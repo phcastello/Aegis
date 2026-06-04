@@ -1,0 +1,6 @@
+@Aegis.Api_HostAddress = http://localhost:8080
+
+GET {{Aegis.Api_HostAddress}}/api/health
+Accept: application/json
+
+###

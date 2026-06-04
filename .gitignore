@@ -1,0 +1,107 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.vs/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# .NET / backend
+**/bin/
+**/obj/
+**/TestResults/
+**/coverage/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.nupkg
+*.snupkg
+packages/
+artifacts/
+*.trx
+*.coverage
+*.coveragexml
+
+# ASP.NET local development
+appsettings.Local.json
+appsettings.*.Local.json
+
+# Docker and compose local overrides
+docker-compose.override.yml
+compose.override.yml
+
+# Node / Vue frontend
+node_modules/
+dist/
+dist-ssr/
+.output/
+.vite/
+.nuxt/
+.cache/
+.parcel-cache/
+coverage/
+*.tsbuildinfo
+
+# Vue / Vite local environment files
+.env.local
+.env.*.local
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+build/
+site/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+poetry.lock
+Pipfile.lock
+
+# Notebooks and data scratch space
+.ipynb_checkpoints/
+tmp/
+temp/
