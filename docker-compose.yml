@@ -1,4 +1,17 @@
 services:
+  aegis-pwa:
+    build:
+      context: ./frontend/aegis-pwa
+      dockerfile: Dockerfile
+      args:
+        # Leave empty in Docker/PWA mode so the frontend calls /api/... through nginx.
+        VITE_AEGIS_API_BASE_URL: ${VITE_AEGIS_API_BASE_URL:-}
+    container_name: aegis-pwa
+    depends_on:
+      - aegis-api
+    ports:
+      - "${AEGIS_FRONTEND_PORT:-5173}:80"
+
   aegis-api:
     build:
       context: ./backend

@@ -1,0 +1,7 @@
+node_modules
+dist
+dev-dist
+.env
+.env.*
+!.env.example
+npm-debug.log*

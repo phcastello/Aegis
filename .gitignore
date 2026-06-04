@@ -55,6 +55,7 @@ compose.override.yml
 node_modules/
 dist/
 dist-ssr/
+dev-dist/
 .output/
 .vite/
 .nuxt/
@@ -105,3 +106,4 @@ Pipfile.lock
 .ipynb_checkpoints/
 tmp/
 temp/
+**/.obsidian

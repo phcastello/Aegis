@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Aegis">
+  <defs>
+    <linearGradient id="bg" x1="14" x2="82" y1="8" y2="88">
+      <stop offset="0" stop-color="#202729"/>
+      <stop offset="1" stop-color="#0d1112"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="18" x2="78" y1="12" y2="84">
+      <stop offset="0" stop-color="#d8e4d6"/>
+      <stop offset="0.52" stop-color="#9fb8a5"/>
+      <stop offset="1" stop-color="#6f8581"/>
+    </linearGradient>
+    <linearGradient id="core" x1="34" x2="62" y1="24" y2="72">
+      <stop offset="0" stop-color="#f3efe5"/>
+      <stop offset="1" stop-color="#b8d2bd"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="20" fill="url(#bg)"/>
+  <path d="M48 8 76 20v22c0 20.3-11.3 35.2-28 44-16.7-8.8-28-23.7-28-44V20L48 8Z" fill="url(#shield)"/>
+  <path d="M48 18 66 26v16c0 13.3-7.1 23.5-18 30.2C37.1 65.5 30 55.3 30 42V26l18-8Z" fill="#111617"/>
+  <path d="M48 25 60.5 68h-8.7l-3.8-14-3.8 14h-8.7L48 25Z" fill="url(#core)"/>
+  <path d="M42.4 48.4h11.2L48 34.2l-5.6 14.2Z" fill="#111617" fill-opacity="0.78"/>
+  <path d="M48 12 72 22v7L48 19 24 29v-7L48 12Z" fill="#fff" fill-opacity="0.2"/>
+</svg>
