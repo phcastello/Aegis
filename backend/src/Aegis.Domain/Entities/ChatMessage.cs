@@ -1,3 +1,5 @@
+using Aegis.Domain;
+
 namespace Aegis.Domain.Entities;
 
 public sealed class ChatMessage : AuditableEntity
@@ -8,10 +10,20 @@ public sealed class ChatMessage : AuditableEntity
 
     public ChatMessage(Guid conversationId, string role, string content)
     {
+        if (!ChatRoles.IsKnown(role))
+        {
+            throw new ArgumentException($"Unsupported chat role '{role}'.", nameof(role));
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new ArgumentException("Message content cannot be empty.", nameof(content));
+        }
+
         InitializeAudit();
         ConversationId = conversationId;
         Role = role;
-        Content = content;
+        Content = content.Trim();
     }
 
     public Guid ConversationId { get; private set; }
@@ -32,7 +44,12 @@ public sealed class ChatMessage : AuditableEntity
 
     public void UpdateContent(string content)
     {
-        Content = content;
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new ArgumentException("Message content cannot be empty.", nameof(content));
+        }
+
+        Content = content.Trim();
         Touch();
     }
 

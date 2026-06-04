@@ -1,5 +1,7 @@
 using Aegis.Application;
 using Aegis.Infrastructure;
+using Aegis.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,6 +35,8 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+
+    await ApplyDevelopmentMigrationsAsync(app.Services, app.Logger);
 }
 
 app.UseCors(CorsPolicyName);
@@ -42,3 +46,29 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+static async Task ApplyDevelopmentMigrationsAsync(IServiceProvider services, ILogger logger)
+{
+    const int maxAttempts = 10;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            using var scope = services.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+            await dbContext.Database.MigrateAsync();
+            return;
+        }
+        catch (Exception exception) when (attempt < maxAttempts)
+        {
+            logger.LogWarning(
+                exception,
+                "Database migration failed on attempt {Attempt}/{MaxAttempts}. Retrying shortly.",
+                attempt,
+                maxAttempts);
+
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+    }
+}

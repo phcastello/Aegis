@@ -84,3 +84,11 @@ dotnet ef migrations add InitialCreate \
   --project backend/src/Aegis.Infrastructure \
   --startup-project backend/src/Aegis.Api
 ```
+
+Apply migrations manually when needed:
+
+```bash
+dotnet ef database update \
+  --project backend/src/Aegis.Infrastructure \
+  --startup-project backend/src/Aegis.Api
+```

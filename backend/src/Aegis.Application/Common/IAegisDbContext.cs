@@ -12,5 +12,18 @@ public interface IAegisDbContext
 
     void AddChatMessage(ChatMessage message);
 
+    Task<Conversation?> GetConversationWithMessagesAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ChatMessage>> GetRecentMessagesAsync(
+        Guid conversationId,
+        int limit,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Conversation>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

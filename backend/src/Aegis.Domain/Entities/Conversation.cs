@@ -8,19 +8,19 @@ public sealed class Conversation : AuditableEntity
     {
     }
 
-    public Conversation(string title)
+    public Conversation(string? title = null)
     {
         InitializeAudit();
-        Title = title;
+        Title = NormalizeTitle(title);
     }
 
-    public string Title { get; private set; } = string.Empty;
+    public string? Title { get; private set; }
 
-    public IReadOnlyCollection<ChatMessage> Messages => _messages.AsReadOnly();
+    public ICollection<ChatMessage> Messages => _messages;
 
-    public void Rename(string title)
+    public void Rename(string? title)
     {
-        Title = title;
+        Title = NormalizeTitle(title);
         Touch();
     }
 
@@ -31,5 +31,12 @@ public sealed class Conversation : AuditableEntity
         Touch();
 
         return message;
+    }
+
+    private static string? NormalizeTitle(string? title)
+    {
+        return string.IsNullOrWhiteSpace(title)
+            ? null
+            : title.Trim();
     }
 }

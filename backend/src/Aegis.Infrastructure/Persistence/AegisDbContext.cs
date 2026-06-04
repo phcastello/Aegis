@@ -24,6 +24,47 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
         ChatMessages.Add(message);
     }
 
+    public async Task<Conversation?> GetConversationWithMessagesAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await Conversations
+            .Include(conversation => conversation.Messages)
+            .FirstOrDefaultAsync(conversation => conversation.Id == conversationId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ChatMessage>> GetRecentMessagesAsync(
+        Guid conversationId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedLimit = Math.Max(1, limit);
+        var messages = await ChatMessages
+            .Where(message => message.ConversationId == conversationId)
+            .OrderByDescending(message => message.CreatedAt)
+            .ThenByDescending(message => message.Id)
+            .Take(normalizedLimit)
+            .ToListAsync(cancellationToken);
+
+        return messages
+            .OrderBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<Conversation>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedLimit = Math.Max(1, limit);
+        return await Conversations
+            .Include(conversation => conversation.Messages)
+            .OrderByDescending(conversation => conversation.UpdatedAt)
+            .ThenByDescending(conversation => conversation.Id)
+            .Take(normalizedLimit)
+            .ToListAsync(cancellationToken);
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Conversation>(entity =>
@@ -33,7 +74,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
             entity.Property(conversation => conversation.Title)
                 .HasMaxLength(200)
-                .IsRequired();
+                .IsRequired(false);
 
             entity.Property(conversation => conversation.CreatedAt)
                 .IsRequired();
