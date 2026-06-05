@@ -21,11 +21,15 @@ public sealed class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> 
         var model = string.IsNullOrWhiteSpace(ollamaOptions.Model)
             ? OllamaOptions.DefaultModel
             : ollamaOptions.Model;
+        var keepAlive = string.IsNullOrWhiteSpace(ollamaOptions.KeepAlive)
+            ? OllamaOptions.DefaultKeepAlive
+            : ollamaOptions.KeepAlive;
 
         var request = new OllamaGenerateRequest(
             model,
             prompt,
             Stream: false,
+            keepAlive,
             new OllamaGenerateOptions(ollamaOptions.Temperature, ollamaOptions.NumCtx));
 
         using var response = await httpClient.PostAsJsonAsync("api/generate", request, JsonOptions, cancellationToken);
@@ -73,6 +77,7 @@ public sealed class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> 
         [property: JsonPropertyName("model")] string Model,
         [property: JsonPropertyName("prompt")] string Prompt,
         [property: JsonPropertyName("stream")] bool Stream,
+        [property: JsonPropertyName("keep_alive")] string KeepAlive,
         [property: JsonPropertyName("options")] OllamaGenerateOptions Options);
 
     private sealed record OllamaGenerateOptions(

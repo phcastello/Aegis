@@ -134,6 +134,11 @@ VITE_AEGIS_API_BASE_URL=
 docker compose build aegis-pwa
 ```
 
+The PWA Nginx proxy waits up to 300 seconds for API responses, matching the
+backend's Ollama HTTP client timeout. If the deployment has another reverse
+proxy or load balancer in front of Docker Compose, configure its upstream
+response timeout to at least 300 seconds as well.
+
 ## Entity Framework
 
 The database context is `Aegis.Infrastructure.Persistence.AegisDbContext`.

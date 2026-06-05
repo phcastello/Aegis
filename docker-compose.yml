@@ -30,6 +30,7 @@ services:
       Ollama__Model: ${OLLAMA_MODEL:-qwen2.5:14b}
       Ollama__Temperature: ${OLLAMA_TEMPERATURE:-0.6}
       Ollama__NumCtx: ${OLLAMA_NUM_CTX:-4096}
+      Ollama__KeepAlive: ${OLLAMA_KEEP_ALIVE:-24h}
     ports:
       - "${AEGIS_API_PORT:-8080}:8080"
 
