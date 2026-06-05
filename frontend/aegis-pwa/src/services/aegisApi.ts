@@ -1,4 +1,10 @@
-import type { Conversation, SendMessageRequest, SendMessageResponse } from '../types/chat';
+import type {
+  Conversation,
+  MessageFeedbackResponse,
+  SendMessageRequest,
+  SendMessageResponse,
+  SubmitMessageFeedbackRequest
+} from '../types/chat';
 
 const configuredBaseUrl = import.meta.env.VITE_AEGIS_API_BASE_URL ?? '';
 
@@ -41,4 +47,14 @@ export async function sendMessage(request: SendMessageRequest): Promise<SendMess
 
 export async function getConversation(conversationId: string): Promise<Conversation> {
   return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`);
+}
+
+export async function submitMessageFeedback(
+  messageId: string,
+  request: SubmitMessageFeedbackRequest
+): Promise<MessageFeedbackResponse> {
+  return requestJson<MessageFeedbackResponse>(`/api/chat/messages/${messageId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(request)
+  });
 }

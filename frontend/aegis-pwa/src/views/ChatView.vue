@@ -2,8 +2,9 @@
 import { computed, nextTick, onMounted, ref } from 'vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
-import { getConversation, sendMessage } from '../services/aegisApi';
-import type { LocalChatMessage } from '../types/chat';
+import FeedbackDialog from '../components/FeedbackDialog.vue';
+import { getConversation, sendMessage, submitMessageFeedback } from '../services/aegisApi';
+import type { FeedbackRating, LocalChatMessage, SubmitMessageFeedbackRequest } from '../types/chat';
 
 const STORAGE_KEY = 'aegis.currentConversationId';
 
@@ -16,6 +17,10 @@ const errorMessage = ref<string | null>(null);
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
+const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
+const feedbackStatusByMessageId = ref<Record<string, string>>({});
+const feedbackErrorMessage = ref<string | null>(null);
+const isSavingFeedback = ref(false);
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value);
 const conversationLabel = computed(() =>
@@ -140,6 +145,46 @@ function startNewConversation(): void {
   draft.value = '';
   resizeComposer();
   errorMessage.value = null;
+  feedbackTarget.value = null;
+  feedbackErrorMessage.value = null;
+  feedbackStatusByMessageId.value = {};
+}
+
+function openFeedback(message: LocalChatMessage, rating: FeedbackRating): void {
+  feedbackTarget.value = { message, rating };
+  feedbackErrorMessage.value = null;
+}
+
+function closeFeedback(): void {
+  if (isSavingFeedback.value) {
+    return;
+  }
+
+  feedbackTarget.value = null;
+  feedbackErrorMessage.value = null;
+}
+
+async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Promise<void> {
+  if (!feedbackTarget.value) {
+    return;
+  }
+
+  isSavingFeedback.value = true;
+  feedbackErrorMessage.value = null;
+
+  try {
+    await submitMessageFeedback(feedbackTarget.value.message.id, request);
+    feedbackStatusByMessageId.value = {
+      ...feedbackStatusByMessageId.value,
+      [feedbackTarget.value.message.id]: 'Feedback salvo'
+    };
+    feedbackTarget.value = null;
+  } catch (error) {
+    feedbackErrorMessage.value =
+      error instanceof Error ? error.message : 'Nao foi possivel salvar o feedback.';
+  } finally {
+    isSavingFeedback.value = false;
+  }
 }
 
 onMounted(() => {
@@ -157,7 +202,7 @@ onMounted(() => {
           </div>
           <div>
             <h1>Aegis</h1>
-            <p>Finding My Voice</p>
+            <p>Bonk the Bot!</p>
           </div>
         </div>
 
@@ -182,7 +227,13 @@ onMounted(() => {
         </div>
 
         <template v-else>
-          <ChatMessage v-for="message in messages" :key="message.id" :message="message" />
+          <ChatMessage
+            v-for="message in messages"
+            :key="message.id"
+            :message="message"
+            :feedback-status="feedbackStatusByMessageId[message.id]"
+            @feedback="openFeedback"
+          />
         </template>
 
         <div v-if="isLoading" class="typing-indicator" role="status">
@@ -217,5 +268,15 @@ onMounted(() => {
         </button>
       </form>
     </section>
+
+    <FeedbackDialog
+      v-if="feedbackTarget"
+      :message="feedbackTarget.message"
+      :rating="feedbackTarget.rating"
+      :is-saving="isSavingFeedback"
+      :error-message="feedbackErrorMessage"
+      @cancel="closeFeedback"
+      @submit="handleFeedbackSubmit"
+    />
   </main>
 </template>

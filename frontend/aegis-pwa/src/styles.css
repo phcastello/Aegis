@@ -43,6 +43,7 @@ body {
 }
 
 button,
+select,
 textarea {
   font: inherit;
 }
@@ -224,6 +225,19 @@ textarea:focus-visible {
   justify-content: flex-start;
 }
 
+.message-stack {
+  min-width: 0;
+  max-width: min(72%, 660px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.message-row--user .message-stack {
+  align-items: flex-end;
+}
+
 .message-avatar {
   width: 34px;
   height: 34px;
@@ -242,7 +256,7 @@ textarea:focus-visible {
 
 .message-bubble {
   width: fit-content;
-  max-width: min(72%, 660px);
+  max-width: 100%;
   padding: 13px 15px;
   border: 1px solid rgba(240, 238, 232, 0.1);
   border-radius: 8px;
@@ -250,6 +264,39 @@ textarea:focus-visible {
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
     var(--surface-soft);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+}
+
+.message-feedback {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 28px;
+  padding-left: 2px;
+}
+
+.feedback-chip {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(240, 238, 232, 0.1);
+  border-radius: 7px;
+  color: #c9d2cc;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.feedback-chip:hover {
+  border-color: rgba(184, 210, 189, 0.32);
+  background: rgba(184, 210, 189, 0.08);
+}
+
+.feedback-saved {
+  color: var(--quiet);
+  font-size: 0.76rem;
 }
 
 .message-row--user .message-bubble {
@@ -412,6 +459,136 @@ textarea:focus-visible {
   opacity: 0.52;
 }
 
+.feedback-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(4, 6, 7, 0.68);
+  backdrop-filter: blur(8px);
+}
+
+.feedback-dialog {
+  width: min(100%, 520px);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(240, 238, 232, 0.14);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 140px),
+    #15191b;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+}
+
+.feedback-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.feedback-dialog__header p {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 720;
+}
+
+.feedback-dialog__header span {
+  display: -webkit-box;
+  max-height: 4.5em;
+  margin-top: 6px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(240, 238, 232, 0.12);
+  border-radius: 7px;
+  color: #d8d4cc;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.feedback-field {
+  display: grid;
+  gap: 7px;
+}
+
+.feedback-field span {
+  color: #d8d4cc;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.feedback-field select,
+.feedback-field textarea {
+  width: 100%;
+  border: 1px solid rgba(240, 238, 232, 0.13);
+  border-radius: 8px;
+  color: var(--text);
+  background: #0e1214;
+  outline: none;
+  line-height: 1.45;
+}
+
+.feedback-field select {
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.feedback-field textarea {
+  resize: vertical;
+  min-height: 86px;
+  padding: 11px 12px;
+}
+
+.feedback-field select:focus,
+.feedback-field textarea:focus {
+  border-color: rgba(184, 210, 189, 0.62);
+  box-shadow: 0 0 0 3px rgba(184, 210, 189, 0.12);
+}
+
+.feedback-error {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.86rem;
+}
+
+.feedback-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.save-feedback-button {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 7px;
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.icon-button:disabled,
+.feedback-field select:disabled,
+.feedback-field textarea:disabled,
+.save-feedback-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @keyframes pulse {
   0%,
   80%,
@@ -472,7 +649,7 @@ textarea:focus-visible {
     height: 30px;
   }
 
-  .message-bubble {
+  .message-stack {
     max-width: calc(100% - 76px);
   }
 

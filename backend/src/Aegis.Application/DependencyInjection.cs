@@ -1,4 +1,5 @@
 using Aegis.Application.Chat;
+using Aegis.Application.Feedback;
 using Aegis.Application.Prompts;
 using Aegis.Application.Runtime;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +11,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IChatService, ChatService>();
+        services.AddScoped<IMessageFeedbackService, MessageFeedbackService>();
         services.AddSingleton<IRuntimeContextProvider, RuntimeContextProvider>();
         services.AddSingleton<IPromptBuilder, PromptBuilder>();
 

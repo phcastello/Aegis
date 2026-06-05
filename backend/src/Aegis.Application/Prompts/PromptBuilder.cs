@@ -126,8 +126,8 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
 
             You are Aegis.
 
-            Your current version is v0.1.1.
-            Your current version codename is "Finding My Voice".
+            Your current version is v0.1.2.
+            Your current version codename is "Bonk the Bot!".
             """;
     }
 

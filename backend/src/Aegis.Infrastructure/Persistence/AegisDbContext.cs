@@ -1,4 +1,5 @@
 using Aegis.Application.Common;
+using Aegis.Domain;
 using Aegis.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,9 +11,13 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
 
+    public DbSet<MessageFeedback> MessageFeedback => Set<MessageFeedback>();
+
     IQueryable<Conversation> IAegisDbContext.Conversations => Conversations;
 
     IQueryable<ChatMessage> IAegisDbContext.ChatMessages => ChatMessages;
+
+    IQueryable<MessageFeedback> IAegisDbContext.MessageFeedback => MessageFeedback;
 
     public void AddConversation(Conversation conversation)
     {
@@ -22,6 +27,56 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     public void AddChatMessage(ChatMessage message)
     {
         ChatMessages.Add(message);
+    }
+
+    public void AddMessageFeedback(MessageFeedback feedback)
+    {
+        MessageFeedback.Add(feedback);
+    }
+
+    public async Task<ChatMessage?> GetChatMessageAsync(
+        Guid messageId,
+        CancellationToken cancellationToken = default)
+    {
+        return await ChatMessages
+            .FirstOrDefaultAsync(message => message.Id == messageId, cancellationToken);
+    }
+
+    public async Task<ChatMessage?> GetPreviousUserMessageAsync(
+        Guid conversationId,
+        DateTimeOffset before,
+        CancellationToken cancellationToken = default)
+    {
+        return await ChatMessages
+            .Where(message =>
+                message.ConversationId == conversationId &&
+                message.Role == ChatRoles.User &&
+                message.CreatedAt <= before)
+            .OrderByDescending(message => message.CreatedAt)
+            .ThenByDescending(message => message.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<MessageFeedback?> GetMessageFeedbackWithMessageAsync(
+        Guid feedbackId,
+        CancellationToken cancellationToken = default)
+    {
+        return await MessageFeedback
+            .Include(feedback => feedback.Message)
+            .FirstOrDefaultAsync(feedback => feedback.Id == feedbackId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MessageFeedback>> GetRecentMessageFeedbackAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedLimit = Math.Max(1, limit);
+        return await MessageFeedback
+            .Include(feedback => feedback.Message)
+            .OrderByDescending(feedback => feedback.CreatedAt)
+            .ThenByDescending(feedback => feedback.Id)
+            .Take(normalizedLimit)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<Conversation?> GetConversationWithMessagesAsync(
@@ -118,6 +173,47 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
             entity.Property(message => message.UpdatedAt)
                 .IsRequired();
+        });
+
+        modelBuilder.Entity<MessageFeedback>(entity =>
+        {
+            entity.ToTable("message_feedback");
+            entity.HasKey(feedback => feedback.Id);
+
+            entity.Property(feedback => feedback.Rating)
+                .HasMaxLength(20)
+                .IsRequired();
+
+            entity.Property(feedback => feedback.Reason)
+                .HasMaxLength(80);
+
+            entity.Property(feedback => feedback.Comment);
+
+            entity.Property(feedback => feedback.CorrectedAnswer);
+
+            entity.Property(feedback => feedback.MetadataJson)
+                .HasColumnType("jsonb");
+
+            entity.Property(feedback => feedback.CreatedAt)
+                .IsRequired();
+
+            entity.Property(feedback => feedback.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(feedback => feedback.Conversation)
+                .WithMany()
+                .HasForeignKey(feedback => feedback.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(feedback => feedback.Message)
+                .WithMany()
+                .HasForeignKey(feedback => feedback.MessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(feedback => feedback.MessageId);
+            entity.HasIndex(feedback => feedback.ConversationId);
+            entity.HasIndex(feedback => feedback.Rating);
+            entity.HasIndex(feedback => feedback.CreatedAt);
         });
     }
 }

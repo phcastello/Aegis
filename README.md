@@ -1,8 +1,14 @@
 # Aegis
 
-Aegis v0.1.1, "Finding My Voice", is the current behavior-focused microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+Aegis v0.1.2, "Bonk the Bot!", is the current feedback/debug microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
 
-The initial v0.1.0 milestone, "Hello, Aegis", remains the first accessible foundation.
+Version history:
+
+- v0.1.0, "Hello, Aegis", was the first functional and accessible milestone.
+- v0.1.1, "Finding My Voice", adjusted conversational behavior to reduce repetitive greetings, avoid status dumps, respect explicit exclusions, and sound less generic.
+- v0.1.2, "Bonk the Bot!", adds feedback capture for good and bad assistant responses.
+
+In v0.1.2, feedback is linked to persisted messages and conversations so it can support immediate debugging, future human review, behavior regression tests, and curated datasets for later tuning work. It is collection and audit infrastructure only; any future fine-tuning or preference tuning still requires filtering, review, and curation before the data is used.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 
