@@ -1,6 +1,8 @@
 # Aegis
 
-Aegis v0.1, "Hello, Aegis", is the first accessible foundation for a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+Aegis v0.1.1, "Finding My Voice", is the current behavior-focused microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+
+The initial v0.1.0 milestone, "Hello, Aegis", remains the first accessible foundation.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 

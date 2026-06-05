@@ -17,6 +17,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: aegis-api
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
       - qdrant

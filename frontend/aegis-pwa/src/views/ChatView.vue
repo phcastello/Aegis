@@ -157,7 +157,7 @@ onMounted(() => {
           </div>
           <div>
             <h1>Aegis</h1>
-            <p>Hello, Aegis</p>
+            <p>Finding My Voice</p>
           </div>
         </div>
 
