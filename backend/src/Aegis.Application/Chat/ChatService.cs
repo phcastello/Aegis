@@ -40,18 +40,37 @@ public sealed class ChatService(
             userContent,
             cancellationToken);
 
-        var completion = await llmClient.GenerateAsync(promptResult.Prompt, cancellationToken);
-        var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
-        dbContext.AddChatMessage(assistantMessage);
-        assistantMessage.AttachAuditData(
-            completion.Model,
-            promptResult.Prompt,
-            promptResult.RuntimeContext,
-            completion.MetadataJson);
+        try
+        {
+            var completion = await llmClient.GenerateAsync(promptResult.Prompt, cancellationToken);
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
+            dbContext.AddChatMessage(assistantMessage);
+            assistantMessage.AttachAuditData(
+                completion.Model,
+                promptResult.Prompt,
+                promptResult.RuntimeContext,
+                completion.MetadataJson);
+            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
+                conversation.Id,
+                userMessage.Id,
+                assistantMessage.Id,
+                completion.AuditData));
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
 
-        return new SendMessageResponse(conversation.Id, MapMessage(assistantMessage));
+            return new SendMessageResponse(conversation.Id, MapMessage(assistantMessage));
+        }
+        catch (LlmRequestException exception)
+        {
+            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
+                conversation.Id,
+                userMessage.Id,
+                null,
+                exception.AuditData));
+
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
     }
 
     public async Task<ConversationResponse?> GetConversationAsync(
@@ -127,6 +146,27 @@ public sealed class ChatService(
             message.Content,
             message.CreatedAt,
             message.Model);
+    }
+
+    private static LlmRequestAudit CreateLlmRequestAudit(
+        Guid conversationId,
+        Guid userMessageId,
+        Guid? assistantMessageId,
+        LlmRequestAuditData auditData)
+    {
+        return new LlmRequestAudit(
+            conversationId,
+            userMessageId,
+            assistantMessageId,
+            auditData.Provider,
+            auditData.Model,
+            auditData.Success,
+            auditData.DurationMilliseconds,
+            auditData.RequestPayloadJson,
+            auditData.HttpStatusCode,
+            auditData.ResponseBody,
+            auditData.FailureReason,
+            auditData.ErrorType);
     }
 
     private static string CreateConversationTitle(string content)

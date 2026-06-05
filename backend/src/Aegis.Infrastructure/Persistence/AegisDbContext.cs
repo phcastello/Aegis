@@ -13,11 +13,15 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     public DbSet<MessageFeedback> MessageFeedback => Set<MessageFeedback>();
 
+    public DbSet<LlmRequestAudit> LlmRequestAudits => Set<LlmRequestAudit>();
+
     IQueryable<Conversation> IAegisDbContext.Conversations => Conversations;
 
     IQueryable<ChatMessage> IAegisDbContext.ChatMessages => ChatMessages;
 
     IQueryable<MessageFeedback> IAegisDbContext.MessageFeedback => MessageFeedback;
+
+    IQueryable<LlmRequestAudit> IAegisDbContext.LlmRequestAudits => LlmRequestAudits;
 
     public void AddConversation(Conversation conversation)
     {
@@ -32,6 +36,11 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     public void AddMessageFeedback(MessageFeedback feedback)
     {
         MessageFeedback.Add(feedback);
+    }
+
+    public void AddLlmRequestAudit(LlmRequestAudit audit)
+    {
+        LlmRequestAudits.Add(audit);
     }
 
     public async Task<ChatMessage?> GetChatMessageAsync(
@@ -214,6 +223,63 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             entity.HasIndex(feedback => feedback.ConversationId);
             entity.HasIndex(feedback => feedback.Rating);
             entity.HasIndex(feedback => feedback.CreatedAt);
+        });
+
+        modelBuilder.Entity<LlmRequestAudit>(entity =>
+        {
+            entity.ToTable("llm_request_audits");
+            entity.HasKey(audit => audit.Id);
+
+            entity.Property(audit => audit.Provider)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            entity.Property(audit => audit.Model)
+                .HasMaxLength(200)
+                .IsRequired();
+
+            entity.Property(audit => audit.Success)
+                .IsRequired();
+
+            entity.Property(audit => audit.DurationMilliseconds)
+                .IsRequired();
+
+            entity.Property(audit => audit.RequestPayloadJson)
+                .HasColumnType("jsonb")
+                .IsRequired();
+
+            entity.Property(audit => audit.ResponseBody);
+            entity.Property(audit => audit.FailureReason);
+
+            entity.Property(audit => audit.ErrorType)
+                .HasMaxLength(500);
+
+            entity.Property(audit => audit.CreatedAt)
+                .IsRequired();
+
+            entity.Property(audit => audit.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(audit => audit.Conversation)
+                .WithMany()
+                .HasForeignKey(audit => audit.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(audit => audit.UserMessage)
+                .WithMany()
+                .HasForeignKey(audit => audit.UserMessageId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(audit => audit.AssistantMessage)
+                .WithMany()
+                .HasForeignKey(audit => audit.AssistantMessageId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasIndex(audit => audit.ConversationId);
+            entity.HasIndex(audit => audit.UserMessageId);
+            entity.HasIndex(audit => audit.AssistantMessageId);
+            entity.HasIndex(audit => audit.Success);
+            entity.HasIndex(audit => audit.CreatedAt);
         });
     }
 }

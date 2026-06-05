@@ -1,4 +1,5 @@
-using System.Net.Http.Json;
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aegis.Application.Llm;
@@ -31,35 +32,78 @@ public sealed class OllamaClient(HttpClient httpClient, IOptions<OllamaOptions> 
             Stream: false,
             keepAlive,
             new OllamaGenerateOptions(ollamaOptions.Temperature, ollamaOptions.NumCtx));
+        var requestPayload = JsonSerializer.SerializeToElement(request, JsonOptions);
+        var requestPayloadJson = requestPayload.GetRawText();
+        var stopwatch = Stopwatch.StartNew();
+        int? httpStatusCode = null;
+        string? responseBody = null;
 
-        using var response = await httpClient.PostAsJsonAsync("api/generate", request, JsonOptions, cancellationToken);
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            throw new InvalidOperationException(
-                $"Ollama request failed with HTTP {(int)response.StatusCode}: {responseBody}");
+            using var requestContent = new StringContent(
+                requestPayloadJson,
+                Encoding.UTF8,
+                "application/json");
+            using var response = await httpClient.PostAsync("api/generate", requestContent, cancellationToken);
+            httpStatusCode = (int)response.StatusCode;
+            responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"Ollama request failed with HTTP {httpStatusCode}.");
+            }
+
+            var ollamaResponse = JsonSerializer.Deserialize<OllamaGenerateResponse>(responseBody, JsonOptions)
+                ?? throw new InvalidOperationException("Ollama returned an empty response.");
+
+            if (string.IsNullOrWhiteSpace(ollamaResponse.Response))
+            {
+                throw new InvalidOperationException("Ollama returned an empty completion.");
+            }
+
+            stopwatch.Stop();
+            var responseModel = string.IsNullOrWhiteSpace(ollamaResponse.Model) ? model : ollamaResponse.Model;
+
+            return new LlmCompletionResponse(
+                ollamaResponse.Response.Trim(),
+                responseModel,
+                BuildMetadataJson(requestPayload, ollamaResponse),
+                new LlmRequestAuditData(
+                    "ollama",
+                    responseModel,
+                    Success: true,
+                    stopwatch.ElapsedMilliseconds,
+                    requestPayloadJson,
+                    httpStatusCode,
+                    responseBody,
+                    FailureReason: null,
+                    ErrorType: null));
         }
-
-        var ollamaResponse = JsonSerializer.Deserialize<OllamaGenerateResponse>(responseBody, JsonOptions)
-            ?? throw new InvalidOperationException("Ollama returned an empty response.");
-
-        if (string.IsNullOrWhiteSpace(ollamaResponse.Response))
+        catch (Exception exception) when (exception is not LlmRequestException)
         {
-            throw new InvalidOperationException("Ollama returned an empty completion.");
-        }
+            stopwatch.Stop();
+            var auditData = new LlmRequestAuditData(
+                "ollama",
+                model,
+                Success: false,
+                stopwatch.ElapsedMilliseconds,
+                requestPayloadJson,
+                httpStatusCode,
+                responseBody,
+                exception.Message,
+                exception.GetType().FullName);
 
-        return new LlmCompletionResponse(
-            ollamaResponse.Response.Trim(),
-            string.IsNullOrWhiteSpace(ollamaResponse.Model) ? model : ollamaResponse.Model,
-            BuildMetadataJson(ollamaResponse));
+            throw new LlmRequestException("Ollama could not complete the generation request.", auditData, exception);
+        }
     }
 
-    private static string BuildMetadataJson(OllamaGenerateResponse response)
+    private static string BuildMetadataJson(JsonElement requestPayload, OllamaGenerateResponse response)
     {
         var metadata = new
         {
             provider = "ollama",
+            requestPayload,
             response.CreatedAt,
             response.Done,
             response.TotalDuration,

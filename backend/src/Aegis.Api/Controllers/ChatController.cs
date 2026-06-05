@@ -1,4 +1,5 @@
 using Aegis.Application.Chat;
+using Aegis.Application.Llm;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Aegis.Api.Controllers;
@@ -25,6 +26,16 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         catch (ConversationNotFoundException exception)
         {
             return NotFound(new { error = exception.Message });
+        }
+        catch (LlmRequestException exception)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                error = exception.Message,
+                reason = exception.AuditData.FailureReason,
+                durationMilliseconds = exception.AuditData.DurationMilliseconds,
+                ollamaStatusCode = exception.AuditData.HttpStatusCode
+            });
         }
     }
 

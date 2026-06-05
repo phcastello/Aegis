@@ -10,11 +10,15 @@ public interface IAegisDbContext
 
     IQueryable<MessageFeedback> MessageFeedback { get; }
 
+    IQueryable<LlmRequestAudit> LlmRequestAudits { get; }
+
     void AddConversation(Conversation conversation);
 
     void AddChatMessage(ChatMessage message);
 
     void AddMessageFeedback(MessageFeedback feedback);
+
+    void AddLlmRequestAudit(LlmRequestAudit audit);
 
     Task<ChatMessage?> GetChatMessageAsync(
         Guid messageId,
