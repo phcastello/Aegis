@@ -26,23 +26,23 @@ const emit = defineEmits<{
 
 const goodReasons: ReasonOption[] = [
   { value: 'good_tone', label: 'Tom bom' },
-  { value: 'useful', label: 'Util' },
+  { value: 'useful', label: 'Útil' },
   { value: 'clear', label: 'Clara' },
   { value: 'concrete', label: 'Concreta' },
-  { value: 'good_criticism', label: 'Boa critica' },
-  { value: 'respected_constraint', label: 'Respeitou restricao' },
+  { value: 'good_criticism', label: 'Boa crítica' },
+  { value: 'respected_constraint', label: 'Respeitou restrição' },
   { value: 'other', label: 'Outro' }
 ];
 
 const badReasons: ReasonOption[] = [
   { value: 'bad_tone', label: 'Tom estranho' },
-  { value: 'not_useful', label: 'Nao foi util' },
+  { value: 'not_useful', label: 'Não foi útil' },
   { value: 'too_verbose', label: 'Falou demais' },
-  { value: 'too_generic', label: 'Generica demais' },
-  { value: 'ignored_constraint', label: 'Ignorou restricao' },
+  { value: 'too_generic', label: 'Genérica demais' },
+  { value: 'ignored_constraint', label: 'Ignorou restrição' },
   { value: 'hallucinated_capability', label: 'Inventou capacidade' },
   { value: 'repeated_topic', label: 'Repetiu assunto' },
-  { value: 'did_not_answer', label: 'Nao respondeu' },
+  { value: 'did_not_answer', label: 'Não respondeu' },
   { value: 'wrong_context', label: 'Contexto errado' },
   { value: 'other', label: 'Outro' }
 ];
@@ -96,7 +96,7 @@ function handleSubmit(): void {
       <label class="feedback-field">
         <span>Motivo</span>
         <select v-model="selectedReason" :disabled="isSaving">
-          <option value="">Sem motivo especifico</option>
+          <option value="">Sem motivo específico</option>
           <option v-for="reason in reasons" :key="reason.value" :value="reason.value">
             {{ reason.label }}
           </option>
@@ -104,7 +104,7 @@ function handleSubmit(): void {
       </label>
 
       <label class="feedback-field">
-        <span>Comentario</span>
+        <span>Comentário</span>
         <textarea v-model="comment" rows="3" :disabled="isSaving"></textarea>
       </label>
 

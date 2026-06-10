@@ -1,4 +1,5 @@
 import type {
+  ChatStreamHandlers,
   Conversation,
   MessageFeedbackResponse,
   SendMessageRequest,
@@ -23,7 +24,7 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    let message = 'Nao foi possivel conectar com a Aegis.';
+    let message = 'Não foi possível conectar com a Aegis.';
 
     try {
       const errorBody = (await response.json()) as { error?: string };
@@ -43,6 +44,102 @@ export async function sendMessage(request: SendMessageRequest): Promise<SendMess
     method: 'POST',
     body: JSON.stringify(request)
   });
+}
+
+export async function sendMessageStream(
+  request: SendMessageRequest,
+  handlers: ChatStreamHandlers
+): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/api/chat/messages/stream`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/x-ndjson',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok || !response.body) {
+    let message = 'Não foi possível iniciar a resposta da Aegis.';
+
+    try {
+      const errorBody = (await response.json()) as { error?: string; message?: string };
+      message = errorBody.error ?? errorBody.message ?? message;
+    } catch {
+      message = response.statusText || message;
+    }
+
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let receivedDone = false;
+
+  const processLine = (line: string): void => {
+    if (!line.trim()) {
+      return;
+    }
+
+    const event = JSON.parse(line) as {
+      type?: string;
+      conversationId?: string;
+      content?: string;
+      messageId?: string;
+      message?: string;
+    };
+
+    switch (event.type) {
+      case 'conversation':
+        if (event.conversationId) {
+          handlers.onConversation(event.conversationId);
+        }
+        break;
+      case 'token':
+        if (event.content) {
+          handlers.onToken(event.content);
+        }
+        break;
+      case 'done':
+        if (event.conversationId && event.messageId) {
+          receivedDone = true;
+          handlers.onDone({
+            conversationId: event.conversationId,
+            messageId: event.messageId
+          });
+        }
+        break;
+      case 'error':
+        {
+          const message = event.message || 'A resposta da Aegis foi interrompida.';
+          handlers.onError(message);
+          throw new Error(message);
+        }
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      processLine(line);
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  processLine(buffer);
+
+  if (!receivedDone) {
+    throw new Error('A resposta da Aegis terminou antes da confirmação final.');
+  }
 }
 
 export async function getConversation(conversationId: string): Promise<Conversation> {

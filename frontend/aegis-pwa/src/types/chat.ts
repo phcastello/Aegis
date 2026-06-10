@@ -28,7 +28,16 @@ export interface SendMessageResponse {
 }
 
 export interface LocalChatMessage extends ChatMessage {
+  serverId?: string;
   pending?: boolean;
+  streaming?: boolean;
+}
+
+export interface ChatStreamHandlers {
+  onConversation: (conversationId: string) => void;
+  onToken: (content: string) => void;
+  onDone: (event: { conversationId: string; messageId: string }) => void;
+  onError: (message: string) => void;
 }
 
 export type FeedbackRating = 'good' | 'bad';

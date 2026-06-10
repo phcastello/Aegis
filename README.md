@@ -1,14 +1,15 @@
 # Aegis
 
-Aegis v0.1.2, "Bonk the Bot!", is the current feedback/debug microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+Aegis v0.1.3, "Finally, It’s Raining!", is the current streaming and safe Markdown microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
 
 Version history:
 
 - v0.1.0, "Hello, Aegis", was the first functional and accessible milestone.
 - v0.1.1, "Finding My Voice", adjusted conversational behavior to reduce repetitive greetings, avoid status dumps, respect explicit exclusions, and sound less generic.
 - v0.1.2, "Bonk the Bot!", adds feedback capture for good and bad assistant responses.
+- v0.1.3, "Finally, It’s Raining!", adds streaming responses and safe Markdown rendering.
 
-In v0.1.2, feedback is linked to persisted messages and conversations so it can support immediate debugging, future human review, behavior regression tests, and curated datasets for later tuning work. It is collection and audit infrastructure only; any future fine-tuning or preference tuning still requires filtering, review, and curation before the data is used.
+In v0.1.3, responses appear progressively in the PWA while they are generated. The API streams newline-delimited JSON (NDJSON), assistant Markdown is rendered with raw HTML disabled and sanitized before display, and the final complete response remains persisted with its audit data.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 

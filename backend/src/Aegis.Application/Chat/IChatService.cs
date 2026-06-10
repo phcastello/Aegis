@@ -6,6 +6,10 @@ public interface IChatService
         SendMessageRequest request,
         CancellationToken cancellationToken = default);
 
+    IAsyncEnumerable<ChatStreamEvent> StreamMessageAsync(
+        SendMessageRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<ConversationResponse?> GetConversationAsync(
         Guid conversationId,
         CancellationToken cancellationToken = default);

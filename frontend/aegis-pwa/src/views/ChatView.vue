@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
-import { getConversation, sendMessage, submitMessageFeedback } from '../services/aegisApi';
+import { getConversation, sendMessageStream, submitMessageFeedback } from '../services/aegisApi';
 import type { FeedbackRating, LocalChatMessage, SubmitMessageFeedbackRequest } from '../types/chat';
 
 const STORAGE_KEY = 'aegis.currentConversationId';
@@ -21,6 +21,7 @@ const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating }
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
 const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
+let streamScrollFrame: number | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value);
 const conversationLabel = computed(() =>
@@ -28,9 +29,20 @@ const conversationLabel = computed(() =>
 );
 const COMPOSER_MAX_HEIGHT = 168;
 
-function scrollToLatest(): void {
+function scrollToLatest(smooth = true): void {
   nextTick(() => {
-    messagesEnd.value?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    messagesEnd.value?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+  });
+}
+
+function scrollToLatestDuringStream(): void {
+  if (streamScrollFrame !== null) {
+    return;
+  }
+
+  streamScrollFrame = requestAnimationFrame(() => {
+    streamScrollFrame = null;
+    scrollToLatest(false);
   });
 }
 
@@ -61,7 +73,7 @@ function createLocalMessageId(): string {
 }
 
 function createLocalUserMessage(content: string): LocalChatMessage {
-  return {
+  return reactive({
     id: createLocalMessageId(),
     conversationId: conversationId.value ?? 'pending',
     role: 'user',
@@ -69,7 +81,30 @@ function createLocalUserMessage(content: string): LocalChatMessage {
     createdAt: new Date().toISOString(),
     model: null,
     pending: true
-  };
+  });
+}
+
+function createLocalAssistantMessage(): LocalChatMessage {
+  return reactive({
+    id: createLocalMessageId(),
+    conversationId: conversationId.value ?? 'pending',
+    role: 'assistant',
+    content: '',
+    createdAt: new Date().toISOString(),
+    model: null,
+    pending: true,
+    streaming: true
+  });
+}
+
+function getCompletedWordPrefix(content: string): string {
+  let completedLength = 0;
+
+  for (const match of content.matchAll(/\s+/gu)) {
+    completedLength = (match.index ?? 0) + match[0].length;
+  }
+
+  return content.slice(0, completedLength);
 }
 
 async function restoreConversation(): Promise<void> {
@@ -82,13 +117,16 @@ async function restoreConversation(): Promise<void> {
 
   try {
     const conversation = await getConversation(conversationId.value);
-    messages.value = conversation.messages;
+    messages.value = conversation.messages.map((message) => ({
+      ...message,
+      serverId: message.id
+    }));
     scrollToLatest();
   } catch (error) {
     localStorage.removeItem(STORAGE_KEY);
     conversationId.value = null;
     errorMessage.value =
-      error instanceof Error ? error.message : 'Nao foi possivel carregar a conversa anterior.';
+      error instanceof Error ? error.message : 'Não foi possível carregar a conversa anterior.';
   } finally {
     isRestoring.value = false;
   }
@@ -101,31 +139,65 @@ async function handleSubmit(): Promise<void> {
 
   const content = draft.value.trim();
   const localMessage = createLocalUserMessage(content);
+  const assistantMessage = createLocalAssistantMessage();
 
   draft.value = '';
   resizeComposer();
   errorMessage.value = null;
   isLoading.value = true;
-  messages.value.push(localMessage);
+  messages.value.push(localMessage, assistantMessage);
   scrollToLatest();
 
+  let streamedContent = '';
+
   try {
-    const response = await sendMessage({
-      conversationId: conversationId.value,
-      content
-    });
+    await sendMessageStream(
+      {
+        conversationId: conversationId.value,
+        content
+      },
+      {
+        onConversation: (streamConversationId) => {
+          conversationId.value = streamConversationId;
+          localStorage.setItem(STORAGE_KEY, streamConversationId);
+          localMessage.conversationId = streamConversationId;
+          assistantMessage.conversationId = streamConversationId;
+          localMessage.pending = false;
+        },
+        onToken: (token) => {
+          streamedContent += token;
+          assistantMessage.content = getCompletedWordPrefix(streamedContent);
+          scrollToLatestDuringStream();
+        },
+        onDone: ({ conversationId: completedConversationId, messageId }) => {
+          conversationId.value = completedConversationId;
+          localStorage.setItem(STORAGE_KEY, completedConversationId);
+          localMessage.conversationId = completedConversationId;
+          localMessage.pending = false;
+          assistantMessage.conversationId = completedConversationId;
+          assistantMessage.serverId = messageId;
+          assistantMessage.content = streamedContent;
+          assistantMessage.pending = false;
+          scrollToLatest();
 
-    conversationId.value = response.conversationId;
-    localStorage.setItem(STORAGE_KEY, response.conversationId);
-
-    localMessage.conversationId = response.conversationId;
-    localMessage.pending = false;
-    messages.value.push(response.message);
-    scrollToLatest();
+          window.setTimeout(() => {
+            assistantMessage.streaming = false;
+          }, 600);
+        },
+        onError: (message) => {
+          errorMessage.value = message;
+        }
+      }
+    );
   } catch (error) {
     errorMessage.value =
-      error instanceof Error ? error.message : 'Nao foi possivel enviar a mensagem.';
+      error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
     localMessage.pending = false;
+    assistantMessage.pending = false;
+    assistantMessage.streaming = false;
+    if (!assistantMessage.content) {
+      messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
+    }
   } finally {
     isLoading.value = false;
   }
@@ -173,15 +245,20 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
   feedbackErrorMessage.value = null;
 
   try {
-    await submitMessageFeedback(feedbackTarget.value.message.id, request);
+    const messageId = feedbackTarget.value.message.serverId;
+    if (!messageId) {
+      throw new Error('A mensagem ainda não possui um ID persistido para feedback.');
+    }
+
+    await submitMessageFeedback(messageId, request);
     feedbackStatusByMessageId.value = {
       ...feedbackStatusByMessageId.value,
-      [feedbackTarget.value.message.id]: 'Feedback salvo'
+      [messageId]: 'Feedback salvo'
     };
     feedbackTarget.value = null;
   } catch (error) {
     feedbackErrorMessage.value =
-      error instanceof Error ? error.message : 'Nao foi possivel salvar o feedback.';
+      error instanceof Error ? error.message : 'Não foi possível salvar o feedback.';
   } finally {
     isSavingFeedback.value = false;
   }
@@ -202,13 +279,18 @@ onMounted(() => {
           </div>
           <div>
             <h1>Aegis</h1>
-            <p>Bonk the Bot!</p>
+            <p>Finally, It’s Raining!</p>
           </div>
         </div>
 
         <div class="header-actions">
           <span class="conversation-chip">{{ conversationLabel }}</span>
-          <button class="ghost-button" type="button" @click="startNewConversation">
+          <button
+            class="ghost-button"
+            type="button"
+            :disabled="isLoading || isRestoring"
+            @click="startNewConversation"
+          >
             Nova conversa
           </button>
         </div>
@@ -222,7 +304,7 @@ onMounted(() => {
 
         <div v-else-if="messages.length === 0" class="empty-state">
           <AegisMark />
-          <strong>Aegis esta pronta.</strong>
+          <strong>Aegis está pronta.</strong>
           <span>Escreva a primeira mensagem para iniciar esta conversa.</span>
         </div>
 
@@ -231,16 +313,10 @@ onMounted(() => {
             v-for="message in messages"
             :key="message.id"
             :message="message"
-            :feedback-status="feedbackStatusByMessageId[message.id]"
+            :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             @feedback="openFeedback"
           />
         </template>
-
-        <div v-if="isLoading" class="typing-indicator" role="status">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
 
         <div ref="messagesEnd" class="messages-end"></div>
       </div>

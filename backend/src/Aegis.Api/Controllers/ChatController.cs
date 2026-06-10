@@ -1,6 +1,8 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Aegis.Api.Controllers;
 
@@ -8,6 +10,11 @@ namespace Aegis.Api.Controllers;
 [Route("api/chat")]
 public sealed class ChatController(IChatService chatService) : ControllerBase
 {
+    private static readonly JsonSerializerOptions StreamJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     [HttpPost("messages")]
     public async Task<ActionResult<SendMessageResponse>> SendMessage(
         [FromBody] SendMessageRequest? request,
@@ -39,6 +46,49 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         }
     }
 
+    [HttpPost("messages/stream")]
+    public async Task StreamMessage(
+        [FromBody] SendMessageRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Content))
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(
+                new { error = "Message content cannot be empty." },
+                cancellationToken);
+            return;
+        }
+
+        Response.ContentType = "application/x-ndjson";
+        Response.Headers.CacheControl = "no-cache";
+        Response.Headers.Append("X-Accel-Buffering", "no");
+
+        try
+        {
+            await foreach (var streamEvent in chatService.StreamMessageAsync(request, cancellationToken))
+            {
+                await WriteStreamEventAsync(streamEvent, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The client disconnected; there is no stream left to notify.
+        }
+        catch (ConversationNotFoundException exception)
+        {
+            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status404NotFound, cancellationToken);
+        }
+        catch (LlmRequestException exception)
+        {
+            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status502BadGateway, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status500InternalServerError, cancellationToken);
+        }
+    }
+
     [HttpGet("conversations/{conversationId:guid}")]
     public async Task<ActionResult<ConversationResponse>> GetConversation(
         Guid conversationId,
@@ -60,5 +110,29 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
     {
         var conversations = await chatService.GetRecentConversationsAsync(limit, cancellationToken);
         return Ok(conversations);
+    }
+
+    private async Task WriteStreamEventAsync(object streamEvent, CancellationToken cancellationToken)
+    {
+        await Response.WriteAsync(
+            JsonSerializer.Serialize(streamEvent, StreamJsonOptions) + "\n",
+            cancellationToken);
+        await Response.Body.FlushAsync(cancellationToken);
+    }
+
+    private async Task WriteStreamErrorAsync(
+        string message,
+        int statusCode,
+        CancellationToken cancellationToken)
+    {
+        if (!Response.HasStarted)
+        {
+            Response.StatusCode = statusCode;
+        }
+
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            await WriteStreamEventAsync(new { type = "error", message }, cancellationToken);
+        }
     }
 }
