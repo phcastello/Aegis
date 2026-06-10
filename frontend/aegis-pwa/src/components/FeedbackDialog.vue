@@ -51,7 +51,7 @@ const selectedReason = ref<FeedbackReason | ''>('');
 const comment = ref('');
 const correctedAnswer = ref('');
 
-const title = computed(() => (props.rating === 'good' ? 'Boa resposta' : 'Resposta ruim'));
+const title = computed(() => (props.rating === 'good' ? 'Boa resposta' : 'Dar um bonk nessa resposta'));
 const reasons = computed(() => (props.rating === 'good' ? goodReasons : badReasons));
 const shouldShowCorrection = computed(() => props.rating === 'bad');
 
@@ -89,7 +89,9 @@ function handleSubmit(): void {
           <span>{{ message.content }}</span>
         </div>
         <button type="button" class="icon-button" aria-label="Fechar" :disabled="isSaving" @click="emit('cancel')">
-          x
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m5 5 10 10M15 5 5 15" />
+          </svg>
         </button>
       </header>
 

@@ -31,7 +31,7 @@ const emit = defineEmits<{
           v-if="message.streaming"
           class="generation-marker"
           role="status"
-          aria-label="Aegis está gerando a resposta"
+          aria-label="Aegis está respondendo"
         ></span>
       </div>
 
@@ -39,11 +39,16 @@ const emit = defineEmits<{
         v-if="message.role === 'assistant' && !message.pending && !message.streaming && message.serverId"
         class="message-feedback"
       >
-        <button type="button" class="feedback-chip" @click="emit('feedback', message, 'good')">
+        <button type="button" class="feedback-chip" title="Boa resposta" @click="emit('feedback', message, 'good')">
           Boa
         </button>
-        <button type="button" class="feedback-chip" @click="emit('feedback', message, 'bad')">
-          Ruim
+        <button
+          type="button"
+          class="feedback-chip feedback-chip--bonk"
+          title="Dar um bonk nessa resposta"
+          @click="emit('feedback', message, 'bad')"
+        >
+          Bonk
         </button>
         <span v-if="feedbackStatus" class="feedback-saved">{{ feedbackStatus }}</span>
       </div>

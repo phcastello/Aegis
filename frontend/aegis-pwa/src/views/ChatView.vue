@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
+import ConversationSidebar from '../components/ConversationSidebar.vue';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import { getConversation, sendMessageStream, submitMessageFeedback } from '../services/aegisApi';
 import type { FeedbackRating, LocalChatMessage, SubmitMessageFeedbackRequest } from '../types/chat';
@@ -21,12 +22,19 @@ const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating }
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
 const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
+const isSidebarOpen = ref(false);
 let streamScrollFrame: number | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value);
-const conversationLabel = computed(() =>
-  conversationId.value ? `Conversa ${conversationId.value.slice(0, 8)}` : 'Nova conversa'
-);
+const firstUserMessage = computed(() => messages.value.find((message) => message.role === 'user'));
+const conversationLabel = computed(() => {
+  const content = firstUserMessage.value?.content.trim();
+  if (!content) {
+    return 'Nova conversa';
+  }
+
+  return content.length > 48 ? `${content.slice(0, 48).trimEnd()}...` : content;
+});
 const COMPOSER_MAX_HEIGHT = 168;
 
 function scrollToLatest(smooth = true): void {
@@ -122,11 +130,10 @@ async function restoreConversation(): Promise<void> {
       serverId: message.id
     }));
     scrollToLatest();
-  } catch (error) {
+  } catch {
     localStorage.removeItem(STORAGE_KEY);
     conversationId.value = null;
-    errorMessage.value =
-      error instanceof Error ? error.message : 'Não foi possível carregar a conversa anterior.';
+    errorMessage.value = 'Não foi possível carregar a conversa anterior.';
   } finally {
     isRestoring.value = false;
   }
@@ -184,14 +191,13 @@ async function handleSubmit(): Promise<void> {
             assistantMessage.streaming = false;
           }, 600);
         },
-        onError: (message) => {
-          errorMessage.value = message;
+        onError: () => {
+          errorMessage.value = 'A resposta da Aegis foi interrompida. Tente continuar em um instante.';
         }
       }
     );
-  } catch (error) {
-    errorMessage.value =
-      error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
+  } catch {
+    errorMessage.value = 'Não foi possível enviar a mensagem. Tente novamente em um instante.';
     localMessage.pending = false;
     assistantMessage.pending = false;
     assistantMessage.streaming = false;
@@ -220,6 +226,7 @@ function startNewConversation(): void {
   feedbackTarget.value = null;
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
+  isSidebarOpen.value = false;
 }
 
 function openFeedback(message: LocalChatMessage, rating: FeedbackRating): void {
@@ -247,7 +254,7 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
   try {
     const messageId = feedbackTarget.value.message.serverId;
     if (!messageId) {
-      throw new Error('A mensagem ainda não possui um ID persistido para feedback.');
+      throw new Error('A resposta ainda não está pronta para receber feedback.');
     }
 
     await submitMessageFeedback(messageId, request);
@@ -256,9 +263,8 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
       [messageId]: 'Feedback salvo'
     };
     feedbackTarget.value = null;
-  } catch (error) {
-    feedbackErrorMessage.value =
-      error instanceof Error ? error.message : 'Não foi possível salvar o feedback.';
+  } catch {
+    feedbackErrorMessage.value = 'Não foi possível salvar o feedback.';
   } finally {
     isSavingFeedback.value = false;
   }
@@ -271,29 +277,36 @@ onMounted(() => {
 
 <template>
   <main class="app-shell">
-    <section class="chat-panel" aria-label="Chat da Aegis">
+    <div class="hideout-shell">
+      <ConversationSidebar
+        :current-title="conversationLabel"
+        :has-conversation="messages.length > 0"
+        :disabled="isLoading || isRestoring"
+        :open="isSidebarOpen"
+        @close="isSidebarOpen = false"
+        @new-conversation="startNewConversation"
+      />
+
+      <section class="chat-panel" aria-label="Conversa com a Aegis">
       <header class="chat-header">
-        <div class="brand-lockup">
-          <div class="brand-mark">
-            <AegisMark />
-          </div>
+        <button type="button" class="sidebar-toggle" aria-label="Abrir histórico" @click="isSidebarOpen = true">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M4 5h12M4 10h12M4 15h12" />
+          </svg>
+        </button>
+
+        <div class="conversation-heading">
+          <span>{{ conversationId ? 'Conversa ativa' : 'Novo pensamento' }}</span>
           <div>
-            <h1>Aegis</h1>
-            <p>Finally, It’s Raining!</p>
+            <h1>{{ conversationLabel }}</h1>
+            <p>{{ isLoading ? 'Aegis está respondendo' : 'Um espaço reservado para continuar.' }}</p>
           </div>
         </div>
 
-        <div class="header-actions">
-          <span class="conversation-chip">{{ conversationLabel }}</span>
-          <button
-            class="ghost-button"
-            type="button"
-            :disabled="isLoading || isRestoring"
-            @click="startNewConversation"
-          >
-            Nova conversa
-          </button>
-        </div>
+        <span class="presence-indicator" :class="{ 'presence-indicator--active': isLoading }">
+          <i></i>
+          {{ isLoading ? 'respondendo' : 'presente' }}
+        </span>
       </header>
 
       <div class="messages" aria-live="polite">
@@ -303,9 +316,10 @@ onMounted(() => {
         </div>
 
         <div v-else-if="messages.length === 0" class="empty-state">
-          <AegisMark />
-          <strong>Aegis está pronta.</strong>
-          <span>Escreva a primeira mensagem para iniciar esta conversa.</span>
+          <div class="empty-state__mark"><AegisMark /></div>
+          <span class="empty-state__eyebrow">Aegis está presente</span>
+          <strong>O que merece espaço agora?</strong>
+          <span>Comece uma conversa ou continue um raciocínio em voz alta.</span>
         </div>
 
         <template v-else>
@@ -324,26 +338,30 @@ onMounted(() => {
       <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
 
       <form class="composer" @submit.prevent="handleSubmit">
-        <textarea
-          v-model="draft"
-          rows="1"
-          placeholder="Escreva para a Aegis..."
-          aria-label="Mensagem"
-          :disabled="isLoading || isRestoring"
-          :class="{ 'composer-input--scrollable': isComposerScrollable }"
-          ref="composerInput"
-          @input="resizeComposer"
-          @keydown="handleKeydown"
-        ></textarea>
+        <div class="composer-field">
+          <textarea
+            v-model="draft"
+            rows="1"
+            placeholder="Escreva para a Aegis..."
+            aria-label="Mensagem"
+            :disabled="isLoading || isRestoring"
+            :class="{ 'composer-input--scrollable': isComposerScrollable }"
+            ref="composerInput"
+            @input="resizeComposer"
+            @keydown="handleKeydown"
+          ></textarea>
 
-        <button class="send-button" type="submit" :disabled="!canSend || isRestoring" aria-label="Enviar">
-          <span>Enviar</span>
-          <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-            <path d="M3 10h12.2M10.8 5.6 15.2 10l-4.4 4.4" />
-          </svg>
-        </button>
+          <button class="send-button" type="submit" :disabled="!canSend || isRestoring" aria-label="Enviar">
+            <span>Enviar</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <path d="M3 10h12.2M10.8 5.6 15.2 10l-4.4 4.4" />
+            </svg>
+          </button>
+        </div>
+        <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
       </form>
-    </section>
+      </section>
+    </div>
 
     <FeedbackDialog
       v-if="feedbackTarget"

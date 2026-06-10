@@ -9,13 +9,13 @@ const coreId = `${useId()}-core`;
   <svg class="aegis-mark" viewBox="0 0 96 96" aria-hidden="true" focusable="false">
     <defs>
       <linearGradient :id="shieldId" x1="18" x2="78" y1="12" y2="84">
-        <stop offset="0" stop-color="#d8e4d6" />
-        <stop offset="0.52" stop-color="#9fb8a5" />
-        <stop offset="1" stop-color="#6f8581" />
+        <stop offset="0" stop-color="#d9e4ff" />
+        <stop offset="0.52" stop-color="#91a9ee" />
+        <stop offset="1" stop-color="#5f72b4" />
       </linearGradient>
       <linearGradient :id="coreId" x1="34" x2="62" y1="24" y2="72">
-        <stop offset="0" stop-color="#f3efe5" />
-        <stop offset="1" stop-color="#b8d2bd" />
+        <stop offset="0" stop-color="#f4f7ff" />
+        <stop offset="1" stop-color="#aebff2" />
       </linearGradient>
     </defs>
 
@@ -27,7 +27,7 @@ const coreId = `${useId()}-core`;
     <path
       class="aegis-mark__field"
       d="M48 18 66 26v16c0 13.3-7.1 23.5-18 30.2C37.1 65.5 30 55.3 30 42V26l18-8Z"
-      fill="#111617"
+      fill="#172033"
     />
     <path
       class="aegis-mark__spine"
@@ -37,7 +37,7 @@ const coreId = `${useId()}-core`;
     <path
       class="aegis-mark__crossbar"
       d="M42.4 48.4h11.2L48 34.2l-5.6 14.2Z"
-      fill="#111617"
+      fill="#172033"
       fill-opacity="0.78"
     />
     <path
