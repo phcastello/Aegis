@@ -11,10 +11,12 @@ namespace Aegis.Application.Chat;
 public sealed class ChatService(
     IAegisDbContext dbContext,
     IPromptBuilder promptBuilder,
-    ILlmClient llmClient) : IChatService
+    ILlmClient llmClient,
+    IConversationTitleJobQueue titleJobQueue) : IChatService
 {
     private const int RecentHistoryLimit = 20;
-    private const int MaxConversationSummaryLimit = 50;
+    private const int DefaultConversationSummaryLimit = 30;
+    private const int MaxConversationSummaryLimit = 100;
 
     public async Task<SendMessageResponse> SendMessageAsync(
         SendMessageRequest request,
@@ -26,7 +28,7 @@ public sealed class ChatService(
         }
 
         var userContent = request.Content.Trim();
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, userContent, cancellationToken);
+        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         dbContext.AddChatMessage(userMessage);
 
@@ -59,8 +61,17 @@ public sealed class ChatService(
                 completion.AuditData));
 
             await dbContext.SaveChangesAsync(cancellationToken);
+            await QueueConversationTitleGenerationAsync(
+                conversation,
+                userContent,
+                completion.Content,
+                CancellationToken.None);
 
-            return new SendMessageResponse(conversation.Id, MapMessage(assistantMessage));
+            return new SendMessageResponse(
+                conversation.Id,
+                conversation.Title,
+                conversation.TitleSource,
+                MapMessage(assistantMessage));
         }
         catch (LlmRequestException exception)
         {
@@ -85,7 +96,7 @@ public sealed class ChatService(
         }
 
         var userContent = request.Content.Trim();
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, userContent, cancellationToken);
+        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         dbContext.AddChatMessage(userMessage);
 
@@ -165,8 +176,17 @@ public sealed class ChatService(
                 chunk.AuditData));
 
             await dbContext.SaveChangesAsync(cancellationToken);
+            await QueueConversationTitleGenerationAsync(
+                conversation,
+                userContent,
+                content.ToString(),
+                CancellationToken.None);
 
-            yield return ChatStreamEvent.Done(conversation.Id, assistantMessage.Id);
+            yield return ChatStreamEvent.Done(
+                conversation.Id,
+                assistantMessage.Id,
+                conversation.Title,
+                conversation.TitleSource);
             yield break;
         }
     }
@@ -186,6 +206,7 @@ public sealed class ChatService(
             conversation.Title,
             conversation.CreatedAt,
             conversation.UpdatedAt,
+            conversation.TitleSource,
             conversation.Messages
                 .OrderBy(message => message.CreatedAt)
                 .ThenBy(message => message.Id)
@@ -193,40 +214,77 @@ public sealed class ChatService(
                 .ToList());
     }
 
-    public async Task<IReadOnlyList<ConversationSummaryResponse>> GetRecentConversationsAsync(
-        int limit = 20,
+    public async Task<ConversationPageResponse> GetRecentConversationsAsync(
+        int limit = DefaultConversationSummaryLimit,
+        string? cursor = null,
         CancellationToken cancellationToken = default)
     {
-        var normalizedLimit = Math.Clamp(limit, 1, MaxConversationSummaryLimit);
-        var conversations = await dbContext.GetRecentConversationsAsync(normalizedLimit, cancellationToken);
+        if (!ConversationCursor.TryDecode(cursor, out var decodedCursor))
+        {
+            throw new ArgumentException("Invalid cursor.", nameof(cursor));
+        }
 
-        return conversations
+        var normalizedLimit = Math.Clamp(limit, 1, MaxConversationSummaryLimit);
+        var conversations = await dbContext.GetRecentConversationSummariesAsync(
+            normalizedLimit + 1,
+            decodedCursor,
+            cancellationToken);
+        var hasMore = conversations.Count > normalizedLimit;
+        var pageItems = conversations.Take(normalizedLimit).ToList();
+        var nextCursor = hasMore && pageItems.Count > 0
+            ? new ConversationCursor(pageItems[^1].UpdatedAt, pageItems[^1].Id).Encode()
+            : null;
+
+        var items = pageItems
             .Select(conversation =>
             {
-                var lastMessage = conversation.Messages
-                    .OrderByDescending(message => message.CreatedAt)
-                    .ThenByDescending(message => message.Id)
-                    .FirstOrDefault();
-
-                return new ConversationSummaryResponse(
-                    conversation.Id,
-                    conversation.Title,
-                    conversation.CreatedAt,
-                    conversation.UpdatedAt,
-                    conversation.Messages.Count,
-                    CreatePreview(lastMessage?.Content));
+                return MapConversationSummary(conversation);
             })
             .ToList();
+
+        return new ConversationPageResponse(items, nextCursor, hasMore);
+    }
+
+    public async Task<ConversationSummaryResponse?> RenameConversationAsync(
+        Guid conversationId,
+        string? title,
+        CancellationToken cancellationToken = default)
+    {
+        var conversation = await dbContext.GetConversationWithMessagesAsync(conversationId, cancellationToken);
+        if (conversation is null)
+        {
+            return null;
+        }
+
+        conversation.Rename(title ?? string.Empty);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return MapConversationSummary(conversation);
+    }
+
+    public async Task<bool> DeleteConversationAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var conversation = await dbContext.GetConversationWithMessagesAsync(conversationId, cancellationToken);
+        if (conversation is null)
+        {
+            return false;
+        }
+
+        conversation.Delete();
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return true;
     }
 
     private async Task<Conversation> GetOrCreateConversationAsync(
         Guid? conversationId,
-        string firstMessage,
         CancellationToken cancellationToken)
     {
         if (conversationId is null)
         {
-            var conversation = new Conversation(CreateConversationTitle(firstMessage));
+            var conversation = new Conversation(Conversation.DefaultTitle);
             dbContext.AddConversation(conversation);
             return conversation;
         }
@@ -267,12 +325,50 @@ public sealed class ChatService(
             auditData.ErrorType);
     }
 
-    private static string CreateConversationTitle(string content)
+    private static ConversationSummaryResponse MapConversationSummary(Conversation conversation)
     {
-        var normalized = string.Join(' ', content.Split(default(string[]), StringSplitOptions.RemoveEmptyEntries));
-        return normalized.Length <= 80
-            ? normalized
-            : normalized[..77] + "...";
+        var lastMessage = conversation.Messages
+            .OrderByDescending(message => message.CreatedAt)
+            .ThenByDescending(message => message.Id)
+            .FirstOrDefault();
+
+        return new ConversationSummaryResponse(
+            conversation.Id,
+            conversation.Title,
+            conversation.CreatedAt,
+            conversation.UpdatedAt,
+            conversation.TitleSource,
+            conversation.Messages.Count,
+            CreatePreview(lastMessage?.Content));
+    }
+
+    private static ConversationSummaryResponse MapConversationSummary(ConversationSummaryData conversation)
+    {
+        return new ConversationSummaryResponse(
+            conversation.Id,
+            conversation.Title,
+            conversation.CreatedAt,
+            conversation.UpdatedAt,
+            conversation.TitleSource,
+            conversation.MessageCount,
+            CreatePreview(conversation.LastMessageContent));
+    }
+
+    private async Task QueueConversationTitleGenerationAsync(
+        Conversation conversation,
+        string userContent,
+        string assistantContent,
+        CancellationToken cancellationToken)
+    {
+        if (!conversation.CanGenerateAutomaticTitle ||
+            conversation.Messages.Count(message => message.Role == ChatRoles.User) != 1)
+        {
+            return;
+        }
+
+        await titleJobQueue.EnqueueAsync(
+            new ConversationTitleJob(conversation.Id, userContent, assistantContent),
+            cancellationToken);
     }
 
     private static string? CreatePreview(string? content)

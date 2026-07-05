@@ -1,5 +1,6 @@
 using Aegis.Application.Common;
 using Aegis.Application.Llm;
+using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Llm;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,7 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(baseUrl);
             client.Timeout = TimeSpan.FromMinutes(5);
         });
+        services.AddHostedService<ConversationTitleWorker>();
 
         return services;
     }

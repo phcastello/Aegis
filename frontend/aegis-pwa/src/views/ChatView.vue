@@ -1,11 +1,23 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
-import { getConversation, sendMessageStream, submitMessageFeedback } from '../services/aegisApi';
-import type { FeedbackRating, LocalChatMessage, SubmitMessageFeedbackRequest } from '../types/chat';
+import {
+  deleteConversation,
+  getConversation,
+  getConversations,
+  renameConversation,
+  sendMessageStream,
+  submitMessageFeedback
+} from '../services/aegisApi';
+import type {
+  ConversationSummary,
+  FeedbackRating,
+  LocalChatMessage,
+  SubmitMessageFeedbackRequest
+} from '../types/chat';
 
 const STORAGE_KEY = 'aegis.currentConversationId';
 
@@ -23,17 +35,21 @@ const feedbackStatusByMessageId = ref<Record<string, string>>({});
 const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
 const isSidebarOpen = ref(false);
+const activeConversationTitle = ref<string | null>(null);
+const conversations = ref<ConversationSummary[]>([]);
+const nextHistoryCursor = ref<string | null>(null);
+const hasMoreHistory = ref(false);
+const isLoadingHistory = ref(false);
+const historyErrorMessage = ref<string | null>(null);
+const deleteTarget = ref<ConversationSummary | null>(null);
+const isDeletingConversation = ref(false);
 let streamScrollFrame: number | null = null;
+const historyRefreshTimers: number[] = [];
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value);
-const firstUserMessage = computed(() => messages.value.find((message) => message.role === 'user'));
 const conversationLabel = computed(() => {
-  const content = firstUserMessage.value?.content.trim();
-  if (!content) {
-    return 'Nova conversa';
-  }
-
-  return content.length > 48 ? `${content.slice(0, 48).trimEnd()}...` : content;
+  const title = activeConversationTitle.value?.trim() || 'Nova conversa';
+  return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
 });
 const COMPOSER_MAX_HEIGHT = 168;
 
@@ -125,6 +141,7 @@ async function restoreConversation(): Promise<void> {
 
   try {
     const conversation = await getConversation(conversationId.value);
+    activeConversationTitle.value = conversation.title ?? 'Nova conversa';
     messages.value = conversation.messages.map((message) => ({
       ...message,
       serverId: message.id
@@ -133,7 +150,97 @@ async function restoreConversation(): Promise<void> {
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     conversationId.value = null;
+    activeConversationTitle.value = null;
     errorMessage.value = 'Não foi possível carregar a conversa anterior.';
+  } finally {
+    isRestoring.value = false;
+  }
+}
+
+function mergeConversationSummary(summary: ConversationSummary): void {
+  const withoutCurrent = conversations.value.filter((conversation) => conversation.id !== summary.id);
+  conversations.value = [summary, ...withoutCurrent].sort((first, second) => {
+    const dateDifference = new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
+    return dateDifference || second.id.localeCompare(first.id);
+  });
+}
+
+async function loadConversationHistory(reset = false): Promise<void> {
+  if (isLoadingHistory.value) {
+    return;
+  }
+
+  if (!reset && !hasMoreHistory.value) {
+    return;
+  }
+
+  isLoadingHistory.value = true;
+  historyErrorMessage.value = null;
+
+  try {
+    const page = await getConversations(30, reset ? null : nextHistoryCursor.value);
+    const incoming = reset ? page.items : [...conversations.value, ...page.items];
+    const seen = new Set<string>();
+    conversations.value = incoming.filter((conversation) => {
+      if (seen.has(conversation.id)) {
+        return false;
+      }
+
+      seen.add(conversation.id);
+      return true;
+    });
+    nextHistoryCursor.value = page.nextCursor ?? null;
+    hasMoreHistory.value = page.hasMore;
+
+    const active = conversations.value.find((conversation) => conversation.id === conversationId.value);
+    if (active) {
+      activeConversationTitle.value = active.title ?? 'Nova conversa';
+    }
+  } catch {
+    historyErrorMessage.value = 'Não foi possível carregar o histórico.';
+  } finally {
+    isLoadingHistory.value = false;
+  }
+}
+
+function refreshHistoryAfterResponse(): void {
+  void loadConversationHistory(true);
+
+  for (const delay of [1800, 5200]) {
+    historyRefreshTimers.push(
+      window.setTimeout(() => {
+        void loadConversationHistory(true);
+      }, delay)
+    );
+  }
+}
+
+async function openConversation(targetConversationId: string): Promise<void> {
+  if (isLoading.value || isRestoring.value || targetConversationId === conversationId.value) {
+    isSidebarOpen.value = false;
+    return;
+  }
+
+  isRestoring.value = true;
+  errorMessage.value = null;
+  feedbackTarget.value = null;
+  feedbackErrorMessage.value = null;
+  feedbackStatusByMessageId.value = {};
+
+  try {
+    const conversation = await getConversation(targetConversationId);
+    conversationId.value = conversation.id;
+    activeConversationTitle.value = conversation.title ?? 'Nova conversa';
+    localStorage.setItem(STORAGE_KEY, conversation.id);
+    messages.value = conversation.messages.map((message) => ({
+      ...message,
+      serverId: message.id
+    }));
+    isSidebarOpen.value = false;
+    scrollToLatest(false);
+  } catch {
+    errorMessage.value = 'Não foi possível abrir esta conversa.';
+    await loadConversationHistory(true);
   } finally {
     isRestoring.value = false;
   }
@@ -176,20 +283,24 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = getCompletedWordPrefix(streamedContent);
           scrollToLatestDuringStream();
         },
-        onDone: ({ conversationId: completedConversationId, messageId }) => {
+        onDone: ({ conversationId: completedConversationId, messageId, conversationTitle }) => {
           conversationId.value = completedConversationId;
           localStorage.setItem(STORAGE_KEY, completedConversationId);
+          activeConversationTitle.value = conversationTitle ?? activeConversationTitle.value ?? 'Nova conversa';
           localMessage.conversationId = completedConversationId;
           localMessage.pending = false;
           assistantMessage.conversationId = completedConversationId;
           assistantMessage.serverId = messageId;
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
+          isLoading.value = false;
           scrollToLatest();
 
           window.setTimeout(() => {
             assistantMessage.streaming = false;
           }, 600);
+
+          refreshHistoryAfterResponse();
         },
         onError: () => {
           errorMessage.value = 'A resposta da Aegis foi interrompida. Tente continuar em um instante.';
@@ -219,6 +330,7 @@ function handleKeydown(event: KeyboardEvent): void {
 function startNewConversation(): void {
   localStorage.removeItem(STORAGE_KEY);
   conversationId.value = null;
+  activeConversationTitle.value = null;
   messages.value = [];
   draft.value = '';
   resizeComposer();
@@ -227,6 +339,54 @@ function startNewConversation(): void {
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
   isSidebarOpen.value = false;
+}
+
+async function handleRenameConversation(targetConversationId: string, title: string): Promise<void> {
+  try {
+    const summary = await renameConversation(targetConversationId, title);
+    mergeConversationSummary(summary);
+    if (conversationId.value === targetConversationId) {
+      activeConversationTitle.value = summary.title ?? 'Nova conversa';
+    }
+  } catch {
+    errorMessage.value = 'Não foi possível renomear a conversa.';
+  }
+}
+
+function requestDeleteConversation(conversation: ConversationSummary): void {
+  deleteTarget.value = conversation;
+}
+
+function cancelDeleteConversation(): void {
+  if (isDeletingConversation.value) {
+    return;
+  }
+
+  deleteTarget.value = null;
+}
+
+async function confirmDeleteConversation(): Promise<void> {
+  if (!deleteTarget.value || isDeletingConversation.value) {
+    return;
+  }
+
+  const targetId = deleteTarget.value.id;
+  isDeletingConversation.value = true;
+
+  try {
+    await deleteConversation(targetId);
+    conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
+    if (conversationId.value === targetId) {
+      startNewConversation();
+    }
+
+    deleteTarget.value = null;
+    await loadConversationHistory(true);
+  } catch {
+    errorMessage.value = 'Não foi possível apagar a conversa.';
+  } finally {
+    isDeletingConversation.value = false;
+  }
 }
 
 function openFeedback(message: LocalChatMessage, rating: FeedbackRating): void {
@@ -271,7 +431,14 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 }
 
 onMounted(() => {
+  void loadConversationHistory(true);
   void restoreConversation();
+});
+
+onBeforeUnmount(() => {
+  for (const timer of historyRefreshTimers) {
+    window.clearTimeout(timer);
+  }
 });
 </script>
 
@@ -279,12 +446,20 @@ onMounted(() => {
   <main class="app-shell">
     <div class="hideout-shell">
       <ConversationSidebar
-        :current-title="conversationLabel"
-        :has-conversation="messages.length > 0"
+        :conversations="conversations"
+        :active-conversation-id="conversationId"
         :disabled="isLoading || isRestoring"
         :open="isSidebarOpen"
+        :has-more="hasMoreHistory"
+        :is-loading-more="isLoadingHistory"
+        :history-error="historyErrorMessage"
         @close="isSidebarOpen = false"
         @new-conversation="startNewConversation"
+        @open-conversation="openConversation"
+        @rename-conversation="handleRenameConversation"
+        @request-delete-conversation="requestDeleteConversation"
+        @load-more="loadConversationHistory(false)"
+        @retry-history="loadConversationHistory(true)"
       />
 
       <section class="chat-panel" aria-label="Conversa com a Aegis">
@@ -372,5 +547,25 @@ onMounted(() => {
       @cancel="closeFeedback"
       @submit="handleFeedbackSubmit"
     />
+
+    <div v-if="deleteTarget" class="confirm-overlay" role="dialog" aria-modal="true" aria-label="Apagar conversa">
+      <div class="confirm-dialog">
+        <p>Apagar esta conversa?</p>
+        <span>Ela sairá do histórico e não será usada para continuar raciocínios futuros.</span>
+        <div class="confirm-dialog__actions">
+          <button type="button" class="ghost-button" :disabled="isDeletingConversation" @click="cancelDeleteConversation">
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="delete-confirm-button"
+            :disabled="isDeletingConversation"
+            @click="confirmDeleteConversation"
+          >
+            Apagar
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>

@@ -11,7 +11,9 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IChatService, ChatService>();
+        services.AddScoped<IConversationTitleService, ConversationTitleService>();
         services.AddScoped<IMessageFeedbackService, MessageFeedbackService>();
+        services.AddSingleton<IConversationTitleJobQueue, ConversationTitleJobQueue>();
         services.AddSingleton<IRuntimeContextProvider, RuntimeContextProvider>();
         services.AddSingleton<IPromptBuilder, PromptBuilder>();
 

@@ -14,7 +14,17 @@ public interface IChatService
         Guid conversationId,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ConversationSummaryResponse>> GetRecentConversationsAsync(
-        int limit = 20,
+    Task<ConversationPageResponse> GetRecentConversationsAsync(
+        int limit = 30,
+        string? cursor = null,
+        CancellationToken cancellationToken = default);
+
+    Task<ConversationSummaryResponse?> RenameConversationAsync(
+        Guid conversationId,
+        string? title,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> DeleteConversationAsync(
+        Guid conversationId,
         CancellationToken cancellationToken = default);
 }

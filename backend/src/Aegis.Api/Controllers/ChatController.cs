@@ -104,12 +104,64 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
     }
 
     [HttpGet("conversations")]
-    public async Task<ActionResult<IReadOnlyList<ConversationSummaryResponse>>> GetRecentConversations(
-        [FromQuery] int limit = 20,
+    public async Task<ActionResult<ConversationPageResponse>> GetRecentConversations(
+        [FromQuery] int limit = 30,
+        [FromQuery] string? cursor = null,
         CancellationToken cancellationToken = default)
     {
-        var conversations = await chatService.GetRecentConversationsAsync(limit, cancellationToken);
-        return Ok(conversations);
+        try
+        {
+            var conversations = await chatService.GetRecentConversationsAsync(limit, cursor, cancellationToken);
+            return Ok(conversations);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+    }
+
+    [HttpPatch("conversations/{conversationId:guid}/title")]
+    public async Task<ActionResult<ConversationSummaryResponse>> RenameConversation(
+        Guid conversationId,
+        [FromBody] RenameConversationTitleRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return BadRequest(new { error = "Title is required." });
+        }
+
+        try
+        {
+            var conversation = await chatService.RenameConversationAsync(
+                conversationId,
+                request.Title,
+                cancellationToken);
+            if (conversation is null)
+            {
+                return NotFound(new { error = $"Conversation '{conversationId}' was not found." });
+            }
+
+            return Ok(conversation);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+    }
+
+    [HttpDelete("conversations/{conversationId:guid}")]
+    public async Task<IActionResult> DeleteConversation(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await chatService.DeleteConversationAsync(conversationId, cancellationToken);
+        if (!deleted)
+        {
+            return NotFound(new { error = $"Conversation '{conversationId}' was not found." });
+        }
+
+        return NoContent();
     }
 
     private async Task WriteStreamEventAsync(object streamEvent, CancellationToken cancellationToken)

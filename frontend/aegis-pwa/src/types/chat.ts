@@ -14,7 +14,24 @@ export interface Conversation {
   title?: string | null;
   createdAt: string;
   updatedAt: string;
+  titleSource?: string | null;
   messages: ChatMessage[];
+}
+
+export interface ConversationSummary {
+  id: string;
+  title?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  titleSource?: string | null;
+  messageCount: number;
+  lastMessagePreview?: string | null;
+}
+
+export interface ConversationPage {
+  items: ConversationSummary[];
+  nextCursor?: string | null;
+  hasMore: boolean;
 }
 
 export interface SendMessageRequest {
@@ -24,6 +41,8 @@ export interface SendMessageRequest {
 
 export interface SendMessageResponse {
   conversationId: string;
+  conversationTitle?: string | null;
+  titleSource?: string | null;
   message: ChatMessage;
 }
 
@@ -36,7 +55,12 @@ export interface LocalChatMessage extends ChatMessage {
 export interface ChatStreamHandlers {
   onConversation: (conversationId: string) => void;
   onToken: (content: string) => void;
-  onDone: (event: { conversationId: string; messageId: string }) => void;
+  onDone: (event: {
+    conversationId: string;
+    messageId: string;
+    conversationTitle?: string | null;
+    titleSource?: string | null;
+  }) => void;
   onError: (message: string) => void;
 }
 

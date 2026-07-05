@@ -235,6 +235,18 @@ button:disabled {
   background: rgba(15, 23, 37, 0.4);
 }
 
+.history-list {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-color: #52617b transparent;
+  scrollbar-width: thin;
+}
+
 .history-panel__header {
   display: flex;
   align-items: flex-end;
@@ -267,16 +279,18 @@ button:disabled {
 }
 
 .history-item {
+  position: relative;
   width: 100%;
-  display: grid;
+  display: flex;
+  align-items: stretch;
   gap: 6px;
-  padding: 11px;
+  min-height: 74px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 10px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.025);
-  text-align: left;
-  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
 }
 
 .history-item--active {
@@ -284,6 +298,18 @@ button:disabled {
   background:
     linear-gradient(120deg, rgba(145, 169, 238, 0.12), transparent),
     rgba(35, 48, 73, 0.76);
+}
+
+.history-item__main {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  padding: 2px 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
 .history-item__state {
@@ -317,8 +343,112 @@ button:disabled {
 }
 
 .history-item small {
+  overflow: hidden;
   color: var(--quiet);
   font-size: 0.66rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-menu-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  border-radius: 7px;
+  color: #9da9bf;
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-menu-button:hover {
+  color: #dce5f7;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.history-menu-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2.6;
+}
+
+.history-menu {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  z-index: 4;
+  min-width: 118px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid rgba(176, 193, 224, 0.16);
+  border-radius: 8px;
+  background: #182337;
+  box-shadow: 0 16px 36px rgba(3, 7, 14, 0.34);
+}
+
+.history-menu button,
+.history-retry {
+  min-height: 30px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: #cbd4e5;
+  background: transparent;
+  font-size: 0.72rem;
+  font-weight: 680;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-menu button:hover,
+.history-retry:hover {
+  background: rgba(145, 169, 238, 0.09);
+}
+
+.history-rename-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid rgba(176, 193, 224, 0.18);
+  border-radius: 8px;
+  color: var(--text);
+  background: #111a2a;
+  outline: none;
+}
+
+.history-rename-input:focus {
+  border-color: rgba(157, 177, 230, 0.5);
+  box-shadow: 0 0 0 3px rgba(145, 169, 238, 0.08);
+}
+
+.history-inline-error {
+  color: var(--warn);
+  font-size: 0.66rem;
+}
+
+.history-sentinel {
+  min-height: 1px;
+}
+
+.history-loading {
+  display: block;
+  padding: 6px 0 2px;
+  color: var(--quiet);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.history-retry {
+  justify-self: center;
+  border: 1px solid var(--line);
+  text-align: center;
 }
 
 .history-empty {
@@ -829,6 +959,61 @@ button:disabled {
   padding: 18px;
   background: rgba(7, 12, 21, 0.72);
   backdrop-filter: blur(7px);
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(7, 12, 21, 0.72);
+  backdrop-filter: blur(7px);
+}
+
+.confirm-dialog {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(176, 193, 224, 0.18);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(145, 169, 238, 0.07), transparent 38%),
+    #1a2436;
+  box-shadow: 0 28px 80px rgba(3, 7, 14, 0.48);
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 720;
+}
+
+.confirm-dialog span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 2px;
+}
+
+.delete-confirm-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: #321d22;
+  background: linear-gradient(180deg, #ffc4bd, #ff9f94);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .feedback-dialog {

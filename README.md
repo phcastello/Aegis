@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.1.3, "Finally, It’s Raining!", is the current streaming and safe Markdown microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+Aegis v0.1.4, "Where Were We?", is the current conversation history and continuity microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
 
 Version history:
 
@@ -8,8 +8,9 @@ Version history:
 - v0.1.1, "Finding My Voice", adjusted conversational behavior to reduce repetitive greetings, avoid status dumps, respect explicit exclusions, and sound less generic.
 - v0.1.2, "Bonk the Bot!", adds feedback capture for good and bad assistant responses.
 - v0.1.3, "Finally, It’s Raining!", adds streaming responses and safe Markdown rendering.
+- v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
 
-In v0.1.3, responses appear progressively in the PWA while they are generated. The API streams newline-delimited JSON (NDJSON), assistant Markdown is rendered with raw HTML disabled and sanitized before display, and the final complete response remains persisted with its audit data.
+In v0.1.4, Pedro can continue older conversations from the sidebar, rename or remove conversations from normal history, and new conversations receive short generated titles after the first response.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 

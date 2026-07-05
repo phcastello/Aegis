@@ -1,3 +1,4 @@
+using Aegis.Application.Chat;
 using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Common;
@@ -46,8 +47,9 @@ public interface IAegisDbContext
         int limit,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<Conversation>> GetRecentConversationsAsync(
+    Task<IReadOnlyList<ConversationSummaryData>> GetRecentConversationSummariesAsync(
         int limit,
+        ConversationCursor? cursor = null,
         CancellationToken cancellationToken = default);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

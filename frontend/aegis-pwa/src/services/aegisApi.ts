@@ -1,6 +1,8 @@
 import type {
   ChatStreamHandlers,
   Conversation,
+  ConversationPage,
+  ConversationSummary,
   MessageFeedbackResponse,
   SendMessageRequest,
   SendMessageResponse,
@@ -36,7 +38,12 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(message);
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 export async function sendMessage(request: SendMessageRequest): Promise<SendMessageResponse> {
@@ -88,6 +95,8 @@ export async function sendMessageStream(
       content?: string;
       messageId?: string;
       message?: string;
+      conversationTitle?: string | null;
+      titleSource?: string | null;
     };
 
     switch (event.type) {
@@ -106,7 +115,9 @@ export async function sendMessageStream(
           receivedDone = true;
           handlers.onDone({
             conversationId: event.conversationId,
-            messageId: event.messageId
+            messageId: event.messageId,
+            conversationTitle: event.conversationTitle,
+            titleSource: event.titleSource
           });
         }
         break;
@@ -144,6 +155,31 @@ export async function sendMessageStream(
 
 export async function getConversation(conversationId: string): Promise<Conversation> {
   return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`);
+}
+
+export async function getConversations(limit = 30, cursor?: string | null): Promise<ConversationPage> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+
+  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`);
+}
+
+export async function renameConversation(
+  conversationId: string,
+  title: string
+): Promise<ConversationSummary> {
+  return requestJson<ConversationSummary>(`/api/chat/conversations/${conversationId}/title`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title })
+  });
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await requestJson<void>(`/api/chat/conversations/${conversationId}`, {
+    method: 'DELETE'
+  });
 }
 
 export async function submitMessageFeedback(

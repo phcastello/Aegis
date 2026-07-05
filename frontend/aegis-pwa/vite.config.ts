@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'Finally, It’s Raining!',
+        description: 'Where Were We?',
         theme_color: '#151719',
         background_color: '#0f1113',
         display: 'standalone',

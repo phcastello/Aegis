@@ -5,4 +5,5 @@ public sealed record ConversationResponse(
     string? Title,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
+    string? TitleSource,
     IReadOnlyList<ChatMessageResponse> Messages);
