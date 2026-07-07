@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.1.4, "Where Were We?", is the current conversation history and continuity microversion of a personal assistant with an ASP.NET Core Web API backend and a simple installable chat PWA.
+Aegis v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 
 Version history:
 
@@ -9,8 +9,9 @@ Version history:
 - v0.1.2, "Bonk the Bot!", adds feedback capture for good and bad assistant responses.
 - v0.1.3, "Finally, It’s Raining!", adds streaming responses and safe Markdown rendering.
 - v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
+- v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 
-In v0.1.4, Pedro can continue older conversations from the sidebar, rename or remove conversations from normal history, and new conversations receive short generated titles after the first response.
+In v0.2.0, Pedro keeps the same chat, history, feedback, and Markdown experience while the backend routes normal conversation through the online model stack. New conversations still start as `Nova conversa`, and automatic titles are generated locally in the background from the first user message only.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 
@@ -137,7 +138,7 @@ docker compose build aegis-pwa
 ```
 
 The PWA Nginx proxy waits up to 300 seconds for API responses, matching the
-backend's Ollama HTTP client timeout. If the deployment has another reverse
+backend's model HTTP client timeout. If the deployment has another reverse
 proxy or load balancer in front of Docker Compose, configure its upstream
 response timeout to at least 300 seconds as well.
 

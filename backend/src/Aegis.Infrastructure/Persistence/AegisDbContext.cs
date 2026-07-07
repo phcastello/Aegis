@@ -236,6 +236,9 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             entity.Property(conversation => conversation.TitleGeneratedAt)
                 .IsRequired(false);
 
+            entity.Property(conversation => conversation.TitleGenerationRawResponse)
+                .IsRequired(false);
+
             entity.Property(conversation => conversation.DeletedAt)
                 .IsRequired(false);
 

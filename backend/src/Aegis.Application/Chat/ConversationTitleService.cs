@@ -1,15 +1,14 @@
 using Aegis.Application.Common;
-using Aegis.Application.Llm;
-using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Aegis.Application.Chat;
 
 public sealed class ConversationTitleService(
     IAegisDbContext dbContext,
-    ILlmClient llmClient) : IConversationTitleService
+    ILocalTitleGenerator titleGenerator) : IConversationTitleService
 {
     private const int TitlePromptUserLimit = 600;
     private const int TitlePromptAssistantLimit = 900;
@@ -22,79 +21,64 @@ public sealed class ConversationTitleService(
             job.ConversationId,
             cancellationToken);
         if (conversation is null ||
-            !conversation.CanGenerateAutomaticTitle ||
-            conversation.Messages.Count(message => message.Role == ChatRoles.User) != 1)
+            !conversation.CanGenerateAutomaticTitle)
         {
             return;
         }
 
-        var completion = await llmClient.GenerateAsync(
-            BuildTitlePrompt(job.UserContent, job.AssistantContent),
+        var generatedTitle = await titleGenerator.GenerateAsync(
+            LimitForTitlePrompt(job.UserContent, TitlePromptUserLimit),
+            LimitForTitlePrompt(job.AssistantContent, TitlePromptAssistantLimit),
             cancellationToken);
-        var title = SanitizeGeneratedTitle(completion.Content, job.UserContent);
-        conversation.SetGeneratedTitle(title);
+        var title = SanitizeGeneratedTitle(generatedTitle);
+        if (title is null)
+        {
+            if (generatedTitle is not null)
+            {
+                conversation.RecordTitleGenerationRawResponse(generatedTitle);
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return;
+        }
+
+        conversation.SetGeneratedTitle(title, generatedTitle);
         await dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    private static string BuildTitlePrompt(string userContent, string assistantContent)
-    {
-        return $"""
-            Gere um título curto em português brasileiro para esta conversa.
-
-            Regras:
-            - Máximo de 50 caracteres.
-            - Não use aspas.
-            - Não use ponto final.
-            - Não use emoji.
-            - Não explique.
-            - Nomeie o assunto da conversa, não o formato da resposta.
-            - Não mencione instruções de estilo, tamanho ou formato da resposta.
-            - Não use expressões como "breve resposta", "resposta curta", "explicação", "ajuda", "pergunta", "conversa" ou semelhantes.
-            - Retorne apenas o título.
-
-            Exemplos:
-            Ruim: Olá Aegis breve resposta
-            Bom: Saudação inicial
-
-            Ruim: Resposta curta sobre histórico
-            Bom: Histórico de conversas
-
-            Mensagem inicial do usuário:
-            {LimitForTitlePrompt(userContent, TitlePromptUserLimit)}
-
-            Primeira resposta da Aegis:
-            {LimitForTitlePrompt(assistantContent, TitlePromptAssistantLimit)}
-            """;
     }
 
     private static string LimitForTitlePrompt(string content, int maxLength)
     {
-        var normalized = string.Join(' ', content.Split(default(string[]), StringSplitOptions.RemoveEmptyEntries));
+        var normalized = string.Join(' ', content.Split((string[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return normalized.Length <= maxLength
             ? normalized
             : normalized[..maxLength].TrimEnd();
     }
 
-    private static string SanitizeGeneratedTitle(string generatedTitle, string fallbackContent)
+    private static string? SanitizeGeneratedTitle(string? generatedTitle)
     {
-        var firstLine = generatedTitle
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+        var firstLine = (generatedTitle ?? string.Empty)
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault() ?? string.Empty;
         var title = RemoveEmojiLikeSymbols(firstLine)
             .Replace("\"", string.Empty, StringComparison.Ordinal)
             .Replace("'", string.Empty, StringComparison.Ordinal)
             .Trim()
             .TrimEnd('.');
+        title = Regex.Replace(
+            title,
+            @"^\s*t[íi]tulo\s*[:\-]\s*",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         if (string.IsNullOrWhiteSpace(title))
         {
-            title = RemoveEmojiLikeSymbols(fallbackContent).Trim();
+            return null;
         }
 
-        title = string.Join(' ', title.Split(default(string[]), StringSplitOptions.RemoveEmptyEntries));
+        title = string.Join(' ', title.Split((string[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (string.IsNullOrWhiteSpace(title))
         {
-            return Conversation.DefaultTitle;
+            return null;
         }
 
         return title.Length <= Conversation.MaxGeneratedTitleLength

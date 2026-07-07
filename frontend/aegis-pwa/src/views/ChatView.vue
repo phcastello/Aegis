@@ -206,7 +206,7 @@ async function loadConversationHistory(reset = false): Promise<void> {
 function refreshHistoryAfterResponse(): void {
   void loadConversationHistory(true);
 
-  for (const delay of [1800, 5200]) {
+  for (const delay of [1800, 5200, 16000, 22000]) {
     historyRefreshTimers.push(
       window.setTimeout(() => {
         void loadConversationHistory(true);

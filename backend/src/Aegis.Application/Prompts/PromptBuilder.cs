@@ -97,13 +97,8 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
             prompt.AppendLine();
         }
 
-        prompt.AppendLine("# Current user message");
-        prompt.AppendLine("Answer this message now.");
-        prompt.AppendLine();
-        prompt.AppendLine("<current_user_message>");
-        prompt.AppendLine(currentUserMessage.Trim());
-        prompt.AppendLine("</current_user_message>");
-        prompt.AppendLine();
+        prompt.AppendLine("# Current response instructions");
+        prompt.AppendLine("Answer the current user input now.");
         prompt.AppendLine("Answer as Aegis, following the identity and behavior rules.");
         prompt.AppendLine("Do not use generic assistant closings such as \"Como posso ajudar?\" or \"Como posso ajudar hoje?\".");
         prompt.AppendLine("Do not use variants such as \"Como posso ser mais útil?\".");
@@ -126,8 +121,8 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
 
             You are Aegis.
 
-            Your current version is v0.1.4.
-            Your current version codename is "Where Were We?".
+            Your current version is v0.2.0.
+            Your current version codename is "Neural Uplink".
             """;
     }
 

@@ -85,6 +85,9 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset?>("TitleGeneratedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("TitleGenerationRawResponse")
+                        .HasColumnType("text");
+
                     b.Property<string>("TitleSource")
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
