@@ -11,9 +11,9 @@ import AegisMark from './AegisMark.vue';
     <div class="identity-card__copy">
       <div class="identity-card__title">
         <h1>Aegis</h1>
-        <span>v0.1.4</span>
+        <span>v0.2.0</span>
       </div>
-      <p class="identity-card__codename">Where Were We?</p>
+      <p class="identity-card__codename">Neural Uplink</p>
       <p class="identity-card__note">Um espaço calmo para pensar em voz alta.</p>
     </div>
   </section>

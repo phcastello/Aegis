@@ -1,5 +1,6 @@
 using Aegis.Application.Common;
 using Aegis.Application.Llm;
+using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
@@ -11,7 +12,8 @@ namespace Aegis.Application.Chat;
 public sealed class ChatService(
     IAegisDbContext dbContext,
     IPromptBuilder promptBuilder,
-    ILlmClient llmClient,
+    IAegisModelClient modelClient,
+    AegisModelRouter modelRouter,
     IConversationTitleJobQueue titleJobQueue) : IChatService
 {
     private const int RecentHistoryLimit = 20;
@@ -46,7 +48,10 @@ public sealed class ChatService(
 
         try
         {
-            var completion = await llmClient.GenerateAsync(promptResult.Prompt, cancellationToken);
+            var purpose = modelRouter.ChoosePurpose(new ChatRequestContext(userContent));
+            var completion = await modelClient.GenerateAsync(
+                CreateModelRequest(promptResult, userContent, purpose),
+                cancellationToken);
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
             dbContext.AddChatMessage(assistantMessage);
             assistantMessage.AttachAuditData(
@@ -61,11 +66,7 @@ public sealed class ChatService(
                 completion.AuditData));
 
             await dbContext.SaveChangesAsync(cancellationToken);
-            await QueueConversationTitleGenerationAsync(
-                conversation,
-                userContent,
-                completion.Content,
-                CancellationToken.None);
+            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
 
             return new SendMessageResponse(
                 conversation.Id,
@@ -115,19 +116,20 @@ public sealed class ChatService(
             cancellationToken);
 
         var content = new StringBuilder();
-        await using var stream = llmClient
-            .StreamCompletionAsync(promptResult.Prompt, cancellationToken)
+        var purpose = modelRouter.ChoosePurpose(new ChatRequestContext(userContent));
+        await using var stream = modelClient
+            .StreamAsync(CreateModelRequest(promptResult, userContent, purpose), cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
 
         while (true)
         {
-            LlmStreamChunk chunk;
+            ModelStreamChunk chunk;
             try
             {
                 if (!await stream.MoveNextAsync())
                 {
                     throw new InvalidOperationException(
-                        "Ollama streaming ended before a final event was received.");
+                        "Model streaming ended before a final event was received.");
                 }
 
                 chunk = stream.Current;
@@ -159,7 +161,7 @@ public sealed class ChatService(
                 string.IsNullOrWhiteSpace(chunk.Model) ||
                 chunk.AuditData is null)
             {
-                throw new InvalidOperationException("Ollama streaming ended without a complete response.");
+                throw new InvalidOperationException("Model streaming ended without a complete response.");
             }
 
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
@@ -176,11 +178,7 @@ public sealed class ChatService(
                 chunk.AuditData));
 
             await dbContext.SaveChangesAsync(cancellationToken);
-            await QueueConversationTitleGenerationAsync(
-                conversation,
-                userContent,
-                content.ToString(),
-                CancellationToken.None);
+            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
 
             yield return ChatStreamEvent.Done(
                 conversation.Id,
@@ -356,19 +354,55 @@ public sealed class ChatService(
 
     private async Task QueueConversationTitleGenerationAsync(
         Conversation conversation,
-        string userContent,
-        string assistantContent,
         CancellationToken cancellationToken)
     {
-        if (!conversation.CanGenerateAutomaticTitle ||
-            conversation.Messages.Count(message => message.Role == ChatRoles.User) != 1)
+        if (!conversation.CanGenerateAutomaticTitle)
+        {
+            return;
+        }
+
+        var firstUserMessage = conversation.Messages
+            .Where(message => message.Role == ChatRoles.User)
+            .OrderBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .FirstOrDefault();
+        if (firstUserMessage is null)
+        {
+            return;
+        }
+
+        var firstAssistantMessage = conversation.Messages
+            .Where(message => message.Role == ChatRoles.Assistant)
+            .OrderBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .FirstOrDefault();
+        if (firstAssistantMessage is null)
         {
             return;
         }
 
         await titleJobQueue.EnqueueAsync(
-            new ConversationTitleJob(conversation.Id, userContent, assistantContent),
+            new ConversationTitleJob(
+                conversation.Id,
+                firstUserMessage.Content,
+                firstAssistantMessage.Content),
             cancellationToken);
+    }
+
+    private static ModelRequest CreateModelRequest(
+        PromptBuildResult promptResult,
+        string userContent,
+        ModelPurpose purpose)
+    {
+        return new ModelRequest(
+            promptResult.Prompt,
+            userContent,
+            purpose,
+            new Dictionary<string, string>
+            {
+                ["aegis_version"] = "0.2.0",
+                ["purpose"] = purpose.ToString()
+            });
     }
 
     private static string? CreatePreview(string? content)

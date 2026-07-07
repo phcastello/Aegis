@@ -28,6 +28,8 @@ public sealed class Conversation : AuditableEntity
 
     public DateTimeOffset? TitleGeneratedAt { get; private set; }
 
+    public string? TitleGenerationRawResponse { get; private set; }
+
     public DateTimeOffset? DeletedAt { get; private set; }
 
     public ICollection<ChatMessage> Messages => _messages;
@@ -57,7 +59,18 @@ public sealed class Conversation : AuditableEntity
         Touch();
     }
 
-    public void SetGeneratedTitle(string title, DateTimeOffset? now = null)
+    public void RecordTitleGenerationRawResponse(string? rawResponse, DateTimeOffset? now = null)
+    {
+        if (!CanGenerateAutomaticTitle)
+        {
+            return;
+        }
+
+        TitleGenerationRawResponse = rawResponse;
+        Touch(now);
+    }
+
+    public void SetGeneratedTitle(string title, string? rawResponse = null, DateTimeOffset? now = null)
     {
         if (!CanGenerateAutomaticTitle)
         {
@@ -70,12 +83,14 @@ public sealed class Conversation : AuditableEntity
             return;
         }
 
+        var timestamp = now ?? DateTimeOffset.UtcNow;
         Title = normalizedTitle.Length <= MaxGeneratedTitleLength
             ? normalizedTitle
             : normalizedTitle[..MaxGeneratedTitleLength].TrimEnd();
         TitleSource = GeneratedTitleSource;
-        TitleGeneratedAt = now ?? DateTimeOffset.UtcNow;
-        Touch();
+        TitleGeneratedAt = timestamp;
+        TitleGenerationRawResponse = rawResponse;
+        Touch(timestamp);
     }
 
     public void Delete(DateTimeOffset? now = null)
@@ -109,4 +124,5 @@ public sealed class Conversation : AuditableEntity
             ? null
             : title.Trim();
     }
+
 }

@@ -10,6 +10,8 @@ namespace Aegis.Api.Controllers;
 [Route("api/chat")]
 public sealed class ChatController(IChatService chatService) : ControllerBase
 {
+    private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
+
     private static readonly JsonSerializerOptions StreamJsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -38,10 +40,7 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         {
             return StatusCode(StatusCodes.Status502BadGateway, new
             {
-                error = exception.Message,
-                reason = exception.AuditData.FailureReason,
-                durationMilliseconds = exception.AuditData.DurationMilliseconds,
-                ollamaStatusCode = exception.AuditData.HttpStatusCode
+                error = exception.Message
             });
         }
     }
@@ -83,9 +82,9 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         {
             await WriteStreamErrorAsync(exception.Message, StatusCodes.Status502BadGateway, cancellationToken);
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status500InternalServerError, cancellationToken);
+            await WriteStreamErrorAsync(FriendlyFailureMessage, StatusCodes.Status500InternalServerError, cancellationToken);
         }
     }
 
