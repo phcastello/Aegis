@@ -2,6 +2,7 @@ using Aegis.Application.Email;
 using Aegis.Infrastructure.Email;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using System.Text;
 
 namespace Aegis.Api.Controllers;
 
@@ -42,7 +43,10 @@ public sealed class EmailController(
         var options = gmailOptions.Value;
         if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
         {
-            return Redirect(options.FailureRedirectPath);
+            var message = string.IsNullOrWhiteSpace(error)
+                ? "Google OAuth did not return an authorization code."
+                : $"Google OAuth returned error: {error}.";
+            return Redirect(BuildFailureRedirectUri(options.FailureRedirectPath, "oauth_callback_error", message));
         }
 
         try
@@ -50,9 +54,33 @@ public sealed class EmailController(
             await emailConnectionService.HandleOAuthCallbackAsync(code, state, cancellationToken);
             return Redirect(options.SuccessRedirectPath);
         }
+        catch (HttpRequestException exception)
+        {
+            return Redirect(BuildFailureRedirectUri(
+                options.FailureRedirectPath,
+                "google_http_error",
+                exception.Message));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Redirect(BuildFailureRedirectUri(
+                options.FailureRedirectPath,
+                "oauth_invalid_operation",
+                exception.Message));
+        }
+        catch (ArgumentException exception)
+        {
+            return Redirect(BuildFailureRedirectUri(
+                options.FailureRedirectPath,
+                "oauth_invalid_argument",
+                exception.Message));
+        }
         catch
         {
-            return Redirect(options.FailureRedirectPath);
+            return Redirect(BuildFailureRedirectUri(
+                options.FailureRedirectPath,
+                "oauth_unknown_error",
+                "Unexpected error while finishing Gmail connection."));
         }
     }
 
@@ -61,5 +89,20 @@ public sealed class EmailController(
     {
         await emailConnectionService.DisconnectAsync(cancellationToken);
         return NoContent();
+    }
+
+    private static string BuildFailureRedirectUri(
+        string failureRedirectPath,
+        string code,
+        string message)
+    {
+        var separator = failureRedirectPath.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+        var builder = new StringBuilder(failureRedirectPath);
+        builder.Append(separator);
+        builder.Append("email_error_code=");
+        builder.Append(Uri.EscapeDataString(code));
+        builder.Append("&email_error_message=");
+        builder.Append(Uri.EscapeDataString(message));
+        return builder.ToString();
     }
 }

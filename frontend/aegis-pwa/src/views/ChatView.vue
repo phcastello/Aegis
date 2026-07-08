@@ -103,6 +103,62 @@ function syncViewportHeight(): void {
   document.documentElement.style.setProperty('--keyboard-inset-bottom', `${insetBottom}px`);
 }
 
+function normalizeEmailConnectError(rawCode: string | null, rawMessage: string | null): string | null {
+  if (!rawCode && !rawMessage) {
+    return null;
+  }
+
+  const message = rawMessage?.trim();
+  switch (rawCode) {
+    case 'oauth_callback_error':
+      return message
+        ? `Falha ao concluir a conexão com o Gmail: ${message}`
+        : 'Falha ao concluir a conexão com o Gmail.';
+    case 'google_http_error':
+      return message
+        ? `O Google rejeitou a conexão com o Gmail: ${message}`
+        : 'O Google rejeitou a conexão com o Gmail.';
+    case 'oauth_invalid_operation':
+    case 'oauth_invalid_argument':
+      return message
+        ? `A configuração ou o estado da conexão Gmail está inválido: ${message}`
+        : 'A configuração ou o estado da conexão Gmail está inválido.';
+    case 'oauth_unknown_error':
+      return message
+        ? `Erro inesperado ao conectar o Gmail: ${message}`
+        : 'Erro inesperado ao conectar o Gmail.';
+    default:
+      return message
+        ? `Falha ao conectar o Gmail: ${message}`
+        : 'Falha ao conectar o Gmail.';
+  }
+}
+
+function consumeEmailConnectStatusFromUrl(): void {
+  const url = new URL(window.location.href);
+  const emailStatus = url.searchParams.get('email');
+  const errorCode = url.searchParams.get('email_error_code');
+  const errorMessageParam = url.searchParams.get('email_error_message');
+
+  if (emailStatus === 'connected') {
+    errorMessage.value = null;
+  } else {
+    const normalizedError = normalizeEmailConnectError(errorCode, errorMessageParam);
+    if (normalizedError) {
+      errorMessage.value = normalizedError;
+    }
+  }
+
+  if (!emailStatus && !errorCode && !errorMessageParam) {
+    return;
+  }
+
+  url.searchParams.delete('email');
+  url.searchParams.delete('email_error_code');
+  url.searchParams.delete('email_error_message');
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+}
+
 function createLocalMessageId(): string {
   try {
     const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -455,6 +511,7 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 
 onMounted(() => {
   syncViewportHeight();
+  consumeEmailConnectStatusFromUrl();
   if (window.visualViewport) {
     const handleViewportChange = (): void => {
       syncViewportHeight();
