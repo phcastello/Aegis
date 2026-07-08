@@ -65,7 +65,7 @@ For Gmail connection in v0.2.1, configure these values in `.env` for Docker or a
 ```env
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:8080/api/email/oauth/callback
+GOOGLE_REDIRECT_URI=http://localhost:8090/api/email/oauth/callback
 GOOGLE_OAUTH_SCOPES=https://www.googleapis.com/auth/gmail.modify
 
 AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=30
@@ -92,7 +92,7 @@ dotnet run --project backend/src/Aegis.Api/Aegis.Api.csproj --launch-profile htt
 Health check:
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8090/api/health
 ```
 
 Run the frontend PWA in local development mode:
@@ -109,7 +109,7 @@ Open `http://localhost:5173`.
 In local development, Vite serves the PWA directly and calls the backend on a separate origin. The frontend reads `VITE_AEGIS_API_BASE_URL` from `frontend/aegis-pwa/.env.local`; the value should point to the backend origin, without `/api`:
 
 ```env
-VITE_AEGIS_API_BASE_URL=http://localhost:8080
+VITE_AEGIS_API_BASE_URL=http://localhost:8090
 ```
 
 Build the frontend:
@@ -136,19 +136,19 @@ http://localhost:5173
 And call the API health check:
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8090/api/health
 ```
 
 Swagger is enabled in the Development environment.
 
-Docker/PWA mode uses the Nginx container as the public origin. In this mode, leave `VITE_AEGIS_API_BASE_URL` empty in the root `.env`; the built PWA calls `/api/...`, and Nginx proxies those requests to `aegis-api:8080` inside Docker:
+Docker/PWA mode uses the Nginx container as the public origin. In this mode, leave `VITE_AEGIS_API_BASE_URL` empty in the root `.env`; the built PWA calls `/api/...`, and Nginx proxies those requests to `aegis-api:8090` inside Docker:
 
 ```env
 AEGIS_FRONTEND_PORT=5173
 VITE_AEGIS_API_BASE_URL=
 ```
 
-`VITE_AEGIS_API_BASE_URL` is baked into the PWA at image build time. Use `http://localhost:8080` for local Vite development, and an empty value for Docker/PWA proxy mode. Rebuild the frontend image after changing it:
+`VITE_AEGIS_API_BASE_URL` is baked into the PWA at image build time. Use `http://localhost:8090` for local Vite development, and an empty value for Docker/PWA proxy mode. Rebuild the frontend image after changing it:
 
 ```bash
 docker compose build aegis-pwa

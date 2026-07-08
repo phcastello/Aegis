@@ -24,12 +24,12 @@ services:
       - qdrant
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ASPNETCORE_URLS: http://+:8080
+      ASPNETCORE_URLS: http://+:8090
       ConnectionStrings__AegisDatabase: ${AEGIS_DB_CONNECTION_STRING}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/api/email/oauth/callback}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8090/api/email/oauth/callback}
       GOOGLE_OAUTH_SCOPES: ${GOOGLE_OAUTH_SCOPES:-https://www.googleapis.com/auth/gmail.modify}
       GOOGLE_OAUTH_SUCCESS_REDIRECT_PATH: ${GOOGLE_OAUTH_SUCCESS_REDIRECT_PATH:-http://localhost:${AEGIS_FRONTEND_PORT:-5173}/?email=connected}
       GOOGLE_OAUTH_FAILURE_REDIRECT_PATH: ${GOOGLE_OAUTH_FAILURE_REDIRECT_PATH:-http://localhost:${AEGIS_FRONTEND_PORT:-5173}/?email=connect_failed}
@@ -55,7 +55,7 @@ services:
       AEGIS_WEB_SEARCH_ENABLED: ${AEGIS_WEB_SEARCH_ENABLED:-false}
       AEGIS_WEB_SEARCH_REQUIRE_EXPLICIT_REQUEST: ${AEGIS_WEB_SEARCH_REQUIRE_EXPLICIT_REQUEST:-true}
     ports:
-      - "${AEGIS_API_PORT:-8080}:8080"
+      - "${AEGIS_API_PORT:-8090}:8090"
     volumes:
       - data_protection_keys:/root/.aspnet/DataProtection-Keys
 
