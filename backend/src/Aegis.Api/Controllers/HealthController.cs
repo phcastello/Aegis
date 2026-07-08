@@ -13,8 +13,8 @@ public sealed class HealthController : ControllerBase
         {
             status = "ok",
             service = "Aegis.Api",
-            version = "0.2.0",
-            codename = "Neural Uplink"
+            version = "0.2.1",
+            codename = "Inbox Familiar"
         });
     }
 }

@@ -2,6 +2,8 @@ using Aegis.Application.Common;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Prompts;
+using Aegis.Application.Tools;
+using Aegis.Application.Email;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Runtime.CompilerServices;
@@ -13,6 +15,8 @@ public sealed class ChatService(
     IAegisDbContext dbContext,
     IPromptBuilder promptBuilder,
     IAegisModelClient modelClient,
+    IAegisToolLoop toolLoop,
+    IEmailToolContextService emailContextService,
     AegisModelRouter modelRouter,
     IConversationTitleJobQueue titleJobQueue) : IChatService
 {
@@ -48,10 +52,17 @@ public sealed class ChatService(
 
         try
         {
-            var purpose = modelRouter.ChoosePurpose(new ChatRequestContext(userContent));
-            var completion = await modelClient.GenerateAsync(
-                CreateModelRequest(promptResult, userContent, purpose),
+            var chatContext = await CreateChatRequestContextAsync(
+                conversation.Id,
+                userContent,
+                recentHistory,
                 cancellationToken);
+            var purpose = modelRouter.ChoosePurpose(chatContext);
+            var useTools = modelRouter.RequiresTools(chatContext);
+            var modelRequest = CreateModelRequest(promptResult, userContent, purpose);
+            var completion = useTools
+                ? await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, cancellationToken)
+                : await modelClient.GenerateAsync(modelRequest, cancellationToken);
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
             dbContext.AddChatMessage(assistantMessage);
             assistantMessage.AttachAuditData(
@@ -116,9 +127,67 @@ public sealed class ChatService(
             cancellationToken);
 
         var content = new StringBuilder();
-        var purpose = modelRouter.ChoosePurpose(new ChatRequestContext(userContent));
+        var chatContext = await CreateChatRequestContextAsync(
+            conversation.Id,
+            userContent,
+            recentHistory,
+            cancellationToken);
+        var purpose = modelRouter.ChoosePurpose(chatContext);
+        var useTools = modelRouter.RequiresTools(chatContext);
+        var modelRequest = CreateModelRequest(promptResult, userContent, purpose);
+
+        if (useTools)
+        {
+            ModelCompletionResponse completion;
+            try
+            {
+                completion = await RunToolCompletionAsync(
+                    modelRequest,
+                    conversation.Id,
+                    userMessage.Id,
+                    userContent,
+                    cancellationToken);
+            }
+            catch (LlmRequestException exception)
+            {
+                dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
+                    conversation.Id,
+                    userMessage.Id,
+                    null,
+                    exception.AuditData));
+
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+                throw;
+            }
+
+            yield return ChatStreamEvent.Token(completion.Content);
+
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
+            dbContext.AddChatMessage(assistantMessage);
+            assistantMessage.AttachAuditData(
+                completion.Model,
+                promptResult.Prompt,
+                promptResult.RuntimeContext,
+                completion.MetadataJson);
+            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
+                conversation.Id,
+                userMessage.Id,
+                assistantMessage.Id,
+                completion.AuditData));
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+
+            yield return ChatStreamEvent.Done(
+                conversation.Id,
+                assistantMessage.Id,
+                conversation.Title,
+                conversation.TitleSource);
+            yield break;
+        }
+
         await using var stream = modelClient
-            .StreamAsync(CreateModelRequest(promptResult, userContent, purpose), cancellationToken)
+            .StreamAsync(modelRequest, cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
 
         while (true)
@@ -302,6 +371,61 @@ public sealed class ChatService(
             message.Model);
     }
 
+    private async Task<ChatRequestContext> CreateChatRequestContextAsync(
+        Guid conversationId,
+        string userContent,
+        IReadOnlyList<ChatMessage> recentHistory,
+        CancellationToken cancellationToken)
+    {
+        var hasPendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(
+            conversationId,
+            cancellationToken) is not null;
+        var hasRecentEmailContext = await emailContextService.HasRecentEmailContextAsync(
+            conversationId,
+            cancellationToken);
+        var hasRecentEmailHistory = recentHistory
+            .OrderByDescending(message => message.CreatedAt)
+            .Take(8)
+            .Any(message => ContainsAny(message.Content,
+            [
+                "email",
+                "gmail",
+                "briefing",
+                "não lido",
+                "nao lido",
+                "lido",
+                "marcar",
+                "conexão",
+                "conexao"
+            ]));
+
+        return new ChatRequestContext(
+            userContent,
+            HasPendingAction: hasPendingAction,
+            HasRecentToolContext: hasRecentEmailContext || hasRecentEmailHistory);
+    }
+
+    private async Task<ModelCompletionResponse> RunToolCompletionAsync(
+        ModelRequest request,
+        Guid conversationId,
+        Guid userMessageId,
+        string userContent,
+        CancellationToken cancellationToken)
+    {
+        var response = await toolLoop.RunAsync(
+            request with { Purpose = ModelPurpose.Main },
+            new ToolExecutionContext(conversationId, userMessageId, userContent),
+            cancellationToken);
+
+        return new ModelCompletionResponse(
+            response.Content,
+            response.Provider,
+            response.Model,
+            response.Purpose,
+            response.MetadataJson,
+            response.AuditData);
+    }
+
     private static LlmRequestAudit CreateLlmRequestAudit(
         Guid conversationId,
         Guid userMessageId,
@@ -400,7 +524,7 @@ public sealed class ChatService(
             purpose,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.2.0",
+                ["aegis_version"] = "0.2.1",
                 ["purpose"] = purpose.ToString()
             });
     }
@@ -416,5 +540,10 @@ public sealed class ChatService(
         return normalized.Length <= 140
             ? normalized
             : normalized[..137] + "...";
+    }
+
+    private static bool ContainsAny(string value, IReadOnlyList<string> terms)
+    {
+        return terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -17,6 +17,14 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     public DbSet<LlmRequestAudit> LlmRequestAudits => Set<LlmRequestAudit>();
 
+    public DbSet<EmailAccountConnection> EmailAccountConnections => Set<EmailAccountConnection>();
+
+    public DbSet<PendingEmailAction> PendingEmailActions => Set<PendingEmailAction>();
+
+    public DbSet<EmailActionAudit> EmailActionAudits => Set<EmailActionAudit>();
+
+    public DbSet<ToolContextEntry> ToolContextEntries => Set<ToolContextEntry>();
+
     IQueryable<Conversation> IAegisDbContext.Conversations => Conversations;
 
     IQueryable<ChatMessage> IAegisDbContext.ChatMessages => ChatMessages;
@@ -24,6 +32,14 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     IQueryable<MessageFeedback> IAegisDbContext.MessageFeedback => MessageFeedback;
 
     IQueryable<LlmRequestAudit> IAegisDbContext.LlmRequestAudits => LlmRequestAudits;
+
+    IQueryable<EmailAccountConnection> IAegisDbContext.EmailAccountConnections => EmailAccountConnections;
+
+    IQueryable<PendingEmailAction> IAegisDbContext.PendingEmailActions => PendingEmailActions;
+
+    IQueryable<EmailActionAudit> IAegisDbContext.EmailActionAudits => EmailActionAudits;
+
+    IQueryable<ToolContextEntry> IAegisDbContext.ToolContextEntries => ToolContextEntries;
 
     public void AddConversation(Conversation conversation)
     {
@@ -43,6 +59,26 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     public void AddLlmRequestAudit(LlmRequestAudit audit)
     {
         LlmRequestAudits.Add(audit);
+    }
+
+    public void AddEmailAccountConnection(EmailAccountConnection connection)
+    {
+        EmailAccountConnections.Add(connection);
+    }
+
+    public void AddPendingEmailAction(PendingEmailAction action)
+    {
+        PendingEmailActions.Add(action);
+    }
+
+    public void AddEmailActionAudit(EmailActionAudit audit)
+    {
+        EmailActionAudits.Add(audit);
+    }
+
+    public void AddToolContextEntry(ToolContextEntry entry)
+    {
+        ToolContextEntries.Add(entry);
     }
 
     public async Task<ChatMessage?> GetChatMessageAsync(
@@ -207,6 +243,91 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             {
                 await connection.CloseAsync();
             }
+        }
+    }
+
+    public async Task<PendingEmailAction?> GetLatestOpenPendingEmailActionAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await PendingEmailActions
+            .Where(action =>
+                action.ConversationId == conversationId &&
+                action.ConfirmedAt == null &&
+                action.CancelledAt == null &&
+                action.ExecutedAt == null &&
+                action.ExpiresAt > now)
+            .OrderByDescending(action => action.CreatedAt)
+            .ThenByDescending(action => action.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ToolContextEntry>> GetActiveToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        string? entryType = null,
+        string? key = null,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var query = ToolContextEntries
+            .Where(entry =>
+                entry.ConversationId == conversationId &&
+                entry.Scope == scope &&
+                entry.ReplacedAt == null &&
+                entry.ExpiresAt > now);
+
+        if (!string.IsNullOrWhiteSpace(entryType))
+        {
+            query = query.Where(entry => entry.EntryType == entryType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            query = query.Where(entry => entry.Key == key);
+        }
+
+        return await query
+            .OrderByDescending(entry => entry.CreatedAt)
+            .ThenByDescending(entry => entry.Id)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> HasRecentToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        DateTimeOffset since,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await ToolContextEntries.AnyAsync(
+            entry =>
+                entry.ConversationId == conversationId &&
+                entry.Scope == scope &&
+                entry.ReplacedAt == null &&
+                entry.ExpiresAt > now &&
+                entry.CreatedAt >= since,
+            cancellationToken);
+    }
+
+    public async Task ReplaceActiveToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        string entryType,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        var entries = await GetActiveToolContextEntriesAsync(
+            conversationId,
+            scope,
+            entryType,
+            key,
+            cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var entry in entries)
+        {
+            entry.Replace(now);
         }
     }
 
@@ -384,6 +505,175 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             entity.HasIndex(audit => audit.AssistantMessageId);
             entity.HasIndex(audit => audit.Success);
             entity.HasIndex(audit => audit.CreatedAt);
+        });
+
+        modelBuilder.Entity<EmailAccountConnection>(entity =>
+        {
+            entity.ToTable("email_account_connections");
+            entity.HasKey(connection => connection.Id);
+
+            entity.Property(connection => connection.Provider)
+                .HasMaxLength(40)
+                .IsRequired();
+
+            entity.Property(connection => connection.EmailAddress)
+                .HasMaxLength(320)
+                .IsRequired(false);
+
+            entity.Property(connection => connection.AccessTokenEncrypted)
+                .IsRequired();
+
+            entity.Property(connection => connection.RefreshTokenEncrypted)
+                .IsRequired(false);
+
+            entity.Property(connection => connection.AccessTokenExpiresAt)
+                .IsRequired();
+
+            entity.Property(connection => connection.Scopes)
+                .IsRequired();
+
+            entity.Property(connection => connection.DisconnectedAt)
+                .IsRequired(false);
+
+            entity.Property(connection => connection.CreatedAt)
+                .IsRequired();
+
+            entity.Property(connection => connection.UpdatedAt)
+                .IsRequired();
+
+            entity.HasIndex(connection => new { connection.Provider, connection.DisconnectedAt });
+        });
+
+        modelBuilder.Entity<PendingEmailAction>(entity =>
+        {
+            entity.ToTable("pending_email_actions");
+            entity.HasKey(action => action.Id);
+
+            entity.Property(action => action.ActionType)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(action => action.EmailIdsJson)
+                .HasColumnType("jsonb")
+                .IsRequired();
+
+            entity.Property(action => action.HumanSummary)
+                .HasMaxLength(500)
+                .IsRequired();
+
+            entity.Property(action => action.ExpiresAt)
+                .IsRequired();
+
+            entity.Property(action => action.ConfirmedAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.CancelledAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.ExecutedAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.CreatedAt)
+                .IsRequired();
+
+            entity.Property(action => action.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(action => action.Conversation)
+                .WithMany()
+                .HasForeignKey(action => action.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(action => new { action.ConversationId, action.ExpiresAt });
+            entity.HasIndex(action => action.ActionType);
+        });
+
+        modelBuilder.Entity<EmailActionAudit>(entity =>
+        {
+            entity.ToTable("email_action_audits");
+            entity.HasKey(audit => audit.Id);
+
+            entity.Property(audit => audit.ActionType)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(audit => audit.EmailIdsJson)
+                .HasColumnType("jsonb")
+                .IsRequired();
+
+            entity.Property(audit => audit.Success)
+                .IsRequired();
+
+            entity.Property(audit => audit.FailureReason);
+
+            entity.Property(audit => audit.CreatedAt)
+                .IsRequired();
+
+            entity.Property(audit => audit.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(audit => audit.Conversation)
+                .WithMany()
+                .HasForeignKey(audit => audit.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(audit => audit.UserConfirmationMessage)
+                .WithMany()
+                .HasForeignKey(audit => audit.UserConfirmationMessageId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasIndex(audit => audit.ConversationId);
+            entity.HasIndex(audit => audit.UserConfirmationMessageId);
+            entity.HasIndex(audit => audit.ActionType);
+            entity.HasIndex(audit => audit.CreatedAt);
+            entity.HasIndex(audit => audit.Success);
+        });
+
+        modelBuilder.Entity<ToolContextEntry>(entity =>
+        {
+            entity.ToTable("tool_context_entries");
+            entity.HasKey(entry => entry.Id);
+
+            entity.Property(entry => entry.Scope)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(entry => entry.EntryType)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(entry => entry.Key)
+                .HasMaxLength(200)
+                .IsRequired();
+
+            entity.Property(entry => entry.DataJson)
+                .HasColumnType("jsonb")
+                .IsRequired();
+
+            entity.Property(entry => entry.SourceToolName)
+                .HasMaxLength(120)
+                .IsRequired();
+
+            entity.Property(entry => entry.ExpiresAt)
+                .IsRequired();
+
+            entity.Property(entry => entry.ReplacedAt)
+                .IsRequired(false);
+
+            entity.Property(entry => entry.CreatedAt)
+                .IsRequired();
+
+            entity.Property(entry => entry.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(entry => entry.Conversation)
+                .WithMany()
+                .HasForeignKey(entry => entry.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(entry => new { entry.ConversationId, entry.Scope, entry.EntryType, entry.Key });
+            entity.HasIndex(entry => new { entry.ConversationId, entry.Scope, entry.ExpiresAt });
+            entity.HasIndex(entry => entry.ReplacedAt);
         });
     }
 }

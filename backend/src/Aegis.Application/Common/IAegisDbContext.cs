@@ -13,6 +13,14 @@ public interface IAegisDbContext
 
     IQueryable<LlmRequestAudit> LlmRequestAudits { get; }
 
+    IQueryable<EmailAccountConnection> EmailAccountConnections { get; }
+
+    IQueryable<PendingEmailAction> PendingEmailActions { get; }
+
+    IQueryable<EmailActionAudit> EmailActionAudits { get; }
+
+    IQueryable<ToolContextEntry> ToolContextEntries { get; }
+
     void AddConversation(Conversation conversation);
 
     void AddChatMessage(ChatMessage message);
@@ -20,6 +28,14 @@ public interface IAegisDbContext
     void AddMessageFeedback(MessageFeedback feedback);
 
     void AddLlmRequestAudit(LlmRequestAudit audit);
+
+    void AddEmailAccountConnection(EmailAccountConnection connection);
+
+    void AddPendingEmailAction(PendingEmailAction action);
+
+    void AddEmailActionAudit(EmailActionAudit audit);
+
+    void AddToolContextEntry(ToolContextEntry entry);
 
     Task<ChatMessage?> GetChatMessageAsync(
         Guid messageId,
@@ -50,6 +66,30 @@ public interface IAegisDbContext
     Task<IReadOnlyList<ConversationSummaryData>> GetRecentConversationSummariesAsync(
         int limit,
         ConversationCursor? cursor = null,
+        CancellationToken cancellationToken = default);
+
+    Task<PendingEmailAction?> GetLatestOpenPendingEmailActionAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ToolContextEntry>> GetActiveToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        string? entryType = null,
+        string? key = null,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> HasRecentToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        DateTimeOffset since,
+        CancellationToken cancellationToken = default);
+
+    Task ReplaceActiveToolContextEntriesAsync(
+        Guid conversationId,
+        string scope,
+        string entryType,
+        string key,
         CancellationToken cancellationToken = default);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

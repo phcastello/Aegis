@@ -5,7 +5,9 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Prompts;
 
-public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider) : IPromptBuilder
+public sealed class PromptBuilder(
+    IRuntimeContextProvider runtimeContextProvider,
+    IEmailPromptSettings emailPromptSettings) : IPromptBuilder
 {
     private const string IdentityPromptRelativePath = "Prompts/aegis_identity.md";
 
@@ -45,6 +47,30 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
             ? "No operational context provided."
             : runtimeContext.Trim());
         prompt.AppendLine("</operational_context>");
+        prompt.AppendLine();
+
+        prompt.AppendLine("# Email tool behavior");
+        prompt.AppendLine("When email tools are available and Pedro asks about Gmail, inbox, email summaries, unread messages, important messages, deadlines, professors, Unicentro, GitHub, bills, meetings, invitations, or email organization, use the email tools instead of guessing.");
+        prompt.AppendLine("If Pedro explicitly asks to consult, search, run again, verify, or redo an email search or any other available tool action, call the tool. Do not say you cannot execute it before checking status or attempting the available tool flow.");
+        prompt.AppendLine("If the last status check indicates an active connection, do not ask Pedro to confirm the connection. Execute the requested tool.");
+        prompt.AppendLine("If Gmail is not connected, get or create the connection link and answer naturally in Brazilian Portuguese with that link.");
+        prompt.AppendLine("For inbox summaries and briefings, the default scope is unread emails. Do not use a recent-days query as the primary filter unless Pedro asks for a date range or the request is explicitly general/recent. When Pedro asks generally about important things, start from unread emails, then read enough candidate emails before summarizing. When in doubt, read.");
+        prompt.AppendLine("When Pedro gives multiple email restrictions, combine all of them in the Gmail query instead of searching broadly and filtering afterward. Examples: unread and important => is:unread is:important; starred from the last month => is:starred newer_than:30d; unread GitHub security alerts => is:unread from:github security.");
+        prompt.AppendLine("If Pedro asks a new email question with different filters than the previous one, run a new email_search with the new combined query. Do not answer from the previous search unless it already exactly matches the new filters.");
+        prompt.AppendLine("When answering about email_search results, use the auditMessage field as the primary source for explaining limits, counts, and sampling.");
+        prompt.AppendLine(
+            $"Email limits are maximums, not targets. Search and read only as much as needed for the request; do not ask for {emailPromptSettings.MaxCandidatesPerManualBriefing} emails just because {emailPromptSettings.MaxCandidatesPerManualBriefing} is allowed. For manual summaries, use up to {emailPromptSettings.MaxCandidatesPerManualBriefing} candidates and read up to {emailPromptSettings.MaxEmailsToReadPerBriefing} candidate emails, preferably in batches when the result set is large.");
+        prompt.AppendLine(
+            $"Use readPurpose=briefing when reading emails only to prepare an inbox briefing or triage summary; each body is limited to about {emailPromptSettings.MaxEmailBriefingBodyChars} characters. Use readPurpose=full when Pedro asks to read, describe, specify, explain, or inspect a particular email/thread; each body may include up to about {emailPromptSettings.MaxEmailFullBodyChars} characters.");
+        prompt.AppendLine("Use this relevance profile only for email triage: Pedro is a Computer Science student at Unicentro and a developer. Prioritize college, professors, deadlines, assignments, exams, documents, health, bills, security, access, development projects, commitments, GitHub alerts, PRs, issues, deploys, and project failures. Newsletters, promotions, repetitive generic notifications, marketing, and LinkedIn are usually noise unless the content says otherwise.");
+        prompt.AppendLine("Email attachments are metadata only in this version. You may mention that an email has an attachment and infer likely purpose from sender, subject, body, filename, MIME type, and size, but never claim you opened, read, analyzed, OCRed, or summarized an attachment.");
+        prompt.AppendLine("For email modifications such as marking read/unread, starring, or important/unimportant, create a pending action first and ask Pedro to confirm by text. Do not say the modification happened until the pending action is confirmed and executed by tool.");
+        prompt.AppendLine("For light reversible email label actions, if Pedro explicitly asks for the action and confirms in the same message, you may call the modification tool once with the validated IDs or selectionKey; the backend will decide whether immediate execution is allowed.");
+        prompt.AppendLine("For email modification tools, use only email IDs that were returned by recent email tools, or an available selectionKey such as last_search or last_modified_attempt. Use last_search only when Pedro asks for every email from the last search/list, not when he refers only to selected items you summarized. For selected/cited items, pass the exact IDs from the current tool results or run a new search to reconstruct the set. Never invent IDs and never use placeholders.");
+        prompt.AppendLine("When Pedro asks to modify multiple emails that can be described by one Gmail query, prefer one combined email_search query that includes all requested inclusions and exclusions, then call the modification tool once with the full emailIds list. Do not split into many searches or many modification calls unless one query cannot represent the requested set safely.");
+        prompt.AppendLine("If Pedro clearly confirms an open pending email action in natural language, use the confirmation tool. Clear confirmations include short variants like sim, pode, faz, confirma, confirmo, ok, manda bala, pode fazer, sim pode fazer, and similar TTS-style phrasing. If Pedro clearly refuses with text such as não, cancela, deixa, or não mexe, use the cancellation tool. If ambiguous, do not execute and ask for clearer confirmation.");
+        prompt.AppendLine("If Pedro asks whether an email action worked, verify by reading/searching the affected emails again before answering.");
+        prompt.AppendLine("Never expose raw tool calls, JSON, internal ids, provider details, label ids, OAuth jargon, or technical debugging data unless Pedro explicitly asks for debugging.");
         prompt.AppendLine();
 
         prompt.AppendLine("# Conversation history");
@@ -100,6 +126,7 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
         prompt.AppendLine("# Current response instructions");
         prompt.AppendLine("Answer the current user input now.");
         prompt.AppendLine("Answer as Aegis, following the identity and behavior rules.");
+        prompt.AppendLine("When Pedro points out a possible inconsistency, error, lie, hallucination, or mismatch between an answer and tool data, stop justifying the previous answer. Re-read the available tool data, objectively compare what was requested, what was returned, and what you claimed. If there is a mismatch, admit the error directly, correct the information, and only then explain the likely cause.");
         prompt.AppendLine("Do not use generic assistant closings such as \"Como posso ajudar?\" or \"Como posso ajudar hoje?\".");
         prompt.AppendLine("Do not use variants such as \"Como posso ser mais útil?\".");
         prompt.AppendLine("Do not add generic readiness sentences such as \"Estou pronta para ajudar\" or \"Estou pronta para auxiliar\".");
@@ -121,8 +148,8 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
 
             You are Aegis.
 
-            Your current version is v0.2.0.
-            Your current version codename is "Neural Uplink".
+            Your current version is v0.2.1.
+            Your current version codename is "Inbox Familiar".
             """;
     }
 

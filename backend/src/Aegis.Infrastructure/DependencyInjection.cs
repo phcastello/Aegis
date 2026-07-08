@@ -1,10 +1,14 @@
 using Aegis.Application.Common;
 using Aegis.Application.Chat;
+using Aegis.Application.Email;
+using Aegis.Application.Prompts;
 using Aegis.Application.Models;
 using Aegis.Infrastructure.Chat;
+using Aegis.Infrastructure.Email;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,6 +27,8 @@ public static class DependencyInjection
             options.UseNpgsql(connectionString));
 
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
+        services.AddDataProtection()
+            .SetApplicationName("Aegis");
 
         services.Configure<OpenAIOptions>(options =>
         {
@@ -64,6 +70,68 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(baseUrl);
             client.Timeout = TimeSpan.FromMinutes(5);
         });
+
+        services.Configure<GmailOptions>(options =>
+        {
+            options.ClientId = ReadAny(configuration, options.ClientId, "GOOGLE_CLIENT_ID", "Google:ClientId");
+            options.ClientSecret = ReadAny(configuration, options.ClientSecret, "GOOGLE_CLIENT_SECRET", "Google:ClientSecret");
+            options.RedirectUri = ReadAny(configuration, options.RedirectUri, "GOOGLE_REDIRECT_URI", "Google:RedirectUri");
+            options.Scopes = ReadAny(configuration, options.Scopes, "GOOGLE_OAUTH_SCOPES", "Google:OAuthScopes");
+            options.SuccessRedirectPath = ReadAny(
+                configuration,
+                options.SuccessRedirectPath,
+                "GOOGLE_OAUTH_SUCCESS_REDIRECT_PATH",
+                "Google:OAuthSuccessRedirectPath");
+            options.FailureRedirectPath = ReadAny(
+                configuration,
+                options.FailureRedirectPath,
+                "GOOGLE_OAUTH_FAILURE_REDIRECT_PATH",
+                "Google:OAuthFailureRedirectPath");
+            options.MaxEmailsPerManualBriefing = ReadIntAny(
+                configuration,
+                options.MaxEmailsPerManualBriefing,
+                "AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING",
+                "Aegis:MaxEmailsPerManualBriefing");
+            options.MaxEmailsToReadPerBriefing = ReadIntAny(
+                configuration,
+                options.MaxEmailsToReadPerBriefing,
+                "AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING",
+                "Aegis:MaxEmailsToReadPerBriefing");
+            options.MaxEmailBriefingBodyChars = ReadIntAny(
+                configuration,
+                options.MaxEmailBriefingBodyChars,
+                "AEGIS_MAX_EMAIL_BRIEFING_BODY_CHARS",
+                "Aegis:MaxEmailBriefingBodyChars");
+            options.MaxEmailFullBodyChars = ReadIntAny(
+                configuration,
+                options.MaxEmailFullBodyChars,
+                "AEGIS_MAX_EMAIL_FULL_BODY_CHARS",
+                "Aegis:MaxEmailFullBodyChars",
+                "AEGIS_MAX_EMAIL_BODY_CHARS",
+                "Aegis:MaxEmailBodyChars");
+            options.MaxEmailBodyChars = ReadIntAny(
+                configuration,
+                options.MaxEmailBodyChars,
+                "AEGIS_MAX_EMAIL_BODY_CHARS",
+                "Aegis:MaxEmailBodyChars");
+            options.EmailBriefingLookbackDays = ReadIntAny(
+                configuration,
+                options.EmailBriefingLookbackDays,
+                "AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS",
+                "Aegis:EmailBriefingLookbackDays");
+        });
+        services.AddSingleton<IEmailPromptSettings>(provider =>
+        {
+            var options = provider.GetRequiredService<IOptions<GmailOptions>>().Value;
+            return new EmailPromptSettings(
+                options.MaxEmailsPerManualBriefing,
+                options.MaxEmailsToReadPerBriefing,
+                options.MaxEmailBriefingBodyChars,
+                options.MaxEmailFullBodyChars);
+        });
+        services.AddSingleton<EmailTokenProtector>();
+        services.AddHttpClient<IEmailConnectionService, GmailConnectionService>();
+        services.AddHttpClient<IEmailService, GmailService>();
 
         services.Configure<LocalTitleOptions>(options =>
         {
@@ -114,5 +182,32 @@ public static class DependencyInjection
         return int.TryParse(configuration[key], out var value)
             ? value
             : fallback;
+    }
+
+    private static string ReadAny(IConfiguration configuration, string? fallback, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return fallback ?? string.Empty;
+    }
+
+    private static int ReadIntAny(IConfiguration configuration, int fallback, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (int.TryParse(configuration[key], out var value))
+            {
+                return value;
+            }
+        }
+
+        return fallback;
     }
 }

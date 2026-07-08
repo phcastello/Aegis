@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
+Aegis v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
 
 Version history:
 
@@ -10,8 +10,9 @@ Version history:
 - v0.1.3, "Finally, It’s Raining!", adds streaming responses and safe Markdown rendering.
 - v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
 - v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
+- v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
 
-In v0.2.0, Pedro keeps the same chat, history, feedback, and Markdown experience while the backend routes normal conversation through the online model stack. New conversations still start as `Nova conversa`, and automatic titles are generated locally in the background from the first user message only.
+In v0.2.1, Pedro keeps the same chat, history, feedback, streaming, and Markdown experience while Aegis can connect to Gmail through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 
@@ -58,6 +59,22 @@ docker compose up -d postgres qdrant
 ```
 
 The `.env` file is read by Docker Compose. The API does not load `.env` automatically when run with `dotnet run`; local API settings come from `backend/src/Aegis.Api/appsettings.Development.json` and normal ASP.NET Core environment variables.
+
+For Gmail connection in v0.2.1, configure these values in `.env` for Docker or as environment variables when running the API locally:
+
+```env
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=http://localhost:8080/api/email/oauth/callback
+GOOGLE_OAUTH_SCOPES=https://www.googleapis.com/auth/gmail.modify
+
+AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=30
+AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING=15
+AEGIS_MAX_EMAIL_BODY_CHARS=6000
+AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS=7
+```
+
+Gmail actions are chat-driven. Aegis can read inbox content and metadata, but in v0.2.1 attachments are metadata-only: filenames, MIME types, sizes, and inline status can be mentioned, but attachment contents are not downloaded or analyzed.
 
 Restore and build the backend:
 

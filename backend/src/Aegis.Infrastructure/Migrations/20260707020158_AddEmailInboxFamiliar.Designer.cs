@@ -3,6 +3,7 @@ using System;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Aegis.Infrastructure.Migrations
 {
     [DbContext(typeof(AegisDbContext))]
-    partial class AegisDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260707020158_AddEmailInboxFamiliar")]
+    partial class AddEmailInboxFamiliar
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -363,62 +366,6 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("pending_email_actions", (string)null);
                 });
 
-            modelBuilder.Entity("Aegis.Domain.Entities.ToolContextEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DataJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("EntryType")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Key")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<DateTimeOffset?>("ReplacedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Scope")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<string>("SourceToolName")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ReplacedAt");
-
-                    b.HasIndex("ConversationId", "Scope", "ExpiresAt");
-
-                    b.HasIndex("ConversationId", "Scope", "EntryType", "Key");
-
-                    b.ToTable("tool_context_entries", (string)null);
-                });
-
             modelBuilder.Entity("Aegis.Domain.Entities.ChatMessage", b =>
                 {
                     b.HasOne("Aegis.Domain.Entities.Conversation", "Conversation")
@@ -494,17 +441,6 @@ namespace Aegis.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.PendingEmailAction", b =>
-                {
-                    b.HasOne("Aegis.Domain.Entities.Conversation", "Conversation")
-                        .WithMany()
-                        .HasForeignKey("ConversationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Conversation");
-                });
-
-            modelBuilder.Entity("Aegis.Domain.Entities.ToolContextEntry", b =>
                 {
                     b.HasOne("Aegis.Domain.Entities.Conversation", "Conversation")
                         .WithMany()

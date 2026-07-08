@@ -315,7 +315,10 @@ public sealed class OpenAIResponsesClient(
             request.Request with { Purpose = ModelPurpose.Main },
             model,
             stream: false,
-            request.Tools);
+            request.Tools,
+            request.PreviousResponseId,
+            request.ToolOutputs,
+            request.InputItems);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -345,6 +348,8 @@ public sealed class OpenAIResponsesClient(
                 responseModel,
                 ModelPurpose.Main,
                 toolCalls,
+                ExtractOutputItems(document.RootElement),
+                ExtractResponseId(document.RootElement),
                 BuildMetadataJson(ModelPurpose.Main, request.Request.Metadata, document.RootElement),
                 new LlmRequestAuditData(
                     Provider,
@@ -392,12 +397,15 @@ public sealed class OpenAIResponsesClient(
         ModelRequest request,
         string model,
         bool stream,
-        IReadOnlyList<ModelToolDefinition>? tools)
+        IReadOnlyList<ModelToolDefinition>? tools,
+        string? previousResponseId = null,
+        IReadOnlyList<ModelToolOutput>? toolOutputs = null,
+        IReadOnlyList<JsonElement>? inputItems = null)
     {
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aegis_version"] = "0.2.0",
+            ["aegis_version"] = "0.2.1",
             ["purpose"] = request.Purpose.ToString()
         };
 
@@ -409,14 +417,26 @@ public sealed class OpenAIResponsesClient(
             }
         }
 
+        object input = inputItems is { Count: > 0 }
+            ? inputItems
+            : toolOutputs is { Count: > 0 }
+            ? toolOutputs.Select(output => new
+            {
+                type = "function_call_output",
+                call_id = output.CallId,
+                output = output.Output
+            }).ToList()
+            : request.Input;
+
         return new
         {
             model,
             instructions = request.Instructions,
-            input = request.Input,
+            input,
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
             store = openAIOptions.StoreResponses,
+            previous_response_id = string.IsNullOrWhiteSpace(previousResponseId) ? null : previousResponseId,
             service_tier = string.IsNullOrWhiteSpace(openAIOptions.ServiceTier)
                 ? null
                 : openAIOptions.ServiceTier,
@@ -426,7 +446,8 @@ public sealed class OpenAIResponsesClient(
                 type = "function",
                 name = tool.Name,
                 description = tool.Description,
-                parameters = tool.ParametersSchema
+                parameters = tool.ParametersSchema,
+                strict = false
             }),
             parallel_tool_calls = tools is { Count: > 0 } ? true : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null
@@ -526,6 +547,20 @@ public sealed class OpenAIResponsesClient(
         return calls;
     }
 
+    private static IReadOnlyList<JsonElement> ExtractOutputItems(JsonElement root)
+    {
+        if (!root.TryGetProperty("output", out var outputElement) ||
+            outputElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return outputElement
+            .EnumerateArray()
+            .Select(item => item.Clone())
+            .ToList();
+    }
+
     private static string ExtractResponseModel(JsonElement root, string fallback)
     {
         return root.TryGetProperty("model", out var modelElement) &&
@@ -533,6 +568,15 @@ public sealed class OpenAIResponsesClient(
             !string.IsNullOrWhiteSpace(modelElement.GetString())
             ? modelElement.GetString()!
             : fallback;
+    }
+
+    private static string? ExtractResponseId(JsonElement root)
+    {
+        return root.TryGetProperty("id", out var idElement) &&
+            idElement.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(idElement.GetString())
+            ? idElement.GetString()
+            : null;
     }
 
     private static string BuildMetadataJson(

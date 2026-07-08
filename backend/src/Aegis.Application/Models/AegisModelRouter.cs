@@ -19,6 +19,8 @@ public sealed class AegisModelRouter
         "email",
         "e-mail",
         "gmail",
+        "inbox",
+        "caixa de entrada",
         "agenda",
         "calendário",
         "calendario",
@@ -35,12 +37,51 @@ public sealed class AegisModelRouter
         "enviar",
         "responder",
         "resumir meus emails",
-        "briefing"
+        "briefing",
+        "não lido",
+        "nao lido",
+        "lido",
+        "estrela",
+        "importante",
+        "professor",
+        "unicentro",
+        "github",
+        "faculdade",
+        "boleto",
+        "prazo",
+        "convite"
+    ];
+
+    private static readonly string[] ContextualToolTerms =
+    [
+        "fiz a conexão",
+        "fiz a conexao",
+        "conectei",
+        "faz o que achar melhor",
+        "cadê",
+        "cade",
+        "tente novamente",
+        "tentar novamente",
+        "confirma",
+        "confirmo",
+        "sim",
+        "agora foi",
+        "deu certo",
+        "confere",
+        "confira",
+        "verifica",
+        "verifique",
+        "valida",
+        "valide",
+        "releia",
+        "já confirmo",
+        "ja confirmo"
     ];
 
     public ModelPurpose ChoosePurpose(ChatRequestContext context)
     {
-        if (context.RequiresTools || context.HasPendingAction)
+        if (context.RequiresTools || context.HasPendingAction ||
+            (context.HasRecentToolContext && ContainsAny(context.UserContent, ContextualToolTerms)))
         {
             return ModelPurpose.Main;
         }
@@ -52,6 +93,14 @@ public sealed class AegisModelRouter
         }
 
         return ModelPurpose.Default;
+    }
+
+    public bool RequiresTools(ChatRequestContext context)
+    {
+        return context.RequiresTools ||
+            context.HasPendingAction ||
+            (context.HasRecentToolContext && ContainsAny(context.UserContent, ContextualToolTerms)) ||
+            ContainsAny(context.UserContent, OperationalTerms);
     }
 
     private static bool ContainsAny(string value, IReadOnlyList<string> terms)
