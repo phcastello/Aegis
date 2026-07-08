@@ -25,6 +25,8 @@
   --accent-strong: #bdcbf6;
   --accent-ink: #18223a;
   --warn: #ffb6ae;
+  --app-viewport-height: 100vh;
+  --keyboard-inset-bottom: 0px;
 }
 
 * {
@@ -79,7 +81,7 @@ button:disabled {
 }
 
 .app-shell {
-  min-height: 100vh;
+  min-height: var(--app-viewport-height);
   padding: 20px;
 }
 
@@ -1187,8 +1189,8 @@ button:disabled {
 
   .hideout-shell {
     width: 100%;
-    height: 100dvh;
-    min-height: 100dvh;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
     display: block;
   }
 
@@ -1297,7 +1299,7 @@ button:disabled {
   }
 
   .composer {
-    padding: 10px 10px max(11px, env(safe-area-inset-bottom));
+    padding: 10px 10px calc(max(11px, env(safe-area-inset-bottom)) + var(--keyboard-inset-bottom));
   }
 
   .composer-hint {

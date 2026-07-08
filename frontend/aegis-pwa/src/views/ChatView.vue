@@ -45,8 +45,9 @@ const deleteTarget = ref<ConversationSummary | null>(null);
 const isDeletingConversation = ref(false);
 let streamScrollFrame: number | null = null;
 const historyRefreshTimers: number[] = [];
+let viewportCleanup: (() => void) | null = null;
 
-const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value);
+const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value && !isRestoring.value);
 const conversationLabel = computed(() => {
   const title = activeConversationTitle.value?.trim() || 'Nova conversa';
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
@@ -81,6 +82,25 @@ function resizeComposer(): void {
     isComposerScrollable.value = input.scrollHeight > COMPOSER_MAX_HEIGHT;
     input.style.height = `${Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
   });
+}
+
+function focusComposer(): void {
+  if (isRestoring.value) {
+    return;
+  }
+
+  void nextTick(() => {
+    composerInput.value?.focus({ preventScroll: true });
+  });
+}
+
+function syncViewportHeight(): void {
+  const viewport = window.visualViewport;
+  const height = viewport?.height ?? window.innerHeight;
+  const insetBottom = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+
+  document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
+  document.documentElement.style.setProperty('--keyboard-inset-bottom', `${insetBottom}px`);
 }
 
 function createLocalMessageId(): string {
@@ -147,6 +167,7 @@ async function restoreConversation(): Promise<void> {
       serverId: message.id
     }));
     scrollToLatest();
+    focusComposer();
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     conversationId.value = null;
@@ -238,6 +259,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
     }));
     isSidebarOpen.value = false;
     scrollToLatest(false);
+    focusComposer();
   } catch {
     errorMessage.value = 'Não foi possível abrir esta conversa.';
     await loadConversationHistory(true);
@@ -321,7 +343,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.key === 'Enter' && !event.shiftKey && canSend.value) {
     event.preventDefault();
     void handleSubmit();
   }
@@ -339,6 +361,7 @@ function startNewConversation(): void {
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
   isSidebarOpen.value = false;
+  focusComposer();
 }
 
 async function handleRenameConversation(targetConversationId: string, title: string): Promise<void> {
@@ -431,14 +454,31 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 }
 
 onMounted(() => {
+  syncViewportHeight();
+  if (window.visualViewport) {
+    const handleViewportChange = (): void => {
+      syncViewportHeight();
+    };
+
+    window.visualViewport.addEventListener('resize', handleViewportChange);
+    window.visualViewport.addEventListener('scroll', handleViewportChange);
+    viewportCleanup = () => {
+      window.visualViewport?.removeEventListener('resize', handleViewportChange);
+      window.visualViewport?.removeEventListener('scroll', handleViewportChange);
+    };
+  }
+
   void loadConversationHistory(true);
   void restoreConversation();
+  focusComposer();
 });
 
 onBeforeUnmount(() => {
   for (const timer of historyRefreshTimers) {
     window.clearTimeout(timer);
   }
+
+  viewportCleanup?.();
 });
 </script>
 
@@ -519,7 +559,6 @@ onBeforeUnmount(() => {
             rows="1"
             placeholder="Escreva para a Aegis..."
             aria-label="Mensagem"
-            :disabled="isLoading || isRestoring"
             :class="{ 'composer-input--scrollable': isComposerScrollable }"
             ref="composerInput"
             @input="resizeComposer"
