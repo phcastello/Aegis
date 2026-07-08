@@ -138,52 +138,79 @@ public sealed class ChatService(
 
         if (useTools)
         {
-            ModelCompletionResponse completion;
-            try
+            await using var toolStream = toolLoop
+                .StreamAsync(
+                    modelRequest with { Purpose = ModelPurpose.Main },
+                    new ToolExecutionContext(conversation.Id, userMessage.Id, userContent),
+                    cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+
+            while (true)
             {
-                completion = await RunToolCompletionAsync(
-                    modelRequest,
-                    conversation.Id,
-                    userMessage.Id,
-                    userContent,
-                    cancellationToken);
-            }
-            catch (LlmRequestException exception)
-            {
+                ModelStreamChunk chunk;
+                try
+                {
+                    if (!await toolStream.MoveNextAsync())
+                    {
+                        throw new InvalidOperationException(
+                            "Tool streaming ended before a final event was received.");
+                    }
+
+                    chunk = toolStream.Current;
+                }
+                catch (LlmRequestException exception)
+                {
+                    dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
+                        conversation.Id,
+                        userMessage.Id,
+                        null,
+                        exception.AuditData));
+
+                    await dbContext.SaveChangesAsync(CancellationToken.None);
+                    throw;
+                }
+
+                if (!string.IsNullOrEmpty(chunk.Content))
+                {
+                    content.Append(chunk.Content);
+                    yield return ChatStreamEvent.Token(chunk.Content);
+                }
+
+                if (!chunk.IsDone)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(content.ToString()) ||
+                    string.IsNullOrWhiteSpace(chunk.Model) ||
+                    chunk.AuditData is null)
+                {
+                    throw new InvalidOperationException("Tool streaming ended without a complete response.");
+                }
+
+                var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+                dbContext.AddChatMessage(assistantMessage);
+                assistantMessage.AttachAuditData(
+                    chunk.Model,
+                    promptResult.Prompt,
+                    promptResult.RuntimeContext,
+                    chunk.MetadataJson);
                 dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
                     conversation.Id,
                     userMessage.Id,
-                    null,
-                    exception.AuditData));
+                    assistantMessage.Id,
+                    chunk.AuditData));
 
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-                throw;
+                await dbContext.SaveChangesAsync(cancellationToken);
+                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+
+                yield return ChatStreamEvent.Done(
+                    conversation.Id,
+                    assistantMessage.Id,
+                    conversation.Title,
+                    conversation.TitleSource);
+                yield break;
             }
-
-            yield return ChatStreamEvent.Token(completion.Content);
-
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
-            dbContext.AddChatMessage(assistantMessage);
-            assistantMessage.AttachAuditData(
-                completion.Model,
-                promptResult.Prompt,
-                promptResult.RuntimeContext,
-                completion.MetadataJson);
-            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
-                conversation.Id,
-                userMessage.Id,
-                assistantMessage.Id,
-                completion.AuditData));
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
-
-            yield return ChatStreamEvent.Done(
-                conversation.Id,
-                assistantMessage.Id,
-                conversation.Title,
-                conversation.TitleSource);
-            yield break;
         }
 
         await using var stream = modelClient

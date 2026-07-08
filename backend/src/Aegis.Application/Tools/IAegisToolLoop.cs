@@ -8,4 +8,9 @@ public interface IAegisToolLoop
         ModelRequest request,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default);
+
+    IAsyncEnumerable<ModelStreamChunk> StreamAsync(
+        ModelRequest request,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken = default);
 }

@@ -16,6 +16,7 @@ public sealed class OpenAIResponsesClient(
 {
     private const string Provider = "openai";
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
+    private const string FinalAnswerPhase = "final_answer";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -104,6 +105,8 @@ public sealed class OpenAIResponsesClient(
         HttpResponseMessage? response = null;
         JsonElement? completedResponse = null;
         string responseModel = model;
+        var outputPhasesByIndex = new Dictionary<int, string?>();
+        var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         try
         {
@@ -228,11 +231,14 @@ public sealed class OpenAIResponsesClient(
                             ? typeElement.GetString()
                             : null;
 
+                        TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
+
                         if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
                             root.TryGetProperty("delta", out var deltaElement))
                         {
                             var delta = deltaElement.GetString();
-                            if (!string.IsNullOrEmpty(delta))
+                            if (!string.IsNullOrEmpty(delta) &&
+                                IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
                             {
                                 yield return new ModelStreamChunk(delta, IsDone: false);
                             }
@@ -376,6 +382,261 @@ public sealed class OpenAIResponsesClient(
         }
     }
 
+    public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(
+        ModelToolRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var model = ChooseModel(ModelPurpose.Main);
+        var payload = CreateRequestPayload(
+            request.Request with { Purpose = ModelPurpose.Main },
+            model,
+            stream: true,
+            request.Tools,
+            request.PreviousResponseId,
+            request.ToolOutputs,
+            request.InputItems);
+        var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var responseBody = new StringBuilder();
+        var completedResponseBody = new StringBuilder();
+        var bufferedContent = new StringBuilder();
+        var stopwatch = Stopwatch.StartNew();
+        int? httpStatusCode = null;
+        HttpResponseMessage? response = null;
+        JsonElement? completedResponse = null;
+        string responseModel = model;
+        var suppressDeltas = request.Tools.Count > 0;
+        var outputPhasesByIndex = new Dictionary<int, string?>();
+        var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        try
+        {
+            using var requestMessage = CreateHttpRequest(requestPayloadJson);
+            response = await httpClient.SendAsync(
+                requestMessage,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            httpStatusCode = (int)response.StatusCode;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                responseBody.Append(await response.Content.ReadAsStringAsync(cancellationToken));
+                throw new InvalidOperationException($"Model tool stream request failed with HTTP {httpStatusCode}.");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            response?.Dispose();
+            throw;
+        }
+        catch (Exception exception) when (exception is not LlmRequestException)
+        {
+            response?.Dispose();
+            throw CreateRequestException(
+                exception,
+                model,
+                ModelPurpose.Main,
+                requestPayloadJson,
+                httpStatusCode,
+                responseBody.ToString().TrimEnd(),
+                stopwatch.ElapsedMilliseconds);
+        }
+
+        using (response)
+        {
+            Stream responseStream;
+            try
+            {
+                responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw CreateRequestException(
+                    exception,
+                    model,
+                    ModelPurpose.Main,
+                    requestPayloadJson,
+                    httpStatusCode,
+                    responseBody.ToString().TrimEnd(),
+                    stopwatch.ElapsedMilliseconds);
+            }
+
+            await using (responseStream)
+            using (var reader = new StreamReader(responseStream))
+            {
+                while (true)
+                {
+                    string? line;
+                    try
+                    {
+                        line = await reader.ReadLineAsync(cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        throw CreateRequestException(
+                            exception,
+                            model,
+                            ModelPurpose.Main,
+                            requestPayloadJson,
+                            httpStatusCode,
+                            responseBody.ToString().TrimEnd(),
+                            stopwatch.ElapsedMilliseconds);
+                    }
+
+                    if (line is null)
+                    {
+                        break;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(line) ||
+                        !line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var data = line["data:".Length..].Trim();
+                    if (string.Equals(data, "[DONE]", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    responseBody.AppendLine(data);
+                    JsonDocument document;
+                    try
+                    {
+                        document = JsonDocument.Parse(data);
+                    }
+                    catch (JsonException exception)
+                    {
+                        throw CreateRequestException(
+                            exception,
+                            model,
+                            ModelPurpose.Main,
+                            requestPayloadJson,
+                            httpStatusCode,
+                            responseBody.ToString().TrimEnd(),
+                            stopwatch.ElapsedMilliseconds);
+                    }
+
+                    using (document)
+                    {
+                        var root = document.RootElement;
+                        var eventType = root.TryGetProperty("type", out var typeElement)
+                            ? typeElement.GetString()
+                            : null;
+
+                        TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
+
+                        if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
+                            root.TryGetProperty("delta", out var deltaElement))
+                        {
+                            var delta = deltaElement.GetString();
+                            if (!string.IsNullOrEmpty(delta) &&
+                                IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
+                            {
+                                if (suppressDeltas)
+                                {
+                                    bufferedContent.Append(delta);
+                                }
+                                else
+                                {
+                                    yield return new ModelToolStreamChunk(
+                                        delta,
+                                        IsDone: false,
+                                        ToolCalls: [],
+                                        OutputItems: []);
+                                }
+                            }
+
+                            continue;
+                        }
+
+                        if (string.Equals(eventType, "response.completed", StringComparison.Ordinal) &&
+                            root.TryGetProperty("response", out var responseElement))
+                        {
+                            completedResponse = responseElement.Clone();
+                            responseModel = ExtractResponseModel(responseElement, model);
+                            completedResponseBody.Append(responseElement.GetRawText());
+                            continue;
+                        }
+
+                        if (string.Equals(eventType, "response.failed", StringComparison.Ordinal) ||
+                            string.Equals(eventType, "error", StringComparison.Ordinal))
+                        {
+                            throw CreateRequestException(
+                                new InvalidOperationException("Model tool stream failed."),
+                                model,
+                                ModelPurpose.Main,
+                                requestPayloadJson,
+                                httpStatusCode,
+                                responseBody.ToString().TrimEnd(),
+                                stopwatch.ElapsedMilliseconds);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (completedResponse is null)
+        {
+            throw CreateRequestException(
+                new InvalidOperationException("Model tool stream ended without a completion event."),
+                model,
+                ModelPurpose.Main,
+                requestPayloadJson,
+                httpStatusCode,
+                responseBody.ToString().TrimEnd(),
+                stopwatch.ElapsedMilliseconds);
+        }
+
+        var toolCalls = ExtractToolCalls(completedResponse.Value);
+        if (suppressDeltas && toolCalls.Count == 0 && bufferedContent.Length > 0)
+        {
+            yield return new ModelToolStreamChunk(
+                bufferedContent.ToString(),
+                IsDone: false,
+                ToolCalls: [],
+                OutputItems: []);
+        }
+
+        stopwatch.Stop();
+        var metadataJson = BuildMetadataJson(
+            ModelPurpose.Main,
+            request.Request.Metadata,
+            completedResponse.Value);
+        var finalResponseBody = completedResponseBody.Length > 0
+            ? completedResponseBody.ToString()
+            : responseBody.ToString().TrimEnd();
+
+        yield return new ModelToolStreamChunk(
+            Content: null,
+            IsDone: true,
+            toolCalls,
+            ExtractOutputItems(completedResponse.Value),
+            ExtractResponseId(completedResponse.Value),
+            Provider,
+            responseModel,
+            ModelPurpose.Main,
+            metadataJson,
+            new LlmRequestAuditData(
+                Provider,
+                responseModel,
+                Success: true,
+                stopwatch.ElapsedMilliseconds,
+                requestPayloadJson,
+                httpStatusCode,
+                finalResponseBody,
+                FailureReason: null,
+                ErrorType: null));
+    }
+
     private HttpRequestMessage CreateHttpRequest(string requestPayloadJson)
     {
         var apiKey = options.Value.ApiKey;
@@ -487,6 +748,11 @@ public sealed class OpenAIResponsesClient(
         var builder = new StringBuilder();
         foreach (var outputItem in outputElement.EnumerateArray())
         {
+            if (!IsFinalAnswerOutputItem(outputItem))
+            {
+                continue;
+            }
+
             if (!outputItem.TryGetProperty("content", out var contentElement) ||
                 contentElement.ValueKind != JsonValueKind.Array)
             {
@@ -504,6 +770,90 @@ public sealed class OpenAIResponsesClient(
         }
 
         return builder.ToString();
+    }
+
+    private static void TrackOutputItemPhase(
+        JsonElement root,
+        IDictionary<int, string?> outputPhasesByIndex,
+        IDictionary<string, string?> outputPhasesByItemId)
+    {
+        if (!root.TryGetProperty("item", out var itemElement) ||
+            itemElement.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (!TryGetPhase(itemElement, out var phase))
+        {
+            return;
+        }
+
+        if (root.TryGetProperty("output_index", out var outputIndexElement) &&
+            outputIndexElement.ValueKind == JsonValueKind.Number &&
+            outputIndexElement.TryGetInt32(out var outputIndex))
+        {
+            outputPhasesByIndex[outputIndex] = phase;
+        }
+
+        if (itemElement.TryGetProperty("id", out var idElement) &&
+            idElement.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(idElement.GetString()))
+        {
+            outputPhasesByItemId[idElement.GetString()!] = phase;
+        }
+    }
+
+    private static bool IsFinalAnswerTextDelta(
+        JsonElement root,
+        IReadOnlyDictionary<int, string?> outputPhasesByIndex,
+        IReadOnlyDictionary<string, string?> outputPhasesByItemId)
+    {
+        if (TryGetPhase(root, out var phase))
+        {
+            return IsFinalAnswerPhase(phase);
+        }
+
+        if (root.TryGetProperty("output_index", out var outputIndexElement) &&
+            outputIndexElement.ValueKind == JsonValueKind.Number &&
+            outputIndexElement.TryGetInt32(out var outputIndex) &&
+            outputPhasesByIndex.TryGetValue(outputIndex, out phase))
+        {
+            return IsFinalAnswerPhase(phase);
+        }
+
+        if (root.TryGetProperty("item_id", out var itemIdElement) &&
+            itemIdElement.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(itemIdElement.GetString()) &&
+            outputPhasesByItemId.TryGetValue(itemIdElement.GetString()!, out phase))
+        {
+            return IsFinalAnswerPhase(phase);
+        }
+
+        return true;
+    }
+
+    private static bool IsFinalAnswerOutputItem(JsonElement outputItem)
+    {
+        return !TryGetPhase(outputItem, out var phase) || IsFinalAnswerPhase(phase);
+    }
+
+    private static bool TryGetPhase(JsonElement element, out string? phase)
+    {
+        phase = ExtractPhase(element);
+        return phase is not null;
+    }
+
+    private static string? ExtractPhase(JsonElement element)
+    {
+        return element.TryGetProperty("phase", out var phaseElement) &&
+            phaseElement.ValueKind == JsonValueKind.String
+            ? phaseElement.GetString()
+            : null;
+    }
+
+    private static bool IsFinalAnswerPhase(string? phase)
+    {
+        return string.Equals(phase, FinalAnswerPhase, StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<ModelToolCall> ExtractToolCalls(JsonElement root)
