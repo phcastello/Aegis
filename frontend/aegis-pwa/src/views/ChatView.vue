@@ -97,10 +97,8 @@ function focusComposer(): void {
 function syncViewportHeight(): void {
   const viewport = window.visualViewport;
   const height = viewport?.height ?? window.innerHeight;
-  const insetBottom = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
 
   document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
-  document.documentElement.style.setProperty('--keyboard-inset-bottom', `${insetBottom}px`);
 }
 
 function normalizeEmailConnectError(rawCode: string | null, rawMessage: string | null): string | null {
@@ -512,18 +510,20 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 onMounted(() => {
   syncViewportHeight();
   consumeEmailConnectStatusFromUrl();
-  if (window.visualViewport) {
-    const handleViewportChange = (): void => {
-      syncViewportHeight();
-    };
+  const handleViewportChange = (): void => {
+    syncViewportHeight();
+  };
 
+  window.addEventListener('resize', handleViewportChange);
+  if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', handleViewportChange);
     window.visualViewport.addEventListener('scroll', handleViewportChange);
-    viewportCleanup = () => {
-      window.visualViewport?.removeEventListener('resize', handleViewportChange);
-      window.visualViewport?.removeEventListener('scroll', handleViewportChange);
-    };
   }
+  viewportCleanup = () => {
+    window.removeEventListener('resize', handleViewportChange);
+    window.visualViewport?.removeEventListener('resize', handleViewportChange);
+    window.visualViewport?.removeEventListener('scroll', handleViewportChange);
+  };
 
   void loadConversationHistory(true);
   void restoreConversation();
