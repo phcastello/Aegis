@@ -10,7 +10,9 @@ namespace Aegis.Api.Controllers;
 [Route("api/email")]
 public sealed class EmailController(
     IEmailConnectionService emailConnectionService,
-    IOptions<GmailOptions> gmailOptions) : ControllerBase
+    IOptions<GmailOptions> gmailOptions,
+    ILogger<EmailController> logger,
+    IHostApplicationLifetime applicationLifetime) : ControllerBase
 {
     [HttpGet("status")]
     public async Task<ActionResult<EmailConnectionStatusResponse>> GetStatus(
@@ -46,16 +48,27 @@ public sealed class EmailController(
             var message = string.IsNullOrWhiteSpace(error)
                 ? "Google OAuth did not return an authorization code."
                 : $"Google OAuth returned error: {error}.";
+            logger.LogWarning(
+                "Gmail OAuth callback failed. ErrorCode: {ErrorCode}. Message: {ErrorMessage}",
+                "oauth_callback_error",
+                message);
             return Redirect(BuildFailureRedirectUri(options.FailureRedirectPath, "oauth_callback_error", message));
         }
 
         try
         {
-            await emailConnectionService.HandleOAuthCallbackAsync(code, state, cancellationToken);
+            // The browser may close the callback request as soon as Google redirects back.
+            // Completing the authorization must not depend on that client connection staying open.
+            await emailConnectionService.HandleOAuthCallbackAsync(
+                code,
+                state,
+                applicationLifetime.ApplicationStopping);
+            logger.LogInformation("Gmail OAuth callback completed successfully.");
             return Redirect(options.SuccessRedirectPath);
         }
         catch (HttpRequestException exception)
         {
+            LogCallbackFailure("google_http_error", exception);
             return Redirect(BuildFailureRedirectUri(
                 options.FailureRedirectPath,
                 "google_http_error",
@@ -63,6 +76,7 @@ public sealed class EmailController(
         }
         catch (InvalidOperationException exception)
         {
+            LogCallbackFailure("oauth_invalid_operation", exception);
             return Redirect(BuildFailureRedirectUri(
                 options.FailureRedirectPath,
                 "oauth_invalid_operation",
@@ -70,13 +84,15 @@ public sealed class EmailController(
         }
         catch (ArgumentException exception)
         {
+            LogCallbackFailure("oauth_invalid_argument", exception);
             return Redirect(BuildFailureRedirectUri(
                 options.FailureRedirectPath,
                 "oauth_invalid_argument",
                 exception.Message));
         }
-        catch
+        catch (Exception exception)
         {
+            LogCallbackFailure("oauth_unknown_error", exception, LogLevel.Error);
             return Redirect(BuildFailureRedirectUri(
                 options.FailureRedirectPath,
                 "oauth_unknown_error",
@@ -89,6 +105,20 @@ public sealed class EmailController(
     {
         await emailConnectionService.DisconnectAsync(cancellationToken);
         return NoContent();
+    }
+
+    private void LogCallbackFailure(
+        string errorCode,
+        Exception exception,
+        LogLevel logLevel = LogLevel.Warning)
+    {
+        logger.Log(
+            logLevel,
+            exception,
+            "Gmail OAuth callback failed. ErrorCode: {ErrorCode}. ExceptionType: {ExceptionType}. Message: {ErrorMessage}",
+            errorCode,
+            exception.GetType().Name,
+            exception.Message);
     }
 
     private static string BuildFailureRedirectUri(

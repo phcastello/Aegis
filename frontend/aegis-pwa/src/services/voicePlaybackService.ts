@@ -9,8 +9,6 @@ type PlaybackMetrics = {
 
 const SOURCE_RATE = 24000;
 const TARGET_BUFFER_SECONDS = 0.4;
-const WARNING_BUFFER_SECONDS = 2;
-const HARD_MAX_BUFFER_SECONDS = 5;
 
 /** Persistent Web Audio PCM player. One instance remains alive for the whole chat view. */
 export class VoicePlaybackService {
@@ -80,17 +78,20 @@ export class VoicePlaybackService {
     if (samples.length === 0) return;
     const resampled = this.resample(samples);
     if (resampled.length === 0 || generation !== this.generation) return;
-    await this.waitForCapacity(generation);
-    if (generation !== this.generation) return;
-    const hardFrames = Math.floor(HARD_MAX_BUFFER_SECONDS * this.context.sampleRate);
-    if (this.queuedFrames + resampled.length > hardFrames) {
-      this.metrics.droppedAudioFrames += resampled.length;
-      return;
+
+    // Never drop PCM because a ReadableStream happened to deliver a large chunk.
+    // Splitting before transferring is important: transferring a subarray would detach
+    // the whole resampled buffer and silently lose its remaining samples.
+    const packetFrames = Math.max(1, Math.floor((TARGET_BUFFER_SECONDS / 2) * this.context.sampleRate));
+    for (let offset = 0; offset < resampled.length; offset += packetFrames) {
+      const packet = resampled.slice(offset, Math.min(offset + packetFrames, resampled.length));
+      await this.waitForCapacity(generation, packet.length);
+      if (generation !== this.generation) return;
+      this.queuedFrames += packet.length;
+      this.metrics.queuedAudioSeconds = this.queuedFrames / this.context.sampleRate;
+      this.node.port.postMessage({ type: 'enqueue', generation, samples: packet }, [packet.buffer]);
+      if (this.queuedFrames >= packetFrames) this.setState('playing');
     }
-    this.queuedFrames += resampled.length;
-    this.metrics.queuedAudioSeconds = this.queuedFrames / this.context.sampleRate;
-    this.node.port.postMessage({ type: 'enqueue', generation, samples: resampled }, [resampled.buffer]);
-    if (this.queuedFrames >= Math.floor(TARGET_BUFFER_SECONDS * this.context.sampleRate)) this.setState('playing');
   }
 
   stop(): void {
@@ -139,15 +140,16 @@ export class VoicePlaybackService {
     return Float32Array.from(output);
   }
 
-  private async waitForCapacity(generation: number): Promise<void> {
+  private async waitForCapacity(generation: number, incomingFrames: number): Promise<void> {
     const context = this.context;
-    if (!context || this.queuedFrames < WARNING_BUFFER_SECONDS * context.sampleRate) return;
-    await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
-    if (generation !== this.generation) return;
+    if (!context) return;
+    const targetFrames = Math.floor(TARGET_BUFFER_SECONDS * context.sampleRate);
+    while (generation === this.generation && this.queuedFrames + incomingFrames > targetFrames) {
+      await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
+    }
   }
 
   private resolveDrainWaiters(): void {
-    if (!this.context || this.queuedFrames >= WARNING_BUFFER_SECONDS * this.context.sampleRate) return;
     const waiters = this.drainWaiters;
     this.drainWaiters = [];
     waiters.forEach((resolve) => resolve());
