@@ -8,6 +8,8 @@ using Aegis.Infrastructure.Email;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
+using Aegis.Infrastructure.Voice;
+using Aegis.Application.Voice;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -69,6 +71,25 @@ public static class DependencyInjection
 
             client.BaseAddress = new Uri(baseUrl);
             client.Timeout = TimeSpan.FromMinutes(5);
+        });
+
+        services.Configure<AegisTtsOptions>(options =>
+        {
+            configuration.GetSection(AegisTtsOptions.SectionName).Bind(options);
+            options.Enabled = ReadBool(configuration, "AEGIS_TTS_ENABLED", options.Enabled);
+            options.BaseUrl = Read(configuration, "AEGIS_TTS_BASE_URL", options.BaseUrl);
+            options.Profile = Read(configuration, "AEGIS_TTS_PROFILE", options.Profile);
+            options.DefaultPriority = ReadInt(configuration, "AEGIS_TTS_DEFAULT_PRIORITY", options.DefaultPriority);
+            options.ConnectTimeoutSeconds = ReadInt(configuration, "AEGIS_TTS_CONNECT_TIMEOUT_SECONDS", options.ConnectTimeoutSeconds);
+            options.FirstAudioTimeoutSeconds = ReadInt(configuration, "AEGIS_TTS_FIRST_AUDIO_TIMEOUT_SECONDS", options.FirstAudioTimeoutSeconds);
+            options.IdleStreamTimeoutSeconds = ReadInt(configuration, "AEGIS_TTS_IDLE_STREAM_TIMEOUT_SECONDS", options.IdleStreamTimeoutSeconds);
+            options.ApiToken = Read(configuration, "AEGIS_TTS_API_TOKEN", options.ApiToken);
+        });
+        services.AddHttpClient<IAegisSpeechClient, AegisSpeechClient>((provider, client) =>
+        {
+            var tts = provider.GetRequiredService<IOptions<AegisTtsOptions>>().Value;
+            client.BaseAddress = new Uri(tts.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = Timeout.InfiniteTimeSpan;
         });
 
         services.Configure<GmailOptions>(options =>
