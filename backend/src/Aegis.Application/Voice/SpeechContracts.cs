@@ -22,15 +22,17 @@ public sealed record StartSpeechRequest(Guid TurnId, Guid SpeechRequestId, Guid 
 
 public sealed class VoiceStream : IAsyncDisposable
 {
-    public VoiceStream(Guid turnId, Guid speechRequestId, SpeechStreamResponse upstream)
+    public VoiceStream(Guid turnId, Guid speechRequestId, CancellationToken turnCancellationToken, SpeechStreamResponse upstream)
     {
         TurnId = turnId;
         SpeechRequestId = speechRequestId;
+        TurnCancellationToken = turnCancellationToken;
         Upstream = upstream;
     }
 
     public Guid TurnId { get; }
     public Guid SpeechRequestId { get; }
+    public CancellationToken TurnCancellationToken { get; }
     public SpeechStreamResponse Upstream { get; }
     public ValueTask DisposeAsync() => Upstream.DisposeAsync();
 }

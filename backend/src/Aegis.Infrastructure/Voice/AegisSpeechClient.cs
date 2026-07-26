@@ -45,8 +45,8 @@ public sealed class AegisSpeechClient(
             }
         };
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, settings.FirstAudioTimeoutSeconds)));
+        using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        connectTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, settings.ConnectTimeoutSeconds)));
         using var message = new HttpRequestMessage(HttpMethod.Post, "v1/aegis/speech")
         {
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
@@ -55,7 +55,7 @@ public sealed class AegisSpeechClient(
         HttpResponseMessage response;
         try
         {
-            response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, connectTimeout.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -79,7 +79,13 @@ public sealed class AegisSpeechClient(
             var format = ValidateHeaders(response, settings.Profile);
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             logger.LogInformation("{Event} {TurnId} {SpeechRequestId}", "aegis_speech_started", request.TurnId, request.SpeechRequestId);
-            return new ResponseOwnedSpeechStreamResponse(response, stream, format);
+            return new ResponseOwnedSpeechStreamResponse(
+                response,
+                new TimedReadStream(
+                    stream,
+                    TimeSpan.FromSeconds(Math.Max(1, settings.FirstAudioTimeoutSeconds)),
+                    TimeSpan.FromSeconds(Math.Max(1, settings.IdleStreamTimeoutSeconds))),
+                format);
         }
         catch
         {
@@ -129,7 +135,7 @@ public sealed class AegisSpeechClient(
         {
             throw;
         }
-        catch (HttpRequestException)
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             return new SpeechServiceStatus(true, false, settings.Profile, SampleRate, Channels);
         }
@@ -173,6 +179,45 @@ public sealed class AegisSpeechClient(
         {
             await Stream.DisposeAsync();
             response.Dispose();
+        }
+    }
+
+    private sealed class TimedReadStream(Stream inner, TimeSpan firstAudioTimeout, TimeSpan idleTimeout) : Stream
+    {
+        private bool receivedAudio;
+
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(receivedAudio ? idleTimeout : firstAudioTimeout);
+            try
+            {
+                var read = await inner.ReadAsync(buffer, timeout.Token);
+                if (read > 0) receivedAudio = true;
+                return read;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new IOException(receivedAudio ? "Speech stream became idle." : "Speech stream produced no audio.");
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

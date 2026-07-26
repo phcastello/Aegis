@@ -29,7 +29,8 @@ public sealed class ActiveTurnRegistryTests
         var second = await registry.CancelAsync(turn.TurnId, "test");
 
         Assert.Equal("cancelled", first.Status);
-        Assert.Equal(first, second);
+        Assert.True(first.LlmCancellationRequested);
+        Assert.False(second.LlmCancellationRequested);
         Assert.True(turn.Cancellation.IsCancellationRequested);
     }
 
@@ -69,6 +70,19 @@ public sealed class ActiveTurnRegistryTests
         var active = ids.Where(registry.IsActive).ToList();
         Assert.Single(active);
         Assert.True(registry.IsCurrent(conversationId, active[0]));
+    }
+
+    [Fact]
+    public void CompletionIsTerminalAndIdempotent()
+    {
+        using var registry = CreateRegistry();
+        var turn = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+
+        registry.Complete(turn.TurnId);
+        registry.Complete(turn.TurnId);
+
+        Assert.Equal(TurnStatus.Completed, turn.Status);
+        Assert.False(registry.IsActive(turn.TurnId));
     }
 
     private static ActiveTurnRegistry CreateRegistry() => new(new AegisMetrics());

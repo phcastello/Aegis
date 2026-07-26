@@ -1,6 +1,7 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Turns;
+using Aegis.Application.Voice;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,7 +10,7 @@ namespace Aegis.Api.Controllers;
 
 [ApiController]
 [Route("api/chat")]
-public sealed class ChatController(IChatService chatService, IActiveTurnRegistry turnRegistry) : ControllerBase
+public sealed class ChatController(IChatService chatService, IVoiceService voiceService) : ControllerBase
 {
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
 
@@ -94,8 +95,15 @@ public sealed class ChatController(IChatService chatService, IActiveTurnRegistry
         Guid turnId,
         CancellationToken cancellationToken)
     {
-        var result = await turnRegistry.CancelAsync(turnId, "user_stop", cancellationToken);
+        var result = await voiceService.CancelTurnAsync(turnId, "user_stop", cancellationToken);
         return Ok(result);
+    }
+
+    [HttpPost("turns/{turnId:guid}/complete")]
+    public IActionResult CompleteTurnWithoutSpeech(Guid turnId)
+    {
+        voiceService.CompleteTurnWithoutSpeech(turnId);
+        return NoContent();
     }
 
     [HttpGet("conversations/{conversationId:guid}")]

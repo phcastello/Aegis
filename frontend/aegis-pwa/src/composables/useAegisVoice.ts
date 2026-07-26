@@ -21,6 +21,7 @@ export function useAegisVoice() {
     autoSpeak.value = value;
     localStorage.setItem(AUTO_SPEAK_KEY, String(value));
     if (!value) void stop();
+    if (value) void prepare();
   }
 
   async function prepare(): Promise<void> {
@@ -43,7 +44,11 @@ export function useAegisVoice() {
         await player.enqueuePcm(chunk, generation);
         voiceMessage.value = 'Falando';
       }, controller.signal);
-      if (activeTurnId === turnId) voiceMessage.value = null;
+      await player.finish(generation);
+      if (activeTurnId === turnId) {
+        voiceAvailable.value = true;
+        voiceMessage.value = null;
+      }
     } catch (error) {
       if (!controller?.signal.aborted && activeTurnId === turnId) {
         player.fail();

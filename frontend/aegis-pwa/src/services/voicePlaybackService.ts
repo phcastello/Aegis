@@ -19,10 +19,12 @@ export class VoicePlaybackService {
   private sourceCarry: number | null = null;
   private resamplePosition = 0;
   private queuedFrames = 0;
+  private inputCompletedGeneration: number | null = null;
   private readonly metrics: PlaybackMetrics = { queuedAudioSeconds: 0, playedAudioSeconds: 0, underrunCount: 0, droppedAudioFrames: 0 };
   private state: VoicePlaybackState = 'idle';
   private readonly listeners = new Set<(state: VoicePlaybackState) => void>();
   private drainWaiters: Array<() => void> = [];
+  private finishWaiters: Array<() => void> = [];
 
   onState(listener: (state: VoicePlaybackState) => void): () => void {
     this.listeners.add(listener);
@@ -51,6 +53,10 @@ export class VoicePlaybackService {
           this.queuedFrames = Math.max(0, this.queuedFrames - frames);
           this.metrics.playedAudioSeconds += frames / this.context!.sampleRate;
           this.resolveDrainWaiters();
+          if (this.queuedFrames === 0 && this.inputCompletedGeneration === this.generation) {
+            this.setState('idle');
+            this.resolveFinishWaiters();
+          }
         } else if (event.data.type === 'underrun') {
           this.metrics.underrunCount += 1;
         }
@@ -67,6 +73,7 @@ export class VoicePlaybackService {
     this.sourceCarry = null;
     this.resamplePosition = 0;
     this.queuedFrames = 0;
+    this.inputCompletedGeneration = null;
     this.node?.port.postMessage({ type: 'clear', generation: this.generation });
     this.setState('buffering');
     return this.generation;
@@ -101,14 +108,26 @@ export class VoicePlaybackService {
     this.sourceCarry = null;
     this.resamplePosition = 0;
     this.queuedFrames = 0;
+    this.inputCompletedGeneration = null;
     this.node?.port.postMessage({ type: 'clear', generation: this.generation });
     this.resolveDrainWaiters();
+    this.resolveFinishWaiters();
     this.setState('stopped');
   }
 
   fail(): void {
     this.stop();
     this.setState('failed');
+  }
+
+  async finish(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
+    this.inputCompletedGeneration = generation;
+    if (this.queuedFrames === 0) {
+      this.setState('idle');
+      return;
+    }
+    await new Promise<void>((resolve) => this.finishWaiters.push(resolve));
   }
 
   private decodeS16Le(chunk: Uint8Array): Float32Array {
@@ -152,6 +171,12 @@ export class VoicePlaybackService {
   private resolveDrainWaiters(): void {
     const waiters = this.drainWaiters;
     this.drainWaiters = [];
+    waiters.forEach((resolve) => resolve());
+  }
+
+  private resolveFinishWaiters(): void {
+    const waiters = this.finishWaiters;
+    this.finishWaiters = [];
     waiters.forEach((resolve) => resolve());
   }
 

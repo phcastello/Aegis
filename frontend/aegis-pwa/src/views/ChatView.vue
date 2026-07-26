@@ -7,6 +7,7 @@ import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
   deleteConversation,
   cancelTurn,
+  completeTurnWithoutSpeech,
   getConversation,
   getConversations,
   renameConversation,
@@ -406,6 +407,7 @@ async function handleSubmit(): Promise<void> {
               }
             });
           } else {
+            void completeTurnWithoutSpeech(completedTurnId).catch(() => undefined);
             activeTurnId.value = null;
             turnStatus.value = 'idle';
           }
@@ -695,7 +697,7 @@ onBeforeUnmount(() => {
         <div ref="messagesEnd" class="messages-end"></div>
       </div>
 
-      <p v-if="errorMessage || voice.voiceMessage" class="error-message" role="alert">{{ errorMessage ?? voice.voiceMessage }}</p>
+      <p v-if="errorMessage || voice.voiceMessage" class="error-message" :role="errorMessage ? 'alert' : 'status'">{{ errorMessage ?? voice.voiceMessage }}</p>
 
       <form class="composer" @submit.prevent="handleSubmit">
         <div class="composer-field">

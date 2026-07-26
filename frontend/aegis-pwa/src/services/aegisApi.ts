@@ -164,6 +164,10 @@ export async function cancelTurn(turnId: string): Promise<void> {
   await requestJson<void>(`/api/chat/turns/${encodeURIComponent(turnId)}`, { method: 'DELETE' });
 }
 
+export async function completeTurnWithoutSpeech(turnId: string): Promise<void> {
+  await requestJson<void>(`/api/chat/turns/${encodeURIComponent(turnId)}/complete`, { method: 'POST' });
+}
+
 export async function streamSpeech(
   request: StartSpeechRequest,
   onChunk: (chunk: Uint8Array) => Promise<void>,

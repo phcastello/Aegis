@@ -60,10 +60,16 @@ public sealed class VoiceService(
                 throw new OperationCanceledException(turn.Cancellation.Token);
             }
 
-            return new VoiceStream(turn.TurnId, request.SpeechRequestId, upstream);
+            return new VoiceStream(turn.TurnId, request.SpeechRequestId, turn.Cancellation.Token, upstream);
         }
         catch (OperationCanceledException) when (turn.Cancellation.IsCancellationRequested)
         {
+            await speechClient.CancelAsync(nativeRequestId, CancellationToken.None);
+            throw;
+        }
+        catch
+        {
+            turnRegistry.Fail(turn.TurnId);
             await speechClient.CancelAsync(nativeRequestId, CancellationToken.None);
             throw;
         }
@@ -78,13 +84,34 @@ public sealed class VoiceService(
         }
 
         var result = await turnRegistry.CancelAsync(turn.TurnId, "speech_stop", cancellationToken);
-        if (!string.IsNullOrWhiteSpace(turn.NativeSpeechRequestId))
+        if (result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(turn.NativeSpeechRequestId))
         {
             await speechClient.CancelAsync(turn.NativeSpeechRequestId, CancellationToken.None);
         }
 
         return result;
     }
+
+    public async Task<CancelTurnResult> CancelTurnAsync(Guid turnId, string reason, CancellationToken cancellationToken = default)
+    {
+        var info = turnRegistry.GetCancellationInfo(turnId);
+        var result = await turnRegistry.CancelAsync(turnId, reason, cancellationToken);
+        if (result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(info?.NativeSpeechRequestId))
+        {
+            await speechClient.CancelAsync(info.NativeSpeechRequestId, CancellationToken.None);
+        }
+        return result;
+    }
+
+    public async Task CancelAllTurnsAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        foreach (var turnId in turnRegistry.GetActiveTurnIds())
+        {
+            await CancelTurnAsync(turnId, reason, cancellationToken);
+        }
+    }
+
+    public void CompleteTurnWithoutSpeech(Guid turnId) => turnRegistry.Complete(turnId);
 
     public void CompleteSpeech(Guid speechRequestId)
     {
@@ -95,13 +122,47 @@ public sealed class VoiceService(
         }
     }
 
+    public void FailSpeech(Guid speechRequestId)
+    {
+        var turn = turnRegistry.FindBySpeechRequest(speechRequestId);
+        if (turn is not null) turnRegistry.Fail(turn.TurnId);
+    }
+
     public Task<SpeechServiceStatus> GetStatusAsync(CancellationToken cancellationToken = default) =>
         statusCache.GetAsync(cancellationToken);
 }
 
 internal static class NativeSpeechRequestId
 {
-    // The native gateway validates a ULID-shaped identifier. It is deliberately internal;
-    // browser UUIDs remain the public cancellation correlation IDs.
-    public static string Create() => "0" + Guid.NewGuid().ToString("N").ToUpperInvariant()[..25];
+    private const string Crockford32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+    // Native IDs are actual ULIDs; browser UUIDs remain the public correlation IDs.
+    public static string Create()
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        var milliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        for (var index = 5; index >= 0; index--)
+        {
+            bytes[index] = (byte)(milliseconds & 0xff);
+            milliseconds >>= 8;
+        }
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes[6..]);
+
+        Span<char> result = stackalloc char[26];
+        var buffer = 0;
+        var bits = 2; // ULID is 128 bits represented in 26 base32 characters.
+        var byteIndex = 0;
+        for (var index = 0; index < result.Length; index++)
+        {
+            while (bits < 5)
+            {
+                buffer = (buffer << 8) | bytes[byteIndex++];
+                bits += 8;
+            }
+            bits -= 5;
+            result[index] = Crockford32[(buffer >> bits) & 31];
+            buffer &= (1 << bits) - 1;
+        }
+        return new string(result);
+    }
 }

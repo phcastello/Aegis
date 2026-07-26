@@ -34,11 +34,32 @@ public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
             Response.Headers.Append("X-Aegis-Voice-Profile", format.VoiceProfile);
             Response.Headers.CacheControl = "no-store";
 
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, HttpContext.RequestAborted);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                HttpContext.RequestAborted,
+                stream.TurnCancellationToken);
             var completed = false;
+            var failed = false;
+            var audioBytes = 0L;
+            var buffer = new byte[64 * 1024];
             try
             {
-                await stream.Upstream.Stream.CopyToAsync(Response.Body, 64 * 1024, linked.Token);
+                while (true)
+                {
+                    var read = await stream.Upstream.Stream.ReadAsync(buffer.AsMemory(), linked.Token);
+                    if (read == 0) break;
+                    audioBytes += read;
+                    await Response.Body.WriteAsync(buffer.AsMemory(0, read), linked.Token);
+                    await Response.Body.FlushAsync(linked.Token);
+                }
+
+                if (audioBytes == 0 || audioBytes % 2 != 0)
+                {
+                    voiceService.FailSpeech(stream.SpeechRequestId);
+                    failed = true;
+                    if (!Response.HasStarted) Response.StatusCode = StatusCodes.Status502BadGateway;
+                    return;
+                }
                 completed = true;
             }
             catch (OperationCanceledException) when (linked.IsCancellationRequested)
@@ -51,7 +72,7 @@ public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
                 {
                     voiceService.CompleteSpeech(stream.SpeechRequestId);
                 }
-                else
+                else if (!failed)
                 {
                     await voiceService.CancelSpeechAsync(stream.SpeechRequestId, CancellationToken.None);
                 }
