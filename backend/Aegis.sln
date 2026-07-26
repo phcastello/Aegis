@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aegis.Domain", "src\Aegis.D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aegis.Infrastructure", "src\Aegis.Infrastructure\Aegis.Infrastructure.csproj", "{0DA70936-A8A6-453A-9F11-FA2CFD986127}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aegis.Application.Tests", "tests\Aegis.Application.Tests\Aegis.Application.Tests.csproj", "{B6BF3DFA-5FCB-4A72-97DA-4C6A6D99D231}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,6 +40,10 @@ Global
 		{0DA70936-A8A6-453A-9F11-FA2CFD986127}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0DA70936-A8A6-453A-9F11-FA2CFD986127}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0DA70936-A8A6-453A-9F11-FA2CFD986127}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B6BF3DFA-5FCB-4A72-97DA-4C6A6D99D231}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B6BF3DFA-5FCB-4A72-97DA-4C6A6D99D231}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B6BF3DFA-5FCB-4A72-97DA-4C6A6D99D231}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B6BF3DFA-5FCB-4A72-97DA-4C6A6D99D231}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{32AC0DDF-5257-4B41-91D6-B1688AEA2639} = {A9ABD439-1DB7-4554-8539-44EA3AD42F9F}

@@ -6,6 +6,7 @@ COPY src/Aegis.Api/Aegis.Api.csproj src/Aegis.Api/
 COPY src/Aegis.Application/Aegis.Application.csproj src/Aegis.Application/
 COPY src/Aegis.Domain/Aegis.Domain.csproj src/Aegis.Domain/
 COPY src/Aegis.Infrastructure/Aegis.Infrastructure.csproj src/Aegis.Infrastructure/
+COPY tests/Aegis.Application.Tests/Aegis.Application.Tests.csproj tests/Aegis.Application.Tests/
 RUN dotnet restore
 
 COPY . .
