@@ -102,8 +102,9 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
     [HttpPost("turns/{turnId:guid}/complete")]
     public IActionResult CompleteTurnWithoutSpeech(Guid turnId)
     {
-        voiceService.CompleteTurnWithoutSpeech(turnId);
-        return NoContent();
+        return voiceService.TryCompleteTurnWithoutSpeech(turnId)
+            ? NoContent()
+            : Conflict();
     }
 
     [HttpGet("conversations/{conversationId:guid}")]

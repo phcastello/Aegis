@@ -5,6 +5,7 @@ using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Email;
 using Aegis.Application.Turns;
+using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Runtime.CompilerServices;
@@ -20,7 +21,8 @@ public sealed class ChatService(
     IEmailToolContextService emailContextService,
     AegisModelRouter modelRouter,
     IConversationTitleJobQueue titleJobQueue,
-    IActiveTurnRegistry turnRegistry) : IChatService
+    IActiveTurnRegistry turnRegistry,
+    IVoiceService voiceService) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -37,7 +39,7 @@ public sealed class ChatService(
 
         var userContent = request.Content.Trim();
         var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = turnRegistry.Register(request.TurnId ?? Guid.NewGuid(), conversation.Id);
+        var turn = await voiceService.RegisterTurnAsync(request.TurnId ?? Guid.NewGuid(), conversation.Id, cancellationToken);
         turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
@@ -133,7 +135,7 @@ public sealed class ChatService(
 
         var userContent = request.Content.Trim();
         var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = turnRegistry.Register(turnId, conversation.Id);
+        var turn = await voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken);
         if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
         {
             throw new OperationCanceledException(turn.Cancellation.Token);

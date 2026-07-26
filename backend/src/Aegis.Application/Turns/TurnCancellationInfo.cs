@@ -1,3 +1,6 @@
 namespace Aegis.Application.Turns;
 
-public sealed record TurnCancellationInfo(Guid TurnId, string? NativeSpeechRequestId);
+/// <summary>Atomic cancellation outcome plus the native request that must be stopped upstream.</summary>
+public sealed record TurnCancellationInfo(
+    CancelTurnResult Result,
+    string? NativeSpeechRequestId);

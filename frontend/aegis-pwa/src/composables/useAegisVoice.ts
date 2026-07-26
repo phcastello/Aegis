@@ -24,13 +24,20 @@ export function useAegisVoice() {
     if (value) void prepare();
   }
 
-  async function prepare(): Promise<void> {
-    try { await player.ensureReady(); } catch { voiceMessage.value = 'Toque em Ativar áudio para ouvir a Aegis.'; }
+  async function prepare(): Promise<boolean> {
+    try {
+      await player.ensureReady();
+      return true;
+    } catch {
+      voiceAvailable.value = false;
+      voiceMessage.value = 'Toque em Ativar áudio para ouvir a Aegis.';
+      return false;
+    }
   }
 
   async function speak(turnId: string, assistantMessageId: string, manual = false): Promise<void> {
     await stop();
-    await prepare();
+    if (!(await prepare())) return;
     if (!manual && !autoSpeak.value) return;
     const speechRequestId = crypto.randomUUID();
     const generation = player.begin();

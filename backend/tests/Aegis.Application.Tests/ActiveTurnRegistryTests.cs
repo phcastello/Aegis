@@ -85,5 +85,66 @@ public sealed class ActiveTurnRegistryTests
         Assert.False(registry.IsActive(turn.TurnId));
     }
 
+    [Fact]
+    public void CompleteWithoutSpeechOnlyAcceptsTextCompletedTurns()
+    {
+        using var registry = CreateRegistry();
+        var turn = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+
+        Assert.False(registry.TryCompleteWithoutSpeech(turn.TurnId));
+        Assert.True(registry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText));
+        Assert.False(registry.TryCompleteWithoutSpeech(turn.TurnId));
+        Assert.True(registry.TrySetTextCompleted(turn.TurnId, Guid.NewGuid()));
+        Assert.True(registry.TryCompleteWithoutSpeech(turn.TurnId));
+        Assert.Equal(TurnStatus.Completed, turn.Status);
+    }
+
+    [Fact]
+    public void AtomicCancellationCapturesTheNativeSpeechRequest()
+    {
+        using var registry = CreateRegistry();
+        var turn = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+        var speechRequestId = Guid.NewGuid();
+        Assert.True(registry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText));
+        Assert.True(registry.TrySetTextCompleted(turn.TurnId, Guid.NewGuid()));
+        Assert.True(registry.TryBeginSpeech(turn.TurnId, speechRequestId, "01JATOMICNATIVESPEECHID000"));
+
+        var cancellation = registry.CancelAndGetInfo(turn.TurnId, "test");
+
+        Assert.True(cancellation.Result.SpeechCancellationRequested);
+        Assert.Equal("01JATOMICNATIVESPEECHID000", cancellation.NativeSpeechRequestId);
+        Assert.True(turn.Cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void ShutdownAtomicallyCancelsTurnsAndRejectsNewRegistrations()
+    {
+        using var registry = CreateRegistry();
+        var existing = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+
+        var cancelled = registry.BeginShutdownAndCancelAll("shutdown");
+
+        Assert.Single(cancelled);
+        Assert.True(existing.Cancellation.IsCancellationRequested);
+        Assert.Throws<InvalidOperationException>(() => registry.Register(Guid.NewGuid(), Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void NewRegistrationAtomicallyCapturesSupersededNativeSpeech()
+    {
+        using var registry = CreateRegistry();
+        var conversationId = Guid.NewGuid();
+        var first = registry.Register(Guid.NewGuid(), conversationId);
+        Assert.True(registry.TryTransition(first.TurnId, TurnStatus.Created, TurnStatus.GeneratingText));
+        Assert.True(registry.TrySetTextCompleted(first.TurnId, Guid.NewGuid()));
+        Assert.True(registry.TryBeginSpeech(first.TurnId, Guid.NewGuid(), "01JSUPERSEDEDNATIVESPEECHID00"));
+
+        var registration = registry.RegisterAndGetSuperseded(Guid.NewGuid(), conversationId);
+
+        Assert.Equal("01JSUPERSEDEDNATIVESPEECHID00", registration.SupersededNativeSpeechRequestId);
+        Assert.True(first.Cancellation.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversationId, registration.Turn.TurnId));
+    }
+
     private static ActiveTurnRegistry CreateRegistry() => new(new AegisMetrics());
 }

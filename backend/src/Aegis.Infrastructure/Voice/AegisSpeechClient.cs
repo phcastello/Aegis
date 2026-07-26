@@ -61,6 +61,11 @@ public sealed class AegisSpeechClient(
         {
             throw;
         }
+        catch (OperationCanceledException exception)
+        {
+            metrics.TtsFailures.Add(1);
+            throw new TimeoutException("Timed out while connecting to the speech service.", exception);
+        }
         catch (Exception)
         {
             metrics.TtsFailures.Add(1);
@@ -210,7 +215,9 @@ public sealed class AegisSpeechClient(
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new IOException(receivedAudio ? "Speech stream became idle." : "Speech stream produced no audio.");
+                throw new TimeoutException(receivedAudio
+                    ? "Speech stream became idle."
+                    : "Speech stream produced no audio.");
             }
         }
 

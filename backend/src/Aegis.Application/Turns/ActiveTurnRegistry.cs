@@ -24,6 +24,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     }
 
     public ActiveTurn Register(Guid turnId, Guid conversationId)
+        => RegisterAndGetSuperseded(turnId, conversationId).Turn;
+
+    public TurnRegistrationInfo RegisterAndGetSuperseded(Guid turnId, Guid conversationId)
     {
         if (turnId == Guid.Empty || conversationId == Guid.Empty)
         {
@@ -44,12 +47,14 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             {
                 CancelUnsafe(turn, "cancelled_before_registration");
                 turns.Add(turnId, turn);
-                return turn;
+                return new TurnRegistrationInfo(turn, null);
             }
 
+            string? supersededNativeSpeechRequestId = null;
             if (currentByConversation.TryGetValue(conversationId, out var priorId) &&
                 turns.TryGetValue(priorId, out var prior))
             {
+                supersededNativeSpeechRequestId = prior.NativeSpeechRequestId;
                 CancelUnsafe(prior, "superseded_by_new_turn");
             }
 
@@ -57,7 +62,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             turns.Add(turnId, turn);
             metrics.TurnsStarted.Add(1);
             metrics.ActiveTurnStarted();
-            return turn;
+            return new TurnRegistrationInfo(turn, supersededNativeSpeechRequestId);
         }
     }
 
@@ -77,24 +82,6 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             return turnBySpeechRequest.TryGetValue(speechRequestId, out var turnId) && turns.TryGetValue(turnId, out var turn)
                 ? turn
                 : null;
-        }
-    }
-
-    public TurnCancellationInfo? GetCancellationInfo(Guid turnId)
-    {
-        lock (gate)
-        {
-            return turns.TryGetValue(turnId, out var turn)
-                ? new TurnCancellationInfo(turn.TurnId, turn.NativeSpeechRequestId)
-                : null;
-        }
-    }
-
-    public IReadOnlyList<Guid> GetActiveTurnIds()
-    {
-        lock (gate)
-        {
-            return turns.Values.Where(IsActiveUnsafe).Select(turn => turn.TurnId).ToList();
         }
     }
 
@@ -199,12 +186,23 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             {
                 return;
             }
+            CompleteUnsafe(turn);
+        }
+    }
 
-            turn.Status = TurnStatus.Completed;
-            turn.CompletedAt = DateTimeOffset.UtcNow;
-            metrics.TurnsCompleted.Add(1);
-            metrics.ActiveTurnEnded();
-            RemoveCurrentUnsafe(turn);
+    public bool TryCompleteWithoutSpeech(Guid turnId)
+    {
+        lock (gate)
+        {
+            if (!turns.TryGetValue(turnId, out var turn)) return false;
+            if (turn.Status == TurnStatus.Completed) return true;
+            if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null)
+            {
+                return false;
+            }
+
+            CompleteUnsafe(turn);
+            return true;
         }
     }
 
@@ -222,6 +220,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     }
 
     public Task<CancelTurnResult> CancelAsync(Guid turnId, string reason, CancellationToken cancellationToken = default)
+        => Task.FromResult(CancelAndGetInfo(turnId, reason, cancellationToken).Result);
+
+    public TurnCancellationInfo CancelAndGetInfo(Guid turnId, string reason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
@@ -229,29 +230,45 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             if (!turns.TryGetValue(turnId, out var turn))
             {
                 cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
-                return Task.FromResult(new CancelTurnResult(turnId, "cancelled", true, true));
+                TrimCancelledBeforeRegistrationUnsafe();
+                return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
             }
 
             var wasSpeech = turn.SpeechRequestId is not null;
+            var nativeSpeechRequestId = turn.NativeSpeechRequestId;
             var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
             CancelUnsafe(turn, reason);
-            return Task.FromResult(new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech));
+            return new TurnCancellationInfo(
+                new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
+                nativeSpeechRequestId);
         }
     }
 
-    public async Task CancelAllAsync(string reason, CancellationToken cancellationToken = default)
+    public IReadOnlyList<TurnCancellationInfo> BeginShutdownAndCancelAll(string reason)
     {
-        Guid[] ids;
         lock (gate)
         {
             stopping = true;
-            ids = turns.Keys.ToArray();
-        }
+            var cancellations = new List<TurnCancellationInfo>();
+            foreach (var turn in turns.Values.Where(IsActiveUnsafe).ToList())
+            {
+                var wasSpeech = turn.SpeechRequestId is not null;
+                var nativeSpeechRequestId = turn.NativeSpeechRequestId;
+                CancelUnsafe(turn, reason);
+                cancellations.Add(new TurnCancellationInfo(
+                    new CancelTurnResult(turn.TurnId, "cancelled", true, wasSpeech),
+                    nativeSpeechRequestId));
+            }
 
-        foreach (var id in ids)
-        {
-            await CancelAsync(id, reason, cancellationToken);
+            return cancellations;
         }
+    }
+
+    public Task CancelAllAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        BeginShutdownAndCancelAll(reason);
+        return Task.CompletedTask;
     }
 
     public void Dispose()
@@ -262,6 +279,8 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             foreach (var turn in turns.Values) turn.Dispose();
             turns.Clear();
             currentByConversation.Clear();
+            turnBySpeechRequest.Clear();
+            cancelledBeforeRegistration.Clear();
         }
     }
 
@@ -282,6 +301,15 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         RemoveCurrentUnsafe(turn);
     }
 
+    private void CompleteUnsafe(ActiveTurn turn)
+    {
+        turn.Status = TurnStatus.Completed;
+        turn.CompletedAt = DateTimeOffset.UtcNow;
+        metrics.TurnsCompleted.Add(1);
+        metrics.ActiveTurnEnded();
+        RemoveCurrentUnsafe(turn);
+    }
+
     private static bool IsActiveUnsafe(ActiveTurn turn) => !turn.Cancellation.IsCancellationRequested &&
         turn.Status is not (TurnStatus.Cancelled or TurnStatus.Cancelling or TurnStatus.Failed or TurnStatus.Completed);
 
@@ -295,7 +323,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         var cutoff = DateTimeOffset.UtcNow - TerminalRetention;
         foreach (var turn in turns.Values.Where(turn => turn.Status == TurnStatus.TextCompleted && turn.TextCompletedAt < DateTimeOffset.UtcNow - TextCompletionGrace).ToList())
         {
-            Complete(turn.TurnId);
+            CompleteUnsafe(turn);
         }
 
         foreach (var pair in turns.Where(pair => pair.Value.CompletedAt < cutoff || pair.Value.CancelledAt < cutoff).ToList())
@@ -309,6 +337,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             cancelledBeforeRegistration.Remove(pair.Key);
         }
+        TrimCancelledBeforeRegistrationUnsafe();
 
         while (turns.Count > MaxTurns)
         {
@@ -317,6 +346,15 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             turns.Remove(oldest.TurnId);
             if (oldest.SpeechRequestId is { } speechRequestId) turnBySpeechRequest.Remove(speechRequestId);
             oldest.Dispose();
+        }
+    }
+
+    private void TrimCancelledBeforeRegistrationUnsafe()
+    {
+        while (cancelledBeforeRegistration.Count > MaxTurns)
+        {
+            var oldest = cancelledBeforeRegistration.MinBy(pair => pair.Value);
+            cancelledBeforeRegistration.Remove(oldest.Key);
         }
     }
 

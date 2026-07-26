@@ -10,6 +10,18 @@ public sealed class VoiceService(
     IAegisSpeechClient speechClient,
     VoiceStatusCache statusCache) : IVoiceService
 {
+    public async Task<ActiveTurn> RegisterTurnAsync(Guid turnId, Guid conversationId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var registration = turnRegistry.RegisterAndGetSuperseded(turnId, conversationId);
+        if (!string.IsNullOrWhiteSpace(registration.SupersededNativeSpeechRequestId))
+        {
+            await speechClient.CancelAsync(registration.SupersededNativeSpeechRequestId, CancellationToken.None);
+        }
+
+        return registration.Turn;
+    }
+
     public async Task<VoiceStream> StartSpeechAsync(StartSpeechRequest request, CancellationToken cancellationToken = default)
     {
         if (request.TurnId == Guid.Empty || request.SpeechRequestId == Guid.Empty || request.AssistantMessageId == Guid.Empty)
@@ -27,7 +39,7 @@ public sealed class VoiceService(
         var turn = turnRegistry.Find(request.TurnId);
         if (turn is null)
         {
-            turn = turnRegistry.Register(request.TurnId, message.ConversationId);
+            turn = await RegisterTurnAsync(request.TurnId, message.ConversationId, cancellationToken);
             turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, message.Id))
             {
@@ -83,35 +95,39 @@ public sealed class VoiceService(
             return new CancelTurnResult(speechRequestId, "cancelled", false, true);
         }
 
-        var result = await turnRegistry.CancelAsync(turn.TurnId, "speech_stop", cancellationToken);
-        if (result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(turn.NativeSpeechRequestId))
+        var cancellation = turnRegistry.CancelAndGetInfo(turn.TurnId, "speech_stop", cancellationToken);
+        if (cancellation.Result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(cancellation.NativeSpeechRequestId))
         {
-            await speechClient.CancelAsync(turn.NativeSpeechRequestId, CancellationToken.None);
+            await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
         }
 
-        return result;
+        return cancellation.Result;
     }
 
     public async Task<CancelTurnResult> CancelTurnAsync(Guid turnId, string reason, CancellationToken cancellationToken = default)
     {
-        var info = turnRegistry.GetCancellationInfo(turnId);
-        var result = await turnRegistry.CancelAsync(turnId, reason, cancellationToken);
-        if (result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(info?.NativeSpeechRequestId))
+        var cancellation = turnRegistry.CancelAndGetInfo(turnId, reason, cancellationToken);
+        if (cancellation.Result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(cancellation.NativeSpeechRequestId))
         {
-            await speechClient.CancelAsync(info.NativeSpeechRequestId, CancellationToken.None);
+            await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
         }
-        return result;
+        return cancellation.Result;
     }
 
     public async Task CancelAllTurnsAsync(string reason, CancellationToken cancellationToken = default)
     {
-        foreach (var turnId in turnRegistry.GetActiveTurnIds())
+        cancellationToken.ThrowIfCancellationRequested();
+        var cancellations = turnRegistry.BeginShutdownAndCancelAll(reason);
+        foreach (var cancellation in cancellations)
         {
-            await CancelTurnAsync(turnId, reason, cancellationToken);
+            if (cancellation.Result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(cancellation.NativeSpeechRequestId))
+            {
+                await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
+            }
         }
     }
 
-    public void CompleteTurnWithoutSpeech(Guid turnId) => turnRegistry.Complete(turnId);
+    public bool TryCompleteTurnWithoutSpeech(Guid turnId) => turnRegistry.TryCompleteWithoutSpeech(turnId);
 
     public void CompleteSpeech(Guid speechRequestId)
     {

@@ -62,6 +62,12 @@ public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
                 }
                 completed = true;
             }
+            catch (TimeoutException)
+            {
+                voiceService.FailSpeech(stream.SpeechRequestId);
+                failed = true;
+                if (!Response.HasStarted) Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+            }
             catch (OperationCanceledException) when (linked.IsCancellationRequested)
             {
                 // Client disconnect and explicit turn cancellation are both expected.
@@ -89,6 +95,10 @@ public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
         catch (HttpRequestException)
         {
             Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        }
+        catch (TimeoutException)
+        {
+            Response.StatusCode = StatusCodes.Status504GatewayTimeout;
         }
         catch (OperationCanceledException)
         {
