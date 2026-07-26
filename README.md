@@ -213,3 +213,11 @@ AEGIS_TTS_API_TOKEN=
 ```
 
 For rollback, set `AEGIS_TTS_ENABLED=false` and redeploy the API; chat remains textual and the PWA keeps manual controls harmlessly unavailable. The independent `aegis-tts` deployment is not included in this Compose file.
+
+Run the turn-lifecycle regression suite with:
+
+```bash
+dotnet test backend/Aegis.sln
+```
+
+It covers superseding a conversation turn, idempotent cancellation, invalid transitions, cancellation before registration, and concurrent registrations. The PWA typecheck and production bundle are verified with `npm run build` in `frontend/aegis-pwa`.
