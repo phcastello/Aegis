@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
+Aegis v0.3.0, "Now We're Talking!", integrates production Aegis voice with automatic spoken chat responses, persistent PCM playback, and coordinated cancellation across LLM generation, speech synthesis, and local audio output.
 
 Version history:
 
@@ -11,6 +11,7 @@ Version history:
 - v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
 - v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 - v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
+- v0.3.0, "Now We're Talking!", integrates the production Aegis voice, automatic spoken chat responses, persistent PCM playback, and coordinated cancellation across LLM generation, speech synthesis, and local audio output.
 
 In v0.2.1, Pedro keeps the same chat, history, feedback, streaming, and Markdown experience while Aegis can connect to Gmail through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -178,3 +179,37 @@ dotnet ef database update \
   --project backend/src/Aegis.Infrastructure \
   --startup-project backend/src/Aegis.Api
 ```
+
+## Voice in v0.3.0
+
+Voice is part of the normal chat, never a separate public TTS screen. A browser creates a UUID turn when a message is sent; the API owns that turn, links its cancellation token to model/tool execution, and emits the same NDJSON chat protocol with `turnId` on conversation, token, and done events. A completed `done` event includes both `assistantMessageId` and the legacy `messageId`.
+
+When automatic speech is enabled (the local default), the PWA sends the persisted assistant message ID to `POST /api/voice/speech`. The API verifies that it is an assistant message in the current turn's conversation, sends its complete persisted text to the private `aegis-tts` deployment, validates PCM s16le mono/24 kHz headers, and streams the bytes unchanged to the PWA. The browser never receives the TTS URL, token, profile controls, reference, or acoustic parameters.
+
+The relevant endpoints are:
+
+- `DELETE /api/chat/turns/{turnId}` — idempotently cancels model/tool work and any associated speech.
+- `POST /api/voice/speech` — accepts `turnId`, `speechRequestId`, and `assistantMessageId`; it never accepts arbitrary text.
+- `DELETE /api/voice/speech/{speechRequestId}` — stops only that voice request.
+- `GET /api/voice/status` — reports whether voice is enabled and currently reachable without exposing internal addresses or credentials.
+
+The native TTS contract is `POST /v1/aegis/speech` and `DELETE /v1/aegis/speech/{request_id}`. The native service requires a ULID-shaped request ID, so Aegis maps public browser UUIDs to internal native IDs. Requests use fixed `AegisVoicev1.0`, priority 50, `enqueue`, PCM, mono 24 kHz, and complete text only after the LLM has finished. No acoustic recipe, reference, normalizer, or DSP is duplicated here.
+
+The PWA keeps one `AudioContext`/`AudioWorkletNode` alive after the first send gesture. It accepts arbitrary HTTP chunk boundaries, retains an odd residual byte, converts little-endian s16 PCM to floats, resamples continuously from 24 kHz to the actual device rate, and clears the generation-tagged queue immediately on stop. It targets 400 ms of audio, applies read backpressure above two seconds, and drops rather than grows beyond five seconds. This also keeps Bluetooth output awake while the model is generating, without adding artificial silence to speech.
+
+`aegis.voice.autoSpeak` is a device-local preference; a missing key means enabled. Disabling it stops current audio but not textual generation. Each completed assistant message retains a compact **Ouvir** action that creates a new voice request without rerunning the LLM. If browser autoplay is blocked, use the first send or the toggle as the gesture to activate audio. Text remains available if TTS is disabled or unavailable; no browser `speechSynthesis` fallback is used.
+
+Configure the backend only (never `VITE_*`) with:
+
+```env
+AEGIS_TTS_ENABLED=true
+AEGIS_TTS_BASE_URL=http://10.1.1.47:8001
+AEGIS_TTS_PROFILE=AegisVoicev1.0
+AEGIS_TTS_DEFAULT_PRIORITY=50
+AEGIS_TTS_CONNECT_TIMEOUT_SECONDS=5
+AEGIS_TTS_FIRST_AUDIO_TIMEOUT_SECONDS=90
+AEGIS_TTS_IDLE_STREAM_TIMEOUT_SECONDS=30
+AEGIS_TTS_API_TOKEN=
+```
+
+For rollback, set `AEGIS_TTS_ENABLED=false` and redeploy the API; chat remains textual and the PWA keeps manual controls harmlessly unavailable. The independent `aegis-tts` deployment is not included in this Compose file.

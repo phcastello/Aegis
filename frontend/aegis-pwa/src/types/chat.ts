@@ -35,6 +35,7 @@ export interface ConversationPage {
 }
 
 export interface SendMessageRequest {
+  turnId?: string;
   conversationId?: string | null;
   content: string;
 }
@@ -53,15 +54,30 @@ export interface LocalChatMessage extends ChatMessage {
 }
 
 export interface ChatStreamHandlers {
-  onConversation: (conversationId: string) => void;
-  onToken: (content: string) => void;
+  onConversation: (turnId: string, conversationId: string) => void;
+  onToken: (turnId: string, content: string) => void;
   onDone: (event: {
+    turnId: string;
     conversationId: string;
     messageId: string;
     conversationTitle?: string | null;
     titleSource?: string | null;
   }) => void;
   onError: (message: string) => void;
+}
+
+export interface StartSpeechRequest {
+  turnId: string;
+  speechRequestId: string;
+  assistantMessageId: string;
+}
+
+export interface VoiceStatus {
+  enabled: boolean;
+  available: boolean;
+  profile: string;
+  sampleRate: number;
+  channels: number;
 }
 
 export type FeedbackRating = 'good' | 'bad';

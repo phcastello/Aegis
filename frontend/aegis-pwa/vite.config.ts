@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'Inbox Familiar',
+        description: "Now We're Talking!",
         theme_color: '#151719',
         background_color: '#0f1113',
         display: 'standalone',

@@ -13,8 +13,8 @@ public sealed class HealthController : ControllerBase
         {
             status = "ok",
             service = "Aegis.Api",
-            version = "0.2.1",
-            codename = "Inbox Familiar"
+            version = "0.3.0",
+            codename = "Now We're Talking!"
         });
     }
 }

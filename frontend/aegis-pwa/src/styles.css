@@ -28,6 +28,27 @@
   --app-viewport-height: 100dvh;
 }
 
+.chat-voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-toggle,
+.stop-turn-button {
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.16));
+  background: transparent;
+  color: inherit;
+  min-height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.voice-toggle { width: 34px; font-size: 0.9rem; }
+.stop-turn-button { padding: 0 10px; font-size: 0.78rem; }
+.voice-toggle:focus-visible,
+.stop-turn-button:focus-visible { outline: 2px solid var(--accent, #8bd5ca); outline-offset: 2px; }
+
 * {
   box-sizing: border-box;
 }

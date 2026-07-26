@@ -6,12 +6,14 @@ import ConversationSidebar from '../components/ConversationSidebar.vue';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
   deleteConversation,
+  cancelTurn,
   getConversation,
   getConversations,
   renameConversation,
   sendMessageStream,
   submitMessageFeedback
 } from '../services/aegisApi';
+import { useAegisVoice } from '../composables/useAegisVoice';
 import type {
   ConversationSummary,
   FeedbackRating,
@@ -43,11 +45,16 @@ const isLoadingHistory = ref(false);
 const historyErrorMessage = ref<string | null>(null);
 const deleteTarget = ref<ConversationSummary | null>(null);
 const isDeletingConversation = ref(false);
+const activeTurnId = ref<string | null>(null);
+const turnStatus = ref<'thinking' | 'responding' | 'preparing_voice' | 'speaking' | 'interrupted' | 'voice_unavailable' | 'idle'>('idle');
+let chatAbortController: AbortController | null = null;
+const voice = useAegisVoice();
 let streamScrollFrame: number | null = null;
 const historyRefreshTimers: number[] = [];
 let viewportCleanup: (() => void) | null = null;
 
-const canSend = computed(() => draft.value.trim().length > 0 && !isLoading.value && !isRestoring.value);
+const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value);
+const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value || voice.isBusy.value);
 const conversationLabel = computed(() => {
   const title = activeConversationTitle.value?.trim() || 'Nova conversa';
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
@@ -291,10 +298,12 @@ function refreshHistoryAfterResponse(): void {
 }
 
 async function openConversation(targetConversationId: string): Promise<void> {
-  if (isLoading.value || isRestoring.value || targetConversationId === conversationId.value) {
+  if (isRestoring.value || targetConversationId === conversationId.value) {
     isSidebarOpen.value = false;
     return;
   }
+
+  await stopActiveTurn('conversation_changed');
 
   isRestoring.value = true;
   errorMessage.value = null;
@@ -327,7 +336,10 @@ async function handleSubmit(): Promise<void> {
     return;
   }
 
+  await voice.prepare();
+  await stopActiveTurn('superseded_by_new_message');
   const content = draft.value.trim();
+  const turnId = crypto.randomUUID();
   const localMessage = createLocalUserMessage(content);
   const assistantMessage = createLocalAssistantMessage();
 
@@ -335,6 +347,9 @@ async function handleSubmit(): Promise<void> {
   resizeComposer();
   errorMessage.value = null;
   isLoading.value = true;
+  turnStatus.value = 'thinking';
+  activeTurnId.value = turnId;
+  chatAbortController = new AbortController();
   messages.value.push(localMessage, assistantMessage);
   scrollToLatest();
 
@@ -343,23 +358,28 @@ async function handleSubmit(): Promise<void> {
   try {
     await sendMessageStream(
       {
+        turnId,
         conversationId: conversationId.value,
         content
       },
       {
-        onConversation: (streamConversationId) => {
+        onConversation: (eventTurnId, streamConversationId) => {
+          if (eventTurnId !== activeTurnId.value) return;
           conversationId.value = streamConversationId;
           localStorage.setItem(STORAGE_KEY, streamConversationId);
           localMessage.conversationId = streamConversationId;
           assistantMessage.conversationId = streamConversationId;
           localMessage.pending = false;
         },
-        onToken: (token) => {
+        onToken: (eventTurnId, token) => {
+          if (eventTurnId !== activeTurnId.value) return;
           streamedContent += token;
+          turnStatus.value = 'responding';
           assistantMessage.content = getCompletedWordPrefix(streamedContent);
           scrollToLatestDuringStream();
         },
-        onDone: ({ conversationId: completedConversationId, messageId, conversationTitle }) => {
+        onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
+          if (completedTurnId !== activeTurnId.value) return;
           conversationId.value = completedConversationId;
           localStorage.setItem(STORAGE_KEY, completedConversationId);
           activeConversationTitle.value = conversationTitle ?? activeConversationTitle.value ?? 'Nova conversa';
@@ -377,14 +397,33 @@ async function handleSubmit(): Promise<void> {
           }, 600);
 
           refreshHistoryAfterResponse();
+          if (voice.autoSpeak.value) {
+            turnStatus.value = 'preparing_voice';
+            void voice.speak(completedTurnId, messageId).finally(() => {
+              if (activeTurnId.value === completedTurnId) {
+                activeTurnId.value = null;
+                turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
+              }
+            });
+          } else {
+            activeTurnId.value = null;
+            turnStatus.value = 'idle';
+          }
         },
         onError: () => {
+          if (activeTurnId.value !== turnId) return;
           errorMessage.value = 'A resposta da Aegis foi interrompida. Tente continuar em um instante.';
         }
-      }
+      },
+      chatAbortController.signal
     );
-  } catch {
-    errorMessage.value = 'Não foi possível enviar a mensagem. Tente novamente em um instante.';
+  } catch (error) {
+    if (activeTurnId.value !== turnId) return;
+    if ((error as DOMException).name === 'AbortError') {
+      turnStatus.value = 'interrupted';
+    } else {
+      errorMessage.value = 'Não foi possível enviar a mensagem. Tente novamente em um instante.';
+    }
     localMessage.pending = false;
     assistantMessage.pending = false;
     assistantMessage.streaming = false;
@@ -392,8 +431,41 @@ async function handleSubmit(): Promise<void> {
       messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
     }
   } finally {
-    isLoading.value = false;
+    if (activeTurnId.value === turnId) isLoading.value = false;
   }
+}
+
+async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
+  const turnId = activeTurnId.value;
+  activeTurnId.value = null;
+  chatAbortController?.abort();
+  chatAbortController = null;
+  void voice.stop();
+  isLoading.value = false;
+  if (turnId) {
+    turnStatus.value = 'interrupted';
+    void cancelTurn(turnId).catch(() => undefined);
+  }
+  void reason;
+}
+
+function toggleAutoSpeak(): void {
+  voice.setAutoSpeak(!voice.autoSpeak.value);
+}
+
+function replayMessage(message: LocalChatMessage): void {
+  if (!message.serverId) return;
+  void (async () => {
+    await stopActiveTurn('replay');
+    const turnId = crypto.randomUUID();
+    activeTurnId.value = turnId;
+    turnStatus.value = 'preparing_voice';
+    await voice.speak(turnId, message.serverId!, true);
+    if (activeTurnId.value === turnId) {
+      activeTurnId.value = null;
+      turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
+    }
+  })();
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -404,6 +476,7 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 function startNewConversation(): void {
+  void stopActiveTurn('new_conversation');
   localStorage.removeItem(STORAGE_KEY);
   conversationId.value = null;
   activeConversationTitle.value = null;
@@ -453,7 +526,8 @@ async function confirmDeleteConversation(): Promise<void> {
   try {
     await deleteConversation(targetId);
     conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
-    if (conversationId.value === targetId) {
+  if (conversationId.value === targetId) {
+      await stopActiveTurn('conversation_deleted');
       startNewConversation();
     }
 
@@ -527,10 +601,12 @@ onMounted(() => {
 
   void loadConversationHistory(true);
   void restoreConversation();
+  void voice.refreshStatus();
   focusComposer();
 });
 
 onBeforeUnmount(() => {
+  void stopActiveTurn('view_unmounted');
   for (const timer of historyRefreshTimers) {
     window.clearTimeout(timer);
   }
@@ -571,13 +647,24 @@ onBeforeUnmount(() => {
           <span>{{ conversationId ? 'Conversa ativa' : 'Novo pensamento' }}</span>
           <div>
             <h1>{{ conversationLabel }}</h1>
-            <p>{{ isLoading ? 'Aegis está respondendo' : 'Um espaço reservado para continuar.' }}</p>
+            <p>{{ turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Um espaço reservado para continuar.' }}</p>
           </div>
         </div>
 
-        <span class="presence-indicator" :class="{ 'presence-indicator--active': isLoading }">
+        <div class="chat-voice-controls">
+          <button
+            type="button"
+            class="voice-toggle"
+            :aria-label="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
+            :title="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
+            @click="toggleAutoSpeak"
+          >{{ voice.autoSpeak.value ? '🔊' : '🔇' }}</button>
+          <button v-if="hasActiveTurn" type="button" class="stop-turn-button" @click="stopActiveTurn()">Parar</button>
+        </div>
+
+        <span class="presence-indicator" :class="{ 'presence-indicator--active': hasActiveTurn }">
           <i></i>
-          {{ isLoading ? 'respondendo' : 'presente' }}
+          {{ hasActiveTurn ? 'ativa' : 'presente' }}
         </span>
       </header>
 
@@ -601,13 +688,14 @@ onBeforeUnmount(() => {
             :message="message"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             @feedback="openFeedback"
+            @replay="replayMessage"
           />
         </template>
 
         <div ref="messagesEnd" class="messages-end"></div>
       </div>
 
-      <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
+      <p v-if="errorMessage || voice.voiceMessage" class="error-message" role="alert">{{ errorMessage ?? voice.voiceMessage }}</p>
 
       <form class="composer" @submit.prevent="handleSubmit">
         <div class="composer-field">

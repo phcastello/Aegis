@@ -10,6 +10,7 @@ defineProps<{
 
 const emit = defineEmits<{
   feedback: [message: LocalChatMessage, rating: FeedbackRating];
+  replay: [message: LocalChatMessage];
 }>();
 </script>
 
@@ -41,6 +42,15 @@ const emit = defineEmits<{
       >
         <button type="button" class="feedback-chip" title="Boa resposta" @click="emit('feedback', message, 'good')">
           Boa
+        </button>
+        <button
+          type="button"
+          class="feedback-chip"
+          title="Repetir em voz alta"
+          aria-label="Repetir em voz alta"
+          @click="emit('replay', message)"
+        >
+          Ouvir
         </button>
         <button
           type="button"
