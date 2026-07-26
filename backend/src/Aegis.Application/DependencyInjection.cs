@@ -6,6 +6,9 @@ using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Application.Runtime;
 using Aegis.Application.Tools;
+using Aegis.Application.Turns;
+using Aegis.Application.Voice;
+using Aegis.Application.Observability;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aegis.Application;
@@ -15,6 +18,10 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IChatService, ChatService>();
+        services.AddSingleton<AegisMetrics>();
+        services.AddScoped<IVoiceService, VoiceService>();
+        services.AddSingleton<VoiceStatusCache>();
+        services.AddSingleton<IActiveTurnRegistry, ActiveTurnRegistry>();
         services.AddScoped<IConversationTitleService, ConversationTitleService>();
         services.AddScoped<IMessageFeedbackService, MessageFeedbackService>();
         services.AddScoped<IEmailToolContextService, EmailToolContextService>();

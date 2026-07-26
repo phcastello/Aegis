@@ -1,6 +1,7 @@
 using Aegis.Application;
 using Aegis.Infrastructure;
 using Aegis.Infrastructure.Persistence;
+using Aegis.Application.Turns;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,6 +31,13 @@ builder.Services
     .AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
+
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    using var scope = app.Services.CreateScope();
+    var turns = scope.ServiceProvider.GetRequiredService<IActiveTurnRegistry>();
+    turns.CancelAllAsync("application_shutdown").GetAwaiter().GetResult();
+});
 
 if (app.Environment.IsDevelopment())
 {

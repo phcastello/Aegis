@@ -37,6 +37,7 @@ public sealed class AegisToolLoop(
 
         for (var iteration = 1; ; iteration++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
                 new ModelToolRequest(request, tools, maxIterations, InputItems: inputItems),
                 cancellationToken);
@@ -82,9 +83,10 @@ public sealed class AegisToolLoop(
 
             inputItems ??= [CreateUserInputItem(request.Input)];
             inputItems.AddRange(response.OutputItems);
-            foreach (var toolCall in response.ToolCalls)
-            {
-                var tool = toolRegistry.Find(toolCall.Name);
+                foreach (var toolCall in response.ToolCalls)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var tool = toolRegistry.Find(toolCall.Name);
                 AegisToolResult result;
                 if (tool is null)
                 {
@@ -158,6 +160,7 @@ public sealed class AegisToolLoop(
 
         for (var iteration = 1; ; iteration++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
                 new ModelToolRequest(request, tools, maxIterations, InputItems: inputItems),
                 cancellationToken);
@@ -215,6 +218,7 @@ public sealed class AegisToolLoop(
 
             foreach (var toolCall in response.ToolCalls)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var tool = toolRegistry.Find(toolCall.Name);
                 AegisToolResult result;
                 if (tool is null)
@@ -358,6 +362,7 @@ public sealed class AegisToolLoop(
             new ModelToolRequest(request, [], maxIterations, InputItems: inputItems),
             cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 yield return new ModelStreamChunk(chunk.Content, IsDone: false);

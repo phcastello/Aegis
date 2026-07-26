@@ -4,6 +4,7 @@ using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Email;
+using Aegis.Application.Turns;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Runtime.CompilerServices;
@@ -18,7 +19,8 @@ public sealed class ChatService(
     IAegisToolLoop toolLoop,
     IEmailToolContextService emailContextService,
     AegisModelRouter modelRouter,
-    IConversationTitleJobQueue titleJobQueue) : IChatService
+    IConversationTitleJobQueue titleJobQueue,
+    IActiveTurnRegistry turnRegistry) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -35,20 +37,25 @@ public sealed class ChatService(
 
         var userContent = request.Content.Trim();
         var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
+        var turn = turnRegistry.Register(request.TurnId ?? Guid.NewGuid(), conversation.Id);
+        turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
+        using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
+        var turnToken = turnCancellation.Token;
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
+        turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await dbContext.SaveChangesAsync(turnToken);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(
             conversation.Id,
             RecentHistoryLimit + 1,
-            cancellationToken);
+            turnToken);
 
         var promptResult = await promptBuilder.BuildPromptAsync(
             recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
             userContent,
-            cancellationToken);
+            turnToken);
 
         try
         {
@@ -56,14 +63,19 @@ public sealed class ChatService(
                 conversation.Id,
                 userContent,
                 recentHistory,
-                cancellationToken);
+                turnToken);
             var purpose = modelRouter.ChoosePurpose(chatContext);
             var useTools = modelRouter.RequiresTools(chatContext);
             var modelRequest = CreateModelRequest(promptResult, userContent, purpose);
             var completion = useTools
-                ? await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, cancellationToken)
-                : await modelClient.GenerateAsync(modelRequest, cancellationToken);
+                ? await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken)
+                : await modelClient.GenerateAsync(modelRequest, turnToken);
+            EnsureCurrent(turn);
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
+            if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
+            {
+                throw new OperationCanceledException(turnToken);
+            }
             dbContext.AddChatMessage(assistantMessage);
             assistantMessage.AttachAuditData(
                 completion.Model,
@@ -76,14 +88,21 @@ public sealed class ChatService(
                 assistantMessage.Id,
                 completion.AuditData));
 
-            await dbContext.SaveChangesAsync(cancellationToken);
-            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+            if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
+            {
+                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+            }
 
             return new SendMessageResponse(
                 conversation.Id,
                 conversation.Title,
                 conversation.TitleSource,
                 MapMessage(assistantMessage));
+        }
+        catch (OperationCanceledException) when (turnToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (LlmRequestException exception)
         {
@@ -107,145 +126,44 @@ public sealed class ChatService(
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
 
-        var userContent = request.Content.Trim();
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
-        dbContext.AddChatMessage(userMessage);
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        yield return ChatStreamEvent.Conversation(conversation.Id);
-
-        var recentHistory = await dbContext.GetRecentMessagesAsync(
-            conversation.Id,
-            RecentHistoryLimit + 1,
-            cancellationToken);
-
-        var promptResult = await promptBuilder.BuildPromptAsync(
-            recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
-            userContent,
-            cancellationToken);
-
-        var content = new StringBuilder();
-        var chatContext = await CreateChatRequestContextAsync(
-            conversation.Id,
-            userContent,
-            recentHistory,
-            cancellationToken);
-        var purpose = modelRouter.ChoosePurpose(chatContext);
-        var useTools = modelRouter.RequiresTools(chatContext);
-        var modelRequest = CreateModelRequest(promptResult, userContent, purpose);
-
-        if (useTools)
+        if (request.TurnId is not { } turnId || turnId == Guid.Empty)
         {
-            await using var toolStream = toolLoop
-                .StreamAsync(
-                    modelRequest with { Purpose = ModelPurpose.Main },
-                    new ToolExecutionContext(conversation.Id, userMessage.Id, userContent),
-                    cancellationToken)
-                .GetAsyncEnumerator(cancellationToken);
-
-            while (true)
-            {
-                ModelStreamChunk chunk;
-                try
-                {
-                    if (!await toolStream.MoveNextAsync())
-                    {
-                        throw new InvalidOperationException(
-                            "Tool streaming ended before a final event was received.");
-                    }
-
-                    chunk = toolStream.Current;
-                }
-                catch (LlmRequestException exception)
-                {
-                    dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
-                        conversation.Id,
-                        userMessage.Id,
-                        null,
-                        exception.AuditData));
-
-                    await dbContext.SaveChangesAsync(CancellationToken.None);
-                    throw;
-                }
-
-                if (!string.IsNullOrEmpty(chunk.Content))
-                {
-                    content.Append(chunk.Content);
-                    yield return ChatStreamEvent.Token(chunk.Content);
-                }
-
-                if (!chunk.IsDone)
-                {
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(content.ToString()) ||
-                    string.IsNullOrWhiteSpace(chunk.Model) ||
-                    chunk.AuditData is null)
-                {
-                    throw new InvalidOperationException("Tool streaming ended without a complete response.");
-                }
-
-                var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
-                dbContext.AddChatMessage(assistantMessage);
-                assistantMessage.AttachAuditData(
-                    chunk.Model,
-                    promptResult.Prompt,
-                    promptResult.RuntimeContext,
-                    chunk.MetadataJson);
-                dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
-                    conversation.Id,
-                    userMessage.Id,
-                    assistantMessage.Id,
-                    chunk.AuditData));
-
-                await dbContext.SaveChangesAsync(cancellationToken);
-                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
-
-                yield return ChatStreamEvent.Done(
-                    conversation.Id,
-                    assistantMessage.Id,
-                    conversation.Title,
-                    conversation.TitleSource);
-                yield break;
-            }
+            throw new ArgumentException("A valid turnId is required for streaming chat.", nameof(request));
         }
 
-        await using var stream = modelClient
-            .StreamAsync(modelRequest, cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
-
-        while (true)
+        var userContent = request.Content.Trim();
+        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
+        var turn = turnRegistry.Register(turnId, conversation.Id);
+        if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
         {
-            ModelStreamChunk chunk;
-            try
-            {
-                if (!await stream.MoveNextAsync())
-                {
-                    throw new InvalidOperationException(
-                        "Model streaming ended before a final event was received.");
-                }
+            throw new OperationCanceledException(turn.Cancellation.Token);
+        }
 
-                chunk = stream.Current;
-            }
-            catch (LlmRequestException exception)
-            {
-                dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
-                    conversation.Id,
-                    userMessage.Id,
-                    null,
-                    exception.AuditData));
+        using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
+        var turnToken = turnCancellation.Token;
+        var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
+        turn.UserMessageId = userMessage.Id;
+        dbContext.AddChatMessage(userMessage);
+        await dbContext.SaveChangesAsync(turnToken);
+        yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-                throw;
-            }
+        var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
+        var promptResult = await promptBuilder.BuildPromptAsync(
+            recentHistory.Where(message => message.Id != userMessage.Id).ToList(), userContent, turnToken);
+        var chatContext = await CreateChatRequestContextAsync(conversation.Id, userContent, recentHistory, turnToken);
+        var modelRequest = CreateModelRequest(promptResult, userContent, modelRouter.ChoosePurpose(chatContext));
+        IAsyncEnumerable<ModelStreamChunk> chunks = modelRouter.RequiresTools(chatContext)
+            ? toolLoop.StreamAsync(modelRequest with { Purpose = ModelPurpose.Main }, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken)
+            : modelClient.StreamAsync(modelRequest, turnToken);
 
+        var content = new StringBuilder();
+        await foreach (var chunk in chunks.WithCancellation(turnToken))
+        {
+            EnsureCurrent(turn);
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 content.Append(chunk.Content);
-                yield return ChatStreamEvent.Token(chunk.Content);
+                yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
 
             if (!chunk.IsDone)
@@ -253,36 +171,31 @@ public sealed class ChatService(
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(content.ToString()) ||
-                string.IsNullOrWhiteSpace(chunk.Model) ||
-                chunk.AuditData is null)
+            if (string.IsNullOrWhiteSpace(content.ToString()) || string.IsNullOrWhiteSpace(chunk.Model) || chunk.AuditData is null)
             {
                 throw new InvalidOperationException("Model streaming ended without a complete response.");
             }
 
+            EnsureCurrent(turn);
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+            if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
+            {
+                throw new OperationCanceledException(turnToken);
+            }
+
             dbContext.AddChatMessage(assistantMessage);
-            assistantMessage.AttachAuditData(
-                chunk.Model,
-                promptResult.Prompt,
-                promptResult.RuntimeContext,
-                chunk.MetadataJson);
-            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
-                conversation.Id,
-                userMessage.Id,
-                assistantMessage.Id,
-                chunk.AuditData));
-
-            await dbContext.SaveChangesAsync(cancellationToken);
-            await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
-
-            yield return ChatStreamEvent.Done(
-                conversation.Id,
-                assistantMessage.Id,
-                conversation.Title,
-                conversation.TitleSource);
+            assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt, promptResult.RuntimeContext, chunk.MetadataJson);
+            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+            if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
+            {
+                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+                yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id, conversation.Title, conversation.TitleSource);
+            }
             yield break;
         }
+
+        throw new InvalidOperationException("Model streaming ended before a final event was received.");
     }
 
     public async Task<ConversationResponse?> GetConversationAsync(
@@ -551,7 +464,7 @@ public sealed class ChatService(
             purpose,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.2.1",
+                ["aegis_version"] = "0.3.0",
                 ["purpose"] = purpose.ToString()
             });
     }
@@ -572,5 +485,13 @@ public sealed class ChatService(
     private static bool ContainsAny(string value, IReadOnlyList<string> terms)
     {
         return terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void EnsureCurrent(ActiveTurn turn)
+    {
+        if (!turnRegistry.IsCurrent(turn.ConversationId, turn.TurnId))
+        {
+            throw new OperationCanceledException(turn.Cancellation.Token);
+        }
     }
 }

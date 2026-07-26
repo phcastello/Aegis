@@ -1,5 +1,6 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
+using Aegis.Application.Turns;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,7 +9,7 @@ namespace Aegis.Api.Controllers;
 
 [ApiController]
 [Route("api/chat")]
-public sealed class ChatController(IChatService chatService) : ControllerBase
+public sealed class ChatController(IChatService chatService, IActiveTurnRegistry turnRegistry) : ControllerBase
 {
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
 
@@ -50,11 +51,11 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         [FromBody] SendMessageRequest? request,
         CancellationToken cancellationToken)
     {
-        if (request is null || string.IsNullOrWhiteSpace(request.Content))
+        if (request is null || string.IsNullOrWhiteSpace(request.Content) || request.TurnId is not { } turnId || turnId == Guid.Empty)
         {
             Response.StatusCode = StatusCodes.Status400BadRequest;
             await Response.WriteAsJsonAsync(
-                new { error = "Message content cannot be empty." },
+                new { error = "Message content and a valid turnId are required." },
                 cancellationToken);
             return;
         }
@@ -70,7 +71,7 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
                 await WriteStreamEventAsync(streamEvent, cancellationToken);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             // The client disconnected; there is no stream left to notify.
         }
@@ -86,6 +87,15 @@ public sealed class ChatController(IChatService chatService) : ControllerBase
         {
             await WriteStreamErrorAsync(FriendlyFailureMessage, StatusCodes.Status500InternalServerError, cancellationToken);
         }
+    }
+
+    [HttpDelete("turns/{turnId:guid}")]
+    public async Task<ActionResult<CancelTurnResult>> CancelTurn(
+        Guid turnId,
+        CancellationToken cancellationToken)
+    {
+        var result = await turnRegistry.CancelAsync(turnId, "user_stop", cancellationToken);
+        return Ok(result);
     }
 
     [HttpGet("conversations/{conversationId:guid}")]

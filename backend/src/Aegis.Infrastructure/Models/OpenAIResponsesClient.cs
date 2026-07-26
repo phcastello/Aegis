@@ -77,6 +77,10 @@ public sealed class OpenAIResponsesClient(
                     FailureReason: null,
                     ErrorType: null));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception) when (exception is not LlmRequestException)
         {
             stopwatch.Stop();
@@ -128,7 +132,8 @@ public sealed class OpenAIResponsesClient(
             response?.Dispose();
             throw;
         }
-        catch (Exception exception) when (exception is not LlmRequestException)
+        catch (Exception exception) when (exception is not LlmRequestException &&
+            !(exception is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             response?.Dispose();
             throw CreateRequestException(
@@ -368,6 +373,10 @@ public sealed class OpenAIResponsesClient(
                     FailureReason: null,
                     ErrorType: null));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception) when (exception is not LlmRequestException)
         {
             stopwatch.Stop();
@@ -428,7 +437,8 @@ public sealed class OpenAIResponsesClient(
             response?.Dispose();
             throw;
         }
-        catch (Exception exception) when (exception is not LlmRequestException)
+        catch (Exception exception) when (exception is not LlmRequestException &&
+            !(exception is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             response?.Dispose();
             throw CreateRequestException(
@@ -666,7 +676,7 @@ public sealed class OpenAIResponsesClient(
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aegis_version"] = "0.2.1",
+            ["aegis_version"] = "0.3.0",
             ["purpose"] = request.Purpose.ToString()
         };
 
