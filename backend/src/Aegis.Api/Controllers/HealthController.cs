@@ -11,10 +11,7 @@ public sealed class HealthController : ControllerBase
     {
         return Ok(new
         {
-            status = "ok",
-            service = "Aegis.Api",
-            version = "0.3.0",
-            codename = "Now We're Talking!"
+            status = "ok"
         });
     }
 }

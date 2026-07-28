@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.3.0, "Now We're Talking!", integrates production Aegis voice with automatic spoken chat responses, persistent PCM playback, and coordinated cancellation across LLM generation, speech synthesis, and local audio output.
+Aegis v0.3.1, "Now We're Talking!", refines chat controls, contextual feedback, voice playback feedback, cancellation, and server availability while preserving the v0.3.0 voice stack.
 
 Version history:
 
@@ -11,7 +11,7 @@ Version history:
 - v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
 - v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 - v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
-- v0.3.0, "Now We're Talking!", integrates the production Aegis voice, automatic spoken chat responses, persistent PCM playback, and coordinated cancellation across LLM generation, speech synthesis, and local audio output.
+- v0.3.1, "Now We're Talking!", refines chat controls, contextual feedback, voice playback feedback, cancellation, and server availability.
 
 In v0.2.1, Pedro keeps the same chat, history, feedback, streaming, and Markdown experience while Aegis can connect to Gmail through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 

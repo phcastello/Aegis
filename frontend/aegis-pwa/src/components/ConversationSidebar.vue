@@ -239,6 +239,6 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <p class="sidebar-footer">Presente, discreta e pronta para continuar.</p>
+    <p class="sidebar-footer">Discreta e pronta para continuar.</p>
   </aside>
 </template>

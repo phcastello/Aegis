@@ -10,6 +10,7 @@ import {
   completeTurnWithoutSpeech,
   getConversation,
   getConversations,
+  getHealth,
   renameConversation,
   sendMessageStream,
   submitMessageFeedback
@@ -46,16 +47,19 @@ const isLoadingHistory = ref(false);
 const historyErrorMessage = ref<string | null>(null);
 const deleteTarget = ref<ConversationSummary | null>(null);
 const isDeletingConversation = ref(false);
+const healthState = ref<'checking' | 'online' | 'offline'>('checking');
 const activeTurnId = ref<string | null>(null);
 const turnStatus = ref<'thinking' | 'responding' | 'preparing_voice' | 'speaking' | 'interrupted' | 'voice_unavailable' | 'idle'>('idle');
 let chatAbortController: AbortController | null = null;
+let activeSpeechPlaybackId: string | null = null;
+const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
 let streamScrollFrame: number | null = null;
 const historyRefreshTimers: number[] = [];
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value);
-const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value || voice.isBusy.value);
+const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
 const conversationLabel = computed(() => {
   const title = activeConversationTitle.value?.trim() || 'Nova conversa';
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
@@ -337,8 +341,6 @@ async function handleSubmit(): Promise<void> {
     return;
   }
 
-  await voice.prepare();
-  await stopActiveTurn('superseded_by_new_message');
   const content = draft.value.trim();
   const turnId = crypto.randomUUID();
   const localMessage = createLocalUserMessage(content);
@@ -399,13 +401,8 @@ async function handleSubmit(): Promise<void> {
 
           refreshHistoryAfterResponse();
           if (voice.autoSpeak.value) {
-            turnStatus.value = 'preparing_voice';
-            void voice.speak(completedTurnId, messageId).finally(() => {
-              if (activeTurnId.value === completedTurnId) {
-                activeTurnId.value = null;
-                turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
-              }
-            });
+            activeTurnId.value = null;
+            void playSpeech(completedTurnId, messageId);
           } else {
             void completeTurnWithoutSpeech(completedTurnId).catch(() => undefined);
             activeTurnId.value = null;
@@ -442,7 +439,7 @@ async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
   activeTurnId.value = null;
   chatAbortController?.abort();
   chatAbortController = null;
-  void voice.stop();
+  stopPlayback();
   isLoading.value = false;
   if (turnId) {
     turnStatus.value = 'interrupted';
@@ -452,7 +449,36 @@ async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
 }
 
 function toggleAutoSpeak(): void {
-  voice.setAutoSpeak(!voice.autoSpeak.value);
+  const enabled = !voice.autoSpeak.value;
+  voice.setAutoSpeak(enabled);
+  if (!enabled) {
+    stopPlayback();
+  }
+}
+
+function stopPlayback(): void {
+  activeSpeechPlaybackId = null;
+  activeSpeechMessageId.value = null;
+  void voice.stop();
+  if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
+}
+
+async function playSpeech(turnId: string, assistantMessageId: string): Promise<void> {
+  const playbackId = crypto.randomUUID();
+  activeSpeechPlaybackId = playbackId;
+  activeSpeechMessageId.value = assistantMessageId;
+  turnStatus.value = 'preparing_voice';
+  await voice.speak(turnId, assistantMessageId, true);
+  if (activeSpeechPlaybackId === playbackId) {
+    activeSpeechPlaybackId = null;
+    activeSpeechMessageId.value = null;
+    if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
+  }
+}
+
+async function checkServerHealth(): Promise<void> {
+  healthState.value = 'checking'; const controller = new AbortController(); const timeout = window.setTimeout(() => controller.abort(), 3000);
+  try { healthState.value = await getHealth(controller.signal) ? 'online' : 'offline'; } catch { healthState.value = 'offline'; } finally { window.clearTimeout(timeout); }
 }
 
 function replayMessage(message: LocalChatMessage): void {
@@ -460,13 +486,7 @@ function replayMessage(message: LocalChatMessage): void {
   void (async () => {
     await stopActiveTurn('replay');
     const turnId = crypto.randomUUID();
-    activeTurnId.value = turnId;
-    turnStatus.value = 'preparing_voice';
-    await voice.speak(turnId, message.serverId!, true);
-    if (activeTurnId.value === turnId) {
-      activeTurnId.value = null;
-      turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
-    }
+    await playSpeech(turnId, message.serverId!);
   })();
 }
 
@@ -604,6 +624,7 @@ onMounted(() => {
   void loadConversationHistory(true);
   void restoreConversation();
   void voice.refreshStatus();
+  void checkServerHealth();
   focusComposer();
 });
 
@@ -657,17 +678,14 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="voice-toggle"
+            :class="{ 'voice-toggle--muted': !voice.autoSpeak.value }"
             :aria-label="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
             :title="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
             @click="toggleAutoSpeak"
-          >{{ voice.autoSpeak.value ? '🔊' : '🔇' }}</button>
-          <button v-if="hasActiveTurn" type="button" class="stop-turn-button" @click="stopActiveTurn()">Parar</button>
+          ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Zm12-1a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /><path v-if="!voice.autoSpeak.value" d="M4 4l16 16" /></svg></button>
         </div>
 
-        <span class="presence-indicator" :class="{ 'presence-indicator--active': hasActiveTurn }">
-          <i></i>
-          {{ hasActiveTurn ? 'ativa' : 'presente' }}
-        </span>
+        <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>
       </header>
 
       <div class="messages" aria-live="polite">
@@ -678,7 +696,7 @@ onBeforeUnmount(() => {
 
         <div v-else-if="messages.length === 0" class="empty-state">
           <div class="empty-state__mark"><AegisMark /></div>
-          <span class="empty-state__eyebrow">Aegis está presente</span>
+          <span class="empty-state__eyebrow">Aegis</span>
           <strong>O que merece espaço agora?</strong>
           <span>Comece uma conversa ou continue um raciocínio em voz alta.</span>
         </div>
@@ -689,17 +707,17 @@ onBeforeUnmount(() => {
             :key="message.id"
             :message="message"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
+            :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
             @feedback="openFeedback"
             @replay="replayMessage"
+            @stop-playback="stopPlayback"
           />
         </template>
 
         <div ref="messagesEnd" class="messages-end"></div>
       </div>
 
-      <p v-if="errorMessage || voice.voiceMessage" class="error-message" :role="errorMessage ? 'alert' : 'status'">{{ errorMessage ?? voice.voiceMessage }}</p>
-
-      <form class="composer" @submit.prevent="handleSubmit">
+      <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
         <div class="composer-field">
           <textarea
             v-model="draft"
@@ -712,11 +730,9 @@ onBeforeUnmount(() => {
             @keydown="handleKeydown"
           ></textarea>
 
-          <button class="send-button" type="submit" :disabled="!canSend || isRestoring" aria-label="Enviar">
-            <span>Enviar</span>
-            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-              <path d="M3 10h12.2M10.8 5.6 15.2 10l-4.4 4.4" />
-            </svg>
+          <button class="send-button" :class="{ 'send-button--stop': hasActiveTurn }" type="submit" :disabled="(!hasActiveTurn && !canSend) || isRestoring" :aria-label="hasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
+            <svg v-if="hasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
+            <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
           </button>
         </div>
         <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
