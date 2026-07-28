@@ -51,6 +51,7 @@ export interface LocalChatMessage extends ChatMessage {
   serverId?: string;
   pending?: boolean;
   streaming?: boolean;
+  interrupted?: boolean;
 }
 
 export interface ChatStreamHandlers {

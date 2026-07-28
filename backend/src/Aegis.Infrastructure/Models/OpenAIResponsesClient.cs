@@ -676,7 +676,7 @@ public sealed class OpenAIResponsesClient(
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aegis_version"] = "0.3.0",
+            ["aegis_version"] = "0.3.1",
             ["purpose"] = request.Purpose.ToString()
         };
 

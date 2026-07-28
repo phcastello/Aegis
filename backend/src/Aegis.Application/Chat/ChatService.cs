@@ -466,7 +466,7 @@ public sealed class ChatService(
             purpose,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.3.0",
+                ["aegis_version"] = "0.3.1",
                 ["purpose"] = purpose.ToString()
             });
     }

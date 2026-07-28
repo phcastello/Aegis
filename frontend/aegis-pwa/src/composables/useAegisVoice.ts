@@ -20,7 +20,6 @@ export function useAegisVoice() {
   function setAutoSpeak(value: boolean): void {
     autoSpeak.value = value;
     localStorage.setItem(AUTO_SPEAK_KEY, String(value));
-    if (!value) void stop();
     if (value) void prepare();
   }
 

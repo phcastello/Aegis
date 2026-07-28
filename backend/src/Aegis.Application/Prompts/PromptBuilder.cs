@@ -148,7 +148,7 @@ public sealed class PromptBuilder(
 
             You are Aegis.
 
-            Your current version is v0.3.0.
+            Your current version is v0.3.1.
             Your current version codename is "Now We're Talking!".
             """;
     }
