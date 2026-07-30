@@ -9,7 +9,9 @@ using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
 using Aegis.Infrastructure.Voice;
+using Aegis.Infrastructure.Voice.Transcription;
 using Aegis.Application.Voice;
+using Aegis.Application.Voice.Transcription;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -91,6 +93,50 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(tts.BaseUrl.TrimEnd('/') + "/");
             client.Timeout = Timeout.InfiniteTimeSpan;
         });
+
+        services.Configure<SttOptions>(options =>
+        {
+            configuration.GetSection(SttOptions.SectionName).Bind(options);
+            options.Enabled = ReadBool(configuration, "AEGIS_STT_ENABLED", options.Enabled);
+            options.PrimaryProvider = Read(configuration, "AEGIS_STT_PRIMARY_PROVIDER", options.PrimaryProvider);
+            options.FallbackEnabled = ReadBool(configuration, "AEGIS_STT_FALLBACK_ENABLED", options.FallbackEnabled);
+            options.FallbackProvider = Read(configuration, "AEGIS_STT_FALLBACK_PROVIDER", options.FallbackProvider);
+            options.Language = Read(configuration, "AEGIS_STT_LANGUAGE", options.Language);
+            options.TimeoutSeconds = ReadInt(configuration, "AEGIS_STT_TIMEOUT_SECONDS", options.TimeoutSeconds);
+            options.MaxAudioBytes = ReadInt(configuration, "AEGIS_STT_MAX_AUDIO_BYTES", options.MaxAudioBytes);
+            options.MaxRecordingSeconds = ReadInt(configuration, "AEGIS_STT_MAX_RECORDING_SECONDS", options.MaxRecordingSeconds);
+            options.MaxKeyterms = ReadInt(configuration, "AEGIS_STT_MAX_KEYTERMS", options.MaxKeyterms);
+            options.Keyterms = Read(configuration, "AEGIS_STT_KEYTERMS", options.Keyterms);
+        });
+        services.Configure<ElevenLabsSttOptions>(options =>
+        {
+            options.ApiKey = Read(configuration, "AEGIS_STT_ELEVENLABS_API_KEY", options.ApiKey);
+            options.Model = Read(configuration, "AEGIS_STT_ELEVENLABS_MODEL", options.Model);
+            options.BaseUrl = Read(configuration, "AEGIS_STT_ELEVENLABS_BASE_URL", options.BaseUrl);
+        });
+        services.Configure<OpenAiSttOptions>(options =>
+        {
+            // Deliberately only reads AEGIS_STT_OPENAI_API_KEY. Never use OPENAI_API_KEY here.
+            options.ApiKey = Read(configuration, "AEGIS_STT_OPENAI_API_KEY", options.ApiKey);
+            options.Model = Read(configuration, "AEGIS_STT_OPENAI_MODEL", options.Model);
+            options.BaseUrl = Read(configuration, "AEGIS_STT_OPENAI_BASE_URL", options.BaseUrl);
+        });
+        services.AddSingleton<ISttKeytermProvider, SttKeytermProvider>();
+        services.AddHttpClient<ElevenLabsTranscriptionClient>((provider, client) =>
+        {
+            var stt = provider.GetRequiredService<IOptions<ElevenLabsSttOptions>>().Value;
+            client.BaseAddress = new Uri(stt.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        });
+        services.AddHttpClient<OpenAiTranscriptionClient>((provider, client) =>
+        {
+            var stt = provider.GetRequiredService<IOptions<OpenAiSttOptions>>().Value;
+            client.BaseAddress = new Uri(stt.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        });
+        services.AddScoped<ISpeechTranscriptionProvider>(provider => provider.GetRequiredService<ElevenLabsTranscriptionClient>());
+        services.AddScoped<ISpeechTranscriptionProvider>(provider => provider.GetRequiredService<OpenAiTranscriptionClient>());
+        services.AddScoped<ITranscriptionSettings>(provider => provider.GetRequiredService<IOptions<SttOptions>>().Value);
 
         services.Configure<GmailOptions>(options =>
         {

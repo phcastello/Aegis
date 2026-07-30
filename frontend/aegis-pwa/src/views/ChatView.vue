@@ -16,6 +16,7 @@ import {
   submitMessageFeedback
 } from '../services/aegisApi';
 import { useAegisVoice } from '../composables/useAegisVoice';
+import { useAegisTranscription } from '../composables/useAegisTranscription';
 import type {
   ConversationSummary,
   FeedbackRating,
@@ -54,12 +55,18 @@ let chatAbortController: AbortController | null = null;
 let activeSpeechPlaybackId: string | null = null;
 const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
+const transcription = useAegisTranscription(insertTranscriptIntoDraft);
 let streamScrollFrame: number | null = null;
 const historyRefreshTimers: number[] = [];
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value);
 const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
+const canStartRecording = computed(() =>
+  !hasActiveTurn.value &&
+  !isRestoring.value &&
+  transcription.available.value &&
+  (transcription.state.value === 'idle' || transcription.state.value === 'error'));
 const conversationLabel = computed(() => {
   const title = activeConversationTitle.value?.trim() || 'Nova conversa';
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
@@ -103,6 +110,29 @@ function focusComposer(): void {
 
   void nextTick(() => {
     composerInput.value?.focus({ preventScroll: true });
+  });
+}
+
+function insertTranscriptIntoDraft(transcript: string): void {
+  const text = transcript.trim();
+  if (!text) return;
+
+  const input = composerInput.value;
+  const current = draft.value;
+  const start = input?.selectionStart ?? current.length;
+  const end = input?.selectionEnd ?? start;
+  const before = current.slice(0, start);
+  const after = current.slice(end);
+  const leftSeparator = before && !/\s$/u.test(before) ? ' ' : '';
+  const rightSeparator = after && !/^\s/u.test(after) ? ' ' : '';
+  const insertion = `${leftSeparator}${text}${rightSeparator}`;
+  draft.value = `${before}${insertion}${after}`;
+
+  void nextTick(() => {
+    const nextCursor = before.length + insertion.length;
+    composerInput.value?.focus({ preventScroll: true });
+    composerInput.value?.setSelectionRange(nextCursor, nextCursor);
+    resizeComposer();
   });
 }
 
@@ -308,6 +338,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
     return;
   }
 
+  transcription.discard();
   await stopActiveTurn('conversation_changed');
 
   isRestoring.value = true;
@@ -342,6 +373,7 @@ async function handleSubmit(): Promise<void> {
   }
 
   const content = draft.value.trim();
+  transcription.discard();
   const turnId = crypto.randomUUID();
   const localMessage = createLocalUserMessage(content);
   const assistantMessage = createLocalAssistantMessage();
@@ -491,13 +523,31 @@ function replayMessage(message: LocalChatMessage): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && transcription.isRecording.value) {
+    event.preventDefault();
+    transcription.discard();
+    return;
+  }
+
   if (event.key === 'Enter' && !event.shiftKey && canSend.value) {
     event.preventDefault();
     void handleSubmit();
   }
 }
 
+async function toggleRecording(): Promise<void> {
+  if (transcription.isRecording.value) {
+    transcription.stopRecording();
+    return;
+  }
+
+  if (!canStartRecording.value) return;
+  stopPlayback();
+  await transcription.start();
+}
+
 function startNewConversation(): void {
+  transcription.discard();
   void stopActiveTurn('new_conversation');
   localStorage.removeItem(STORAGE_KEY);
   conversationId.value = null;
@@ -624,11 +674,13 @@ onMounted(() => {
   void loadConversationHistory(true);
   void restoreConversation();
   void voice.refreshStatus();
+  void transcription.refreshStatus();
   void checkServerHealth();
   focusComposer();
 });
 
 onBeforeUnmount(() => {
+  transcription.dispose();
   void stopActiveTurn('view_unmounted');
   for (const timer of historyRefreshTimers) {
     window.clearTimeout(timer);
@@ -730,12 +782,35 @@ onBeforeUnmount(() => {
             @keydown="handleKeydown"
           ></textarea>
 
+          <button
+            class="record-button"
+            :class="{ 'record-button--recording': transcription.isRecording.value, 'record-button--transcribing': transcription.isTranscribing.value }"
+            type="button"
+            :disabled="transcription.isTranscribing.value || (!transcription.isRecording.value && !canStartRecording)"
+            :aria-label="transcription.isRecording.value ? 'Encerrar gravação' : transcription.isTranscribing.value ? 'Transcrevendo gravação' : 'Gravar mensagem de voz'"
+            :title="transcription.isRecording.value ? 'Encerrar gravação' : transcription.isTranscribing.value ? 'Transcrevendo…' : 'Gravar mensagem de voz'"
+            @click="toggleRecording"
+          >
+            <span v-if="transcription.isRecording.value" class="recording-bars" aria-hidden="true"><i/><i/><i/></span>
+            <svg v-else viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
+          </button>
+
+          <button
+            v-if="transcription.isRecording.value || transcription.isTranscribing.value"
+            class="record-discard-button"
+            type="button"
+            :aria-label="transcription.isTranscribing.value ? 'Cancelar transcrição' : 'Descartar gravação'"
+            :title="transcription.isTranscribing.value ? 'Cancelar transcrição' : 'Descartar gravação'"
+            @click="transcription.discard"
+          ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></button>
+
           <button class="send-button" :class="{ 'send-button--stop': hasActiveTurn }" type="submit" :disabled="(!hasActiveTurn && !canSend) || isRestoring" :aria-label="hasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
             <svg v-if="hasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
             <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
           </button>
         </div>
-        <span class="composer-hint">Enter para enviar · Shift + Enter para nova linha</span>
+        <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
+        <span class="composer-hint">{{ transcription.isRecording.value ? 'Ouvindo… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>
     </div>

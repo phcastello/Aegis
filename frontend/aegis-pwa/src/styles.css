@@ -956,7 +956,7 @@ button:disabled {
 
 .composer-field {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto auto;
   gap: 10px;
   align-items: end;
   padding: 5px;
@@ -1032,6 +1032,79 @@ button:disabled {
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.38);
   transition: filter 150ms ease, transform 150ms ease, opacity 150ms ease;
 }
+
+.record-button,
+.record-discard-button {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #aebee7;
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.record-button:hover:not(:disabled),
+.record-discard-button:hover {
+  color: #e0e7ff;
+  background: rgba(145, 169, 238, 0.12);
+}
+
+.record-button:focus-visible,
+.record-discard-button:focus-visible {
+  outline: 2px solid #a9baf0;
+  outline-offset: 2px;
+}
+
+.record-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.record-button svg,
+.record-discard-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.record-button--recording {
+  color: #ffd0cc;
+  background: rgba(231, 118, 112, 0.18);
+}
+
+.record-button--transcribing {
+  color: #91a9ee;
+}
+
+.recording-bars {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+}
+
+.recording-bars i {
+  display: block;
+  width: 3px;
+  border-radius: 3px;
+  background: currentColor;
+  animation: audio-bar 460ms ease-in-out infinite alternate;
+}
+
+.recording-bars i:nth-child(1) { height: 8px; }
+.recording-bars i:nth-child(2) { height: 17px; animation-delay: 150ms; }
+.recording-bars i:nth-child(3) { height: 11px; animation-delay: 280ms; }
 
 .send-button svg {
   width: 17px;
@@ -1315,6 +1388,10 @@ button:disabled {
   .generation-marker,
   .server-indicator--online i,
   .audio-bars i {
+    animation: none;
+  }
+
+  .recording-bars i {
     animation: none;
   }
 }

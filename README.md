@@ -221,3 +221,32 @@ dotnet test backend/Aegis.sln
 ```
 
 It covers superseding a conversation turn, idempotent cancellation, invalid transitions, cancellation before registration, and concurrent registrations. The PWA typecheck and production bundle are verified with `npm run build` in `frontend/aegis-pwa`.
+
+## Voice input (STT)
+
+Voice input is push-to-talk only: the browser records a short clip, sends it only to the Aegis API, then inserts the returned transcript into the composer for review. It never sends the message automatically, does not persist audio, and does not use the active chat `turnId`.
+
+Configure STT on the backend only. `AEGIS_STT_OPENAI_API_KEY` is intentionally different from `OPENAI_API_KEY`; the STT client never reads or falls back to the chat-model key.
+
+```env
+AEGIS_STT_ENABLED=true
+AEGIS_STT_PRIMARY_PROVIDER=elevenlabs
+AEGIS_STT_ELEVENLABS_MODEL=scribe_v2
+AEGIS_STT_ELEVENLABS_API_KEY=
+AEGIS_STT_FALLBACK_ENABLED=true
+AEGIS_STT_FALLBACK_PROVIDER=openai
+AEGIS_STT_OPENAI_MODEL=gpt-4o-transcribe
+AEGIS_STT_OPENAI_API_KEY=
+AEGIS_STT_LANGUAGE=por
+AEGIS_STT_TIMEOUT_SECONDS=30
+AEGIS_STT_MAX_AUDIO_BYTES=20971520
+AEGIS_STT_MAX_RECORDING_SECONDS=90
+AEGIS_STT_MAX_KEYTERMS=80
+AEGIS_STT_KEYTERMS=Aegis;oito;às oito;Qdrant;TTS;STT;GPU;CPU
+```
+
+ElevenLabs Scribe v2 is the primary batch provider. It receives `language_code=por`, `no_verbatim=false`, `tag_audio_events=false`, and the backend-validated static keyterms. A technical primary failure (timeout, network/DNS failure, 429, 5xx, invalid/empty response, or missing primary configuration) may call the OpenAI fallback with `gpt-4o-transcribe`, `language=pt`, and a literal-transcription prompt. Invalid audio, provider HTTP 400, and client cancellation never trigger fallback.
+
+The public contracts are `GET /api/voice/transcription/status`, returning `{ "enabled": boolean, "configured": boolean, "maxRecordingSeconds": number }` without an external probe, and `POST /api/voice/transcriptions` as `multipart/form-data` with `audio`, `transcriptionRequestId`, and `clientDurationMilliseconds`. The response is `{ "transcriptionRequestId": "uuid", "text": "..." }`; all transcription responses use `Cache-Control: no-store`.
+
+The PWA prefers `audio/webm;codecs=opus`, then `audio/webm`, and uses an MP4/AAC MediaRecorder choice when that is what the browser supports (notably Safari). The API also accepts WAV, OGG/Opus, and MPEG/MP3. There is no browser-to-provider request, streaming STT, wake word, continuous capture, audio storage, or transcript cleanup by an LLM in this version.
