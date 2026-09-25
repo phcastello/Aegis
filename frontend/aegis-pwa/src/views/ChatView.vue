@@ -41,6 +41,7 @@ let toolStatusState: 'started' | 'completed' | 'failed' | null = null;
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
+let emailConnectionChannel: BroadcastChannel | null = null;
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
@@ -199,12 +200,14 @@ function consumeEmailConnectStatusFromUrl(): void {
   const errorCode = url.searchParams.get('email_error_code');
 
   if (emailStatus === 'connected') {
+    emailConnectionChannel?.postMessage({ status: 'connected' });
     void confirmEmailConnection();
   } else {
     const normalizedError = emailConnectionFailureMessage(errorCode);
     if (normalizedError) {
       emailConnectionState.value = 'failed';
       emailConnectionMessage.value = normalizedError;
+      emailConnectionChannel?.postMessage({ status: 'failed', code: errorCode });
     }
   }
 
@@ -699,6 +702,21 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 
 onMounted(() => {
   syncViewportHeight();
+  if ('BroadcastChannel' in window) {
+    emailConnectionChannel = new BroadcastChannel('aegis.email.connection');
+    emailConnectionChannel.onmessage = (event: MessageEvent) => {
+      if (event.data?.status === 'connected') {
+        void confirmEmailConnection();
+      } else if (event.data?.status === 'failed') {
+        const message = emailConnectionFailureMessage(event.data.code);
+        if (message) {
+          emailConnectionAbortController?.abort();
+          emailConnectionState.value = 'failed';
+          emailConnectionMessage.value = message;
+        }
+      }
+    };
+  }
   consumeEmailConnectStatusFromUrl();
   const handleViewportChange = (): void => {
     syncViewportHeight();
@@ -726,6 +744,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearToolStatus();
   emailConnectionAbortController?.abort();
+  emailConnectionChannel?.close();
+  emailConnectionChannel = null;
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
@@ -814,6 +834,7 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
+        <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <div class="composer-field">
           <textarea
             v-model="draft"
@@ -854,7 +875,6 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
-        <p v-if="emailConnectionMessage" :class="emailConnectionState === 'failed' ? 'composer-error' : 'composer-hint'" role="status">{{ emailConnectionMessage }}</p>
         <span class="composer-hint">{{ transcription.isRecording.value ? 'Ouvindo… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>

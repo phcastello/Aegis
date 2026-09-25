@@ -954,6 +954,30 @@ button:disabled {
   background: rgba(18, 27, 43, 0.9);
 }
 
+.email-connection-notice {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(131, 194, 162, 0.3);
+  border-radius: 8px;
+  background: rgba(75, 128, 101, 0.12);
+  color: #b8e7cf;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.email-connection-notice--pending {
+  border-color: var(--line);
+  background: rgba(176, 193, 224, 0.06);
+  color: var(--muted);
+}
+
+.email-connection-notice--failed {
+  border-color: rgba(255, 182, 174, 0.34);
+  background: rgba(255, 182, 174, 0.08);
+  color: var(--warn);
+}
+
 .composer-field {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
