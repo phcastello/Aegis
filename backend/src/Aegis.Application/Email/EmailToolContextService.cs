@@ -19,6 +19,12 @@ public interface IEmailToolContextService
         string sourceToolName,
         CancellationToken cancellationToken = default);
 
+    Task RememberModifiedEmailsAsync(
+        Guid conversationId,
+        IReadOnlyList<EmailSummaryData> emails,
+        string sourceToolName,
+        CancellationToken cancellationToken = default);
+
     Task RememberThreadAsync(
         Guid conversationId,
         ThreadData thread,
@@ -91,6 +97,17 @@ public sealed class EmailToolContextService(IAegisDbContext dbContext) : IEmailT
             sourceToolName,
             cancellationToken);
     }
+
+    public Task RememberModifiedEmailsAsync(
+        Guid conversationId,
+        IReadOnlyList<EmailSummaryData> emails,
+        string sourceToolName,
+        CancellationToken cancellationToken = default) =>
+        RememberItemsAsync(
+            conversationId,
+            emails.Select(EmailContextItem.FromSummary).ToList(),
+            sourceToolName,
+            cancellationToken);
 
     public async Task RememberThreadAsync(
         Guid conversationId,

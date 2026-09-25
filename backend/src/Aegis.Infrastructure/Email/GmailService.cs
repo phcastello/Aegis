@@ -24,6 +24,7 @@ public sealed partial class GmailService(
     private const int MaxModificationCount = 100;
     private const int ModificationChunkSize = 20;
     private const int MaxThreadMessages = 15;
+    private const int MaxMetadataConcurrency = 4;
 
     public async Task<EmailSearchResultData> SearchEmailsAsync(
         string? query,
@@ -85,6 +86,34 @@ public sealed partial class GmailService(
         var accessToken = await GetAccessTokenAsync(cancellationToken);
         var message = await GetMessageAsync(emailId.Trim(), "full", accessToken, cancellationToken);
         return MapContent(message, GetMaxBodyCharacters(readPurpose));
+    }
+
+    public async Task<IReadOnlyList<EmailSummaryData>> ReadEmailMetadataBatchAsync(
+        IReadOnlyList<string> emailIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (emailIds.Count == 0 || emailIds.Count > MaxModificationCount ||
+            emailIds.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("A valid bounded email selection is required.", nameof(emailIds));
+        }
+
+        var accessToken = await GetAccessTokenAsync(cancellationToken);
+        using var gate = new SemaphoreSlim(MaxMetadataConcurrency);
+        var requests = emailIds.Select(async emailId =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                var message = await GetMessageAsync(emailId.Trim(), "metadata", accessToken, cancellationToken);
+                return MapSummary(message);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        return await Task.WhenAll(requests);
     }
 
     public async Task<ThreadData> ReadThreadAsync(

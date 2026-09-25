@@ -348,12 +348,13 @@ public sealed class EmailConfirmPendingActionTool(
         }
 
         var emailIds = DeserializeEmailIds(action.EmailIdsJson);
+        var confirmedAt = DateTimeOffset.UtcNow;
+        EmailModificationResult result;
+        EmailModificationVerification verification;
         try
         {
-            action.Confirm();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            var result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
-            var verification = await VerifyModificationAsync(
+            result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
+            verification = await VerifyModificationAsync(
                 emailService,
                 emailContextService,
                 context.ConversationId,
@@ -361,26 +362,10 @@ public sealed class EmailConfirmPendingActionTool(
                 emailIds,
                 Name,
                 cancellationToken);
-            action.MarkExecuted();
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId,
-                action.ActionType,
-                action.EmailIdsJson,
-                context.UserMessageId,
-                success: verification.AllConfirmed));
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            return Ok(new
-            {
-                pendingActionId = action.Id,
-                action.ActionType,
-                action.HumanSummary,
-                result,
-                verification,
-                userMessage = verification.AllConfirmed
-                    ? $"Pronto, concluí: {action.HumanSummary}."
-                    : $"Executei a ação, mas a verificação não confirmou todos os emails: {action.HumanSummary}."
-            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -395,6 +380,32 @@ public sealed class EmailConfirmPendingActionTool(
 
             return Error("email_action_failed", "The pending email action failed while executing.");
         }
+
+        if (!verification.AllConfirmed)
+        {
+            dbContext.AddEmailActionAudit(new EmailActionAudit(
+                context.ConversationId, action.ActionType, action.EmailIdsJson,
+                context.UserMessageId, success: false, "Gmail state verification did not confirm every email."));
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Error("email_action_unverified", "A alteração não foi confirmada para todos os emails. A ação continua disponível para nova tentativa.");
+        }
+
+        action.Confirm(confirmedAt);
+        action.MarkExecuted();
+        dbContext.AddEmailActionAudit(new EmailActionAudit(
+            context.ConversationId, action.ActionType, action.EmailIdsJson,
+            context.UserMessageId, success: true));
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            pendingActionId = action.Id,
+            action.ActionType,
+            action.HumanSummary,
+            result,
+            verification,
+            userMessage = $"Pronto, concluí: {action.HumanSummary}."
+        });
     }
 
     public static Task<EmailModificationResult> ExecuteModificationAsync(
@@ -424,27 +435,14 @@ public sealed class EmailConfirmPendingActionTool(
         string sourceToolName,
         CancellationToken cancellationToken)
     {
-        var emails = new List<EmailContentData>();
-        foreach (var emailId in emailIds)
-        {
-            emails.Add(await emailService.ReadEmailAsync(
-                emailId,
-                EmailBodyReadPurpose.Full,
-                cancellationToken));
-        }
+        var emails = await emailService.ReadEmailMetadataBatchAsync(emailIds, cancellationToken);
+        await emailContextService.RememberModifiedEmailsAsync(
+            conversationId, emails, sourceToolName, cancellationToken);
 
-        foreach (var email in emails)
-        {
-            await emailContextService.RememberEmailAsync(
-                conversationId,
-                email,
-                sourceToolName,
-                cancellationToken);
-        }
-
-        var failedIds = emails
-            .Where(email => !IsExpectedState(actionType, email))
-            .Select(email => email.Id)
+        var failedIds = emailIds
+            .Where((emailId, index) => index >= emails.Count ||
+                !string.Equals(emailId, emails[index].Id, StringComparison.Ordinal) ||
+                !IsExpectedState(actionType, emails[index]))
             .ToList();
 
         return new EmailModificationVerification(
@@ -453,7 +451,7 @@ public sealed class EmailConfirmPendingActionTool(
             failedIds);
     }
 
-    private static bool IsExpectedState(string actionType, EmailContentData email)
+    private static bool IsExpectedState(string actionType, EmailSummaryData email)
     {
         return actionType switch
         {
