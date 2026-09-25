@@ -8,6 +8,7 @@ using Aegis.Application.Runtime;
 using Aegis.Application.Tools;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
+using Aegis.Application.Voice.Transcription;
 using Aegis.Application.Observability;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +21,7 @@ public static class DependencyInjection
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<IVoiceService, VoiceService>();
+        services.AddScoped<ISpeechTranscriptionService, SpeechTranscriptionService>();
         services.AddSingleton<VoiceStatusCache>();
         services.AddSingleton<IActiveTurnRegistry, ActiveTurnRegistry>();
         services.AddScoped<IConversationTitleService, ConversationTitleService>();

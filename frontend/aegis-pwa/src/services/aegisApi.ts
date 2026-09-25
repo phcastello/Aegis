@@ -8,7 +8,9 @@ import type {
   SendMessageResponse,
   StartSpeechRequest,
   SubmitMessageFeedbackRequest,
-  VoiceStatus
+  VoiceStatus,
+  TranscriptionResponse,
+  TranscriptionStatus
 } from '../types/chat';
 
 const configuredBaseUrl = import.meta.env.VITE_AEGIS_API_BASE_URL ?? '';
@@ -205,6 +207,47 @@ export async function cancelSpeech(speechRequestId: string): Promise<void> {
 
 export function getVoiceStatus(): Promise<VoiceStatus> {
   return requestJson<VoiceStatus>('/api/voice/status');
+}
+
+export function getTranscriptionStatus(signal?: AbortSignal): Promise<TranscriptionStatus> {
+  return requestJson<TranscriptionStatus>('/api/voice/transcription/status', {
+    cache: 'no-store',
+    signal
+  });
+}
+
+export async function transcribeAudio(
+  audio: Blob,
+  transcriptionRequestId: string,
+  clientDurationMilliseconds: number,
+  fileName: string,
+  signal?: AbortSignal
+): Promise<TranscriptionResponse> {
+  const form = new FormData();
+  form.append('audio', audio, fileName);
+  form.append('transcriptionRequestId', transcriptionRequestId);
+  form.append('clientDurationMilliseconds', String(clientDurationMilliseconds));
+
+  const response = await fetch(`${getApiBaseUrl()}/api/voice/transcriptions`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    body: form,
+    cache: 'no-store',
+    signal
+  });
+
+  if (!response.ok) {
+    let message = 'Não foi possível transcrever a gravação.';
+    try {
+      const errorBody = (await response.json()) as { error?: string };
+      message = errorBody.error ?? message;
+    } catch {
+      message = response.statusText || message;
+    }
+    throw new Error(message);
+  }
+
+  return (await response.json()) as TranscriptionResponse;
 }
 
 export async function getConversation(conversationId: string): Promise<Conversation> {

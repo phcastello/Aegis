@@ -81,6 +81,17 @@ export interface VoiceStatus {
   channels: number;
 }
 
+export interface TranscriptionStatus {
+  enabled: boolean;
+  configured: boolean;
+  maxRecordingSeconds: number;
+}
+
+export interface TranscriptionResponse {
+  transcriptionRequestId: string;
+  text: string;
+}
+
 export type FeedbackRating = 'good' | 'bad';
 
 export type FeedbackReason =

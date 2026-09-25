@@ -1,11 +1,17 @@
 using Aegis.Application.Voice;
+using Aegis.Application.Voice.Transcription;
+using Aegis.Infrastructure.Voice.Transcription;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Aegis.Api.Controllers;
 
 [ApiController]
 [Route("api/voice")]
-public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
+public sealed class VoiceController(
+    IVoiceService voiceService,
+    ISpeechTranscriptionService transcriptionService,
+    IOptions<SttOptions> sttOptions) : ControllerBase
 {
     [HttpGet("status")]
     public async Task<ActionResult<SpeechServiceStatus>> GetStatus(CancellationToken cancellationToken)
@@ -111,5 +117,66 @@ public sealed class VoiceController(IVoiceService voiceService) : ControllerBase
     {
         var result = await voiceService.CancelSpeechAsync(speechRequestId, cancellationToken);
         return Ok(result);
+    }
+
+    [HttpGet("transcription/status")]
+    public ActionResult<TranscriptionServiceStatus> GetTranscriptionStatus()
+    {
+        Response.Headers.CacheControl = "no-store";
+        return Ok(transcriptionService.GetStatus());
+    }
+
+    [HttpPost("transcriptions")]
+    [RequestSizeLimit(21 * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 21 * 1024 * 1024)]
+    public async Task<ActionResult<TranscriptionResult>> Transcribe(
+        [FromForm] IFormFile? audio,
+        [FromForm] string? transcriptionRequestId,
+        [FromForm] long? clientDurationMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (audio is null || string.IsNullOrWhiteSpace(transcriptionRequestId) ||
+            !Guid.TryParse(transcriptionRequestId, out var requestId) ||
+            clientDurationMilliseconds is null)
+        {
+            return BadRequest(new { error = "A gravação de voz é inválida." });
+        }
+
+        if (audio.Length > Math.Max(1, sttOptions.Value.MaxAudioBytes))
+        {
+            return StatusCode(StatusCodes.Status413PayloadTooLarge, new { error = "O áudio excede o limite permitido." });
+        }
+
+        byte[]? audioBytes = null;
+        try
+        {
+            await using var input = audio.OpenReadStream();
+            using var buffer = new MemoryStream(checked((int)Math.Min(audio.Length, int.MaxValue)));
+            await input.CopyToAsync(buffer, cancellationToken);
+            audioBytes = buffer.ToArray();
+            var request = new TranscriptionRequest(
+                requestId,
+                audioBytes,
+                audio.FileName,
+                audio.ContentType,
+                clientDurationMilliseconds.Value);
+            return Ok(await transcriptionService.TranscribeAsync(request, cancellationToken));
+        }
+        catch (TranscriptionRequestException exception)
+        {
+            return StatusCode(exception.StatusCode, new { error = exception.Message });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return new EmptyResult();
+        }
+        finally
+        {
+            if (audioBytes is not null)
+            {
+                Array.Clear(audioBytes);
+            }
+        }
     }
 }
