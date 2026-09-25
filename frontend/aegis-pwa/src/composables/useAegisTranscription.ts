@@ -173,7 +173,8 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError') && !controller.signal.aborted && !disposed) {
         state.value = 'error';
-        errorMessage.value = 'Não foi possível transcrever a gravação.';
+        errorMessage.value = error instanceof TypeError ? 'Servidor de transcrição indisponível.'
+          : error instanceof Error ? error.message : 'Não foi possível transcrever a gravação.';
       }
     } finally {
       if (transcriptionController === controller) transcriptionController = null;

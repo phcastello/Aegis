@@ -19,6 +19,7 @@ import {
 import { useAegisVoice } from '../composables/useAegisVoice';
 import { useAegisTranscription } from '../composables/useAegisTranscription';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
+import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
   ConversationSummary,
   FeedbackRating,
@@ -34,6 +35,7 @@ const draft = ref('');
 const isLoading = ref(false);
 const isRestoring = ref(false);
 const errorMessage = ref<string | null>(null);
+const toolStatusMessage = ref<string | null>(null);
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
@@ -62,7 +64,7 @@ const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
 const transcription = useAegisTranscription(insertTranscriptIntoDraft);
 let streamScrollFrame: number | null = null;
-const historyRefreshTimers: number[] = [];
+let historyRefreshTimer: number | null = null;
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
@@ -148,46 +150,20 @@ function syncViewportHeight(): void {
   document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
 }
 
-function normalizeEmailConnectError(rawCode: string | null, rawMessage: string | null): string | null {
-  if (!rawCode && !rawMessage) {
-    return null;
-  }
-
-  const message = rawMessage?.trim();
-  switch (rawCode) {
-    case 'oauth_callback_error':
-      return message
-        ? `Falha ao concluir a conexão com o Gmail: ${message}`
-        : 'Falha ao concluir a conexão com o Gmail.';
-    case 'google_http_error':
-      return message
-        ? `O Google rejeitou a conexão com o Gmail: ${message}`
-        : 'O Google rejeitou a conexão com o Gmail.';
-    case 'oauth_invalid_operation':
-    case 'oauth_invalid_argument':
-      return message
-        ? `A configuração ou o estado da conexão Gmail está inválido: ${message}`
-        : 'A configuração ou o estado da conexão Gmail está inválido.';
-    case 'oauth_unknown_error':
-      return message
-        ? `Erro inesperado ao conectar o Gmail: ${message}`
-        : 'Erro inesperado ao conectar o Gmail.';
-    default:
-      return message
-        ? `Falha ao conectar o Gmail: ${message}`
-        : 'Falha ao conectar o Gmail.';
-  }
-}
-
 async function confirmEmailConnection(): Promise<void> {
   emailConnectionAbortController?.abort();
   const controller = new AbortController();
   emailConnectionAbortController = controller;
   emailConnectionState.value = 'pending';
   emailConnectionMessage.value = 'Conectando Gmail…';
+  let connectedEmail: string | null = null;
 
   const result = await waitForEmailConnection(
-    async (signal) => (await getEmailStatus(signal)).isConnected === true,
+    async (signal) => {
+      const status = await getEmailStatus(signal);
+      connectedEmail = status.emailAddress;
+      return status.isConnected === true;
+    },
     controller.signal
   );
   if (controller.signal.aborted) return;
@@ -195,7 +171,7 @@ async function confirmEmailConnection(): Promise<void> {
   emailConnectionAbortController = null;
   emailConnectionState.value = result === 'connected' ? 'connected' : 'failed';
   emailConnectionMessage.value = result === 'connected'
-    ? 'Gmail conectado. Envie uma nova consulta para acessar seus e-mails.'
+    ? emailConnectionSuccessMessage(connectedEmail)
     : 'Não foi possível confirmar a conexão com o Gmail. Tente conectar novamente.';
 }
 
@@ -203,19 +179,18 @@ function consumeEmailConnectStatusFromUrl(): void {
   const url = new URL(window.location.href);
   const emailStatus = url.searchParams.get('email');
   const errorCode = url.searchParams.get('email_error_code');
-  const errorMessageParam = url.searchParams.get('email_error_message');
 
   if (emailStatus === 'connected') {
     void confirmEmailConnection();
   } else {
-    const normalizedError = normalizeEmailConnectError(errorCode, errorMessageParam);
+    const normalizedError = emailConnectionFailureMessage(errorCode);
     if (normalizedError) {
       emailConnectionState.value = 'failed';
       emailConnectionMessage.value = normalizedError;
     }
   }
 
-  if (!emailStatus && !errorCode && !errorMessageParam) {
+  if (!emailStatus && !errorCode) {
     return;
   }
 
@@ -347,15 +322,18 @@ async function loadConversationHistory(reset = false): Promise<void> {
 }
 
 function refreshHistoryAfterResponse(): void {
+  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
   void loadConversationHistory(true);
-
-  for (const delay of [1800, 5200, 16000, 22000]) {
-    historyRefreshTimers.push(
-      window.setTimeout(() => {
-        void loadConversationHistory(true);
-      }, delay)
-    );
-  }
+  const retry = (attempt: number): void => {
+    if (attempt >= 2 || activeConversationTitle.value !== 'Nova conversa') return;
+    historyRefreshTimer = window.setTimeout(async () => {
+      historyRefreshTimer = null;
+      if (activeConversationTitle.value !== 'Nova conversa') return;
+      await loadConversationHistory(true);
+      retry(attempt + 1);
+    }, attempt === 0 ? 1800 : 3400);
+  };
+  retry(0);
 }
 
 async function openConversation(targetConversationId: string): Promise<void> {
@@ -363,6 +341,8 @@ async function openConversation(targetConversationId: string): Promise<void> {
     isSidebarOpen.value = false;
     return;
   }
+  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = null;
 
   transcription.discard();
   await stopActiveTurn('conversation_changed');
@@ -442,6 +422,11 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = getCompletedWordPrefix(streamedContent);
           scrollToLatestDuringStream();
         },
+        onToolStatus: (eventTurnId, status) => {
+          if (eventTurnId !== activeTurnId.value) return;
+          toolStatusMessage.value = status.state === 'started' ? status.message
+            : status.state === 'failed' ? status.message : null;
+        },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
           if (completedTurnId !== activeTurnId.value) return;
           conversationId.value = completedConversationId;
@@ -454,6 +439,7 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
           isLoading.value = false;
+          toolStatusMessage.value = null;
           scrollToLatest();
 
           window.setTimeout(() => {
@@ -470,9 +456,9 @@ async function handleSubmit(): Promise<void> {
             turnStatus.value = 'idle';
           }
         },
-        onError: () => {
+        onError: (message) => {
           if (activeTurnId.value !== turnId) return;
-          errorMessage.value = 'A resposta da Aegis foi interrompida. Tente continuar em um instante.';
+          errorMessage.value = message;
         }
       },
       chatAbortController.signal
@@ -482,11 +468,14 @@ async function handleSubmit(): Promise<void> {
     if ((error as DOMException).name === 'AbortError') {
       turnStatus.value = 'interrupted';
     } else {
-      errorMessage.value = 'Não foi possível enviar a mensagem. Tente novamente em um instante.';
+      errorMessage.value ??= error instanceof TypeError
+        ? 'Servidor indisponível. Tente novamente em instantes.'
+        : error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
     }
     localMessage.pending = false;
     assistantMessage.pending = false;
     assistantMessage.streaming = false;
+    toolStatusMessage.value = null;
     if (!assistantMessage.content) {
       messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
     }
@@ -576,6 +565,8 @@ async function toggleRecording(): Promise<void> {
 }
 
 function startNewConversation(): void {
+  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = null;
   transcription.discard();
   void stopActiveTurn('new_conversation');
   localStorage.removeItem(STORAGE_KEY);
@@ -712,9 +703,7 @@ onBeforeUnmount(() => {
   emailConnectionAbortController?.abort();
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
-  for (const timer of historyRefreshTimers) {
-    window.clearTimeout(timer);
-  }
+  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
 
   viewportCleanup?.();
 });
@@ -749,10 +738,10 @@ onBeforeUnmount(() => {
         </button>
 
         <div class="conversation-heading">
-          <span>{{ conversationId ? 'Conversa ativa' : 'Novo pensamento' }}</span>
+          <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
           <div>
             <h1>{{ conversationLabel }}</h1>
-            <p>{{ turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Um espaço reservado para continuar.' }}</p>
+            <p>{{ toolStatusMessage ?? voice.voiceMessage.value ?? (turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Pronta') }}</p>
           </div>
         </div>
 
@@ -779,8 +768,8 @@ onBeforeUnmount(() => {
         <div v-else-if="messages.length === 0" class="empty-state">
           <div class="empty-state__mark"><AegisMark /></div>
           <span class="empty-state__eyebrow">Aegis</span>
-          <strong>O que merece espaço agora?</strong>
-          <span>Comece uma conversa ou continue um raciocínio em voz alta.</span>
+          <strong>Nova conversa</strong>
+          <span>Digite ou fale uma mensagem.</span>
         </div>
 
         <template v-else>
