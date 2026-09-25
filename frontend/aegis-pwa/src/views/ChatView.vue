@@ -10,6 +10,7 @@ import {
   completeTurnWithoutSpeech,
   getConversation,
   getConversations,
+  getEmailStatus,
   getHealth,
   renameConversation,
   sendMessageStream,
@@ -17,6 +18,7 @@ import {
 } from '../services/aegisApi';
 import { useAegisVoice } from '../composables/useAegisVoice';
 import { useAegisTranscription } from '../composables/useAegisTranscription';
+import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import type {
   ConversationSummary,
   FeedbackRating,
@@ -32,6 +34,9 @@ const draft = ref('');
 const isLoading = ref(false);
 const isRestoring = ref(false);
 const errorMessage = ref<string | null>(null);
+const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
+const emailConnectionMessage = ref<string | null>(null);
+let emailConnectionAbortController: AbortController | null = null;
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
@@ -60,7 +65,7 @@ let streamScrollFrame: number | null = null;
 const historyRefreshTimers: number[] = [];
 let viewportCleanup: (() => void) | null = null;
 
-const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value);
+const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
 const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
 const canStartRecording = computed(() =>
   !hasActiveTurn.value &&
@@ -174,6 +179,26 @@ function normalizeEmailConnectError(rawCode: string | null, rawMessage: string |
   }
 }
 
+async function confirmEmailConnection(): Promise<void> {
+  emailConnectionAbortController?.abort();
+  const controller = new AbortController();
+  emailConnectionAbortController = controller;
+  emailConnectionState.value = 'pending';
+  emailConnectionMessage.value = 'Conectando Gmail…';
+
+  const result = await waitForEmailConnection(
+    async (signal) => (await getEmailStatus(signal)).isConnected === true,
+    controller.signal
+  );
+  if (controller.signal.aborted) return;
+
+  emailConnectionAbortController = null;
+  emailConnectionState.value = result === 'connected' ? 'connected' : 'failed';
+  emailConnectionMessage.value = result === 'connected'
+    ? 'Gmail conectado. Envie uma nova consulta para acessar seus e-mails.'
+    : 'Não foi possível confirmar a conexão com o Gmail. Tente conectar novamente.';
+}
+
 function consumeEmailConnectStatusFromUrl(): void {
   const url = new URL(window.location.href);
   const emailStatus = url.searchParams.get('email');
@@ -181,11 +206,12 @@ function consumeEmailConnectStatusFromUrl(): void {
   const errorMessageParam = url.searchParams.get('email_error_message');
 
   if (emailStatus === 'connected') {
-    errorMessage.value = null;
+    void confirmEmailConnection();
   } else {
     const normalizedError = normalizeEmailConnectError(errorCode, errorMessageParam);
     if (normalizedError) {
-      errorMessage.value = normalizedError;
+      emailConnectionState.value = 'failed';
+      emailConnectionMessage.value = normalizedError;
     }
   }
 
@@ -381,6 +407,9 @@ async function handleSubmit(): Promise<void> {
   draft.value = '';
   resizeComposer();
   errorMessage.value = null;
+  if (emailConnectionState.value === 'connected') {
+    emailConnectionMessage.value = null;
+  }
   isLoading.value = true;
   turnStatus.value = 'thinking';
   activeTurnId.value = turnId;
@@ -680,6 +709,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  emailConnectionAbortController?.abort();
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
   for (const timer of historyRefreshTimers) {
@@ -804,12 +834,13 @@ onBeforeUnmount(() => {
             @click="transcription.discard"
           ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></button>
 
-          <button class="send-button" :class="{ 'send-button--stop': hasActiveTurn }" type="submit" :disabled="(!hasActiveTurn && !canSend) || isRestoring" :aria-label="hasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
+          <button class="send-button" :class="{ 'send-button--stop': hasActiveTurn }" type="submit" :disabled="(!hasActiveTurn && !canSend) || isRestoring || emailConnectionState === 'pending'" :aria-label="hasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
             <svg v-if="hasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
             <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
           </button>
         </div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
+        <p v-if="emailConnectionMessage" :class="emailConnectionState === 'failed' ? 'composer-error' : 'composer-hint'" role="status">{{ emailConnectionMessage }}</p>
         <span class="composer-hint">{{ transcription.isRecording.value ? 'Ouvindo… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>
