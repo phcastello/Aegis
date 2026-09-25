@@ -4,7 +4,12 @@ import AegisMark from './AegisMark.vue';
 import MarkdownMessage from './MarkdownMessage.vue';
 import type { FeedbackRating, LocalChatMessage } from '../types/chat';
 
-const props = defineProps<{ message: LocalChatMessage; feedbackStatus?: string | null; isPlaying?: boolean }>();
+const props = defineProps<{
+  message: LocalChatMessage;
+  feedbackStatus?: string | null;
+  isPlaying?: boolean;
+  activityStatus?: string | null;
+}>();
 const emit = defineEmits<{
   feedback: [message: LocalChatMessage, rating: FeedbackRating];
   replay: [message: LocalChatMessage];
@@ -33,7 +38,11 @@ async function copy(): Promise<void> {
       <div class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
         <p v-if="message.role === 'user'">{{ message.content }}</p>
         <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming" />
-        <span v-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>
+        <p v-if="activityStatus" class="message-activity" role="status">
+          <span class="generation-marker" aria-hidden="true"></span>
+          <span>{{ activityStatus }}</span>
+        </p>
+        <span v-else-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>
       </div>
       <p v-if="message.interrupted" class="message-generation-status">Geração interrompida</p>
       <div v-if="!message.pending && !message.streaming" class="message-actions">

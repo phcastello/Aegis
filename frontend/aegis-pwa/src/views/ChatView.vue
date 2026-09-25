@@ -447,6 +447,7 @@ async function handleSubmit(): Promise<void> {
         },
         onToolStatus: (eventTurnId, status) => {
           if (eventTurnId !== activeTurnId.value) return;
+          turnStatus.value = 'thinking';
           showToolStatus(status.message, status.state);
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
@@ -824,6 +825,9 @@ onBeforeUnmount(() => {
             :message="message"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
+            :activity-status="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id
+              ? (toolStatusMessage ?? (message.pending && isLoading && (turnStatus === 'thinking' || !message.content) ? 'Pensando…' : null))
+              : null"
             @feedback="openFeedback"
             @replay="replayMessage"
             @stop-playback="stopPlayback"
