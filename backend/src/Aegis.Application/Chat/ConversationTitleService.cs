@@ -8,7 +8,7 @@ namespace Aegis.Application.Chat;
 
 public sealed class ConversationTitleService(
     IAegisDbContext dbContext,
-    ILocalTitleGenerator titleGenerator) : IConversationTitleService
+    IConversationTitleGenerator titleGenerator) : IConversationTitleService
 {
     private const int TitlePromptUserLimit = 600;
     private const int TitlePromptAssistantLimit = 900;

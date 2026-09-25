@@ -1,6 +1,6 @@
 namespace Aegis.Application.Chat;
 
-public interface ILocalTitleGenerator
+public interface IConversationTitleGenerator
 {
     Task<string?> GenerateAsync(
         string userContent,

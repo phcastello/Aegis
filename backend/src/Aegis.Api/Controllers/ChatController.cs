@@ -10,7 +10,7 @@ namespace Aegis.Api.Controllers;
 
 [ApiController]
 [Route("api/chat")]
-public sealed class ChatController(IChatService chatService, IVoiceService voiceService) : ControllerBase
+public sealed class ChatController(IChatService chatService, IVoiceService voiceService, ILogger<ChatController> logger) : ControllerBase
 {
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
 
@@ -40,10 +40,17 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         }
         catch (LlmRequestException exception)
         {
+            logger.LogWarning(exception, "Chat model request failed.");
             return StatusCode(StatusCodes.Status502BadGateway, new
             {
+                code = "model_unavailable",
                 error = exception.Message
             });
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Unexpected chat request failure.");
+            return StatusCode(StatusCodes.Status500InternalServerError, new { code = "chat_failed", error = FriendlyFailureMessage });
         }
     }
 
@@ -78,15 +85,17 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         }
         catch (ConversationNotFoundException exception)
         {
-            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status404NotFound, cancellationToken);
+            await WriteStreamErrorAsync(exception.Message, "conversation_not_found", StatusCodes.Status404NotFound, cancellationToken);
         }
         catch (LlmRequestException exception)
         {
-            await WriteStreamErrorAsync(exception.Message, StatusCodes.Status502BadGateway, cancellationToken);
+            logger.LogWarning(exception, "Chat stream model request failed.");
+            await WriteStreamErrorAsync(exception.Message, "model_unavailable", StatusCodes.Status502BadGateway, cancellationToken);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            await WriteStreamErrorAsync(FriendlyFailureMessage, StatusCodes.Status500InternalServerError, cancellationToken);
+            logger.LogError(exception, "Unexpected chat stream failure.");
+            await WriteStreamErrorAsync(FriendlyFailureMessage, "chat_failed", StatusCodes.Status500InternalServerError, cancellationToken);
         }
     }
 
@@ -192,6 +201,7 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
 
     private async Task WriteStreamErrorAsync(
         string message,
+        string code,
         int statusCode,
         CancellationToken cancellationToken)
     {
@@ -202,7 +212,7 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
 
         if (!cancellationToken.IsCancellationRequested)
         {
-            await WriteStreamEventAsync(new { type = "error", message }, cancellationToken);
+            await WriteStreamEventAsync(new { type = "error", code, message }, cancellationToken);
         }
     }
 }

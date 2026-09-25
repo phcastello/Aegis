@@ -42,7 +42,6 @@ public static class DependencyInjection
         services.AddScoped<IAegisTool, EmailUnmarkImportantTool>();
         services.AddScoped<IAegisTool, EmailConfirmPendingActionTool>();
         services.AddScoped<IAegisTool, EmailCancelPendingActionTool>();
-        services.AddSingleton<AegisModelRouter>();
         services.AddSingleton<IConversationTitleJobQueue, ConversationTitleJobQueue>();
         services.AddSingleton<IRuntimeContextProvider, RuntimeContextProvider>();
         services.AddSingleton<IPromptBuilder, PromptBuilder>();

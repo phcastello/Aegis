@@ -9,4 +9,5 @@ public sealed record ModelStreamChunk(
     string? Model = null,
     ModelPurpose? Purpose = null,
     string? MetadataJson = null,
-    LlmRequestAuditData? AuditData = null);
+    LlmRequestAuditData? AuditData = null,
+    ToolStatus? ToolStatus = null);

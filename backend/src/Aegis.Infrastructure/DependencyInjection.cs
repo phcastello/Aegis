@@ -38,15 +38,9 @@ public static class DependencyInjection
         {
             configuration.GetSection(OpenAIOptions.SectionName).Bind(options);
             options.ApiKey = Read(configuration, "OPENAI_API_KEY", options.ApiKey);
-            options.ModelProvider = Read(configuration, "AEGIS_MODEL_PROVIDER", options.ModelProvider);
-            options.DefaultModel = Read(configuration, "AEGIS_DEFAULT_MODEL", options.DefaultModel);
-            options.MainModel = Read(configuration, "AEGIS_MAIN_MODEL", options.MainModel);
-            options.EscalationModel = Read(configuration, "AEGIS_ESCALATION_MODEL", options.EscalationModel);
+            options.BaseUrl = Read(configuration, "AEGIS_OPENAI_BASE_URL", options.BaseUrl);
+            options.ChatModel = Read(configuration, "AEGIS_CHAT_MODEL", options.ChatModel);
             options.ServiceTier = Read(configuration, "AEGIS_OPENAI_SERVICE_TIER", options.ServiceTier);
-            options.UseEscalationAutomatically = ReadBool(
-                configuration,
-                "AEGIS_USE_ESCALATION_AUTOMATICALLY",
-                options.UseEscalationAutomatically);
             options.StoreResponses = ReadBool(
                 configuration,
                 "AEGIS_OPENAI_STORE_RESPONSES",
@@ -55,14 +49,6 @@ public static class DependencyInjection
                 configuration,
                 "AEGIS_MAX_OUTPUT_TOKENS",
                 options.MaxOutputTokens);
-            options.WebSearchEnabled = ReadBool(
-                configuration,
-                "AEGIS_WEB_SEARCH_ENABLED",
-                options.WebSearchEnabled);
-            options.WebSearchRequireExplicitRequest = ReadBool(
-                configuration,
-                "AEGIS_WEB_SEARCH_REQUIRE_EXPLICIT_REQUEST",
-                options.WebSearchRequireExplicitRequest);
         });
         services.AddHttpClient<IAegisModelClient, OpenAIResponsesClient>((provider, client) =>
         {
@@ -143,6 +129,7 @@ public static class DependencyInjection
             options.ClientId = ReadAny(configuration, options.ClientId, "GOOGLE_CLIENT_ID", "Google:ClientId");
             options.ClientSecret = ReadAny(configuration, options.ClientSecret, "GOOGLE_CLIENT_SECRET", "Google:ClientSecret");
             options.RedirectUri = ReadAny(configuration, options.RedirectUri, "GOOGLE_REDIRECT_URI", "Google:RedirectUri");
+            options.PublicAppUrl = ReadAny(configuration, options.PublicAppUrl, "AEGIS_PUBLIC_APP_URL", "Google:PublicAppUrl");
             options.Scopes = ReadAny(configuration, options.Scopes, "GOOGLE_OAUTH_SCOPES", "Google:OAuthScopes");
             options.SuccessRedirectPath = ReadAny(
                 configuration,
@@ -173,38 +160,22 @@ public static class DependencyInjection
                 configuration,
                 options.MaxEmailFullBodyChars,
                 "AEGIS_MAX_EMAIL_FULL_BODY_CHARS",
-                "Aegis:MaxEmailFullBodyChars",
-                "AEGIS_MAX_EMAIL_BODY_CHARS",
-                "Aegis:MaxEmailBodyChars");
-            options.MaxEmailBodyChars = ReadIntAny(
-                configuration,
-                options.MaxEmailBodyChars,
-                "AEGIS_MAX_EMAIL_BODY_CHARS",
-                "Aegis:MaxEmailBodyChars");
+                "Aegis:MaxEmailFullBodyChars");
             options.EmailBriefingLookbackDays = ReadIntAny(
                 configuration,
                 options.EmailBriefingLookbackDays,
                 "AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS",
                 "Aegis:EmailBriefingLookbackDays");
         });
-        services.AddSingleton<IEmailPromptSettings>(provider =>
-        {
-            var options = provider.GetRequiredService<IOptions<GmailOptions>>().Value;
-            return new EmailPromptSettings(
-                options.MaxEmailsPerManualBriefing,
-                options.MaxEmailsToReadPerBriefing,
-                options.MaxEmailBriefingBodyChars,
-                options.MaxEmailFullBodyChars);
-        });
         services.AddSingleton<EmailTokenProtector>();
         services.AddHttpClient<IEmailConnectionService, GmailConnectionService>();
         services.AddHttpClient<IEmailService, GmailService>();
 
-        services.Configure<LocalTitleOptions>(options =>
+        services.Configure<TitleOptions>(options =>
         {
-            options.Provider = Read(configuration, "AEGIS_TITLE_PROVIDER", options.Provider);
-            options.LocalBaseUrl = Read(configuration, "AEGIS_TITLE_LOCAL_BASE_URL", options.LocalBaseUrl);
-            options.LocalModel = Read(configuration, "AEGIS_TITLE_LOCAL_MODEL", options.LocalModel);
+            configuration.GetSection(TitleOptions.SectionName).Bind(options);
+            options.Model = Read(configuration, "AEGIS_TITLE_MODEL", options.Model);
+            options.ReasoningEffort = Read(configuration, "AEGIS_TITLE_REASONING_EFFORT", options.ReasoningEffort);
             options.TimeoutSeconds = ReadInt(
                 configuration,
                 "AEGIS_TITLE_TIMEOUT_SECONDS",
@@ -214,14 +185,11 @@ public static class DependencyInjection
                 "AEGIS_TITLE_MAX_OUTPUT_TOKENS",
                 options.MaxOutputTokens);
         });
-        services.AddHttpClient<ILocalTitleGenerator, LocalTitleGenerator>((provider, client) =>
+        services.AddHttpClient<IConversationTitleGenerator, OpenAiTitleGenerator>((provider, client) =>
         {
-            var options = provider.GetRequiredService<IOptions<LocalTitleOptions>>().Value;
-            var baseUrl = string.IsNullOrWhiteSpace(options.LocalBaseUrl)
-                ? LocalTitleOptions.DefaultBaseUrl
-                : options.LocalBaseUrl;
-
-            client.BaseAddress = new Uri(baseUrl);
+            var options = provider.GetRequiredService<IOptions<TitleOptions>>().Value;
+            var openAi = provider.GetRequiredService<IOptions<OpenAIOptions>>().Value;
+            client.BaseAddress = new Uri(openAi.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds + 2));
         });
         services.AddHostedService<ConversationTitleWorker>();

@@ -1,5 +1,7 @@
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
+using Aegis.Application.Observability;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Net.Http.Headers;
@@ -12,7 +14,9 @@ namespace Aegis.Infrastructure.Models;
 
 public sealed class OpenAIResponsesClient(
     HttpClient httpClient,
-    IOptions<OpenAIOptions> options) : IAegisModelClient
+    IOptions<OpenAIOptions> options,
+    AegisMetrics metrics,
+    ILogger<OpenAIResponsesClient> logger) : IAegisModelClient
 {
     private const string Provider = "openai";
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
@@ -27,9 +31,10 @@ public sealed class OpenAIResponsesClient(
         ModelRequest request,
         CancellationToken cancellationToken = default)
     {
-        var model = ChooseModel(request.Purpose);
+        var model = ChooseModel();
         var payload = CreateRequestPayload(request, model, stream: false, tools: null);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
         string? responseBody = null;
@@ -47,6 +52,7 @@ public sealed class OpenAIResponsesClient(
             }
 
             using var document = JsonDocument.Parse(responseBody);
+            RecordUsage(document.RootElement);
             var content = ExtractOutputText(document.RootElement);
             if (string.IsNullOrWhiteSpace(content))
             {
@@ -99,9 +105,10 @@ public sealed class OpenAIResponsesClient(
         ModelRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var model = ChooseModel(request.Purpose);
+        var model = ChooseModel();
         var payload = CreateRequestPayload(request, model, stream: true, tools: null);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
         var stopwatch = Stopwatch.StartNew();
@@ -290,6 +297,7 @@ public sealed class OpenAIResponsesClient(
         }
 
         stopwatch.Stop();
+        RecordUsage(completedResponse.Value);
         var metadataJson = BuildMetadataJson(
             request.Purpose,
             request.Metadata,
@@ -321,9 +329,9 @@ public sealed class OpenAIResponsesClient(
         ModelToolRequest request,
         CancellationToken cancellationToken = default)
     {
-        var model = ChooseModel(ModelPurpose.Main);
+        var model = ChooseModel();
         var payload = CreateRequestPayload(
-            request.Request with { Purpose = ModelPurpose.Main },
+            request.Request with { Purpose = ModelPurpose.Chat },
             model,
             stream: false,
             request.Tools,
@@ -331,6 +339,7 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs,
             request.InputItems);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
         string? responseBody = null;
@@ -348,6 +357,7 @@ public sealed class OpenAIResponsesClient(
             }
 
             using var document = JsonDocument.Parse(responseBody);
+            RecordUsage(document.RootElement);
             var content = ExtractOutputText(document.RootElement);
             var toolCalls = ExtractToolCalls(document.RootElement);
             stopwatch.Stop();
@@ -357,11 +367,11 @@ public sealed class OpenAIResponsesClient(
                 content.Trim(),
                 Provider,
                 responseModel,
-                ModelPurpose.Main,
+                ModelPurpose.Chat,
                 toolCalls,
                 ExtractOutputItems(document.RootElement),
                 ExtractResponseId(document.RootElement),
-                BuildMetadataJson(ModelPurpose.Main, request.Request.Metadata, document.RootElement),
+                BuildMetadataJson(ModelPurpose.Chat, request.Request.Metadata, document.RootElement),
                 new LlmRequestAuditData(
                     Provider,
                     responseModel,
@@ -383,7 +393,7 @@ public sealed class OpenAIResponsesClient(
             throw CreateRequestException(
                 exception,
                 model,
-                ModelPurpose.Main,
+                ModelPurpose.Chat,
                 requestPayloadJson,
                 httpStatusCode,
                 responseBody,
@@ -395,9 +405,9 @@ public sealed class OpenAIResponsesClient(
         ModelToolRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var model = ChooseModel(ModelPurpose.Main);
+        var model = ChooseModel();
         var payload = CreateRequestPayload(
-            request.Request with { Purpose = ModelPurpose.Main },
+            request.Request with { Purpose = ModelPurpose.Chat },
             model,
             stream: true,
             request.Tools,
@@ -405,15 +415,15 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs,
             request.InputItems);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
-        var bufferedContent = new StringBuilder();
+        var emittedContent = new StringBuilder();
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
         HttpResponseMessage? response = null;
         JsonElement? completedResponse = null;
         string responseModel = model;
-        var suppressDeltas = request.Tools.Count > 0;
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -444,7 +454,7 @@ public sealed class OpenAIResponsesClient(
             throw CreateRequestException(
                 exception,
                 model,
-                ModelPurpose.Main,
+                ModelPurpose.Chat,
                 requestPayloadJson,
                 httpStatusCode,
                 responseBody.ToString().TrimEnd(),
@@ -467,7 +477,7 @@ public sealed class OpenAIResponsesClient(
                 throw CreateRequestException(
                     exception,
                     model,
-                    ModelPurpose.Main,
+                    ModelPurpose.Chat,
                     requestPayloadJson,
                     httpStatusCode,
                     responseBody.ToString().TrimEnd(),
@@ -493,7 +503,7 @@ public sealed class OpenAIResponsesClient(
                         throw CreateRequestException(
                             exception,
                             model,
-                            ModelPurpose.Main,
+                            ModelPurpose.Chat,
                             requestPayloadJson,
                             httpStatusCode,
                             responseBody.ToString().TrimEnd(),
@@ -528,7 +538,7 @@ public sealed class OpenAIResponsesClient(
                         throw CreateRequestException(
                             exception,
                             model,
-                            ModelPurpose.Main,
+                            ModelPurpose.Chat,
                             requestPayloadJson,
                             httpStatusCode,
                             responseBody.ToString().TrimEnd(),
@@ -551,18 +561,12 @@ public sealed class OpenAIResponsesClient(
                             if (!string.IsNullOrEmpty(delta) &&
                                 IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
                             {
-                                if (suppressDeltas)
-                                {
-                                    bufferedContent.Append(delta);
-                                }
-                                else
-                                {
-                                    yield return new ModelToolStreamChunk(
-                                        delta,
-                                        IsDone: false,
-                                        ToolCalls: [],
-                                        OutputItems: []);
-                                }
+                                emittedContent.Append(delta);
+                                yield return new ModelToolStreamChunk(
+                                    delta,
+                                    IsDone: false,
+                                    ToolCalls: [],
+                                    OutputItems: []);
                             }
 
                             continue;
@@ -583,7 +587,7 @@ public sealed class OpenAIResponsesClient(
                             throw CreateRequestException(
                                 new InvalidOperationException("Model tool stream failed."),
                                 model,
-                                ModelPurpose.Main,
+                                ModelPurpose.Chat,
                                 requestPayloadJson,
                                 httpStatusCode,
                                 responseBody.ToString().TrimEnd(),
@@ -599,7 +603,7 @@ public sealed class OpenAIResponsesClient(
             throw CreateRequestException(
                 new InvalidOperationException("Model tool stream ended without a completion event."),
                 model,
-                ModelPurpose.Main,
+                ModelPurpose.Chat,
                 requestPayloadJson,
                 httpStatusCode,
                 responseBody.ToString().TrimEnd(),
@@ -607,18 +611,17 @@ public sealed class OpenAIResponsesClient(
         }
 
         var toolCalls = ExtractToolCalls(completedResponse.Value);
-        if (suppressDeltas && toolCalls.Count == 0 && bufferedContent.Length > 0)
+        RecordUsage(completedResponse.Value);
+        if (toolCalls.Count == 0 && emittedContent.Length == 0)
         {
-            yield return new ModelToolStreamChunk(
-                bufferedContent.ToString(),
-                IsDone: false,
-                ToolCalls: [],
-                OutputItems: []);
+            var finalText = ExtractOutputText(completedResponse.Value);
+            if (!string.IsNullOrEmpty(finalText))
+                yield return new ModelToolStreamChunk(finalText, false, [], []);
         }
 
         stopwatch.Stop();
         var metadataJson = BuildMetadataJson(
-            ModelPurpose.Main,
+            ModelPurpose.Chat,
             request.Request.Metadata,
             completedResponse.Value);
         var finalResponseBody = completedResponseBody.Length > 0
@@ -633,7 +636,7 @@ public sealed class OpenAIResponsesClient(
             ExtractResponseId(completedResponse.Value),
             Provider,
             responseModel,
-            ModelPurpose.Main,
+            ModelPurpose.Chat,
             metadataJson,
             new LlmRequestAuditData(
                 Provider,
@@ -664,6 +667,30 @@ public sealed class OpenAIResponsesClient(
         return request;
     }
 
+    private void RecordUsage(JsonElement response)
+    {
+        if (!response.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return;
+        static long Read(JsonElement parent, string name) =>
+            parent.TryGetProperty(name, out var value) && value.TryGetInt64(out var count) ? count : 0;
+
+        var inputTokens = Read(usage, "input_tokens");
+        var outputTokens = Read(usage, "output_tokens");
+        long cachedTokens = 0;
+        long cacheWriteTokens = 0;
+        metrics.LlmInputTokens.Add(inputTokens);
+        metrics.LlmOutputTokens.Add(outputTokens);
+        if (usage.TryGetProperty("input_tokens_details", out var details) && details.ValueKind == JsonValueKind.Object)
+        {
+            cachedTokens = Read(details, "cached_tokens");
+            cacheWriteTokens = Read(details, "cache_write_tokens");
+            metrics.LlmCachedInputTokens.Add(cachedTokens);
+            metrics.LlmCacheWriteTokens.Add(cacheWriteTokens);
+        }
+        var responseModel = response.TryGetProperty("model", out var model) ? model.GetString() : null;
+        logger.LogInformation("OpenAI usage {Model}: {InputTokens} input, {CachedInputTokens} cached, {CacheWriteTokens} cache write, {OutputTokens} output tokens.",
+            responseModel, inputTokens, cachedTokens, cacheWriteTokens, outputTokens);
+    }
+
     private object CreateRequestPayload(
         ModelRequest request,
         string model,
@@ -676,7 +703,7 @@ public sealed class OpenAIResponsesClient(
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aegis_version"] = "0.3.1",
+            ["aegis_version"] = "0.3.2",
             ["purpose"] = request.Purpose.ToString()
         };
 
@@ -697,13 +724,15 @@ public sealed class OpenAIResponsesClient(
                 call_id = output.CallId,
                 output = output.Output
             }).ToList()
+            : request.InputItems is { Count: > 0 }
+            ? request.InputItems
             : request.Input;
 
         return new
         {
             model,
-            instructions = request.Instructions,
             input,
+            prompt_cache_options = new { mode = "explicit" },
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
             store = openAIOptions.StoreResponses,
@@ -712,7 +741,7 @@ public sealed class OpenAIResponsesClient(
                 ? null
                 : openAIOptions.ServiceTier,
             metadata,
-            tools = tools?.Select(tool => new
+            tools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => new
             {
                 type = "function",
                 name = tool.Name,
@@ -720,20 +749,14 @@ public sealed class OpenAIResponsesClient(
                 parameters = tool.ParametersSchema,
                 strict = false
             }),
-            parallel_tool_calls = tools is { Count: > 0 } ? true : (bool?)null,
+            parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null
         };
     }
 
-    private string ChooseModel(ModelPurpose purpose)
+    private string ChooseModel()
     {
-        var openAIOptions = options.Value;
-        return purpose switch
-        {
-            ModelPurpose.Main => Normalize(openAIOptions.MainModel, OpenAIOptions.DefaultMainModel),
-            ModelPurpose.Escalation => Normalize(openAIOptions.EscalationModel, OpenAIOptions.DefaultEscalationModel),
-            _ => Normalize(openAIOptions.DefaultModel, OpenAIOptions.DefaultDefaultModel)
-        };
+        return Normalize(options.Value.ChatModel, OpenAIOptions.DefaultChatModel);
     }
 
     private static string Normalize(string? value, string fallback)
