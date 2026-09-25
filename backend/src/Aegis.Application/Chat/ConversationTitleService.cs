@@ -60,6 +60,7 @@ public sealed class ConversationTitleService(
             .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault() ?? string.Empty;
         var title = RemoveEmojiLikeSymbols(firstLine)
+            .Replace("</s>", string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace("\"", string.Empty, StringComparison.Ordinal)
             .Replace("'", string.Empty, StringComparison.Ordinal)
             .Trim()
