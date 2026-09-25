@@ -38,7 +38,9 @@ export default defineConfig({
         ]
       },
       workbox: {
-        navigateFallback: '/index.html'
+        navigateFallback: '/index.html',
+        // OAuth callbacks are browser navigations, but must reach the API.
+        navigateFallbackDenylist: [/^\/api(?:\/|$)/]
       }
     })
   ]
