@@ -12,7 +12,7 @@ Version history:
 - v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 - v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
 - v0.3.0, "Now We're Talking!", introduces spoken chat responses, persistent browser playback, and coordinated turn cancellation.
-- v0.3.1, "Now We're Talking!", follows with chat and voice control refinements, server availability feedback, and push-to-talk STT (merged into the current main after the UI changes).
+- v0.3.1, "Now We're Talking!", refines chat and voice controls, improves server availability feedback, and adds push-to-talk transcription.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
