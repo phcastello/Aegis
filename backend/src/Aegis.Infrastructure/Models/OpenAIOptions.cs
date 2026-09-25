@@ -12,6 +12,8 @@ public sealed class OpenAIOptions
 
     public string ChatModel { get; set; } = DefaultChatModel;
 
+    public string ChatReasoningEffort { get; set; } = "medium";
+
     public bool StoreResponses { get; set; }
 
     public string ServiceTier { get; set; } = "auto";

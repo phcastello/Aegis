@@ -50,10 +50,9 @@ public sealed class ChatService(
             RecentHistoryLimit + 1,
             turnToken);
 
-        var promptResult = await promptBuilder.BuildPromptAsync(
+        var promptResult = await BuildPromptForTurnAsync(
             recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
-            userContent,
-            turnToken);
+            userContent, conversation.Id, turnToken);
 
         try
         {
@@ -137,8 +136,9 @@ public sealed class ChatService(
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
-        var promptResult = await promptBuilder.BuildPromptAsync(
-            recentHistory.Where(message => message.Id != userMessage.Id).ToList(), userContent, turnToken);
+        var promptResult = await BuildPromptForTurnAsync(
+            recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
+            userContent, conversation.Id, turnToken);
         var modelRequest = CreateModelRequest(promptResult, userContent);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
@@ -289,6 +289,19 @@ public sealed class ChatService(
 
         return await dbContext.GetConversationWithMessagesAsync(conversationId.Value, cancellationToken)
             ?? throw new ConversationNotFoundException(conversationId.Value);
+    }
+
+    private async Task<PromptBuildResult> BuildPromptForTurnAsync(
+        IReadOnlyList<ChatMessage> history,
+        string userContent,
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var pendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(conversationId, cancellationToken);
+        var pendingState = pendingAction is null ? null :
+            $"Existe uma ação pendente de Gmail do tipo {pendingAction.ActionType}, válida até {pendingAction.ExpiresAt:O}. " +
+            "Use email_confirm_pending_action somente se a mensagem atual confirmar essa ação; o backend valida a confirmação.";
+        return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
     }
 
     private static ChatMessageResponse MapMessage(ChatMessage message)

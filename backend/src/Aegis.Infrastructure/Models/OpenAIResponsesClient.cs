@@ -732,7 +732,8 @@ public sealed class OpenAIResponsesClient(
         {
             model,
             input,
-            prompt_cache_options = new { mode = "explicit" },
+            reasoning = new { effort = openAIOptions.ChatReasoningEffort },
+            prompt_cache_options = new { mode = "implicit" },
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
             store = openAIOptions.StoreResponses,

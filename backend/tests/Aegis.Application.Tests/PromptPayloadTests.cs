@@ -18,7 +18,7 @@ namespace Aegis.Application.Tests;
 public sealed class PromptPayloadTests
 {
     [Fact]
-    public async Task PayloadKeepsStableDeveloperMessageBeforeRuntimeHistoryAndCurrentUser()
+    public async Task PayloadKeepsStableDeveloperAndConversationPrefixBeforeRuntime()
     {
         var builder = new PromptBuilder(new FixedRuntimeContext("Horário: 2026-09-25 12:00 UTC"));
         var history = new[]
@@ -43,18 +43,52 @@ public sealed class PromptPayloadTests
         using var payload = JsonDocument.Parse(handler.Body!);
         var root = payload.RootElement;
         Assert.Equal("gpt-5.6-luna", root.GetProperty("model").GetString());
-        Assert.Equal("explicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
+        Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
+        Assert.Equal("medium", root.GetProperty("reasoning").GetProperty("effort").GetString());
         var input = root.GetProperty("input");
-        Assert.Equal(new[] { "developer", "developer", "user", "assistant", "user" },
+        Assert.Equal(new[] { "developer", "user", "assistant", "user", "developer" },
             input.EnumerateArray().Select(item => item.GetProperty("role").GetString()));
         var stable = input[0].GetProperty("content")[0];
         Assert.Equal("explicit", stable.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
         Assert.DoesNotContain("2026-09-25", stable.GetProperty("text").GetString());
         Assert.DoesNotContain("mensagem atual", stable.GetProperty("text").GetString());
-        Assert.Contains("2026-09-25", input[1].GetProperty("content").GetString());
-        Assert.Equal("mensagem atual", input[4].GetProperty("content").GetString());
+        Assert.Contains("2026-09-25", input[4].GetProperty("content").GetString());
+        Assert.Equal("mensagem atual", input[3].GetProperty("content").GetString());
         Assert.Equal(new[] { "a_tool", "z_tool" },
             root.GetProperty("tools").EnumerateArray().Select(tool => tool.GetProperty("name").GetString()));
+    }
+
+    [Fact]
+    public async Task NextTurnPreservesPreviousUserBoundaryBeforeChangedTimestamp()
+    {
+        var previousUser = new ChatMessage(Guid.NewGuid(), ChatRoles.User, "primeira pergunta");
+        var previousAssistant = new ChatMessage(previousUser.ConversationId, ChatRoles.Assistant, "primeira resposta");
+        var first = await new PromptBuilder(new FixedRuntimeContext("Horário: 12:00"))
+            .BuildPromptAsync([], previousUser.Content);
+        var second = await new PromptBuilder(new FixedRuntimeContext("Horário: 12:05"))
+            .BuildPromptAsync([previousUser, previousAssistant], "segunda pergunta",
+                pendingEmailActionState: "Existe uma ação pendente de Gmail.");
+
+        Assert.Equal(first.InputItems[0].GetRawText(), second.InputItems[0].GetRawText());
+        Assert.Equal(first.InputItems[1].GetRawText(), second.InputItems[1].GetRawText());
+        Assert.Equal("developer", first.InputItems[2].GetProperty("role").GetString());
+        Assert.Equal("assistant", second.InputItems[2].GetProperty("role").GetString());
+        Assert.Contains("12:05", second.InputItems[^1].GetProperty("content").GetString());
+        Assert.Contains("ação pendente", second.InputItems[^1].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ChatReasoningEffortUsesConfiguredValue()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var client = new OpenAIResponsesClient(httpClient,
+            Options.Create(new OpenAIOptions { ApiKey = "fake", ChatReasoningEffort = "low" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest("", "oi"), []));
+        using var payload = JsonDocument.Parse(handler.Body!);
+        Assert.Equal("low", payload.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
     }
 
     [Fact]

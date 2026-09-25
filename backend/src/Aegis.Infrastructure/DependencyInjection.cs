@@ -40,6 +40,7 @@ public static class DependencyInjection
             options.ApiKey = Read(configuration, "OPENAI_API_KEY", options.ApiKey);
             options.BaseUrl = Read(configuration, "AEGIS_OPENAI_BASE_URL", options.BaseUrl);
             options.ChatModel = Read(configuration, "AEGIS_CHAT_MODEL", options.ChatModel);
+            options.ChatReasoningEffort = Read(configuration, "AEGIS_CHAT_REASONING_EFFORT", options.ChatReasoningEffort);
             options.ServiceTier = Read(configuration, "AEGIS_OPENAI_SERVICE_TIER", options.ServiceTier);
             options.StoreResponses = ReadBool(
                 configuration,
