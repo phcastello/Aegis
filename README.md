@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.3.1, "Now We're Talking!", refines chat controls, contextual feedback, voice playback feedback, cancellation, and server availability while preserving the v0.3.0 voice stack.
+Aegis v0.3.1, "Now We're Talking!", builds on the v0.3.0 voice stack with refined chat and voice controls, cancellation, server feedback, and push-to-talk transcription.
 
 Version history:
 
@@ -11,9 +11,10 @@ Version history:
 - v0.1.4, "Where Were We?", adds real conversation history, opening old conversations, rename/delete actions, paginated history, and automatic short titles.
 - v0.2.0, "Neural Uplink", moves Aegis' main interpretive brain to an online OpenAI model stack, with nano as the default model, mini as the operational model, and local non-blocking title generation.
 - v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
-- v0.3.1, "Now We're Talking!", refines chat controls, contextual feedback, voice playback feedback, cancellation, and server availability.
+- v0.3.0, "Now We're Talking!", introduces spoken chat responses, persistent browser playback, and coordinated turn cancellation.
+- v0.3.1, "Now We're Talking!", follows with chat and voice control refinements, server availability feedback, and push-to-talk STT (merged into the current main after the UI changes).
 
-In v0.2.1, Pedro keeps the same chat, history, feedback, streaming, and Markdown experience while Aegis can connect to Gmail through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
+Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
 The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
 
@@ -61,7 +62,7 @@ docker compose up -d postgres qdrant
 
 The `.env` file is read by Docker Compose. The API does not load `.env` automatically when run with `dotnet run`; local API settings come from `backend/src/Aegis.Api/appsettings.Development.json` and normal ASP.NET Core environment variables.
 
-For Gmail connection in v0.2.1, configure these values in `.env` for Docker or as environment variables when running the API locally:
+For Gmail connection, configure these values in `.env` for Docker or as environment variables when running the API locally:
 
 ```env
 GOOGLE_CLIENT_ID=
@@ -69,13 +70,14 @@ GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:8090/api/email/oauth/callback
 GOOGLE_OAUTH_SCOPES=https://www.googleapis.com/auth/gmail.modify
 
-AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=30
-AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING=15
-AEGIS_MAX_EMAIL_BODY_CHARS=6000
+AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=100
+AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING=100
+AEGIS_MAX_EMAIL_BRIEFING_BODY_CHARS=500
+AEGIS_MAX_EMAIL_FULL_BODY_CHARS=50000
 AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS=7
 ```
 
-Gmail actions are chat-driven. Aegis can read inbox content and metadata, but in v0.2.1 attachments are metadata-only: filenames, MIME types, sizes, and inline status can be mentioned, but attachment contents are not downloaded or analyzed.
+Gmail actions are chat-driven. Attachments remain metadata-only: filenames, MIME types, sizes, and inline status can be mentioned, but attachment contents are not downloaded or analyzed. After an OAuth redirect, the PWA confirms `/api/email/status` before allowing a new chat message; an earlier message is never sent again automatically.
 
 Restore and build the backend:
 
@@ -180,7 +182,7 @@ dotnet ef database update \
   --startup-project backend/src/Aegis.Api
 ```
 
-## Voice in v0.3.0
+## Voice output (introduced in v0.3.0)
 
 Voice is part of the normal chat, never a separate public TTS screen. A browser creates a UUID turn when a message is sent; the API owns that turn, links its cancellation token to model/tool execution, and emits the same NDJSON chat protocol with `turnId` on conversation, token, and done events. A completed `done` event includes both `assistantMessageId` and the legacy `messageId`.
 
@@ -222,7 +224,7 @@ dotnet test backend/Aegis.sln
 
 It covers superseding a conversation turn, idempotent cancellation, invalid transitions, cancellation before registration, and concurrent registrations. The PWA typecheck and production bundle are verified with `npm run build` in `frontend/aegis-pwa`.
 
-## Voice input (STT)
+## Voice input (STT in the current v0.3.1 main)
 
 Voice input is push-to-talk only: the browser records a short clip, sends it only to the Aegis API, then inserts the returned transcript into the composer for review. It never sends the message automatically, does not persist audio, and does not use the active chat `turnId`.
 
