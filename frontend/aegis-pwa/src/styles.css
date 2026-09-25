@@ -863,26 +863,15 @@ button:disabled {
 }
 
 .assistant-activity {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 5px 9px;
-  margin: 0 0 7px 2px;
+  margin: 3px 0 10px 3px;
   color: var(--muted);
   line-height: 1.4;
 }
 
-.assistant-activity__label {
-  color: var(--quiet);
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
 .assistant-activity__text {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .assistant-activity--completed .assistant-activity__text {

@@ -37,7 +37,6 @@ async function copy(): Promise<void> {
     <div v-if="message.role !== 'user'" class="message-avatar message-avatar--aegis"><AegisMark /></div>
     <div class="message-stack">
       <div v-if="activityStatus" class="assistant-activity" :class="`assistant-activity--${activityState ?? 'working'}`" role="status">
-        <span class="assistant-activity__label">Atividade</span>
         <span class="assistant-activity__text">{{ activityStatus }}</span>
       </div>
       <div v-if="message.role === 'user' || message.content.trim() || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
