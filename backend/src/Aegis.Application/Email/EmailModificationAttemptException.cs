@@ -10,3 +10,15 @@ public sealed class EmailModificationAttemptException(
 
     public int CompletedCount { get; } = completedCount;
 }
+
+public sealed class EmailModificationCancelledException(
+    bool requestWasSent,
+    int completedCount,
+    OperationCanceledException innerException,
+    CancellationToken cancellationToken)
+    : OperationCanceledException("Gmail batch modification was cancelled.", innerException, cancellationToken)
+{
+    public bool RequestWasSent { get; } = requestWasSent;
+
+    public int CompletedCount { get; } = completedCount;
+}

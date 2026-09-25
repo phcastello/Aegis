@@ -18,6 +18,80 @@ namespace Aegis.Application.Tests;
 public sealed class EmailModificationHardeningTests
 {
     [Fact]
+    public async Task CancellationBeforeFirstPostDoesNotRecordPossibleEffects()
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 3);
+        using var cancellation = new CancellationTokenSource();
+        var service = new BatchEmailService { CancelSource = cancellation, CancelAfterMessages = 0 };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ConfirmAsync(db, service, conversation, cancellation.Token));
+
+        Assert.False(action.MayHaveAppliedChanges);
+        Assert.True(action.IsOpen());
+        Assert.Null(action.ConfirmedAt);
+        Assert.Null(action.ExecutedAt);
+        Assert.Empty(service.ReadIds);
+    }
+
+    [Fact]
+    public async Task CancellationAfterTwoPostsPersistsPossibleEffectsAndPropagates()
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 3);
+        using var cancellation = new CancellationTokenSource();
+        var service = new BatchEmailService { CancelSource = cancellation, CancelAfterMessages = 2 };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ConfirmAsync(db, service, conversation, cancellation.Token));
+
+        Assert.Equal(2, service.ReadIds.Count);
+        Assert.True(action.IsOpen());
+        Assert.Null(action.ConfirmedAt);
+        Assert.Null(action.ExecutedAt);
+        db.ChangeTracker.Clear();
+        Assert.True(db.PendingEmailActions.Single().MayHaveAppliedChanges);
+    }
+
+    [Fact]
+    public async Task CancellationDuringMetadataVerificationPersistsPossibleEffects()
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 3);
+        using var cancellation = new CancellationTokenSource();
+        var service = new BatchEmailService { CancelSource = cancellation, CancelDuringMetadata = true };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ConfirmAsync(db, service, conversation, cancellation.Token));
+
+        Assert.Equal(3, service.ReadIds.Count);
+        Assert.True(action.IsOpen());
+        Assert.Null(action.ConfirmedAt);
+        Assert.Null(action.ExecutedAt);
+        db.ChangeTracker.Clear();
+        Assert.True(db.PendingEmailActions.Single().MayHaveAppliedChanges);
+    }
+
+    [Fact]
+    public async Task CancelActionAfterInterruptedBatchAcknowledgesPossibleChanges()
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 3);
+        using var cancellation = new CancellationTokenSource();
+        var service = new BatchEmailService { CancelSource = cancellation, CancelAfterMessages = 2 };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ConfirmAsync(db, service, conversation, cancellation.Token));
+        var cancelContext = await CreateContextAsync(db, conversation, "cancela");
+
+        var cancelled = await new EmailCancelPendingActionTool(db)
+            .ExecuteAsync(JsonSerializer.SerializeToElement(new { }), cancelContext);
+
+        Assert.True(cancelled.Success);
+        using var payload = JsonDocument.Parse(cancelled.Content);
+        var userMessage = payload.RootElement.GetProperty("userMessage").GetString();
+        Assert.Contains("não foram revertidas", userMessage);
+        Assert.DoesNotContain("Não mexi em nada", userMessage);
+        Assert.NotNull(action.CancelledAt);
+    }
+
+    [Fact]
     public async Task FailureBeforeFirstEmailHasNoObservedEffectAndRemainsRetryable()
     {
         using var db = CreateDb();
@@ -181,6 +255,51 @@ public sealed class EmailModificationHardeningTests
         Assert.Equal(new[] { false, false, true }, state.Select(email => email.IsUnread));
     }
 
+    [Fact]
+    public async Task GmailServiceCancellationBeforeFirstPostKeepsNoSendEvidence()
+    {
+        using var db = CreateDb();
+        var protector = DataProtectionProvider.Create("Aegis.CancelBeforePost.Tests");
+        var tokenProtector = new EmailTokenProtector(protector);
+        db.EmailAccountConnections.Add(new EmailAccountConnection("gmail", "eval@example.test",
+            tokenProtector.Protect("access"), tokenProtector.Protect("refresh"),
+            DateTimeOffset.UtcNow.AddHours(1), GmailOptions.DefaultScope));
+        await db.SaveChangesAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var handler = new CancellingModificationHandler(cancellation);
+        using var http = new HttpClient(handler);
+        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.MarkReadAsync(["mail-1"], cancellation.Token));
+
+        Assert.Equal(0, handler.PostCount);
+    }
+
+    [Fact]
+    public async Task GmailServiceCancellationDuringThirdPostRetainsSendEvidence()
+    {
+        using var db = CreateDb();
+        var protector = DataProtectionProvider.Create("Aegis.CancelAfterPosts.Tests");
+        var tokenProtector = new EmailTokenProtector(protector);
+        db.EmailAccountConnections.Add(new EmailAccountConnection("gmail", "eval@example.test",
+            tokenProtector.Protect("access"), tokenProtector.Protect("refresh"),
+            DateTimeOffset.UtcNow.AddHours(1), GmailOptions.DefaultScope));
+        await db.SaveChangesAsync();
+        using var cancellation = new CancellationTokenSource();
+        var handler = new CancellingModificationHandler(cancellation);
+        using var http = new HttpClient(handler);
+        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+
+        var failure = await Assert.ThrowsAsync<EmailModificationCancelledException>(() =>
+            service.MarkReadAsync(["mail-1", "mail-2", "mail-3"], cancellation.Token));
+
+        Assert.True(failure.RequestWasSent);
+        Assert.Equal(2, failure.CompletedCount);
+        Assert.Equal(3, handler.PostCount);
+    }
+
     private static AegisDbContext CreateDb() => new(new DbContextOptionsBuilder<AegisDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
@@ -206,11 +325,12 @@ public sealed class EmailModificationHardeningTests
     }
 
     private static async Task<AegisToolResult> ConfirmAsync(
-        AegisDbContext db, IEmailService service, Conversation conversation)
+        AegisDbContext db, IEmailService service, Conversation conversation,
+        CancellationToken cancellationToken = default)
     {
         var context = await CreateContextAsync(db, conversation, "confirmo");
         return await new EmailConfirmPendingActionTool(db, service, new EmailToolContextService(db))
-            .ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context);
+            .ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context, cancellationToken);
     }
 
     private sealed class BatchEmailService : IEmailService
@@ -218,6 +338,9 @@ public sealed class EmailModificationHardeningTests
         public int? FailAfterMessages { get; set; }
         public bool FailAfterAll { get; set; }
         public bool FailMetadata { get; set; }
+        public CancellationTokenSource? CancelSource { get; set; }
+        public int? CancelAfterMessages { get; set; }
+        public bool CancelDuringMetadata { get; set; }
         public int ModificationCalls { get; private set; }
         public HashSet<string> ReadIds { get; } = new(StringComparer.Ordinal);
         public Task<EmailModificationResult> MarkReadAsync(IReadOnlyList<string> ids, CancellationToken token = default)
@@ -226,6 +349,13 @@ public sealed class EmailModificationHardeningTests
             var modified = 0;
             foreach (var id in ids)
             {
+                if (CancelAfterMessages == modified)
+                {
+                    CancelSource!.Cancel();
+                    if (modified == 0) throw new OperationCanceledException(token);
+                    throw new EmailModificationCancelledException(true, modified,
+                        new OperationCanceledException(token), token);
+                }
                 if (FailAfterMessages == modified)
                     throw new EmailModificationAttemptException(modified > 0, modified,
                         new HttpRequestException("simulated Gmail failure"));
@@ -239,6 +369,11 @@ public sealed class EmailModificationHardeningTests
         public Task<EmailContentData> ReadEmailAsync(string emailId, EmailBodyReadPurpose readPurpose = EmailBodyReadPurpose.Full, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<EmailSummaryData>> ReadEmailMetadataBatchAsync(IReadOnlyList<string> ids, CancellationToken cancellationToken = default)
         {
+            if (CancelDuringMetadata)
+            {
+                CancelSource!.Cancel();
+                throw new OperationCanceledException(cancellationToken);
+            }
             if (FailMetadata) throw new HttpRequestException("metadata unavailable");
             return Task.FromResult<IReadOnlyList<EmailSummaryData>>(ids.Select(id => new EmailSummaryData(
                 id, "thread-1", null, null, null, null, null,
@@ -302,6 +437,29 @@ public sealed class EmailModificationHardeningTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class CancellingModificationHandler(CancellationTokenSource cancellation) : HttpMessageHandler
+    {
+        public int PostCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post)
+            {
+                PostCount++;
+                if (PostCount == 3)
+                {
+                    cancellation.Cancel();
+                    throw new OperationCanceledException(cancellation.Token);
+                }
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
             });
         }
     }

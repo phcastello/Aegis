@@ -4,6 +4,7 @@ using Aegis.Application.Common;
 using Aegis.Application.Tools;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace Aegis.Application.Email.Tools;
 
@@ -310,7 +311,8 @@ public sealed class EmailUnmarkImportantTool(
 public sealed class EmailConfirmPendingActionTool(
     IAegisDbContext dbContext,
     IEmailService emailService,
-    IEmailToolContextService emailContextService) : EmailToolBase
+    IEmailToolContextService emailContextService,
+    ILogger<EmailConfirmPendingActionTool>? logger = null) : EmailToolBase
 {
     public override string Name => "email_confirm_pending_action";
 
@@ -349,103 +351,138 @@ public sealed class EmailConfirmPendingActionTool(
 
         var emailIds = DeserializeEmailIds(action.EmailIdsJson);
         var confirmedAt = DateTimeOffset.UtcNow;
-        EmailModificationResult? result = null;
-        Exception? modificationFailure = null;
+        var externalRequestMayHaveBeenSent = false;
         try
         {
-            result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            modificationFailure = exception;
-        }
-
-        if (modificationFailure is EmailModificationAttemptException { RequestWasSent: false })
-        {
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId, action.ActionType, action.EmailIdsJson,
-                context.UserMessageId, success: false, modificationFailure.InnerException?.Message));
-            await dbContext.SaveChangesAsync(cancellationToken);
-            return Error("email_action_failed",
-                "Não consegui iniciar esta tentativa; nenhuma requisição de modificação foi enviada ao Gmail agora. A ação continua aberta; tentativas anteriores não foram revertidas.");
-        }
-
-        EmailModificationVerification? verification = null;
-        Exception? verificationFailure = null;
-        try
-        {
-            verification = await VerifyModificationAsync(
-                emailService,
-                emailContextService,
-                context.ConversationId,
-                action.ActionType,
-                emailIds,
-                Name,
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            verificationFailure = exception;
-        }
-
-        if (verification?.AllConfirmed == true)
-        {
-            action.Confirm(confirmedAt);
-            action.MarkExecuted();
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId, action.ActionType, action.EmailIdsJson,
-                context.UserMessageId, success: true,
-                modificationFailure is null ? null : "Gmail request failed but post-state verification confirmed all emails."));
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            return Ok(new
+            EmailModificationResult? result = null;
+            Exception? modificationFailure = null;
+            try
             {
-                pendingActionId = action.Id,
-                action.ActionType,
-                action.HumanSummary,
-                result,
-                verification,
-                recoveredAfterFailure = modificationFailure is not null,
-                userMessage = $"Pronto, verifiquei a alteração: {action.HumanSummary}."
-            });
-        }
+                result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
+                externalRequestMayHaveBeenSent = true;
+            }
+            catch (EmailModificationCancelledException exception) when (cancellationToken.IsCancellationRequested)
+            {
+                externalRequestMayHaveBeenSent = exception.RequestWasSent;
+                throw;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                modificationFailure = exception;
+                externalRequestMayHaveBeenSent = exception is not EmailModificationAttemptException { RequestWasSent: false };
+            }
 
-        var confirmedCount = verification is null ? 0 : emailIds.Count - verification.FailedEmailIds.Count;
-        var possiblePartialEffects = verification is null || confirmedCount > 0;
-        if (possiblePartialEffects)
+            if (modificationFailure is EmailModificationAttemptException { RequestWasSent: false })
+            {
+                dbContext.AddEmailActionAudit(new EmailActionAudit(
+                    context.ConversationId, action.ActionType, action.EmailIdsJson,
+                    context.UserMessageId, success: false, modificationFailure.InnerException?.Message));
+                await dbContext.SaveChangesAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                return Error("email_action_failed",
+                    "Não consegui iniciar esta tentativa; nenhuma requisição de modificação foi enviada ao Gmail agora. A ação continua aberta; tentativas anteriores não foram revertidas.");
+            }
+
+            EmailModificationVerification? verification = null;
+            Exception? verificationFailure = null;
+            try
+            {
+                verification = await VerifyModificationAsync(
+                    emailService,
+                    emailContextService,
+                    context.ConversationId,
+                    action.ActionType,
+                    emailIds,
+                    Name,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                verificationFailure = exception;
+            }
+
+            if (verification?.AllConfirmed == true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                action.Confirm(confirmedAt);
+                action.MarkExecuted();
+                dbContext.AddEmailActionAudit(new EmailActionAudit(
+                    context.ConversationId, action.ActionType, action.EmailIdsJson,
+                    context.UserMessageId, success: true,
+                    modificationFailure is null ? null : "Gmail request failed but post-state verification confirmed all emails."));
+                await dbContext.SaveChangesAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return Ok(new
+                {
+                    pendingActionId = action.Id,
+                    action.ActionType,
+                    action.HumanSummary,
+                    result,
+                    verification,
+                    recoveredAfterFailure = modificationFailure is not null,
+                    userMessage = $"Pronto, verifiquei a alteração: {action.HumanSummary}."
+                });
+            }
+
+            var confirmedCount = verification is null ? 0 : emailIds.Count - verification.FailedEmailIds.Count;
+            var possiblePartialEffects = verification is null || confirmedCount > 0;
+            if (possiblePartialEffects)
+            {
+                action.RecordPossibleExternalEffects();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            dbContext.AddEmailActionAudit(new EmailActionAudit(
+                context.ConversationId, action.ActionType, action.EmailIdsJson,
+                context.UserMessageId, success: false,
+                $"Post-state verification: {(verification is null ? "unavailable" : $"{confirmedCount}/{emailIds.Count} confirmed")}; " +
+                (verificationFailure?.Message ?? modificationFailure?.Message ?? "Gmail state did not match the requested action.")));
+            await dbContext.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (possiblePartialEffects)
+            {
+                var completedRequests = (modificationFailure as EmailModificationAttemptException)?.CompletedCount ?? 0;
+                var observation = verification is null
+                    ? completedRequests > 0
+                        ? $"O Gmail confirmou {completedRequests} requisições antes da falha, mas não consegui verificar o estado final; outras alterações também podem ter ocorrido."
+                        : "Não consegui verificar todos os emails após a falha; alguns podem ter sido alterados."
+                    : $"{confirmedCount} de {emailIds.Count} emails estão no estado desejado; os demais não foram confirmados.";
+                return Error("email_action_partially_applied",
+                    $"{observation} A ação continua aberta. Repetir o lote inteiro é seguro; a operação é idempotente. Não diga que nada foi alterado.");
+            }
+
+            return Error("email_action_failed",
+                "Nenhum email foi confirmado no estado desejado após a falha. A ação continua aberta para nova tentativa.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            action.RecordPossibleExternalEffects();
+            if (externalRequestMayHaveBeenSent)
+            {
+                action.RecordPossibleExternalEffects();
+                using var bookkeepingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try
+                {
+                    await dbContext.SaveChangesAsync(bookkeepingTimeout.Token);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogError(exception,
+                        "Failed to persist possible Gmail effects after turn cancellation for action {PendingActionId}", action.Id);
+                }
+            }
+
+            throw;
         }
-
-        dbContext.AddEmailActionAudit(new EmailActionAudit(
-            context.ConversationId, action.ActionType, action.EmailIdsJson,
-            context.UserMessageId, success: false,
-            $"Post-state verification: {(verification is null ? "unavailable" : $"{confirmedCount}/{emailIds.Count} confirmed")}; " +
-            (verificationFailure?.Message ?? modificationFailure?.Message ?? "Gmail state did not match the requested action.")));
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        if (possiblePartialEffects)
-        {
-            var completedRequests = (modificationFailure as EmailModificationAttemptException)?.CompletedCount ?? 0;
-            var observation = verification is null
-                ? completedRequests > 0
-                    ? $"O Gmail confirmou {completedRequests} requisições antes da falha, mas não consegui verificar o estado final; outras alterações também podem ter ocorrido."
-                    : "Não consegui verificar todos os emails após a falha; alguns podem ter sido alterados."
-                : $"{confirmedCount} de {emailIds.Count} emails estão no estado desejado; os demais não foram confirmados.";
-            return Error("email_action_partially_applied",
-                $"{observation} A ação continua aberta. Repetir o lote inteiro é seguro; a operação é idempotente. Não diga que nada foi alterado.");
-        }
-
-        return Error("email_action_failed",
-            "Nenhum email foi confirmado no estado desejado após a falha. A ação continua aberta para nova tentativa.");
     }
 
     public static Task<EmailModificationResult> ExecuteModificationAsync(

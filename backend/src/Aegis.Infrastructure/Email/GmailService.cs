@@ -236,6 +236,7 @@ public sealed partial class GmailService(
             throw new EmailModificationAttemptException(false, 0, exception);
         }
         var modifiedCount = 0;
+        var requestWasSent = false;
 
         foreach (var chunk in normalizedIds.Chunk(ModificationChunkSize))
         {
@@ -243,6 +244,9 @@ public sealed partial class GmailService(
             {
                 try
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // Once SendGmailAsync begins, a canceled HTTP request may still have reached Gmail.
+                    requestWasSent = true;
                     await SendGmailAsync<GmailMessageResponse>(
                         HttpMethod.Post,
                         $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{Uri.EscapeDataString(emailId)}/modify",
@@ -251,9 +255,11 @@ public sealed partial class GmailService(
                         cancellationToken);
                     modifiedCount++;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
                 {
-                    throw;
+                    if (!requestWasSent) throw;
+                    throw new EmailModificationCancelledException(
+                        requestWasSent, modifiedCount, exception, cancellationToken);
                 }
                 catch (Exception exception)
                 {
