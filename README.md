@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis v0.3.1, "Now We're Talking!", builds on the v0.3.0 voice stack with refined chat and voice controls, cancellation, server feedback, and push-to-talk transcription.
+Aegis v0.3.2, "Now We're Talking!", hardens chat intelligence, tool use, Gmail OAuth, prompt caching, cost, and feedback while preserving the existing voice stack.
 
 Version history:
 
@@ -13,6 +13,7 @@ Version history:
 - v0.2.1, "Inbox Familiar", adds chat-driven Gmail connection, inbox briefing, email/thread summaries, and light inbox organization through confirmed tool actions.
 - v0.3.0, "Now We're Talking!", introduces spoken chat responses, persistent browser playback, and coordinated turn cancellation.
 - v0.3.1, "Now We're Talking!", refines chat and voice controls, improves server availability feedback, and adds push-to-talk transcription.
+- v0.3.2, "Now We're Talking!", improves model driven tool use, streaming performance and cost, explicit prompt caching, Gmail reliability, visible tool progress, errors, and configuration consistency.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -68,16 +69,23 @@ For Gmail connection, configure these values in `.env` for Docker or as environm
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:8090/api/email/oauth/callback
+AEGIS_PUBLIC_APP_URL=http://localhost:5173
 GOOGLE_OAUTH_SCOPES=https://www.googleapis.com/auth/gmail.modify
 
-AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=100
-AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING=100
+AEGIS_MAX_EMAILS_PER_MANUAL_BRIEFING=30
+AEGIS_MAX_EMAILS_TO_READ_PER_BRIEFING=15
 AEGIS_MAX_EMAIL_BRIEFING_BODY_CHARS=500
 AEGIS_MAX_EMAIL_FULL_BODY_CHARS=50000
 AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS=7
 ```
 
-Gmail actions are chat-driven. Attachments remain metadata-only: filenames, MIME types, sizes, and inline status can be mentioned, but attachment contents are not downloaded or analyzed. After an OAuth redirect, the PWA confirms `/api/email/status` before allowing a new chat message; an earlier message is never sent again automatically.
+`GOOGLE_REDIRECT_URI` is the public API callback registered with Google. `AEGIS_PUBLIC_APP_URL` is the browser URL of the PWA. Set both to their externally reachable HTTPS URLs behind a reverse proxy; they may have different origins. Gmail actions are chat-driven. Attachments remain metadata-only: filenames, MIME types, sizes, and inline status can be mentioned, but attachment contents are not downloaded or analyzed. After OAuth, the PWA confirms `/api/email/status` and shows the connected account when available.
+
+Chat uses `AEGIS_CHAT_MODEL=gpt-5.6-luna` with configurable `AEGIS_CHAT_REASONING_EFFORT=medium`. Async conversation titles use `AEGIS_TITLE_MODEL=gpt-5-nano`, `AEGIS_TITLE_REASONING_EFFORT=minimal`, `OPENAI_API_KEY`, and `AEGIS_TITLE_MAX_OUTPUT_TOKENS=64`; no local model is required. These title settings are configurable for a future model change. `AEGIS_OPENAI_BASE_URL=https://api.openai.com` and `AEGIS_MAX_OUTPUT_TOKENS=4000` apply to chat. The model receives the Gmail tools with automatic selection. The backend still validates arguments, pending actions, confirmation, and effects.
+
+The Responses API request puts stable tools and identity first, with an explicit cache breakpoint at the end of the identity. It then appends native-role conversation history and the current user message. Runtime context, including the timestamp and any real pending email action state, comes last. Cache policy is `implicit` plus that explicit breakpoint: the stable prefix can be reused even when the conversation changes, while the implicit boundary at the current user message can be matched as a prior user-message boundary on the next turn. The changed runtime state follows that boundary and cannot break the history match. In a second turn, the previous user message and all earlier unchanged history can therefore hit cache when the shared visible prefix reaches GPT-5.6's 1,024-token minimum; new assistant text and the latest question are processed normally. A rolling 20-message history window can reset this longer match when old messages leave the window. Tool order and schemas remain deterministic. No padding or extra explicit history breakpoints are added, limiting cache writes to the stable boundary and OpenAI's implicit conversation boundary. OpenTelemetry meter `Aegis` exposes input, cached input, cache write, and output token counters, plus model/tool calls, tool iterations, and turn duration. See the [OpenAI prompt caching documentation](https://developers.openai.com/api/docs/guides/prompt-caching).
+
+Run the read-only intent evaluation with `OPENAI_API_KEY=... python3 scripts/eval_tool_intent.py`. It exports all 13 registered production tool descriptions and schemas through `scripts/Aegis.ToolCatalogExport` and inspects model function calls with stubbed results; it never calls Gmail. It is intentionally excluded from credential-free CI. If `dotnet` is unavailable on the host, export the catalog in a .NET SDK container and pass `--tools-json <path>`. The v0.3.2 live run is recorded in [`scripts/eval-results-v0.3.2.md`](scripts/eval-results-v0.3.2.md).
 
 Restore and build the backend:
 
@@ -224,7 +232,7 @@ dotnet test backend/Aegis.sln
 
 It covers superseding a conversation turn, idempotent cancellation, invalid transitions, cancellation before registration, and concurrent registrations. The PWA typecheck and production bundle are verified with `npm run build` in `frontend/aegis-pwa`.
 
-## Voice input (STT in the current v0.3.1 main)
+## Voice input (introduced in v0.3.1)
 
 Voice input is push-to-talk only: the browser records a short clip, sends it only to the Aegis API, then inserts the returned transcript into the composer for review. It never sends the message automatically, does not persist audio, and does not use the active chat `turnId`.
 

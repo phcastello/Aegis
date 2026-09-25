@@ -103,6 +103,8 @@ export async function sendMessageStream(
       messageId?: string;
       assistantMessageId?: string;
       message?: string;
+      category?: string;
+      state?: string;
       conversationTitle?: string | null;
       titleSource?: string | null;
     };
@@ -116,6 +118,17 @@ export async function sendMessageStream(
       case 'token':
         if (event.turnId && event.content) {
           handlers.onToken(event.turnId, event.content);
+        }
+        break;
+      case 'tool_status':
+        if (event.turnId && event.category &&
+            (event.state === 'started' || event.state === 'completed' || event.state === 'failed') &&
+            event.message) {
+          handlers.onToolStatus?.(event.turnId, {
+            category: event.category,
+            state: event.state,
+            message: event.message
+          });
         }
         break;
       case 'done':
@@ -172,8 +185,8 @@ export async function getHealth(signal?: AbortSignal): Promise<boolean> {
   try { return ((await response.json()) as { status?: string }).status === 'ok'; } catch { return false; }
 }
 
-export function getEmailStatus(signal?: AbortSignal): Promise<{ isConnected: boolean }> {
-  return requestJson<{ isConnected: boolean }>('/api/email/status', {
+export function getEmailStatus(signal?: AbortSignal): Promise<{ isConnected: boolean; emailAddress: string | null }> {
+  return requestJson<{ isConnected: boolean; emailAddress: string | null }>('/api/email/status', {
     cache: 'no-store',
     signal
   });
@@ -194,7 +207,13 @@ export async function streamSpeech(
     body: JSON.stringify(request),
     signal
   });
-  if (!response.ok || !response.body) throw new Error('Voice is unavailable.');
+  if (!response.ok || !response.body) {
+    const message = response.status === 404 ? 'Mensagem para áudio indisponível.'
+      : response.status === 409 ? 'Não foi possível iniciar a voz neste turno.'
+      : response.status === 503 || response.status === 504 ? 'Serviço de voz temporariamente indisponível.'
+      : 'Não foi possível conectar ao serviço de voz.';
+    throw new Error(message);
+  }
   if (response.headers.get('X-Aegis-Audio-Format') !== 'pcm_s16le' ||
       response.headers.get('X-Aegis-Sample-Rate') !== '24000' ||
       response.headers.get('X-Aegis-Channels') !== '1') throw new Error('Invalid audio format.');

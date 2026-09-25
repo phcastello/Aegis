@@ -24,6 +24,7 @@ public sealed partial class GmailService(
     private const int MaxModificationCount = 100;
     private const int ModificationChunkSize = 20;
     private const int MaxThreadMessages = 15;
+    private const int MaxMetadataConcurrency = 4;
 
     public async Task<EmailSearchResultData> SearchEmailsAsync(
         string? query,
@@ -85,6 +86,34 @@ public sealed partial class GmailService(
         var accessToken = await GetAccessTokenAsync(cancellationToken);
         var message = await GetMessageAsync(emailId.Trim(), "full", accessToken, cancellationToken);
         return MapContent(message, GetMaxBodyCharacters(readPurpose));
+    }
+
+    public async Task<IReadOnlyList<EmailSummaryData>> ReadEmailMetadataBatchAsync(
+        IReadOnlyList<string> emailIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (emailIds.Count == 0 || emailIds.Count > MaxModificationCount ||
+            emailIds.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("A valid bounded email selection is required.", nameof(emailIds));
+        }
+
+        var accessToken = await GetAccessTokenAsync(cancellationToken);
+        using var gate = new SemaphoreSlim(MaxMetadataConcurrency);
+        var requests = emailIds.Select(async emailId =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                var message = await GetMessageAsync(emailId.Trim(), "metadata", accessToken, cancellationToken);
+                return MapSummary(message);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        return await Task.WhenAll(requests);
     }
 
     public async Task<ThreadData> ReadThreadAsync(
@@ -183,28 +212,59 @@ public sealed partial class GmailService(
             .ToList();
         if (normalizedIds.Count == 0)
         {
-            throw new ArgumentException("At least one email id is required.", nameof(emailIds));
+            throw new EmailModificationAttemptException(false, 0,
+                new ArgumentException("At least one email id is required.", nameof(emailIds)));
         }
 
         if (normalizedIds.Count > MaxModificationCount)
         {
-            throw new InvalidOperationException($"Cannot modify more than {MaxModificationCount} emails at once.");
+            throw new EmailModificationAttemptException(false, 0,
+                new InvalidOperationException($"Cannot modify more than {MaxModificationCount} emails at once."));
         }
 
-        var accessToken = await GetAccessTokenAsync(cancellationToken);
+        string accessToken;
+        try
+        {
+            accessToken = await GetAccessTokenAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new EmailModificationAttemptException(false, 0, exception);
+        }
         var modifiedCount = 0;
+        var requestWasSent = false;
 
         foreach (var chunk in normalizedIds.Chunk(ModificationChunkSize))
         {
             foreach (var emailId in chunk)
             {
-                await SendGmailAsync<GmailMessageResponse>(
-                    HttpMethod.Post,
-                    $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{Uri.EscapeDataString(emailId)}/modify",
-                    accessToken,
-                    new GmailModifyRequest(addLabels, removeLabels),
-                    cancellationToken);
-                modifiedCount++;
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // Once SendGmailAsync begins, a canceled HTTP request may still have reached Gmail.
+                    requestWasSent = true;
+                    await SendGmailAsync<GmailMessageResponse>(
+                        HttpMethod.Post,
+                        $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{Uri.EscapeDataString(emailId)}/modify",
+                        accessToken,
+                        new GmailModifyRequest(addLabels, removeLabels),
+                        cancellationToken);
+                    modifiedCount++;
+                }
+                catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+                {
+                    if (!requestWasSent) throw;
+                    throw new EmailModificationCancelledException(
+                        requestWasSent, modifiedCount, exception, cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    throw new EmailModificationAttemptException(true, modifiedCount, exception);
+                }
             }
         }
 
@@ -294,9 +354,14 @@ public sealed partial class GmailService(
 
         if (!response.IsSuccessStatusCode)
         {
-            connection.Disconnect();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            throw new EmailNotConnectedException();
+            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                connection.Disconnect();
+                await dbContext.SaveChangesAsync(cancellationToken);
+                throw new EmailNotConnectedException();
+            }
+
+            throw new HttpRequestException("Google token refresh is temporarily unavailable.", null, response.StatusCode);
         }
 
         var tokens = await response.Content.ReadFromJsonAsync<GoogleTokenResponse>(

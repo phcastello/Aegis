@@ -573,6 +573,10 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             entity.Property(action => action.ExecutedAt)
                 .IsRequired(false);
 
+            entity.Property(action => action.MayHaveAppliedChanges)
+                .HasDefaultValue(false)
+                .IsRequired();
+
             entity.Property(action => action.CreatedAt)
                 .IsRequired();
 

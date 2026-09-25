@@ -14,6 +14,10 @@ public interface IEmailService
         EmailBodyReadPurpose readPurpose = EmailBodyReadPurpose.Full,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<EmailSummaryData>> ReadEmailMetadataBatchAsync(
+        IReadOnlyList<string> emailIds,
+        CancellationToken cancellationToken = default);
+
     Task<ThreadData> ReadThreadAsync(
         string threadId,
         EmailBodyReadPurpose readPurpose = EmailBodyReadPurpose.Full,

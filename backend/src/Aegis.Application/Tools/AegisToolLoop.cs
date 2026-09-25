@@ -1,17 +1,21 @@
 using Aegis.Application.Models;
 using Aegis.Application.Llm;
+using Aegis.Application.Observability;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace Aegis.Application.Tools;
 
 public sealed class AegisToolLoop(
     IAegisModelClient modelClient,
-    IAegisToolRegistry toolRegistry) : IAegisToolLoop
+    IAegisToolRegistry toolRegistry,
+    ILogger<AegisToolLoop> logger,
+    AegisMetrics metrics) : IAegisToolLoop
 {
-    private const int DefaultMaxIterations = 10;
+    private const int DefaultMaxIterations = 4;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -23,122 +27,66 @@ public sealed class AegisToolLoop(
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var tools = toolRegistry
-            .GetAvailableTools(context)
+        var tools = toolRegistry.GetAvailableTools(context)
+            .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
-
-        var maxIterations = DefaultMaxIterations;
         List<JsonElement>? inputItems = null;
         var responses = new List<ModelToolResponse>();
         var executions = new List<object>();
-        var recoverableArgumentFailures = 0;
         var stopwatch = Stopwatch.StartNew();
+        var argumentFailures = 0;
 
-        for (var iteration = 1; ; iteration++)
+        for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
-                new ModelToolRequest(request, tools, maxIterations, InputItems: inputItems),
-                cancellationToken);
+                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+                    DefaultMaxIterations, InputItems: inputItems), cancellationToken);
             responses.Add(response);
 
-            if (response.ToolCalls.Count == 0)
+            if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
             {
                 stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
                 return response with
                 {
-                    Content = response.Content.Trim(),
+                    Content = response.ToolCalls.Count == 0 && !string.IsNullOrWhiteSpace(response.Content)
+                        ? response.Content.Trim()
+                        : "Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.",
                     AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
                 };
             }
 
-            if (iteration > maxIterations)
-            {
-                inputItems ??= [CreateUserInputItem(request.Input)];
-                inputItems.AddRange(response.OutputItems);
-                foreach (var toolCall in response.ToolCalls)
-                {
-                    inputItems.Add(CreateFunctionCallOutputItem(
-                        toolCall.Id,
-                        JsonSerializer.Serialize(new
-                        {
-                            error = "tool_iteration_limit_exceeded",
-                            message = $"The tool loop limit of {maxIterations} was reached before this tool call could be executed. Tell Pedro the operation could not continue because it exceeded the tool step limit."
-                        }, JsonOptions)));
-                }
-
-                var limitResponse = await modelClient.RespondWithToolsAsync(
-                    new ModelToolRequest(request, [], maxIterations, InputItems: inputItems),
-                    cancellationToken);
-                responses.Add(limitResponse);
-
-                stopwatch.Stop();
-                return limitResponse with
-                {
-                    Content = limitResponse.Content.Trim(),
-                    AuditData = CombineAuditData(limitResponse, responses, executions, stopwatch.ElapsedMilliseconds)
-                };
-            }
-
-            inputItems ??= [CreateUserInputItem(request.Input)];
+            inputItems ??= request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
             inputItems.AddRange(response.OutputItems);
-                foreach (var toolCall in response.ToolCalls)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var tool = toolRegistry.Find(toolCall.Name);
-                AegisToolResult result;
-                if (tool is null)
-                {
-                    result = new AegisToolResult(
-                        false,
-                        JsonSerializer.Serialize(new
-                        {
-                            error = "unknown_tool",
-                            message = $"Tool '{toolCall.Name}' is not registered."
-                        }, JsonOptions),
-                        "unknown_tool");
-                }
-                else
-                {
-                    result = await ExecuteToolSafelyAsync(tool, toolCall, context, cancellationToken);
-                }
-
+            foreach (var call in response.ToolCalls)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var tool = toolRegistry.Find(call.Name);
+                var result = tool is null
+                    ? new AegisToolResult(false, "{\"error\":\"unknown_tool\"}", "unknown_tool")
+                    : await ExecuteToolSafelyAsync(tool, call, context, cancellationToken);
                 executions.Add(new
                 {
                     iteration,
-                    callId = toolCall.Id,
-                    tool = toolCall.Name,
-                    arguments = toolCall.Arguments,
+                    callId = call.Id,
+                    tool = call.Name,
+                    arguments = call.Arguments,
                     result.Success,
                     result.ErrorCode,
                     result.Content,
                     result.AuditMetadataJson
                 });
-
-                if (IsRecoverableArgumentFailure(result))
+                inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
                 {
-                    recoverableArgumentFailures++;
-                    if (recoverableArgumentFailures > 1)
-                    {
-                        inputItems.Add(CreateFunctionCallOutputItem(toolCall.Id, result.Content));
-                        var argumentFailureResponse = await modelClient.RespondWithToolsAsync(
-                            new ModelToolRequest(request, [], maxIterations, InputItems: inputItems),
-                            cancellationToken);
-                        responses.Add(argumentFailureResponse);
-
-                        stopwatch.Stop();
-                        return argumentFailureResponse with
-                        {
-                            Content = argumentFailureResponse.Content.Trim(),
-                            AuditData = CombineAuditData(argumentFailureResponse, responses, executions, stopwatch.ElapsedMilliseconds)
-                        };
-                    }
+                    tools.Clear();
                 }
-
-                inputItems.Add(CreateFunctionCallOutputItem(toolCall.Id, result.Content));
             }
         }
+
+        throw new InvalidOperationException("The bounded tool loop exited unexpectedly.");
     }
 
     public async IAsyncEnumerable<ModelStreamChunk> StreamAsync(
@@ -146,135 +94,131 @@ public sealed class AegisToolLoop(
         ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var tools = toolRegistry
-            .GetAvailableTools(context)
+        var tools = toolRegistry.GetAvailableTools(context)
+            .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
-
-        var maxIterations = DefaultMaxIterations;
-        List<JsonElement>? inputItems = null;
-        var responses = new List<ModelToolResponse>();
+        var inputItems = request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
+        var responses = new List<ModelToolStreamChunk>();
         var executions = new List<object>();
-        var recoverableArgumentFailures = 0;
         var stopwatch = Stopwatch.StartNew();
+        var argumentFailures = 0;
 
-        for (var iteration = 1; ; iteration++)
+        for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var response = await modelClient.RespondWithToolsAsync(
-                new ModelToolRequest(request, tools, maxIterations, InputItems: inputItems),
-                cancellationToken);
-            responses.Add(response);
-
-            if (response.ToolCalls.Count == 0)
+            ModelToolStreamChunk? completed = null;
+            await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
+                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+                    DefaultMaxIterations, InputItems: inputItems), cancellationToken))
             {
-                inputItems ??= [CreateUserInputItem(request.Input)];
-
-                await foreach (var chunk in StreamFinalResponseAsync(
-                    request,
-                    maxIterations,
-                    inputItems,
-                    responses,
-                    executions,
-                    stopwatch,
-                    cancellationToken))
+                if (chunk.IsDone)
                 {
-                    yield return chunk;
+                    completed = chunk;
+                    break;
                 }
+                if (!string.IsNullOrEmpty(chunk.Content))
+                {
+                    yield return new ModelStreamChunk(chunk.Content, IsDone: false);
+                }
+            }
 
+            if (completed is null || completed.AuditData is null)
+            {
+                throw new InvalidOperationException("Tool streaming ended without a complete response.");
+            }
+            responses.Add(completed);
+            inputItems.AddRange(completed.OutputItems);
+
+            if (completed.ToolCalls.Count == 0)
+            {
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
+                    completed.Purpose, completed.MetadataJson,
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
                 yield break;
             }
 
-            inputItems ??= [CreateUserInputItem(request.Input)];
-            inputItems.AddRange(response.OutputItems);
-
-            if (iteration > maxIterations)
+            if (iteration > DefaultMaxIterations)
             {
-                foreach (var toolCall in response.ToolCalls)
-                {
-                    inputItems.Add(CreateFunctionCallOutputItem(
-                        toolCall.Id,
-                        JsonSerializer.Serialize(new
-                        {
-                            error = "tool_iteration_limit_exceeded",
-                            message = $"The tool loop limit of {maxIterations} was reached before this tool call could be executed. Tell Pedro the operation could not continue because it exceeded the tool step limit."
-                        }, JsonOptions)));
-                }
-
-                await foreach (var chunk in StreamFinalResponseAsync(
-                    request,
-                    maxIterations,
-                    inputItems,
-                    responses,
-                    executions,
-                    stopwatch,
-                    cancellationToken))
-                {
-                    yield return chunk;
-                }
-
+                yield return new ModelStreamChunk("Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.", false);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
+                    completed.Purpose, completed.MetadataJson,
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
                 yield break;
             }
 
-            foreach (var toolCall in response.ToolCalls)
+            foreach (var call in completed.ToolCalls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var tool = toolRegistry.Find(toolCall.Name);
-                AegisToolResult result;
-                if (tool is null)
+                var (category, label, completedLabel) = ToolDisplay(call.Name);
+                yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(category, "started", label));
+                var tool = toolRegistry.Find(call.Name);
+                var result = tool is null
+                    ? new AegisToolResult(false, "{\"error\":\"unknown_tool\"}", "unknown_tool")
+                    : await ExecuteToolSafelyAsync(tool, call, context, cancellationToken);
+                executions.Add(new { iteration, tool = call.Name, result.Success, result.ErrorCode, result.AuditMetadataJson });
+                inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(
+                    category, result.Success ? "completed" : "failed",
+                    result.Success ? completedLabel : "Não foi possível concluir a operação"));
+
+                if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
                 {
-                    result = new AegisToolResult(
-                        false,
-                        JsonSerializer.Serialize(new
-                        {
-                            error = "unknown_tool",
-                            message = $"Tool '{toolCall.Name}' is not registered."
-                        }, JsonOptions),
-                        "unknown_tool");
+                    tools.Clear();
                 }
-                else
-                {
-                    result = await ExecuteToolSafelyAsync(tool, toolCall, context, cancellationToken);
-                }
-
-                executions.Add(new
-                {
-                    iteration,
-                    callId = toolCall.Id,
-                    tool = toolCall.Name,
-                    arguments = toolCall.Arguments,
-                    result.Success,
-                    result.ErrorCode,
-                    result.Content,
-                    result.AuditMetadataJson
-                });
-
-                if (IsRecoverableArgumentFailure(result))
-                {
-                    recoverableArgumentFailures++;
-                    if (recoverableArgumentFailures > 1)
-                    {
-                        inputItems.Add(CreateFunctionCallOutputItem(toolCall.Id, result.Content));
-
-                        await foreach (var chunk in StreamFinalResponseAsync(
-                            request,
-                            maxIterations,
-                            inputItems,
-                            responses,
-                            executions,
-                            stopwatch,
-                            cancellationToken))
-                        {
-                            yield return chunk;
-                        }
-
-                        yield break;
-                    }
-                }
-
-                inputItems.Add(CreateFunctionCallOutputItem(toolCall.Id, result.Content));
             }
         }
+    }
+
+    private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
+    {
+        "email_get_status" => ("gmail", "Verificando conexão Gmail…", "Conexão verificada"),
+        "email_create_connect_link" => ("gmail", "Preparando conexão Gmail…", "Link de conexão pronto"),
+        "email_search" => ("gmail", "Buscando e-mails…", "Busca concluída"),
+        "email_read" or "email_read_thread" => ("gmail", "Lendo e-mail…", "E-mail lido"),
+        "email_confirm_pending_action" => ("gmail", "Verificando alteração…", "Alteração concluída"),
+        _ => ("gmail", "Verificando alteração…", "Etapa concluída")
+    };
+
+    private void RecordTurn(Guid conversationId, int modelCalls, int toolCalls, long elapsedMilliseconds)
+    {
+        metrics.LlmToolCalls.Add(toolCalls);
+        metrics.LlmToolIterations.Record(Math.Max(0, modelCalls - 1));
+        metrics.LlmTurnModelCalls.Record(modelCalls);
+        metrics.LlmTurnToolCalls.Record(toolCalls);
+        metrics.LlmTurnSeconds.Record(elapsedMilliseconds / 1000.0);
+        logger.LogInformation("Chat turn {ConversationId}: {ModelCalls} model calls, {ToolCalls} tool calls, {ToolIterations} tool rounds, {DurationMilliseconds} ms.",
+            conversationId, modelCalls, toolCalls, Math.Max(0, modelCalls - 1), elapsedMilliseconds);
+    }
+
+    private static LlmRequestAuditData CombineStreamAuditData(
+        ModelToolStreamChunk finalResponse,
+        IReadOnlyList<ModelToolStreamChunk> responses,
+        IReadOnlyList<object> executions,
+        long durationMilliseconds)
+    {
+        return finalResponse.AuditData! with
+        {
+            DurationMilliseconds = durationMilliseconds,
+            RequestPayloadJson = JsonSerializer.Serialize(new
+            {
+                type = "tool_loop",
+                modelCalls = responses.Count,
+                iterations = responses.Count,
+                toolCalls = executions.Count,
+                requests = responses.Select(response => response.AuditData?.RequestPayloadJson),
+                toolExecutions = executions
+            }, JsonOptions),
+            ResponseBody = JsonSerializer.Serialize(new
+            {
+                type = "tool_loop",
+                responses = responses.Select(response => response.AuditData?.ResponseBody)
+            }, JsonOptions)
+        };
     }
 
     private static bool IsRecoverableArgumentFailure(AegisToolResult result)
@@ -283,7 +227,7 @@ public sealed class AegisToolLoop(
             string.Equals(result.ErrorCode, "invalid_tool_arguments", StringComparison.Ordinal);
     }
 
-    private static async Task<AegisToolResult> ExecuteToolSafelyAsync(
+    private async Task<AegisToolResult> ExecuteToolSafelyAsync(
         IAegisTool tool,
         ModelToolCall toolCall,
         ToolExecutionContext context,
@@ -299,12 +243,13 @@ public sealed class AegisToolLoop(
         }
         catch (Exception exception)
         {
+            logger.LogWarning(exception, "Tool {ToolName} failed.", toolCall.Name);
             return new AegisToolResult(
                 false,
                 JsonSerializer.Serialize(new
                 {
                     error = "tool_execution_failed",
-                    message = exception.Message
+                    message = "A ferramenta falhou temporariamente."
                 }, JsonOptions),
                 "tool_execution_failed");
         }
@@ -333,104 +278,6 @@ public sealed class AegisToolLoop(
             .ToList();
 
         return finalResponse.AuditData with
-        {
-            DurationMilliseconds = durationMilliseconds,
-            RequestPayloadJson = JsonSerializer.Serialize(new
-            {
-                type = "tool_loop",
-                requestPayloads,
-                toolExecutions = executions
-            }, JsonOptions),
-            ResponseBody = JsonSerializer.Serialize(new
-            {
-                type = "tool_loop",
-                responses = responseBodies
-            }, JsonOptions)
-        };
-    }
-
-    private async IAsyncEnumerable<ModelStreamChunk> StreamFinalResponseAsync(
-        ModelRequest request,
-        int maxIterations,
-        IReadOnlyList<JsonElement> inputItems,
-        IReadOnlyList<ModelToolResponse> responses,
-        IReadOnlyList<object> executions,
-        Stopwatch stopwatch,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
-            new ModelToolRequest(request, [], maxIterations, InputItems: inputItems),
-            cancellationToken))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!string.IsNullOrEmpty(chunk.Content))
-            {
-                yield return new ModelStreamChunk(chunk.Content, IsDone: false);
-            }
-
-            if (!chunk.IsDone)
-            {
-                continue;
-            }
-
-            if (chunk.ToolCalls.Count > 0 ||
-                string.IsNullOrWhiteSpace(chunk.Provider) ||
-                string.IsNullOrWhiteSpace(chunk.Model) ||
-                chunk.Purpose is null ||
-                chunk.AuditData is null)
-            {
-                throw new InvalidOperationException("Tool streaming ended without a complete final event.");
-            }
-
-            stopwatch.Stop();
-            yield return new ModelStreamChunk(
-                Content: null,
-                IsDone: true,
-                chunk.Provider,
-                chunk.Model,
-                chunk.Purpose,
-                chunk.MetadataJson,
-                CombineAuditData(chunk, responses, executions, stopwatch.ElapsedMilliseconds));
-            yield break;
-        }
-
-        throw new InvalidOperationException("Tool streaming ended before a final event was received.");
-    }
-
-    private static LlmRequestAuditData CombineAuditData(
-        ModelToolStreamChunk finalResponse,
-        IReadOnlyList<ModelToolResponse> responses,
-        IReadOnlyList<object> executions,
-        long durationMilliseconds)
-    {
-        var requestPayloads = responses
-            .Select((response, index) => new
-            {
-                iteration = index + 1,
-                response.AuditData.RequestPayloadJson
-            })
-            .Append(new
-            {
-                iteration = responses.Count + 1,
-                finalResponse.AuditData!.RequestPayloadJson
-            })
-            .ToList();
-        var responseBodies = responses
-            .Select((response, index) => new
-            {
-                iteration = index + 1,
-                response.AuditData.HttpStatusCode,
-                response.AuditData.ResponseBody
-            })
-            .Append(new
-            {
-                iteration = responses.Count + 1,
-                finalResponse.AuditData!.HttpStatusCode,
-                finalResponse.AuditData.ResponseBody
-            })
-            .ToList();
-
-        return finalResponse.AuditData! with
         {
             DurationMilliseconds = durationMilliseconds,
             RequestPayloadJson = JsonSerializer.Serialize(new

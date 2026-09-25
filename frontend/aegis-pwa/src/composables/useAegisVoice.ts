@@ -59,7 +59,8 @@ export function useAegisVoice() {
       if (!controller?.signal.aborted && activeTurnId === turnId) {
         player.fail();
         voiceAvailable.value = false;
-        voiceMessage.value = 'Não consegui reproduzir a voz';
+        voiceMessage.value = error instanceof TypeError ? 'Serviço de voz indisponível.'
+          : error instanceof Error ? error.message : 'Não consegui reproduzir a voz.';
       }
     }
   }

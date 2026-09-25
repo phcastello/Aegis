@@ -3,7 +3,6 @@ using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
-using Aegis.Application.Email;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Aegis.Domain;
@@ -16,10 +15,7 @@ namespace Aegis.Application.Chat;
 public sealed class ChatService(
     IAegisDbContext dbContext,
     IPromptBuilder promptBuilder,
-    IAegisModelClient modelClient,
     IAegisToolLoop toolLoop,
-    IEmailToolContextService emailContextService,
-    AegisModelRouter modelRouter,
     IConversationTitleJobQueue titleJobQueue,
     IActiveTurnRegistry turnRegistry,
     IVoiceService voiceService) : IChatService
@@ -54,24 +50,14 @@ public sealed class ChatService(
             RecentHistoryLimit + 1,
             turnToken);
 
-        var promptResult = await promptBuilder.BuildPromptAsync(
+        var promptResult = await BuildPromptForTurnAsync(
             recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
-            userContent,
-            turnToken);
+            userContent, conversation.Id, turnToken);
 
         try
         {
-            var chatContext = await CreateChatRequestContextAsync(
-                conversation.Id,
-                userContent,
-                recentHistory,
-                turnToken);
-            var purpose = modelRouter.ChoosePurpose(chatContext);
-            var useTools = modelRouter.RequiresTools(chatContext);
-            var modelRequest = CreateModelRequest(promptResult, userContent, purpose);
-            var completion = useTools
-                ? await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken)
-                : await modelClient.GenerateAsync(modelRequest, turnToken);
+            var modelRequest = CreateModelRequest(promptResult, userContent);
+            var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
             EnsureCurrent(turn);
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
@@ -150,18 +136,21 @@ public sealed class ChatService(
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
-        var promptResult = await promptBuilder.BuildPromptAsync(
-            recentHistory.Where(message => message.Id != userMessage.Id).ToList(), userContent, turnToken);
-        var chatContext = await CreateChatRequestContextAsync(conversation.Id, userContent, recentHistory, turnToken);
-        var modelRequest = CreateModelRequest(promptResult, userContent, modelRouter.ChoosePurpose(chatContext));
-        IAsyncEnumerable<ModelStreamChunk> chunks = modelRouter.RequiresTools(chatContext)
-            ? toolLoop.StreamAsync(modelRequest with { Purpose = ModelPurpose.Main }, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken)
-            : modelClient.StreamAsync(modelRequest, turnToken);
+        var promptResult = await BuildPromptForTurnAsync(
+            recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
+            userContent, conversation.Id, turnToken);
+        var modelRequest = CreateModelRequest(promptResult, userContent);
+        IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
+            modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
 
         var content = new StringBuilder();
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
             EnsureCurrent(turn);
+            if (chunk.ToolStatus is { } status)
+            {
+                yield return ChatStreamEvent.ToolStatus(turn.TurnId, status.Category, status.State, status.Message);
+            }
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 content.Append(chunk.Content);
@@ -302,6 +291,22 @@ public sealed class ChatService(
             ?? throw new ConversationNotFoundException(conversationId.Value);
     }
 
+    private async Task<PromptBuildResult> BuildPromptForTurnAsync(
+        IReadOnlyList<ChatMessage> history,
+        string userContent,
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        var pendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(conversationId, cancellationToken);
+        var pendingState = pendingAction is null ? null :
+            $"Existe uma ação pendente de Gmail do tipo {pendingAction.ActionType}, válida até {pendingAction.ExpiresAt:O}. " +
+            (pendingAction.MayHaveAppliedChanges
+                ? "Uma tentativa anterior pode ter aplicado parte das alterações; repetir a operação é seguro e idempotente. "
+                : string.Empty) +
+            "Use email_confirm_pending_action somente se a mensagem atual confirmar essa ação; o backend valida a confirmação.";
+        return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
+    }
+
     private static ChatMessageResponse MapMessage(ChatMessage message)
     {
         return new ChatMessageResponse(
@@ -313,40 +318,6 @@ public sealed class ChatService(
             message.Model);
     }
 
-    private async Task<ChatRequestContext> CreateChatRequestContextAsync(
-        Guid conversationId,
-        string userContent,
-        IReadOnlyList<ChatMessage> recentHistory,
-        CancellationToken cancellationToken)
-    {
-        var hasPendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(
-            conversationId,
-            cancellationToken) is not null;
-        var hasRecentEmailContext = await emailContextService.HasRecentEmailContextAsync(
-            conversationId,
-            cancellationToken);
-        var hasRecentEmailHistory = recentHistory
-            .OrderByDescending(message => message.CreatedAt)
-            .Take(8)
-            .Any(message => ContainsAny(message.Content,
-            [
-                "email",
-                "gmail",
-                "briefing",
-                "não lido",
-                "nao lido",
-                "lido",
-                "marcar",
-                "conexão",
-                "conexao"
-            ]));
-
-        return new ChatRequestContext(
-            userContent,
-            HasPendingAction: hasPendingAction,
-            HasRecentToolContext: hasRecentEmailContext || hasRecentEmailHistory);
-    }
-
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(
         ModelRequest request,
         Guid conversationId,
@@ -355,7 +326,7 @@ public sealed class ChatService(
         CancellationToken cancellationToken)
     {
         var response = await toolLoop.RunAsync(
-            request with { Purpose = ModelPurpose.Main },
+            request,
             new ToolExecutionContext(conversationId, userMessageId, userContent),
             cancellationToken);
 
@@ -457,18 +428,18 @@ public sealed class ChatService(
 
     private static ModelRequest CreateModelRequest(
         PromptBuildResult promptResult,
-        string userContent,
-        ModelPurpose purpose)
+        string userContent)
     {
         return new ModelRequest(
             promptResult.Prompt,
             userContent,
-            purpose,
+            ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.3.1",
-                ["purpose"] = purpose.ToString()
-            });
+                ["aegis_version"] = "0.3.2",
+                ["purpose"] = "Chat"
+            },
+            promptResult.InputItems);
     }
 
     private static string? CreatePreview(string? content)
@@ -482,11 +453,6 @@ public sealed class ChatService(
         return normalized.Length <= 140
             ? normalized
             : normalized[..137] + "...";
-    }
-
-    private static bool ContainsAny(string value, IReadOnlyList<string> terms)
-    {
-        return terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
     private void EnsureCurrent(ActiveTurn turn)

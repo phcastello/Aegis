@@ -4,6 +4,7 @@ using Aegis.Application.Common;
 using Aegis.Application.Tools;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace Aegis.Application.Email.Tools;
 
@@ -11,7 +12,7 @@ public sealed class EmailGetStatusTool(IEmailConnectionService connectionService
 {
     public override string Name => "email_get_status";
 
-    public override string Description => "Verifica se o Gmail está conectado à Aegis.";
+    public override string Description => "Consulta o estado atual da conexão Gmail e a conta conectada. Use este resultado como fonte de verdade quando a conexão for relevante.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -50,7 +51,15 @@ public sealed class EmailCreateConnectLinkTool(IEmailConnectionService connectio
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var response = await connectionService.CreateAuthorizationUrlAsync(cancellationToken);
+        EmailAuthorizationResponse response;
+        try
+        {
+            response = await connectionService.CreateAuthorizationUrlAsync(cancellationToken);
+        }
+        catch (EmailConnectionException exception)
+        {
+            return Error(exception.Code, "Não foi possível criar o link de conexão Gmail.");
+        }
         return Ok(new
         {
             isConnected = false,
@@ -67,7 +76,7 @@ public sealed class EmailSearchTool(
     public override string Name => "email_search";
 
     public override string Description =>
-        "Busca emails no Gmail por consulta. Combine todas as restrições pedidas por Pedro na query: por exemplo, não lidos e importantes deve usar is:unread is:important; com estrela deve usar is:starred; último mês deve usar newer_than:30d.";
+        "Busca emails na conta Gmail conectada. Use quando Pedro pedir acesso a emails; combine os filtros pedidos na consulta Gmail.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -75,7 +84,7 @@ public sealed class EmailSearchTool(
           "properties": {
             "query": {
               "type": ["string", "null"],
-              "description": "Consulta Gmail. Restrições são cumulativas: use is:unread is:important para emails não lidos e importantes, is:starred para com estrela, newer_than:30d para último mês, from:github para remetente e termos como Unicentro quando fizer sentido."
+              "description": "Consulta Gmail com todos os filtros relevantes, como remetente, assunto, período e estado."
             },
             "limit": {
               "type": ["integer", "null"],
@@ -247,8 +256,7 @@ public sealed class EmailReadThreadTool(
 
 public sealed class EmailMarkReadTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_mark_read";
     protected override string ActionType => EmailActionTypes.MarkRead;
@@ -257,8 +265,7 @@ public sealed class EmailMarkReadTool(
 
 public sealed class EmailMarkUnreadTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_mark_unread";
     protected override string ActionType => EmailActionTypes.MarkUnread;
@@ -267,8 +274,7 @@ public sealed class EmailMarkUnreadTool(
 
 public sealed class EmailStarTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_star";
     protected override string ActionType => EmailActionTypes.Star;
@@ -277,8 +283,7 @@ public sealed class EmailStarTool(
 
 public sealed class EmailUnstarTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_unstar";
     protected override string ActionType => EmailActionTypes.Unstar;
@@ -287,8 +292,7 @@ public sealed class EmailUnstarTool(
 
 public sealed class EmailMarkImportantTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_mark_important";
     protected override string ActionType => EmailActionTypes.MarkImportant;
@@ -297,8 +301,7 @@ public sealed class EmailMarkImportantTool(
 
 public sealed class EmailUnmarkImportantTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : PendingEmailModificationTool(dbContext, emailContextService, emailService)
+    IEmailToolContextService emailContextService) : PendingEmailModificationTool(dbContext, emailContextService)
 {
     public override string Name => "email_unmark_important";
     protected override string ActionType => EmailActionTypes.UnmarkImportant;
@@ -308,12 +311,13 @@ public sealed class EmailUnmarkImportantTool(
 public sealed class EmailConfirmPendingActionTool(
     IAegisDbContext dbContext,
     IEmailService emailService,
-    IEmailToolContextService emailContextService) : EmailToolBase
+    IEmailToolContextService emailContextService,
+    ILogger<EmailConfirmPendingActionTool>? logger = null) : EmailToolBase
 {
     public override string Name => "email_confirm_pending_action";
 
     public override string Description =>
-        "Confirma a última ação pendente de email quando a mensagem atual de Pedro for uma confirmação clara em linguagem natural. A interpretação da confirmação é feita pelo modelo; o backend valida que existe ação pendente aberta e que a mensagem não é uma recusa clara.";
+        "Executa a última ação pendente de email apenas após Pedro confirmá-la explicitamente em um turno posterior ao preparo. O backend valida a ação, a expiração e a confirmação.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -328,9 +332,9 @@ public sealed class EmailConfirmPendingActionTool(
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (LooksLikeCancellation(context.UserContent))
+        if (LooksLikeCancellation(context.UserContent) || !LooksLikeConfirmation(context.UserContent))
         {
-            return Error("ambiguous_confirmation", "The current user message looks like a cancellation, not a confirmation. Do not execute.");
+            return Error("confirmation_required", "Peça uma confirmação explícita e isolada, como 'confirmo'. Nada foi alterado.");
         }
 
         var action = await dbContext.GetLatestOpenPendingEmailActionAsync(context.ConversationId, cancellationToken);
@@ -339,52 +343,145 @@ public sealed class EmailConfirmPendingActionTool(
             return Error("no_pending_action", "There is no open pending email action for this conversation.");
         }
 
+        var userMessage = await dbContext.GetChatMessageAsync(context.UserMessageId, cancellationToken);
+        if (userMessage is null || action.CreatedAt >= userMessage.CreatedAt || !action.IsOpen())
+        {
+            return Error("confirmation_required", "A ação precisa ser apresentada antes de uma confirmação em outro turno. Nada foi alterado.");
+        }
+
         var emailIds = DeserializeEmailIds(action.EmailIdsJson);
+        var confirmedAt = DateTimeOffset.UtcNow;
+        var externalRequestMayHaveBeenSent = false;
         try
         {
-            var result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
-            var verification = await VerifyModificationAsync(
-                emailService,
-                emailContextService,
-                context.ConversationId,
-                action.ActionType,
-                emailIds,
-                Name,
-                cancellationToken);
-            action.Confirm();
-            action.MarkExecuted();
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId,
-                action.ActionType,
-                action.EmailIdsJson,
-                context.UserMessageId,
-                success: verification.AllConfirmed));
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            return Ok(new
+            EmailModificationResult? result = null;
+            Exception? modificationFailure = null;
+            try
             {
-                pendingActionId = action.Id,
-                action.ActionType,
-                action.HumanSummary,
-                result,
-                verification,
-                userMessage = verification.AllConfirmed
-                    ? $"Pronto, concluí: {action.HumanSummary}."
-                    : $"Executei a ação, mas a verificação não confirmou todos os emails: {action.HumanSummary}."
-            });
-        }
-        catch (Exception exception)
-        {
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId,
-                action.ActionType,
-                action.EmailIdsJson,
-                context.UserMessageId,
-                success: false,
-                exception.Message));
-            await dbContext.SaveChangesAsync(cancellationToken);
+                result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
+                externalRequestMayHaveBeenSent = true;
+            }
+            catch (EmailModificationCancelledException exception) when (cancellationToken.IsCancellationRequested)
+            {
+                externalRequestMayHaveBeenSent = exception.RequestWasSent;
+                throw;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                modificationFailure = exception;
+                externalRequestMayHaveBeenSent = exception is not EmailModificationAttemptException { RequestWasSent: false };
+            }
 
-            return Error("email_action_failed", "The pending email action failed while executing.");
+            if (modificationFailure is EmailModificationAttemptException { RequestWasSent: false })
+            {
+                dbContext.AddEmailActionAudit(new EmailActionAudit(
+                    context.ConversationId, action.ActionType, action.EmailIdsJson,
+                    context.UserMessageId, success: false, modificationFailure.InnerException?.Message));
+                await dbContext.SaveChangesAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                return Error("email_action_failed",
+                    "Não consegui iniciar esta tentativa; nenhuma requisição de modificação foi enviada ao Gmail agora. A ação continua aberta; tentativas anteriores não foram revertidas.");
+            }
+
+            EmailModificationVerification? verification = null;
+            Exception? verificationFailure = null;
+            try
+            {
+                verification = await VerifyModificationAsync(
+                    emailService,
+                    emailContextService,
+                    context.ConversationId,
+                    action.ActionType,
+                    emailIds,
+                    Name,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                verificationFailure = exception;
+            }
+
+            if (verification?.AllConfirmed == true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                action.Confirm(confirmedAt);
+                action.MarkExecuted();
+                dbContext.AddEmailActionAudit(new EmailActionAudit(
+                    context.ConversationId, action.ActionType, action.EmailIdsJson,
+                    context.UserMessageId, success: true,
+                    modificationFailure is null ? null : "Gmail request failed but post-state verification confirmed all emails."));
+                await dbContext.SaveChangesAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return Ok(new
+                {
+                    pendingActionId = action.Id,
+                    action.ActionType,
+                    action.HumanSummary,
+                    result,
+                    verification,
+                    recoveredAfterFailure = modificationFailure is not null,
+                    userMessage = $"Pronto, verifiquei a alteração: {action.HumanSummary}."
+                });
+            }
+
+            var confirmedCount = verification is null ? 0 : emailIds.Count - verification.FailedEmailIds.Count;
+            var possiblePartialEffects = verification is null || confirmedCount > 0;
+            if (possiblePartialEffects)
+            {
+                action.RecordPossibleExternalEffects();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            dbContext.AddEmailActionAudit(new EmailActionAudit(
+                context.ConversationId, action.ActionType, action.EmailIdsJson,
+                context.UserMessageId, success: false,
+                $"Post-state verification: {(verification is null ? "unavailable" : $"{confirmedCount}/{emailIds.Count} confirmed")}; " +
+                (verificationFailure?.Message ?? modificationFailure?.Message ?? "Gmail state did not match the requested action.")));
+            await dbContext.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (possiblePartialEffects)
+            {
+                var completedRequests = (modificationFailure as EmailModificationAttemptException)?.CompletedCount ?? 0;
+                var observation = verification is null
+                    ? completedRequests > 0
+                        ? $"O Gmail confirmou {completedRequests} requisições antes da falha, mas não consegui verificar o estado final; outras alterações também podem ter ocorrido."
+                        : "Não consegui verificar todos os emails após a falha; alguns podem ter sido alterados."
+                    : $"{confirmedCount} de {emailIds.Count} emails estão no estado desejado; os demais não foram confirmados.";
+                return Error("email_action_partially_applied",
+                    $"{observation} A ação continua aberta. Repetir o lote inteiro é seguro; a operação é idempotente. Não diga que nada foi alterado.");
+            }
+
+            return Error("email_action_failed",
+                "Nenhum email foi confirmado no estado desejado após a falha. A ação continua aberta para nova tentativa.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (externalRequestMayHaveBeenSent)
+            {
+                action.RecordPossibleExternalEffects();
+                using var bookkeepingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try
+                {
+                    await dbContext.SaveChangesAsync(bookkeepingTimeout.Token);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogError(exception,
+                        "Failed to persist possible Gmail effects after turn cancellation for action {PendingActionId}", action.Id);
+                }
+            }
+
+            throw;
         }
     }
 
@@ -415,27 +512,14 @@ public sealed class EmailConfirmPendingActionTool(
         string sourceToolName,
         CancellationToken cancellationToken)
     {
-        var emails = new List<EmailContentData>();
-        foreach (var emailId in emailIds)
-        {
-            emails.Add(await emailService.ReadEmailAsync(
-                emailId,
-                EmailBodyReadPurpose.Full,
-                cancellationToken));
-        }
+        var emails = await emailService.ReadEmailMetadataBatchAsync(emailIds, cancellationToken);
+        await emailContextService.RememberModifiedEmailsAsync(
+            conversationId, emails, sourceToolName, cancellationToken);
 
-        foreach (var email in emails)
-        {
-            await emailContextService.RememberEmailAsync(
-                conversationId,
-                email,
-                sourceToolName,
-                cancellationToken);
-        }
-
-        var failedIds = emails
-            .Where(email => !IsExpectedState(actionType, email))
-            .Select(email => email.Id)
+        var failedIds = emailIds
+            .Where((emailId, index) => index >= emails.Count ||
+                !string.Equals(emailId, emails[index].Id, StringComparison.Ordinal) ||
+                !IsExpectedState(actionType, emails[index]))
             .ToList();
 
         return new EmailModificationVerification(
@@ -444,7 +528,7 @@ public sealed class EmailConfirmPendingActionTool(
             failedIds);
     }
 
-    private static bool IsExpectedState(string actionType, EmailContentData email)
+    private static bool IsExpectedState(string actionType, EmailSummaryData email)
     {
         return actionType switch
         {
@@ -468,7 +552,7 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
 {
     public override string Name => "email_cancel_pending_action";
 
-    public override string Description => "Cancela por texto a última ação pendente de email da conversa sem modificar nada.";
+    public override string Description => "Cancela por texto a última ação pendente de email. Não reverte efeitos de tentativas anteriores.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -508,15 +592,16 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
             pendingActionId = action.Id,
             action.ActionType,
             action.HumanSummary,
-            userMessage = "Não mexi em nada."
+            userMessage = action.MayHaveAppliedChanges
+                ? "Cancelei a ação pendente. Alterações que já tenham sido aplicadas antes da falha não foram revertidas."
+                : "Cancelei a ação pendente. Nenhuma alteração foi confirmada nesta tentativa."
         });
     }
 }
 
 public abstract class PendingEmailModificationTool(
     IAegisDbContext dbContext,
-    IEmailToolContextService emailContextService,
-    IEmailService emailService) : EmailToolBase
+    IEmailToolContextService emailContextService) : EmailToolBase
 {
     public override string Description =>
         $"Cria uma ação pendente para {Verb} emails em batch. Passe todos os emailIds selecionados em uma única chamada sempre que possível. Não executa a modificação; exige confirmação textual posterior.";
@@ -597,60 +682,6 @@ public abstract class PendingEmailModificationTool(
             DateTimeOffset.UtcNow.AddMinutes(10));
         dbContext.AddPendingEmailAction(pendingAction);
 
-        if (LooksLikeInlineConfirmation(context.UserContent))
-        {
-            try
-            {
-                var result = await EmailConfirmPendingActionTool.ExecuteModificationAsync(
-                    emailService,
-                    ActionType,
-                    resolution.EmailIds,
-                    cancellationToken);
-                var verification = await EmailConfirmPendingActionTool.VerifyModificationAsync(
-                    emailService,
-                    emailContextService,
-                    context.ConversationId,
-                    ActionType,
-                    resolution.EmailIds,
-                    Name,
-                    cancellationToken);
-                pendingAction.Confirm();
-                pendingAction.MarkExecuted();
-                dbContext.AddEmailActionAudit(new EmailActionAudit(
-                    context.ConversationId,
-                    ActionType,
-                    emailIdsJson,
-                    context.UserMessageId,
-                    success: verification.AllConfirmed));
-                await dbContext.SaveChangesAsync(cancellationToken);
-
-                return Ok(new
-                {
-                    pendingActionId = pendingAction.Id,
-                    pendingAction.ActionType,
-                    pendingAction.HumanSummary,
-                    result,
-                    verification,
-                    userMessage = verification.AllConfirmed
-                        ? $"Pronto, concluí: {pendingAction.HumanSummary}."
-                        : $"Executei a ação, mas a verificação não confirmou todos os emails: {pendingAction.HumanSummary}."
-                });
-            }
-            catch (Exception exception)
-            {
-                dbContext.AddEmailActionAudit(new EmailActionAudit(
-                    context.ConversationId,
-                    ActionType,
-                    emailIdsJson,
-                    context.UserMessageId,
-                    success: false,
-                    exception.Message));
-                await dbContext.SaveChangesAsync(cancellationToken);
-
-                return Error("email_action_failed", "The email action failed while executing.");
-            }
-        }
-
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Ok(new
@@ -661,7 +692,7 @@ public abstract class PendingEmailModificationTool(
             emailCount = resolution.EmailIds.Count,
             selectionKey = resolution.SelectionKey,
             pendingAction.ExpiresAt,
-            userMessage = $"Posso {humanSummary} se você confirmar por texto."
+            userMessage = $"Posso {humanSummary}. Responda 'confirmo' em uma nova mensagem para executar."
         });
     }
 }
@@ -789,47 +820,9 @@ public abstract class EmailToolBase : IAegisTool
 
     protected static bool LooksLikeConfirmation(string userContent)
     {
+        // A confirmation must be explicit and standalone; the model handles ambiguous language.
         var normalized = NormalizeIntent(userContent);
-        return normalized is "sim"
-            or "pode"
-            or "faz"
-            or "confirmo"
-            or "confirma"
-            or "ok"
-            or "okay"
-            or "beleza"
-            or "manda"
-            or "pode sim"
-            or "sim pode"
-            or "isso"
-            or "confirmado" ||
-            normalized.Contains("manda bala", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode fazer", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode marcar", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode executar", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim pode", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim, pode", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim confirma", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim, confirma", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("confirmo", StringComparison.OrdinalIgnoreCase);
-    }
-
-    protected static bool LooksLikeInlineConfirmation(string userContent)
-    {
-        var normalized = NormalizeIntent(userContent);
-        return LooksLikeConfirmation(normalized) ||
-            normalized.Contains("manda bala", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode fazer", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode marcar", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim pode", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim, pode", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim confirma", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("sim, confirma", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("ja confirmo", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("já confirmo", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("pode executar", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("quero essa ação", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("quero essa acao", StringComparison.OrdinalIgnoreCase);
+        return normalized is "sim" or "confirmo" or "pode fazer" or "pode executar" or "confirmado";
     }
 
     protected static bool LooksLikeCancellation(string userContent)
