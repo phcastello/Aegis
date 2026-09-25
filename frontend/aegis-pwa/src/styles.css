@@ -862,19 +862,48 @@ button:disabled {
   animation: generation-arrive 220ms ease-out, generation-pulse 1.25s ease-in-out infinite;
 }
 
-.message-activity {
+.assistant-activity {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin: 0 0 7px 2px;
   color: var(--muted);
-  font-size: 0.8rem;
   line-height: 1.4;
 }
 
-.message-activity .generation-marker {
-  flex: none;
-  margin: 0;
+.assistant-activity__label {
+  color: var(--quiet);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.assistant-activity__text {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.assistant-activity--completed .assistant-activity__text {
+  color: #b8e7cf;
+}
+
+.assistant-activity--failed .assistant-activity__text {
+  color: var(--warn);
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .assistant-activity--working .assistant-activity__text {
+    color: transparent;
+    background-image: linear-gradient(90deg, var(--muted) 30%, #eef3ff 50%, var(--accent-strong) 55%, var(--muted) 70%);
+    background-size: 250% 100%;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: activity-sheen 3.6s ease-in-out infinite;
+  }
 }
 
 .markdown-message {
@@ -1412,6 +1441,11 @@ button:disabled {
   50% { box-shadow: 0 0 0 5px rgba(145, 169, 238, 0.16); }
 }
 
+@keyframes activity-sheen {
+  0%, 12% { background-position: 100% 0; }
+  72%, 100% { background-position: 0% 0; }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1424,6 +1458,13 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .assistant-activity--working .assistant-activity__text {
+    animation: none;
+    background: none;
+    color: var(--muted);
+    -webkit-text-fill-color: currentColor;
+  }
+
   .generation-marker,
   .server-indicator--online i,
   .audio-bars i {

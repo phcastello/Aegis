@@ -37,7 +37,7 @@ const isRestoring = ref(false);
 const errorMessage = ref<string | null>(null);
 const toolStatusMessage = ref<string | null>(null);
 let toolStatusTimer: number | null = null;
-let toolStatusState: 'started' | 'completed' | 'failed' | null = null;
+const toolStatusState = ref<'started' | 'completed' | 'failed' | null>(null);
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
@@ -86,13 +86,13 @@ const COMPOSER_MAX_HEIGHT = 168;
 function clearToolStatus(): void {
   if (toolStatusTimer !== null) window.clearTimeout(toolStatusTimer);
   toolStatusTimer = null;
-  toolStatusState = null;
+  toolStatusState.value = null;
   toolStatusMessage.value = null;
 }
 
 function showToolStatus(message: string, state: 'started' | 'completed' | 'failed'): void {
   clearToolStatus();
-  toolStatusState = state;
+  toolStatusState.value = state;
   toolStatusMessage.value = message;
   if (state !== 'started') {
     toolStatusTimer = window.setTimeout(clearToolStatus, state === 'completed' ? 1400 : 2400);
@@ -462,8 +462,8 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
           isLoading.value = false;
-          if (toolStatusState === 'completed' || toolStatusState === 'failed') {
-            showToolStatus(toolStatusMessage.value ?? '', toolStatusState);
+          if (toolStatusState.value === 'completed' || toolStatusState.value === 'failed') {
+            showToolStatus(toolStatusMessage.value ?? '', toolStatusState.value);
           } else {
             clearToolStatus();
           }
@@ -787,7 +787,7 @@ onBeforeUnmount(() => {
           <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
           <div>
             <h1>{{ conversationLabel }}</h1>
-            <p>{{ toolStatusMessage ?? voice.voiceMessage.value ?? (turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Pronta') }}</p>
+            <p>{{ voice.voiceMessage.value ?? (turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Pronta') }}</p>
           </div>
         </div>
 
@@ -826,8 +826,9 @@ onBeforeUnmount(() => {
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
             :activity-status="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id
-              ? (toolStatusMessage ?? (message.pending && isLoading && (turnStatus === 'thinking' || !message.content) ? 'Pensando…' : null))
+              ? (toolStatusMessage ?? (message.pending && isLoading && (turnStatus === 'thinking' || !message.content.trim()) ? 'Pensando…' : null))
               : null"
+            :activity-state="toolStatusState === 'completed' ? 'completed' : toolStatusState === 'failed' ? 'failed' : 'working'"
             @feedback="openFeedback"
             @replay="replayMessage"
             @stop-playback="stopPlayback"
