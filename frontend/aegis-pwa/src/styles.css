@@ -883,8 +883,7 @@ button:disabled {
 }
 
 .assistant-activity--working .assistant-activity__text {
-  color: #dce6fa;
-  text-shadow: 0 0 7px rgba(145, 169, 238, 0.5);
+  color: #bac8e2;
 }
 
 .assistant-activity--completed .assistant-activity__text {
@@ -900,7 +899,6 @@ button:disabled {
   position: absolute;
   inset: 0;
   color: #fff;
-  text-shadow: 0 0 10px #e4edff, 0 0 20px rgba(145, 169, 238, 0.9);
   clip-path: polygon(0 0, 25% 0, 25% 100%, 0 100%);
   pointer-events: none;
   animation: activity-sheen 2.4s linear infinite;
@@ -1460,7 +1458,6 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .assistant-activity--working .assistant-activity__text {
     color: var(--accent-strong);
-    text-shadow: 0 0 8px rgba(145, 169, 238, 0.45);
   }
 
   .assistant-activity--working .assistant-activity__text::after {
