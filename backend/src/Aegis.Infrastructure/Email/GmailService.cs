@@ -294,9 +294,14 @@ public sealed partial class GmailService(
 
         if (!response.IsSuccessStatusCode)
         {
-            connection.Disconnect();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            throw new EmailNotConnectedException();
+            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                connection.Disconnect();
+                await dbContext.SaveChangesAsync(cancellationToken);
+                throw new EmailNotConnectedException();
+            }
+
+            throw new HttpRequestException("Google token refresh is temporarily unavailable.", null, response.StatusCode);
         }
 
         var tokens = await response.Content.ReadFromJsonAsync<GoogleTokenResponse>(

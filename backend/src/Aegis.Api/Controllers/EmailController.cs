@@ -2,7 +2,6 @@ using Aegis.Application.Email;
 using Aegis.Infrastructure.Email;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using System.Text;
 
 namespace Aegis.Api.Controllers;
 
@@ -26,13 +25,25 @@ public sealed class EmailController(
         [FromQuery] bool redirect = false,
         CancellationToken cancellationToken = default)
     {
-        var response = await emailConnectionService.CreateAuthorizationUrlAsync(cancellationToken);
-        if (redirect)
+        try
         {
-            return Redirect(response.AuthorizationUrl);
-        }
+            var response = await emailConnectionService.CreateAuthorizationUrlAsync(cancellationToken);
+            if (redirect)
+            {
+                return Redirect(response.AuthorizationUrl);
+            }
 
-        return Ok(response);
+            return Ok(response);
+        }
+        catch (EmailConnectionException exception)
+        {
+            logger.LogWarning(exception, "Gmail connection link could not be created.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                code = exception.Code,
+                error = "A conexão Gmail não está disponível neste servidor."
+            });
+        }
     }
 
     [HttpGet("oauth/callback")]
@@ -52,7 +63,8 @@ public sealed class EmailController(
                 "Gmail OAuth callback failed. ErrorCode: {ErrorCode}. Message: {ErrorMessage}",
                 "oauth_callback_error",
                 message);
-            return Redirect(BuildFailureRedirectUri(options.FailureRedirectPath, "oauth_callback_error", message));
+            var failureCode = string.Equals(error, "access_denied", StringComparison.Ordinal) ? "authorization_cancelled" : "google_rejected";
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, failureCode));
         }
 
         try
@@ -64,39 +76,33 @@ public sealed class EmailController(
                 state,
                 applicationLifetime.ApplicationStopping);
             logger.LogInformation("Gmail OAuth callback completed successfully.");
-            return Redirect(options.SuccessRedirectPath);
+            return Redirect(BuildRedirectUri(options, options.SuccessRedirectPath));
         }
         catch (HttpRequestException exception)
         {
             LogCallbackFailure("google_http_error", exception);
-            return Redirect(BuildFailureRedirectUri(
-                options.FailureRedirectPath,
-                "google_http_error",
-                exception.Message));
+            var failureCode = (int?)exception.StatusCode is >= 500 or null ? "oauth_temporary_error" : "google_rejected";
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, failureCode));
+        }
+        catch (EmailConnectionException exception)
+        {
+            LogCallbackFailure(exception.Code, exception);
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, exception.Code));
         }
         catch (InvalidOperationException exception)
         {
             LogCallbackFailure("oauth_invalid_operation", exception);
-            return Redirect(BuildFailureRedirectUri(
-                options.FailureRedirectPath,
-                "oauth_invalid_operation",
-                exception.Message));
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, "oauth_temporary_error"));
         }
         catch (ArgumentException exception)
         {
             LogCallbackFailure("oauth_invalid_argument", exception);
-            return Redirect(BuildFailureRedirectUri(
-                options.FailureRedirectPath,
-                "oauth_invalid_argument",
-                exception.Message));
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, "oauth_state_invalid"));
         }
         catch (Exception exception)
         {
             LogCallbackFailure("oauth_unknown_error", exception, LogLevel.Error);
-            return Redirect(BuildFailureRedirectUri(
-                options.FailureRedirectPath,
-                "oauth_unknown_error",
-                "Unexpected error while finishing Gmail connection."));
+            return Redirect(BuildRedirectUri(options, options.FailureRedirectPath, "oauth_temporary_error"));
         }
     }
 
@@ -121,18 +127,20 @@ public sealed class EmailController(
             exception.Message);
     }
 
-    private static string BuildFailureRedirectUri(
-        string failureRedirectPath,
-        string code,
-        string message)
+    private static string BuildRedirectUri(GmailOptions options, string path, string? code = null)
     {
-        var separator = failureRedirectPath.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-        var builder = new StringBuilder(failureRedirectPath);
-        builder.Append(separator);
-        builder.Append("email_error_code=");
-        builder.Append(Uri.EscapeDataString(code));
-        builder.Append("&email_error_message=");
-        builder.Append(Uri.EscapeDataString(message));
-        return builder.ToString();
+        if (!Uri.TryCreate(options.PublicAppUrl, UriKind.Absolute, out var appUri) ||
+            appUri.Scheme is not ("http" or "https") ||
+            !string.IsNullOrEmpty(appUri.Query) || !string.IsNullOrEmpty(appUri.Fragment) ||
+            !path.StartsWith('/') || path.StartsWith("//", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Public app URL or OAuth return path is invalid.");
+        }
+
+        var appBase = new Uri(appUri.GetLeftPart(UriPartial.Path).TrimEnd('/') + "/");
+        var destination = new Uri(appBase, path.TrimStart('/')).ToString();
+        if (code is null) return destination;
+        return destination + (destination.Contains('?', StringComparison.Ordinal) ? "&" : "?") +
+            "email_error_code=" + Uri.EscapeDataString(code);
     }
 }

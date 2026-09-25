@@ -85,11 +85,11 @@ public sealed class GmailConnectionService(
         tokenResponse.EnsureSuccessStatusCode();
         var tokens = await tokenResponse.Content.ReadFromJsonAsync<GoogleTokenResponse>(
             cancellationToken: cancellationToken)
-            ?? throw new InvalidOperationException("Google returned an empty token response.");
+            ?? throw new EmailConnectionException("connection_unconfirmed", "Google returned an empty token response.");
 
         if (string.IsNullOrWhiteSpace(tokens.AccessToken))
         {
-            throw new InvalidOperationException("Google did not return an access token.");
+            throw new EmailConnectionException("connection_unconfirmed", "Google did not return an access token.");
         }
 
         var expiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, tokens.ExpiresIn));
@@ -104,6 +104,12 @@ public sealed class GmailConnectionService(
             .Where(connection => connection.Provider == EmailAccountConnection.GmailProvider)
             .OrderByDescending(connection => connection.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(emailAddress) ||
+            (refreshTokenEncrypted is null && string.IsNullOrWhiteSpace(existing?.RefreshTokenEncrypted)))
+        {
+            throw new EmailConnectionException("connection_unconfirmed", "Google did not confirm the account or provide a durable authorization.");
+        }
 
         if (existing is null)
         {
@@ -174,8 +180,17 @@ public sealed class GmailConnectionService(
             string.IsNullOrWhiteSpace(gmailOptions.ClientSecret) ||
             string.IsNullOrWhiteSpace(gmailOptions.RedirectUri))
         {
-            throw new InvalidOperationException(
+            throw new EmailConnectionException("oauth_configuration_invalid",
                 "Gmail OAuth is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI.");
+        }
+
+        if (!Uri.TryCreate(gmailOptions.RedirectUri, UriKind.Absolute, out var callbackUri) ||
+            callbackUri.Scheme is not ("http" or "https") ||
+            !Uri.TryCreate(gmailOptions.PublicAppUrl, UriKind.Absolute, out var appUri) ||
+            appUri.Scheme is not ("http" or "https"))
+        {
+            throw new EmailConnectionException("oauth_configuration_invalid",
+                "Gmail OAuth callback and public app URLs must be absolute HTTP(S) URLs.");
         }
 
         if (string.IsNullOrWhiteSpace(gmailOptions.Scopes))
@@ -197,7 +212,7 @@ public sealed class GmailConnectionService(
     {
         if (string.IsNullOrWhiteSpace(state))
         {
-            throw new InvalidOperationException("OAuth state is missing.");
+            throw new EmailConnectionException("oauth_state_invalid", "OAuth state is missing.");
         }
 
         string payload;
@@ -207,7 +222,7 @@ public sealed class GmailConnectionService(
         }
         catch (Exception exception)
         {
-            throw new InvalidOperationException("OAuth state is invalid.", exception);
+            throw new EmailConnectionException("oauth_state_invalid", "OAuth state is invalid.", exception);
         }
 
         var separatorIndex = payload.IndexOf('|', StringComparison.Ordinal);
@@ -215,7 +230,7 @@ public sealed class GmailConnectionService(
             !DateTimeOffset.TryParse(payload[..separatorIndex], out var createdAt) ||
             createdAt < DateTimeOffset.UtcNow.AddMinutes(-15))
         {
-            throw new InvalidOperationException("OAuth state expired.");
+            throw new EmailConnectionException("oauth_state_invalid", "OAuth state expired.");
         }
     }
 

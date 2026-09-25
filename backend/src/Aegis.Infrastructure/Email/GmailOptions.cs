@@ -2,7 +2,6 @@ namespace Aegis.Infrastructure.Email;
 
 public sealed class GmailOptions
 {
-    public const string DefaultProvider = "gmail";
     public const string DefaultScope = "https://www.googleapis.com/auth/gmail.modify";
 
     public string? ClientId { get; set; }
@@ -10,6 +9,9 @@ public sealed class GmailOptions
     public string? ClientSecret { get; set; }
 
     public string? RedirectUri { get; set; }
+
+    // Public browser origin, independent of the API OAuth callback origin.
+    public string PublicAppUrl { get; set; } = "http://localhost:5173";
 
     public string Scopes { get; set; } = DefaultScope;
 
@@ -24,8 +26,6 @@ public sealed class GmailOptions
     public int MaxEmailBriefingBodyChars { get; set; } = 500;
 
     public int MaxEmailFullBodyChars { get; set; } = 50000;
-
-    public int MaxEmailBodyChars { get; set; } = 6000;
 
     public int EmailBriefingLookbackDays { get; set; } = 7;
 }
