@@ -349,11 +349,35 @@ public sealed class EmailConfirmPendingActionTool(
 
         var emailIds = DeserializeEmailIds(action.EmailIdsJson);
         var confirmedAt = DateTimeOffset.UtcNow;
-        EmailModificationResult result;
-        EmailModificationVerification verification;
+        EmailModificationResult? result = null;
+        Exception? modificationFailure = null;
         try
         {
             result = await ExecuteModificationAsync(emailService, action.ActionType, emailIds, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            modificationFailure = exception;
+        }
+
+        if (modificationFailure is EmailModificationAttemptException { RequestWasSent: false })
+        {
+            dbContext.AddEmailActionAudit(new EmailActionAudit(
+                context.ConversationId, action.ActionType, action.EmailIdsJson,
+                context.UserMessageId, success: false, modificationFailure.InnerException?.Message));
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Error("email_action_failed",
+                "Não consegui iniciar esta tentativa; nenhuma requisição de modificação foi enviada ao Gmail agora. A ação continua aberta; tentativas anteriores não foram revertidas.");
+        }
+
+        EmailModificationVerification? verification = null;
+        Exception? verificationFailure = null;
+        try
+        {
             verification = await VerifyModificationAsync(
                 emailService,
                 emailContextService,
@@ -369,43 +393,59 @@ public sealed class EmailConfirmPendingActionTool(
         }
         catch (Exception exception)
         {
-            dbContext.AddEmailActionAudit(new EmailActionAudit(
-                context.ConversationId,
-                action.ActionType,
-                action.EmailIdsJson,
-                context.UserMessageId,
-                success: false,
-                exception.Message));
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            return Error("email_action_failed", "The pending email action failed while executing.");
+            verificationFailure = exception;
         }
 
-        if (!verification.AllConfirmed)
+        if (verification?.AllConfirmed == true)
         {
+            action.Confirm(confirmedAt);
+            action.MarkExecuted();
             dbContext.AddEmailActionAudit(new EmailActionAudit(
                 context.ConversationId, action.ActionType, action.EmailIdsJson,
-                context.UserMessageId, success: false, "Gmail state verification did not confirm every email."));
+                context.UserMessageId, success: true,
+                modificationFailure is null ? null : "Gmail request failed but post-state verification confirmed all emails."));
             await dbContext.SaveChangesAsync(cancellationToken);
-            return Error("email_action_unverified", "A alteração não foi confirmada para todos os emails. A ação continua disponível para nova tentativa.");
+
+            return Ok(new
+            {
+                pendingActionId = action.Id,
+                action.ActionType,
+                action.HumanSummary,
+                result,
+                verification,
+                recoveredAfterFailure = modificationFailure is not null,
+                userMessage = $"Pronto, verifiquei a alteração: {action.HumanSummary}."
+            });
         }
 
-        action.Confirm(confirmedAt);
-        action.MarkExecuted();
+        var confirmedCount = verification is null ? 0 : emailIds.Count - verification.FailedEmailIds.Count;
+        var possiblePartialEffects = verification is null || confirmedCount > 0;
+        if (possiblePartialEffects)
+        {
+            action.RecordPossibleExternalEffects();
+        }
+
         dbContext.AddEmailActionAudit(new EmailActionAudit(
             context.ConversationId, action.ActionType, action.EmailIdsJson,
-            context.UserMessageId, success: true));
+            context.UserMessageId, success: false,
+            $"Post-state verification: {(verification is null ? "unavailable" : $"{confirmedCount}/{emailIds.Count} confirmed")}; " +
+            (verificationFailure?.Message ?? modificationFailure?.Message ?? "Gmail state did not match the requested action.")));
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return Ok(new
+        if (possiblePartialEffects)
         {
-            pendingActionId = action.Id,
-            action.ActionType,
-            action.HumanSummary,
-            result,
-            verification,
-            userMessage = $"Pronto, concluí: {action.HumanSummary}."
-        });
+            var completedRequests = (modificationFailure as EmailModificationAttemptException)?.CompletedCount ?? 0;
+            var observation = verification is null
+                ? completedRequests > 0
+                    ? $"O Gmail confirmou {completedRequests} requisições antes da falha, mas não consegui verificar o estado final; outras alterações também podem ter ocorrido."
+                    : "Não consegui verificar todos os emails após a falha; alguns podem ter sido alterados."
+                : $"{confirmedCount} de {emailIds.Count} emails estão no estado desejado; os demais não foram confirmados.";
+            return Error("email_action_partially_applied",
+                $"{observation} A ação continua aberta. Repetir o lote inteiro é seguro; a operação é idempotente. Não diga que nada foi alterado.");
+        }
+
+        return Error("email_action_failed",
+            "Nenhum email foi confirmado no estado desejado após a falha. A ação continua aberta para nova tentativa.");
     }
 
     public static Task<EmailModificationResult> ExecuteModificationAsync(
@@ -475,7 +515,7 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
 {
     public override string Name => "email_cancel_pending_action";
 
-    public override string Description => "Cancela por texto a última ação pendente de email da conversa sem modificar nada.";
+    public override string Description => "Cancela por texto a última ação pendente de email. Não reverte efeitos de tentativas anteriores.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -515,7 +555,9 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
             pendingActionId = action.Id,
             action.ActionType,
             action.HumanSummary,
-            userMessage = "Não mexi em nada."
+            userMessage = action.MayHaveAppliedChanges
+                ? "Cancelei a ação pendente. Alterações que já tenham sido aplicadas antes da falha não foram revertidas."
+                : "Cancelei a ação pendente. Nenhuma alteração foi confirmada nesta tentativa."
         });
     }
 }

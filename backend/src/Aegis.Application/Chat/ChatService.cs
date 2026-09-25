@@ -300,6 +300,9 @@ public sealed class ChatService(
         var pendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(conversationId, cancellationToken);
         var pendingState = pendingAction is null ? null :
             $"Existe uma ação pendente de Gmail do tipo {pendingAction.ActionType}, válida até {pendingAction.ExpiresAt:O}. " +
+            (pendingAction.MayHaveAppliedChanges
+                ? "Uma tentativa anterior pode ter aplicado parte das alterações; repetir a operação é seguro e idempotente. "
+                : string.Empty) +
             "Use email_confirm_pending_action somente se a mensagem atual confirmar essa ação; o backend valida a confirmação.";
         return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
     }

@@ -54,6 +54,8 @@ public sealed class PendingEmailAction : AuditableEntity
 
     public DateTimeOffset? ExecutedAt { get; private set; }
 
+    public bool MayHaveAppliedChanges { get; private set; }
+
     public Conversation? Conversation { get; private set; }
 
     public bool IsOpen(DateTimeOffset? now = null)
@@ -91,5 +93,12 @@ public sealed class PendingEmailAction : AuditableEntity
     {
         ExecutedAt = now ?? DateTimeOffset.UtcNow;
         Touch(ExecutedAt);
+    }
+
+    public void RecordPossibleExternalEffects()
+    {
+        if (MayHaveAppliedChanges) return;
+        MayHaveAppliedChanges = true;
+        Touch();
     }
 }

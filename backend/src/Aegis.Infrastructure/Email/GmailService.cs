@@ -212,28 +212,53 @@ public sealed partial class GmailService(
             .ToList();
         if (normalizedIds.Count == 0)
         {
-            throw new ArgumentException("At least one email id is required.", nameof(emailIds));
+            throw new EmailModificationAttemptException(false, 0,
+                new ArgumentException("At least one email id is required.", nameof(emailIds)));
         }
 
         if (normalizedIds.Count > MaxModificationCount)
         {
-            throw new InvalidOperationException($"Cannot modify more than {MaxModificationCount} emails at once.");
+            throw new EmailModificationAttemptException(false, 0,
+                new InvalidOperationException($"Cannot modify more than {MaxModificationCount} emails at once."));
         }
 
-        var accessToken = await GetAccessTokenAsync(cancellationToken);
+        string accessToken;
+        try
+        {
+            accessToken = await GetAccessTokenAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new EmailModificationAttemptException(false, 0, exception);
+        }
         var modifiedCount = 0;
 
         foreach (var chunk in normalizedIds.Chunk(ModificationChunkSize))
         {
             foreach (var emailId in chunk)
             {
-                await SendGmailAsync<GmailMessageResponse>(
-                    HttpMethod.Post,
-                    $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{Uri.EscapeDataString(emailId)}/modify",
-                    accessToken,
-                    new GmailModifyRequest(addLabels, removeLabels),
-                    cancellationToken);
-                modifiedCount++;
+                try
+                {
+                    await SendGmailAsync<GmailMessageResponse>(
+                        HttpMethod.Post,
+                        $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{Uri.EscapeDataString(emailId)}/modify",
+                        accessToken,
+                        new GmailModifyRequest(addLabels, removeLabels),
+                        cancellationToken);
+                    modifiedCount++;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new EmailModificationAttemptException(true, modifiedCount, exception);
+                }
             }
         }
 
