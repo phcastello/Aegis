@@ -882,6 +882,11 @@ button:disabled {
   white-space: nowrap;
 }
 
+.assistant-activity--working .assistant-activity__text {
+  color: #dce6fa;
+  text-shadow: 0 0 7px rgba(145, 169, 238, 0.5);
+}
+
 .assistant-activity--completed .assistant-activity__text {
   color: #b8e7cf;
 }
@@ -894,11 +899,11 @@ button:disabled {
   content: attr(data-text);
   position: absolute;
   inset: 0;
-  color: #f7f9ff;
-  text-shadow: 0 0 8px rgba(228, 237, 255, 0.9), 0 0 16px rgba(145, 169, 238, 0.7);
-  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+  color: #fff;
+  text-shadow: 0 0 10px #e4edff, 0 0 20px rgba(145, 169, 238, 0.9);
+  clip-path: polygon(0 0, 25% 0, 25% 100%, 0 100%);
   pointer-events: none;
-  animation: activity-sheen 3.4s ease-in-out infinite;
+  animation: activity-sheen 2.4s linear infinite;
 }
 
 .markdown-message {
@@ -1437,10 +1442,8 @@ button:disabled {
 }
 
 @keyframes activity-sheen {
-  0%, 12% { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); opacity: 0; }
-  20% { opacity: 1; }
-  72% { clip-path: polygon(80% 0, 100% 0, 100% 100%, 80% 100%); opacity: 1; }
-  78%, 100% { clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); opacity: 0; }
+  from { clip-path: polygon(0 0, 25% 0, 25% 100%, 0 100%); }
+  to { clip-path: polygon(75% 0, 100% 0, 100% 100%, 75% 100%); }
 }
 
 .sr-only {
