@@ -57,7 +57,7 @@ export interface LocalChatMessage extends ChatMessage {
 export interface ChatStreamHandlers {
   onConversation: (turnId: string, conversationId: string) => void;
   onToken: (turnId: string, content: string) => void;
-  onToolStatus?: (turnId: string, status: { category: string; state: string; message: string }) => void;
+  onToolStatus?: (turnId: string, status: { category: string; state: 'started' | 'completed' | 'failed'; message: string }) => void;
   onDone: (event: {
     turnId: string;
     conversationId: string;

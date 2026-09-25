@@ -121,7 +121,9 @@ export async function sendMessageStream(
         }
         break;
       case 'tool_status':
-        if (event.turnId && event.category && event.state && event.message) {
+        if (event.turnId && event.category &&
+            (event.state === 'started' || event.state === 'completed' || event.state === 'failed') &&
+            event.message) {
           handlers.onToolStatus?.(event.turnId, {
             category: event.category,
             state: event.state,

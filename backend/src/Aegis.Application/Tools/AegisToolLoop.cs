@@ -154,7 +154,7 @@ public sealed class AegisToolLoop(
             foreach (var call in completed.ToolCalls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var (category, label) = ToolDisplay(call.Name);
+                var (category, label, completedLabel) = ToolDisplay(call.Name);
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(category, "started", label));
                 var tool = toolRegistry.Find(call.Name);
                 var result = tool is null
@@ -164,7 +164,7 @@ public sealed class AegisToolLoop(
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(
                     category, result.Success ? "completed" : "failed",
-                    result.Success ? "Concluído" : "Não foi possível concluir a operação"));
+                    result.Success ? completedLabel : "Não foi possível concluir a operação"));
 
                 if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
                 {
@@ -174,13 +174,14 @@ public sealed class AegisToolLoop(
         }
     }
 
-    private static (string Category, string Label) ToolDisplay(string name) => name switch
+    private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
-        "email_get_status" => ("gmail", "Verificando conexão Gmail…"),
-        "email_create_connect_link" => ("gmail", "Conectando Gmail…"),
-        "email_search" => ("gmail", "Buscando e-mails…"),
-        "email_read" or "email_read_thread" => ("gmail", "Lendo e-mail…"),
-        _ => ("gmail", "Verificando alteração…")
+        "email_get_status" => ("gmail", "Verificando conexão Gmail…", "Conexão verificada"),
+        "email_create_connect_link" => ("gmail", "Preparando conexão Gmail…", "Link de conexão pronto"),
+        "email_search" => ("gmail", "Buscando e-mails…", "Busca concluída"),
+        "email_read" or "email_read_thread" => ("gmail", "Lendo e-mail…", "E-mail lido"),
+        "email_confirm_pending_action" => ("gmail", "Verificando alteração…", "Alteração concluída"),
+        _ => ("gmail", "Verificando alteração…", "Etapa concluída")
     };
 
     private void RecordTurn(Guid conversationId, int modelCalls, int toolCalls, long elapsedMilliseconds)

@@ -36,6 +36,8 @@ const isLoading = ref(false);
 const isRestoring = ref(false);
 const errorMessage = ref<string | null>(null);
 const toolStatusMessage = ref<string | null>(null);
+let toolStatusTimer: number | null = null;
+let toolStatusState: 'started' | 'completed' | 'failed' | null = null;
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
@@ -79,6 +81,22 @@ const conversationLabel = computed(() => {
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
 });
 const COMPOSER_MAX_HEIGHT = 168;
+
+function clearToolStatus(): void {
+  if (toolStatusTimer !== null) window.clearTimeout(toolStatusTimer);
+  toolStatusTimer = null;
+  toolStatusState = null;
+  toolStatusMessage.value = null;
+}
+
+function showToolStatus(message: string, state: 'started' | 'completed' | 'failed'): void {
+  clearToolStatus();
+  toolStatusState = state;
+  toolStatusMessage.value = message;
+  if (state !== 'started') {
+    toolStatusTimer = window.setTimeout(clearToolStatus, state === 'completed' ? 1400 : 2400);
+  }
+}
 
 function scrollToLatest(smooth = true): void {
   nextTick(() => {
@@ -255,6 +273,7 @@ async function restoreConversation(): Promise<void> {
 
   isRestoring.value = true;
   errorMessage.value = null;
+  clearToolStatus();
 
   try {
     const conversation = await getConversation(conversationId.value);
@@ -387,6 +406,7 @@ async function handleSubmit(): Promise<void> {
   draft.value = '';
   resizeComposer();
   errorMessage.value = null;
+  clearToolStatus();
   if (emailConnectionState.value === 'connected') {
     emailConnectionMessage.value = null;
   }
@@ -424,8 +444,7 @@ async function handleSubmit(): Promise<void> {
         },
         onToolStatus: (eventTurnId, status) => {
           if (eventTurnId !== activeTurnId.value) return;
-          toolStatusMessage.value = status.state === 'started' ? status.message
-            : status.state === 'failed' ? status.message : null;
+          showToolStatus(status.message, status.state);
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
           if (completedTurnId !== activeTurnId.value) return;
@@ -439,7 +458,11 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
           isLoading.value = false;
-          toolStatusMessage.value = null;
+          if (toolStatusState === 'completed' || toolStatusState === 'failed') {
+            showToolStatus(toolStatusMessage.value ?? '', toolStatusState);
+          } else {
+            clearToolStatus();
+          }
           scrollToLatest();
 
           window.setTimeout(() => {
@@ -475,7 +498,7 @@ async function handleSubmit(): Promise<void> {
     localMessage.pending = false;
     assistantMessage.pending = false;
     assistantMessage.streaming = false;
-    toolStatusMessage.value = null;
+    clearToolStatus();
     if (!assistantMessage.content) {
       messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
     }
@@ -485,6 +508,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
+  clearToolStatus();
   const turnId = activeTurnId.value;
   activeTurnId.value = null;
   chatAbortController?.abort();
@@ -700,6 +724,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearToolStatus();
   emailConnectionAbortController?.abort();
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
