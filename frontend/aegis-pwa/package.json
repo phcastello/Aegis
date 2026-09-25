@@ -1,12 +1,12 @@
 {
   "name": "aegis-pwa",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
-    "test:email": "node --test tests/emailConnectionPolling.test.mjs",
+    "test:email": "node --test tests/emailConnection*.test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
