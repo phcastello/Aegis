@@ -898,10 +898,21 @@ button:disabled {
   content: attr(data-text);
   position: absolute;
   inset: 0;
-  color: #fff;
-  clip-path: polygon(0 0, 25% 0, 25% 100%, 0 100%);
+  color: transparent;
+  background-image: linear-gradient(110deg,
+    transparent 40%,
+    rgba(232, 238, 255, 0.08) 45%,
+    rgba(255, 255, 255, 0.58) 49%,
+    rgba(255, 255, 255, 0.58) 51%,
+    rgba(232, 238, 255, 0.08) 55%,
+    transparent 60%);
+  background-size: 250% 100%;
+  background-position: 85% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
   pointer-events: none;
-  animation: activity-sheen 2.4s linear infinite;
+  animation: activity-sheen 3.2s ease-in-out infinite;
 }
 
 .markdown-message {
@@ -1440,8 +1451,8 @@ button:disabled {
 }
 
 @keyframes activity-sheen {
-  from { clip-path: polygon(0 0, 25% 0, 25% 100%, 0 100%); }
-  to { clip-path: polygon(75% 0, 100% 0, 100% 100%, 75% 100%); }
+  from { background-position: 85% 0; }
+  to { background-position: 15% 0; }
 }
 
 .sr-only {
