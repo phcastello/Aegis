@@ -898,21 +898,29 @@ button:disabled {
   content: attr(data-text);
   position: absolute;
   inset: 0;
-  color: transparent;
-  background-image: linear-gradient(110deg,
-    transparent 40%,
-    rgba(232, 238, 255, 0.08) 45%,
-    rgba(255, 255, 255, 0.58) 49%,
-    rgba(255, 255, 255, 0.58) 51%,
-    rgba(232, 238, 255, 0.08) 55%,
-    transparent 60%);
-  background-size: 250% 100%;
-  background-position: 85% 0;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: rgba(255, 255, 255, 0.76);
+  -webkit-mask-image: linear-gradient(110deg,
+    transparent 39%,
+    rgba(0, 0, 0, 0.12) 45%,
+    #000 49%,
+    #000 51%,
+    rgba(0, 0, 0, 0.12) 55%,
+    transparent 61%);
+  mask-image: linear-gradient(110deg,
+    transparent 39%,
+    rgba(0, 0, 0, 0.12) 45%,
+    #000 49%,
+    #000 51%,
+    rgba(0, 0, 0, 0.12) 55%,
+    transparent 61%);
+  -webkit-mask-size: 300% 100%;
+  mask-size: 300% 100%;
+  -webkit-mask-position: 100% 0;
+  mask-position: 100% 0;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
   pointer-events: none;
-  animation: activity-sheen 3.2s ease-in-out infinite;
+  animation: activity-sheen 3.4s linear infinite;
 }
 
 .markdown-message {
@@ -1451,8 +1459,8 @@ button:disabled {
 }
 
 @keyframes activity-sheen {
-  from { background-position: 85% 0; }
-  to { background-position: 15% 0; }
+  from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+  to { -webkit-mask-position: 0% 0; mask-position: 0% 0; }
 }
 
 .sr-only {
