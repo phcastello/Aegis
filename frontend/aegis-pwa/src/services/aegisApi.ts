@@ -172,6 +172,13 @@ export async function getHealth(signal?: AbortSignal): Promise<boolean> {
   try { return ((await response.json()) as { status?: string }).status === 'ok'; } catch { return false; }
 }
 
+export function getEmailStatus(signal?: AbortSignal): Promise<{ isConnected: boolean }> {
+  return requestJson<{ isConnected: boolean }>('/api/email/status', {
+    cache: 'no-store',
+    signal
+  });
+}
+
 export async function completeTurnWithoutSpeech(turnId: string): Promise<void> {
   await requestJson<void>(`/api/chat/turns/${encodeURIComponent(turnId)}/complete`, { method: 'POST' });
 }
