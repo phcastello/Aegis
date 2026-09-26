@@ -72,6 +72,12 @@ let historyRefreshTimer: number | null = null;
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
+const showErrorMessage = computed(() => !!errorMessage.value && ![
+  emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
+  transcription.errorMessage.value,
+  !voice.voiceAvailable.value ? voice.voiceMessage.value : null,
+  toolStatusState.value === 'failed' ? toolStatusMessage.value : null
+].includes(errorMessage.value));
 const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
 const canStartRecording = computed(() =>
   !hasActiveTurn.value &&
@@ -866,6 +872,7 @@ onBeforeUnmount(() => {
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
+        <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
         <div class="composer-field">
           <textarea
             v-model="draft"
