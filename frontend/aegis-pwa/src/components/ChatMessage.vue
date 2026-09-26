@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import AegisMark from './AegisMark.vue';
 import MarkdownMessage from './MarkdownMessage.vue';
 import type { FeedbackRating, LocalChatMessage } from '../types/chat';
 
@@ -34,7 +33,6 @@ async function copy(): Promise<void> {
 
 <template>
   <article class="message-row" :class="[`message-row--${message.role}`, { 'message-row--active': !!activityStatus || !!message.interrupted }]">
-    <div v-if="message.role !== 'user'" class="message-avatar message-avatar--aegis"><AegisMark /></div>
     <div class="message-stack">
       <div v-if="activityStatus" class="assistant-activity" :class="`assistant-activity--${activityState ?? 'working'}`" role="status" :aria-label="activityStatus">
         <span class="assistant-activity__text" :data-text="activityStatus" aria-hidden="true">{{ activityStatus }}</span>
