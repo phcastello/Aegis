@@ -115,17 +115,22 @@ onBeforeUnmount(() => {
 <template>
   <div class="sidebar-backdrop" :class="{ 'sidebar-backdrop--visible': open }" @click="emit('close')"></div>
 
-  <aside class="conversation-sidebar" :class="{ 'conversation-sidebar--open': open }">
-    <div class="sidebar-mobile-header">
-      <span>Histórico</span>
-      <button type="button" class="icon-button" aria-label="Fechar histórico" @click="emit('close')">
-        <svg viewBox="0 0 20 20" aria-hidden="true">
-          <path d="m5 5 10 10M15 5 5 15" />
-        </svg>
+  <aside id="conversation-sidebar" class="conversation-sidebar" :class="{ 'conversation-sidebar--open': open }" :inert="!open">
+    <div class="sidebar-header">
+      <AegisIdentityCard />
+      <button
+        id="sidebar-collapse-button"
+        type="button"
+        class="sidebar-toggle"
+        aria-label="Fechar histórico"
+        title="Recolher barra lateral"
+        aria-controls="conversation-sidebar"
+        :aria-expanded="true"
+        @click="emit('close')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
       </button>
     </div>
-
-    <AegisIdentityCard />
 
     <button
       type="button"

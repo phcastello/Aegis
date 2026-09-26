@@ -49,7 +49,8 @@ const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating }
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
 const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
-const isSidebarOpen = ref(false);
+const sidebarDrawerQuery = window.matchMedia('(max-width: 1380px)');
+const isSidebarOpen = ref(!sidebarDrawerQuery.matches);
 const activeConversationTitle = ref<string | null>(null);
 const activeConversationCreatedAt = ref<string | null>(null);
 const conversations = ref<ConversationSummary[]>([]);
@@ -375,9 +376,20 @@ function refreshHistoryAfterResponse(): void {
   retry(0);
 }
 
+function setSidebarOpen(open: boolean): void {
+  isSidebarOpen.value = open;
+  void nextTick(() => {
+    document.querySelector<HTMLButtonElement>(open ? '#sidebar-collapse-button' : '#sidebar-expand-button')?.focus({ preventScroll: true });
+  });
+}
+
+function closeSidebarDrawer(): void {
+  if (sidebarDrawerQuery.matches) isSidebarOpen.value = false;
+}
+
 async function openConversation(targetConversationId: string): Promise<void> {
   if (isRestoring.value || targetConversationId === conversationId.value) {
-    isSidebarOpen.value = false;
+    closeSidebarDrawer();
     return;
   }
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
@@ -402,7 +414,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
       ...message,
       serverId: message.id
     }));
-    isSidebarOpen.value = false;
+    closeSidebarDrawer();
     scrollToLatest(false);
     focusComposer();
   } catch {
@@ -639,7 +651,7 @@ function startNewConversation(): void {
   feedbackTarget.value = null;
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
-  isSidebarOpen.value = false;
+  closeSidebarDrawer();
   focusComposer();
 }
 
@@ -754,13 +766,18 @@ onMounted(() => {
   const handleViewportChange = (): void => {
     syncViewportHeight();
   };
+  const handleSidebarBreakpointChange = (event: MediaQueryListEvent): void => {
+    isSidebarOpen.value = !event.matches;
+  };
 
+  sidebarDrawerQuery.addEventListener('change', handleSidebarBreakpointChange);
   window.addEventListener('resize', handleViewportChange);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', handleViewportChange);
     window.visualViewport.addEventListener('scroll', handleViewportChange);
   }
   viewportCleanup = () => {
+    sidebarDrawerQuery.removeEventListener('change', handleSidebarBreakpointChange);
     window.removeEventListener('resize', handleViewportChange);
     window.visualViewport?.removeEventListener('resize', handleViewportChange);
     window.visualViewport?.removeEventListener('scroll', handleViewportChange);
@@ -789,7 +806,20 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell">
-    <div class="hideout-shell">
+    <div class="hideout-shell" :class="{ 'hideout-shell--sidebar-open': isSidebarOpen }">
+      <button
+        v-if="!isSidebarOpen"
+        id="sidebar-expand-button"
+        type="button"
+        class="sidebar-toggle sidebar-toggle--floating"
+        aria-label="Abrir histórico"
+        title="Expandir barra lateral"
+        aria-controls="conversation-sidebar"
+        :aria-expanded="false"
+        @click="setSidebarOpen(true)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+      </button>
       <ConversationSidebar
         :conversations="conversations"
         :active-conversation-id="conversationId"
@@ -798,7 +828,7 @@ onBeforeUnmount(() => {
         :has-more="hasMoreHistory"
         :is-loading-more="isLoadingHistory"
         :history-error="historyErrorMessage"
-        @close="isSidebarOpen = false"
+        @close="setSidebarOpen(false)"
         @new-conversation="startNewConversation"
         @open-conversation="openConversation"
         @rename-conversation="handleRenameConversation"
@@ -809,12 +839,6 @@ onBeforeUnmount(() => {
 
       <section class="chat-panel" aria-label="Conversa com a Aegis">
       <header class="chat-header">
-        <button type="button" class="sidebar-toggle" aria-label="Abrir histórico" @click="isSidebarOpen = true">
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M4 5h12M4 10h12M4 15h12" />
-          </svg>
-        </button>
-
         <div class="conversation-heading">
           <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
           <div>
