@@ -37,10 +37,11 @@ const isRestoring = ref(false);
 const errorMessage = ref<string | null>(null);
 const toolStatusMessage = ref<string | null>(null);
 let toolStatusTimer: number | null = null;
-let toolStatusState: 'started' | 'completed' | 'failed' | null = null;
+const toolStatusState = ref<'started' | 'completed' | 'failed' | null>(null);
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
+let emailConnectionChannel: BroadcastChannel | null = null;
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
@@ -50,6 +51,7 @@ const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
 const isSidebarOpen = ref(false);
 const activeConversationTitle = ref<string | null>(null);
+const activeConversationCreatedAt = ref<string | null>(null);
 const conversations = ref<ConversationSummary[]>([]);
 const nextHistoryCursor = ref<string | null>(null);
 const hasMoreHistory = ref(false);
@@ -70,6 +72,12 @@ let historyRefreshTimer: number | null = null;
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
+const showErrorMessage = computed(() => !!errorMessage.value && ![
+  emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
+  transcription.errorMessage.value,
+  !voice.voiceAvailable.value ? voice.voiceMessage.value : null,
+  toolStatusState.value === 'failed' ? toolStatusMessage.value : null
+].includes(errorMessage.value));
 const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
 const canStartRecording = computed(() =>
   !hasActiveTurn.value &&
@@ -80,18 +88,24 @@ const conversationLabel = computed(() => {
   const title = activeConversationTitle.value?.trim() || 'Nova conversa';
   return title.length > 48 ? `${title.slice(0, 48).trimEnd()}...` : title;
 });
+const conversationCreatedLabel = computed(() => {
+  if (!conversationId.value || !activeConversationCreatedAt.value) return null;
+  const createdAt = new Date(activeConversationCreatedAt.value);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  return `Criada em ${new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' }).format(createdAt)}`;
+});
 const COMPOSER_MAX_HEIGHT = 168;
 
 function clearToolStatus(): void {
   if (toolStatusTimer !== null) window.clearTimeout(toolStatusTimer);
   toolStatusTimer = null;
-  toolStatusState = null;
+  toolStatusState.value = null;
   toolStatusMessage.value = null;
 }
 
 function showToolStatus(message: string, state: 'started' | 'completed' | 'failed'): void {
   clearToolStatus();
-  toolStatusState = state;
+  toolStatusState.value = state;
   toolStatusMessage.value = message;
   if (state !== 'started') {
     toolStatusTimer = window.setTimeout(clearToolStatus, state === 'completed' ? 1400 : 2400);
@@ -199,12 +213,14 @@ function consumeEmailConnectStatusFromUrl(): void {
   const errorCode = url.searchParams.get('email_error_code');
 
   if (emailStatus === 'connected') {
+    emailConnectionChannel?.postMessage({ status: 'connected' });
     void confirmEmailConnection();
   } else {
     const normalizedError = emailConnectionFailureMessage(errorCode);
     if (normalizedError) {
       emailConnectionState.value = 'failed';
       emailConnectionMessage.value = normalizedError;
+      emailConnectionChannel?.postMessage({ status: 'failed', code: errorCode });
     }
   }
 
@@ -278,6 +294,7 @@ async function restoreConversation(): Promise<void> {
   try {
     const conversation = await getConversation(conversationId.value);
     activeConversationTitle.value = conversation.title ?? 'Nova conversa';
+    activeConversationCreatedAt.value = conversation.createdAt;
     messages.value = conversation.messages.map((message) => ({
       ...message,
       serverId: message.id
@@ -288,6 +305,7 @@ async function restoreConversation(): Promise<void> {
     localStorage.removeItem(STORAGE_KEY);
     conversationId.value = null;
     activeConversationTitle.value = null;
+    activeConversationCreatedAt.value = null;
     errorMessage.value = 'Não foi possível carregar a conversa anterior.';
   } finally {
     isRestoring.value = false;
@@ -295,6 +313,7 @@ async function restoreConversation(): Promise<void> {
 }
 
 function mergeConversationSummary(summary: ConversationSummary): void {
+  if (summary.id === conversationId.value) activeConversationCreatedAt.value = summary.createdAt;
   const withoutCurrent = conversations.value.filter((conversation) => conversation.id !== summary.id);
   conversations.value = [summary, ...withoutCurrent].sort((first, second) => {
     const dateDifference = new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
@@ -332,6 +351,7 @@ async function loadConversationHistory(reset = false): Promise<void> {
     const active = conversations.value.find((conversation) => conversation.id === conversationId.value);
     if (active) {
       activeConversationTitle.value = active.title ?? 'Nova conversa';
+      activeConversationCreatedAt.value = active.createdAt;
     }
   } catch {
     historyErrorMessage.value = 'Não foi possível carregar o histórico.';
@@ -376,6 +396,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
     const conversation = await getConversation(targetConversationId);
     conversationId.value = conversation.id;
     activeConversationTitle.value = conversation.title ?? 'Nova conversa';
+    activeConversationCreatedAt.value = conversation.createdAt;
     localStorage.setItem(STORAGE_KEY, conversation.id);
     messages.value = conversation.messages.map((message) => ({
       ...message,
@@ -429,6 +450,7 @@ async function handleSubmit(): Promise<void> {
       {
         onConversation: (eventTurnId, streamConversationId) => {
           if (eventTurnId !== activeTurnId.value) return;
+          if (!conversationId.value) activeConversationCreatedAt.value = localMessage.createdAt;
           conversationId.value = streamConversationId;
           localStorage.setItem(STORAGE_KEY, streamConversationId);
           localMessage.conversationId = streamConversationId;
@@ -444,10 +466,12 @@ async function handleSubmit(): Promise<void> {
         },
         onToolStatus: (eventTurnId, status) => {
           if (eventTurnId !== activeTurnId.value) return;
+          turnStatus.value = 'thinking';
           showToolStatus(status.message, status.state);
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
           if (completedTurnId !== activeTurnId.value) return;
+          if (!conversationId.value) activeConversationCreatedAt.value = localMessage.createdAt;
           conversationId.value = completedConversationId;
           localStorage.setItem(STORAGE_KEY, completedConversationId);
           activeConversationTitle.value = conversationTitle ?? activeConversationTitle.value ?? 'Nova conversa';
@@ -458,8 +482,8 @@ async function handleSubmit(): Promise<void> {
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
           isLoading.value = false;
-          if (toolStatusState === 'completed' || toolStatusState === 'failed') {
-            showToolStatus(toolStatusMessage.value ?? '', toolStatusState);
+          if (toolStatusState.value === 'completed' || toolStatusState.value === 'failed') {
+            showToolStatus(toolStatusMessage.value ?? '', toolStatusState.value);
           } else {
             clearToolStatus();
           }
@@ -510,6 +534,18 @@ async function handleSubmit(): Promise<void> {
 async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
   clearToolStatus();
   const turnId = activeTurnId.value;
+  if (reason === 'user_stop' && turnId) {
+    errorMessage.value = null;
+    const assistantMessage = messages.value[messages.value.length - 1];
+    const userMessage = messages.value[messages.value.length - 2];
+    if (assistantMessage?.role === 'assistant' && assistantMessage.pending) {
+      assistantMessage.pending = false;
+      assistantMessage.streaming = false;
+      assistantMessage.interrupted = true;
+      if (userMessage?.role === 'user') userMessage.pending = false;
+      scrollToLatest(false);
+    }
+  }
   activeTurnId.value = null;
   chatAbortController?.abort();
   chatAbortController = null;
@@ -519,7 +555,6 @@ async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
     turnStatus.value = 'interrupted';
     void cancelTurn(turnId).catch(() => undefined);
   }
-  void reason;
 }
 
 function toggleAutoSpeak(): void {
@@ -596,6 +631,7 @@ function startNewConversation(): void {
   localStorage.removeItem(STORAGE_KEY);
   conversationId.value = null;
   activeConversationTitle.value = null;
+  activeConversationCreatedAt.value = null;
   messages.value = [];
   draft.value = '';
   resizeComposer();
@@ -699,6 +735,21 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 
 onMounted(() => {
   syncViewportHeight();
+  if ('BroadcastChannel' in window) {
+    emailConnectionChannel = new BroadcastChannel('aegis.email.connection');
+    emailConnectionChannel.onmessage = (event: MessageEvent) => {
+      if (event.data?.status === 'connected') {
+        void confirmEmailConnection();
+      } else if (event.data?.status === 'failed') {
+        const message = emailConnectionFailureMessage(event.data.code);
+        if (message) {
+          emailConnectionAbortController?.abort();
+          emailConnectionState.value = 'failed';
+          emailConnectionMessage.value = message;
+        }
+      }
+    };
+  }
   consumeEmailConnectStatusFromUrl();
   const handleViewportChange = (): void => {
     syncViewportHeight();
@@ -726,6 +777,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearToolStatus();
   emailConnectionAbortController?.abort();
+  emailConnectionChannel?.close();
+  emailConnectionChannel = null;
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
@@ -766,7 +819,7 @@ onBeforeUnmount(() => {
           <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
           <div>
             <h1>{{ conversationLabel }}</h1>
-            <p>{{ toolStatusMessage ?? voice.voiceMessage.value ?? (turnStatus === 'thinking' ? 'Aegis está pensando' : turnStatus === 'responding' ? 'Aegis está respondendo' : turnStatus === 'preparing_voice' ? 'Preparando voz' : voice.playbackState.value === 'playing' ? 'Aegis está falando' : turnStatus === 'interrupted' ? 'Interrompida' : !voice.voiceAvailable.value ? 'Voz indisponível' : 'Pronta') }}</p>
+            <p v-if="conversationCreatedLabel">{{ conversationCreatedLabel }}</p>
           </div>
         </div>
 
@@ -804,6 +857,10 @@ onBeforeUnmount(() => {
             :message="message"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
+            :activity-status="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id
+              ? (toolStatusMessage ?? (message.pending && isLoading && (turnStatus === 'thinking' || !message.content.trim()) ? 'Pensando…' : null))
+              : null"
+            :activity-state="toolStatusState === 'completed' ? 'completed' : toolStatusState === 'failed' ? 'failed' : 'working'"
             @feedback="openFeedback"
             @replay="replayMessage"
             @stop-playback="stopPlayback"
@@ -814,6 +871,8 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
+        <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
+        <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
         <div class="composer-field">
           <textarea
             v-model="draft"
@@ -854,7 +913,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
-        <p v-if="emailConnectionMessage" :class="emailConnectionState === 'failed' ? 'composer-error' : 'composer-hint'" role="status">{{ emailConnectionMessage }}</p>
+        <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
         <span class="composer-hint">{{ transcription.isRecording.value ? 'Ouvindo… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>

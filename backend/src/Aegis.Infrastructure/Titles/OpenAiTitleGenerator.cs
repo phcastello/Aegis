@@ -49,7 +49,24 @@ public sealed class OpenAiTitleGenerator(
 
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token), cancellationToken: timeout.Token);
             var root = document.RootElement;
-            if (root.TryGetProperty("output_text", out var text) && text.ValueKind == JsonValueKind.String)
+            var status = root.TryGetProperty("status", out var statusValue) && statusValue.ValueKind == JsonValueKind.String
+                ? statusValue.GetString()
+                : null;
+            if (status is not null && status != "completed")
+            {
+                var reason = root.TryGetProperty("incomplete_details", out var details) &&
+                    details.ValueKind == JsonValueKind.Object &&
+                    details.TryGetProperty("reason", out var reasonValue) &&
+                    reasonValue.ValueKind == JsonValueKind.String
+                    ? reasonValue.GetString()
+                    : null;
+                logger.LogWarning("Title generation returned status {Status} ({Reason}) with {MaxOutputTokens} output tokens.",
+                    status, reason ?? "unspecified", Math.Clamp(options.Value.MaxOutputTokens, 16, 128));
+                return null;
+            }
+            if (root.TryGetProperty("output_text", out var text) &&
+                text.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(text.GetString()))
             {
                 return text.GetString();
             }
@@ -61,11 +78,17 @@ public sealed class OpenAiTitleGenerator(
                     {
                         foreach (var block in content.EnumerateArray())
                         {
-                            if (block.TryGetProperty("text", out text)) return text.GetString();
+                            if (block.TryGetProperty("text", out text) &&
+                                text.ValueKind == JsonValueKind.String &&
+                                !string.IsNullOrWhiteSpace(text.GetString()))
+                            {
+                                return text.GetString();
+                            }
                         }
                     }
                 }
             }
+            logger.LogWarning("Title generation returned no text (status {Status}).", status ?? "unspecified");
             return null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

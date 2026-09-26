@@ -43,24 +43,6 @@ function getTitle(conversation: ConversationSummary): string {
   return conversation.title?.trim() || 'Nova conversa';
 }
 
-function getDateLabel(value: string): string {
-  const date = new Date(value);
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const dayDifference = Math.round((startOfToday - startOfDate) / 86_400_000);
-
-  if (dayDifference === 0) {
-    return 'Hoje';
-  }
-
-  if (dayDifference === 1) {
-    return 'Ontem';
-  }
-
-  return 'Recentes';
-}
-
 function toggleMenu(conversationId: string): void {
   menuConversationId.value = menuConversationId.value === conversationId ? null : conversationId;
   editError.value = null;
@@ -194,12 +176,7 @@ onBeforeUnmount(() => {
               :disabled="disabled"
               @click="emit('openConversation', conversation.id)"
             >
-              <span class="history-item__state">
-                <i></i>
-                {{ getDateLabel(conversation.updatedAt) }}
-              </span>
               <strong>{{ getTitle(conversation) }}</strong>
-              <small>{{ conversation.lastMessagePreview || 'Conversa salva' }}</small>
             </button>
 
             <button
@@ -215,7 +192,7 @@ onBeforeUnmount(() => {
 
             <div v-if="menuConversationId === conversation.id" class="history-menu">
               <button type="button" @click="startRename(conversation)">Renomear</button>
-              <button type="button" @click="emit('requestDeleteConversation', conversation); menuConversationId = null">
+              <button type="button" class="history-menu__delete" @click="emit('requestDeleteConversation', conversation); menuConversationId = null">
                 Apagar
               </button>
             </div>
@@ -239,6 +216,5 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <p class="sidebar-footer">Discreta e pronta para continuar.</p>
   </aside>
 </template>

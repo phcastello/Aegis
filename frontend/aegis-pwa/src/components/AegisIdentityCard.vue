@@ -14,7 +14,6 @@ import AegisMark from './AegisMark.vue';
         <span>v0.3.2</span>
       </div>
       <p class="identity-card__codename">Now We're Talking!</p>
-      <p class="identity-card__note">Um espaço calmo para pensar em voz alta.</p>
     </div>
   </section>
 </template>
