@@ -13,5 +13,6 @@
     "jsx": "preserve",
     "strict": true
   },
+  "exclude": ["src/sw.ts"],
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
 }

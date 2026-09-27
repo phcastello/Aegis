@@ -176,6 +176,10 @@ public sealed class AegisToolLoop(
 
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
+        "reminder_create" => ("reminder", "Criando lembrete…", "Lembrete criado"),
+        "reminder_list" => ("reminder", "Consultando lembretes…", "Lembretes consultados"),
+        "reminder_update" => ("reminder", "Alterando lembrete…", "Lembrete alterado"),
+        "reminder_cancel" => ("reminder", "Cancelando lembrete…", "Lembrete cancelado"),
         "email_get_status" => ("gmail", "Verificando conexão Gmail…", "Conexão verificada"),
         "email_create_connect_link" => ("gmail", "Preparando conexão Google…", "Link de conexão pronto"),
         "calendar_get_status" => ("calendar", "Verificando conexão Google…", "Conexão verificada"),

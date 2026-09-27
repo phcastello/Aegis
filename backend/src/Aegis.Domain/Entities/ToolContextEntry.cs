@@ -13,7 +13,8 @@ public sealed class ToolContextEntry : AuditableEntity
         string key,
         string dataJson,
         string sourceToolName,
-        DateTimeOffset expiresAt)
+        DateTimeOffset expiresAt,
+        DateTimeOffset? now = null)
     {
         if (string.IsNullOrWhiteSpace(scope))
         {
@@ -40,7 +41,7 @@ public sealed class ToolContextEntry : AuditableEntity
             throw new ArgumentException("Source tool name is required.", nameof(sourceToolName));
         }
 
-        InitializeAudit();
+        InitializeAudit(now);
         ConversationId = conversationId;
         Scope = scope.Trim();
         EntryType = entryType.Trim();

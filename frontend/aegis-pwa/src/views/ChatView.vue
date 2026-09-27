@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import NotificationControl from '../components/NotificationControl.vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
@@ -46,6 +47,7 @@ let emailConnectionAbortController: AbortController | null = null;
 let emailConnectionChannel: BroadcastChannel | null = null;
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
+const notificationControl = ref<InstanceType<typeof NotificationControl> | null>(null);
 const isComposerScrollable = ref(false);
 const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
@@ -484,6 +486,7 @@ async function handleSubmit(): Promise<void> {
           if (eventTurnId !== activeTurnId.value) return;
           turnStatus.value = 'thinking';
           showToolStatus(status.message, status.state);
+          if (status.category === 'reminder' && status.state === 'failed') notificationControl.value?.offerSetup();
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
           if (completedTurnId !== activeTurnId.value) return;
@@ -900,6 +903,7 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
+        <NotificationControl ref="notificationControl" />
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
         <div class="composer-field">

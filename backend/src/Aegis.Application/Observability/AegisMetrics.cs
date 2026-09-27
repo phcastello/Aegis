@@ -4,8 +4,18 @@ namespace Aegis.Application.Observability;
 
 public sealed class AegisMetrics : IDisposable
 {
-    private readonly Meter meter = new("Aegis", "0.4.1");
+    private readonly Meter meter = new("Aegis", "0.5.0");
     private int activeTurns;
+    public Counter<long> RemindersCreated { get; }
+    public Counter<long> RemindersUpdated { get; }
+    public Counter<long> RemindersCancelled { get; }
+    public Counter<long> RemindersTriggered { get; }
+    public Counter<long> RemindersFailed { get; }
+    public Counter<long> PushAttempts { get; }
+    public Counter<long> PushAccepted { get; }
+    public Counter<long> PushFailed { get; }
+    public Histogram<double> ReminderTriggerDelay { get; }
+
 
     public Counter<long> TurnsStarted { get; }
     public Counter<long> TurnsCompleted { get; }
@@ -34,6 +44,15 @@ public sealed class AegisMetrics : IDisposable
     // Meter instruments are deliberately label-free: never attach turn/message UUIDs.
     public AegisMetrics()
     {
+        RemindersCreated = meter.CreateCounter<long>("aegis_reminders_created_total");
+        RemindersUpdated = meter.CreateCounter<long>("aegis_reminders_updated_total");
+        RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");
+        RemindersTriggered = meter.CreateCounter<long>("aegis_reminders_triggered_total");
+        RemindersFailed = meter.CreateCounter<long>("aegis_reminders_failed_total");
+        PushAttempts = meter.CreateCounter<long>("aegis_push_attempts_total");
+        PushAccepted = meter.CreateCounter<long>("aegis_push_accepted_total");
+        PushFailed = meter.CreateCounter<long>("aegis_push_failed_total");
+        ReminderTriggerDelay = meter.CreateHistogram<double>("aegis_reminder_trigger_delay_ms", "ms");
         meter.CreateObservableGauge("aegis_turns_active", () => Volatile.Read(ref activeTurns));
         TurnsStarted = meter.CreateCounter<long>("aegis_turns_started_total");
         TurnsCompleted = meter.CreateCounter<long>("aegis_turns_completed_total");

@@ -1629,3 +1629,10 @@ button:disabled {
     flex-basis: 38px;
   }
 }
+
+.notification-notice { display: flex; align-items: center; gap: 10px; padding: 0 7px 10px; color: var(--muted); font-size: .75rem; }
+.notification-notice p { flex: 1; margin: 0; line-height: 1.5; }
+.notification-notice__action { flex-shrink: 0; padding: 6px 8px; border-radius: var(--radius-sm); background: transparent; color: var(--accent-strong); cursor: pointer; font-size: inherit; }
+.notification-notice__close { display: grid; place-items: center; flex-shrink: 0; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: transparent; color: var(--quiet); cursor: pointer; }
+.notification-notice__action:hover, .notification-notice__close:hover { background: var(--surface-raised); }
+.notification-notice__close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; }

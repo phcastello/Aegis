@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","compilerOptions":{"lib":["ES2022","WebWorker"],"types":["vite/client"]},"include":["src/sw.ts","src/services/reminderNotification.ts"],"exclude":[]}
