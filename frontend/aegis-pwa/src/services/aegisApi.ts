@@ -314,3 +314,16 @@ export async function submitMessageFeedback(
     body: JSON.stringify(request)
   });
 }
+
+export function getPushConfiguration(): Promise<import('./pushNotifications').PushConfiguration> {
+  return requestJson('/api/notifications/configuration');
+}
+export function registerPushSubscription(request: { deviceId: string; endpoint: string; p256dh: string; auth: string; userAgent: string }): Promise<import('./pushNotifications').PushRegistration> {
+  return requestJson('/api/notifications/subscriptions', { method: 'POST', body: JSON.stringify(request) });
+}
+export function disablePushSubscription(id: string, token: string): Promise<void> {
+  return requestJson(`/api/notifications/subscriptions/${encodeURIComponent(id)}/disable`, { method: 'POST', body: JSON.stringify({ token }) });
+}
+export function getPushSubscriptionStatus(id: string, token: string): Promise<{ active: boolean }> {
+  return requestJson(`/api/notifications/subscriptions/${encodeURIComponent(id)}/status`, { method: 'POST', body: JSON.stringify({ token }) });
+}

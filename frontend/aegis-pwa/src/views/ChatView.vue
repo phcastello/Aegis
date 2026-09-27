@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import NotificationControl from '../components/NotificationControl.vue';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
@@ -843,6 +844,7 @@ onBeforeUnmount(() => {
 
       <section class="chat-panel" aria-label="Conversa com a Aegis">
       <header class="chat-header">
+        <NotificationControl />
         <div class="conversation-heading">
           <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
           <div>

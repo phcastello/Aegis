@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only live tool-selection eval using the production Gmail + Calendar tool catalog."""
+"""Read-only live tool-selection eval using the production Gmail + Calendar + Reminder tool catalog."""
 
 import argparse
 import json
@@ -141,6 +141,52 @@ CASES.extend([
 ])
 
 
+REMINDER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+SECOND_REMINDER_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+CASES.extend([
+    ("Me lembra amanhã às 14h de entregar o trabalho.", "reminder_create_tomorrow", "reminder_create"),
+    ("Me lembra amanhã às 18h de comprar ração.", "reminder_create_tomorrow", "reminder_create"),
+    ("Me lembra daqui 20 minutos de tirar a pizza do forno.", "reminder_create_relative", "reminder_create"),
+    ("Me lembra daqui 15 minutos de olhar o forno.", "reminder_create_relative", "reminder_create"),
+    ("Me lembra às 18h de comprar leite.", "reminder_create_today", "reminder_create"),
+    ("Quais lembretes eu tenho?", "reminder_list", "reminder_list"),
+    ("Quais lembretes eu tenho essa semana?", "reminder_list_week", "reminder_list"),
+    ("Muda o lembrete da ração para 19h.", "reminder_update_time", "reminder_update"),
+    ("Troca o texto do lembrete da prova para levar documento e caneta.", "reminder_update_text", "reminder_update"),
+    ("Cancela meu lembrete da ração.", "reminder_cancel", "reminder_cancel"),
+    ("Cancela o segundo.", "reminder_cancel_second", "reminder_cancel"),
+    ("Cancela o lembrete da ração.", "reminder_ambiguous", "reminder_list"),
+    ("Me lembra de comprar leite.", "reminder_missing_time", None),
+    ("Me lembra amanhã às 18h de comprar ração.", "reminder_unavailable", "reminder_create"),
+    ("Me lembra disso amanhã às 18h.", "reminder_accepted", "reminder_create"),
+    ("Quais compromissos eu tenho amanhã?", "calendar_read", "calendar_list_events"),
+    ("Cria uma reunião amanhã às 14h por uma hora.", "calendar_create", "calendar_create_event"),
+    ("Coloca um alerta de uma hora antes nessa reunião.", "calendar_reminder_ensure_hour", "calendar_list_events"),
+    ("Coloca um aviso de uma hora antes nessa reunião.", "calendar_reminder_ensure_hour", "calendar_list_events"),
+    ("Tenho que entregar o trabalho amanhã.", "none", None),
+    ("Seria bom eu lembrar de comprar leite.", "none", None),
+    ("Meu professor disse que o trabalho vence amanhã.", "none", None),
+    ("Meu professor falou que a prova é semana que vem.", "none", None),
+    ("Preciso lembrar como resolve essa equação.", "none", None),
+    ("A palavra aviso leva acento?", "none", None),
+    ("Minha agenda de papel é azul.", "none", None),
+    ("Esse evento foi uma bagunça.", "none", None),
+    ("Meu horário de sono está péssimo.", "none", None),
+    ("Lembrar nomes é difícil para mim.", "none", None),
+    ("Ele deixou um aviso na porta.", "none", None),
+    ("Comprei uma agenda nova ontem.", "none", None),
+    ("O evento do filme me surpreendeu.", "none", None),
+    ("Você sabe o significado de horário?", "none", None),
+])
+
+def reminder_fixture(kind: str) -> list[dict]:
+    text = "Levar documento para prova" if kind == "reminder_update_text" else "Comprar ração"
+    first = {"reminderId": REMINDER_ID, "text": text, "dueAt": "2026-09-26T18:00:00-03:00", "timeZoneId": "America/Sao_Paulo", "status": "Scheduled"}
+    if kind in {"reminder_cancel_second", "reminder_ambiguous"}:
+        return [first, {**first, "reminderId": SECOND_REMINDER_ID, "text": "Comprar ração" if kind == "reminder_ambiguous" else "Estudar Grafos", "dueAt": "2026-09-27T18:00:00-03:00"}]
+    return [first]
+
+
 def load_key() -> str:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if key:
@@ -163,8 +209,8 @@ def load_tools(path: Path | None) -> list[dict]:
             cwd=ROOT, text=True,
         ))
     names = [tool["name"] for tool in tools]
-    if len(names) != 24 or names != sorted(names) or len(set(names)) != len(names):
-        raise ValueError(f"Expected 24 sorted production tools, got {names!r}")
+    if len(names) != 28 or names != sorted(names) or len(set(names)) != len(names):
+        raise ValueError(f"Expected 28 sorted production tools, got {names!r}")
     return tools
 
 
@@ -239,6 +285,24 @@ def reminder_result(values: dict, creating: bool) -> dict | None:
 
 
 def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state: dict) -> str:
+    if name == "reminder_list":
+        items = reminder_fixture(kind)
+        state["observedReminders"] = {item["reminderId"] for item in items}
+        return json.dumps({"reminders": items, "hasMore": False})
+    if name == "reminder_create":
+        if kind == "reminder_unavailable":
+            return json.dumps({"error": "notifications_unavailable", "message": "Ative notificações na Aegis para eu conseguir avisar com a aplicação fechada. Depois, peça o lembrete novamente; ele ainda não foi criado."})
+        try:
+            due = datetime.fromisoformat(arguments.get("dueAt", "").replace("Z", "+00:00"))
+            if due.tzinfo is None or due <= datetime(2026, 9, 26, 15, tzinfo=timezone.utc) or not isinstance(arguments.get("text"), str) or not arguments["text"].strip():
+                raise ValueError()
+        except ValueError:
+            return json.dumps({"error": "invalid_tool_arguments"})
+        return json.dumps({"reminderId": REMINDER_ID, "text": arguments["text"], "dueAt": arguments["dueAt"], "timeZoneId": "America/Sao_Paulo", "status": "Scheduled"})
+    if name in {"reminder_update", "reminder_cancel"}:
+        if arguments.get("reminderId") not in state.get("observedReminders", set()):
+            return json.dumps({"error": "invalid_tool_arguments", "message": "Consulte reminder_list; referência não observada."})
+        return json.dumps({"reminderId": arguments["reminderId"], "text": arguments.get("text", "Comprar ração"), "dueAt": arguments.get("dueAt", "2026-09-26T18:00:00-03:00"), "status": "Cancelled" if name == "reminder_cancel" else "Scheduled"})
     if kind in PROACTIVITY_EMAILS:
         email = {"id": "eval-message-1", "threadId": "eval-thread-1", **PROACTIVITY_EMAILS[kind]}
         if name == "email_search":
@@ -421,6 +485,16 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
             {"role": "user", "content": "Vai ter uma Festa de Halloween dia 31 de outubro, começando às 19h. Coloca na agenda."},
             {"role": "assistant", "content": "Qual é o horário de término?"},
         ])
+    if kind == "reminder_cancel_second":
+        input_items.extend([
+            {"role": "user", "content": "Quais lembretes eu tenho?"},
+            {"role": "assistant", "content": "1. Comprar ração hoje às 18h. 2. Estudar Grafos amanhã às 18h."},
+        ])
+    if kind == "reminder_accepted":
+        input_items.extend([
+            {"role": "user", "content": "Tenho que entregar o trabalho amanhã."},
+            {"role": "assistant", "content": "Se quiser, posso te lembrar de entregar o trabalho. Qual horário?"},
+        ])
     input_items.append({"role": "user", "content": message})
     # Fixed runtime makes date-sensitive cases reproducible and mirrors the production runtime context.
     now = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)
@@ -452,6 +526,9 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
                                     "end": "2026-10-28T15:00:00-03:00", "allDay": False, "calendarId": "primary", "reminderMode": "aegis_default"}
     elif kind in {"calendar_pending", "calendar_cancel_pending"}:
         state["calendarPending"] = {"summary": "Dentista", "start": "2026-09-27T14:00:00-03:00", "end": "2026-09-27T15:00:00-03:00", "allDay": False}
+    if kind == "reminder_cancel_second":
+        state["observedReminders"] = {REMINDER_ID, SECOND_REMINDER_ID}
+        input_items.append({"role": "developer", "content": "Referências observadas por reminder_list nesta conversa, válidas por 30 minutos: " + json.dumps(reminder_fixture(kind))})
     final_text = ""
     for _ in range(6):
         # Mirror AegisToolLoop: reassert the same trusted identity after tool results,
@@ -497,6 +574,50 @@ def main() -> int:
             return 2
         if kind == "none":
             passed = not calls
+        elif kind.startswith("reminder_"):
+            allowed = {"reminder_list", required_tool}
+            if kind == "reminder_missing_time":
+                passed = not calls and bool(answer)
+            elif kind == "reminder_ambiguous":
+                passed = calls == ["reminder_list"] and bool(answer) and "?" in answer
+            else:
+                passed = required_tool in calls and all(name in allowed for name in calls)
+            writes = [call for call in arguments if call["name"] in {"reminder_create", "reminder_update", "reminder_cancel"}]
+            for call in writes:
+                values = call["arguments"]
+                if kind != "reminder_unavailable":
+                    passed = passed and "error" not in call["result"]
+                if "dueAt" in values:
+                    try:
+                        due = datetime.fromisoformat(values["dueAt"].replace("Z", "+00:00"))
+                        local = due.astimezone(timezone(timedelta(hours=-3)))
+                        passed = passed and due.tzinfo is not None and due > datetime(2026, 9, 26, 15, tzinfo=timezone.utc)
+                        if kind == "reminder_create_relative":
+                            minutes = 20 if "20" in message else 15
+                            passed = passed and due == datetime(2026, 9, 26, 15, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+                        elif kind in {"reminder_create_tomorrow", "reminder_accepted"}:
+                            passed = passed and local.date().isoformat() == "2026-09-27" and local.hour == (14 if "14h" in message else 18)
+                        elif kind == "reminder_create_today":
+                            passed = passed and local.date().isoformat() == "2026-09-26" and local.hour == 18
+                        elif kind == "reminder_update_time":
+                            passed = passed and local.date().isoformat() == "2026-09-26" and local.hour == 19 and "text" not in values
+                    except (ValueError, TypeError):
+                        passed = False
+                if call["name"] in {"reminder_update", "reminder_cancel"}:
+                    passed = passed and values.get("reminderId") == (SECOND_REMINDER_ID if kind == "reminder_cancel_second" else REMINDER_ID)
+                if kind == "reminder_update_text":
+                    passed = passed and "documento" in values.get("text", "").lower() and "caneta" in values.get("text", "").lower() and "dueAt" not in values
+            if kind == "reminder_list_week":
+                for call in arguments:
+                    if call["name"] == "reminder_list":
+                        try:
+                            lo = datetime.fromisoformat(call["arguments"]["timeMin"].replace("Z", "+00:00"))
+                            hi = datetime.fromisoformat(call["arguments"]["timeMax"].replace("Z", "+00:00"))
+                            passed = passed and lo.tzinfo is not None and hi.tzinfo is not None and lo < hi and (hi-lo).days <= 7
+                        except (KeyError, ValueError, TypeError):
+                            passed = False
+            if kind == "reminder_unavailable":
+                passed = passed and "notifica" in answer.lower() and not re.search(r"(?:vou|te) lembr(?:ar|o)|lembrete (?:criado|agendado)", answer.lower())
         elif kind == "email_confirmation_clarify":
             passed = all(name in {"email_get_status", "calendar_get_status", "calendar_list_calendars", "email_cancel_pending_action"} for name in calls) and bool(answer)
         elif kind == "clarify":
@@ -558,6 +679,14 @@ def main() -> int:
                     passed = passed and start.hour == 16 and start.date().isoformat() == "2026-10-28"
                 elif "27" in message:
                     passed = passed and start.date().isoformat() == "2026-10-27"
+        elif kind == "calendar_reminder_ensure_hour":
+            passed = "calendar_list_events" in calls and all(name in {"calendar_get_status", "calendar_list_events", "calendar_get_event", "calendar_update_event"} for name in calls)
+            passed = passed and any(value in answer.lower() for value in ["1 hora", "uma hora", "1h", "60"])
+            for call in arguments:
+                if call["name"] == "calendar_update_event":
+                    passed = passed and call["arguments"].get("eventId") == "evalcalendar1"
+                    actual = {(item["method"], item["minutes"]) for item in call["arguments"].get("reminders", [])}
+                    passed = passed and {("popup", 60), ("email", 15)} <= actual
         elif kind == "calendar_reminder_read":
             # Listing already returns reminders; an extra GET is optional, not required.
             passed = any(name in calls for name in {"calendar_list_events", "calendar_get_event"}) and all(
@@ -591,7 +720,7 @@ def main() -> int:
             if kind != "calendar_holiday_read":
                 # "Confirme para criar" is also a valid request for a later confirmation.
                 passed = passed and "calendar_confirm_pending_action" not in calls and any("pendingActionId" in call["result"] for call in arguments)
-        if kind.startswith("calendar_reminder_"):
+        if kind.startswith("calendar_reminder_") and kind != "calendar_reminder_ensure_hour":
             writes = [call for call in arguments if call["name"] in {"calendar_create_event", "calendar_update_event"}]
             if writes:
                 passed = passed and all("pendingActionId" in call["result"] for call in writes)

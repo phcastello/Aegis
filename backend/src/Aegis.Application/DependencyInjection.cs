@@ -1,3 +1,5 @@
+using Aegis.Application.Reminders;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Aegis.Application.Chat;
 using Aegis.Application.Calendar;
 using Aegis.Application.Calendar.Tools;
@@ -20,6 +22,12 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<ReminderService>();
+        services.AddScoped<IAegisTool, ReminderCreateTool>();
+        services.AddScoped<IAegisTool, ReminderListTool>();
+        services.AddScoped<IAegisTool, ReminderUpdateTool>();
+        services.AddScoped<IAegisTool, ReminderCancelTool>();
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<IVoiceService, VoiceService>();

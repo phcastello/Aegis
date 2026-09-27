@@ -1,13 +1,13 @@
 namespace Aegis.Application.Runtime;
 
-public sealed class RuntimeContextProvider : IRuntimeContextProvider
+public sealed class RuntimeContextProvider(TimeProvider? clock = null) : IRuntimeContextProvider
 {
     public const string ReferenceTimeZoneId = "America/Sao_Paulo";
     private static readonly TimeZoneInfo BrasiliaTimeZone = ResolveBrasiliaTimeZone();
 
     public Task<string> GetRuntimeContextAsync(CancellationToken cancellationToken = default)
     {
-        var utcNow = DateTimeOffset.UtcNow;
+        var utcNow = (clock ?? TimeProvider.System).GetUtcNow();
         var brasiliaNow = TimeZoneInfo.ConvertTime(utcNow, BrasiliaTimeZone);
 
         var context = $"""

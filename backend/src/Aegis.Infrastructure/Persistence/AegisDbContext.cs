@@ -9,6 +9,10 @@ namespace Aegis.Infrastructure.Persistence;
 
 public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
 {
+    public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
+    public DbSet<ReminderDeliveryAttempt> ReminderDeliveryAttempts => Set<ReminderDeliveryAttempt>();
+
     public DbSet<Conversation> Conversations => Set<Conversation>();
 
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
@@ -385,6 +389,39 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Reminder>(e =>
+        {
+            e.ToTable("reminders");
+            e.HasKey(r => r.Id);
+            e.Property(r => r.Text).HasMaxLength(600).IsRequired();
+            e.Property(r => r.TimeZoneId).HasMaxLength(100).IsRequired();
+            e.Property(r => r.Status).HasConversion<string>().HasMaxLength(30);
+            e.HasOne<Conversation>().WithMany().HasForeignKey(r => r.SourceConversationId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(r => new { r.Status, r.NextAttemptAt });
+            e.HasIndex(r => new { r.Status, r.LeaseExpiresAt });
+            e.HasIndex(r => r.DueAtUtc);
+        });
+        modelBuilder.Entity<PushSubscription>(e =>
+        {
+            e.ToTable("push_subscriptions");
+            e.HasKey(s => s.Id);
+            e.Property(s => s.Endpoint).HasMaxLength(2048).IsRequired();
+            e.Property(s => s.P256dh).HasMaxLength(100).IsRequired();
+            e.Property(s => s.Auth).HasMaxLength(40).IsRequired();
+            e.Property(s => s.UserAgent).HasMaxLength(500);
+            e.HasIndex(s => s.Endpoint).IsUnique();
+            e.HasIndex(s => s.DeviceId);
+            e.HasIndex(s => s.DisabledAt);
+        });
+        modelBuilder.Entity<ReminderDeliveryAttempt>(e =>
+        {
+            e.ToTable("reminder_delivery_attempts");
+            e.HasKey(a => a.Id);
+            e.Property(a => a.FailureReason).HasMaxLength(100);
+            e.HasOne<Reminder>().WithMany().HasForeignKey(a => a.ReminderId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<PushSubscription>().WithMany().HasForeignKey(a => a.PushSubscriptionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(a => new { a.ReminderId, a.PushSubscriptionId, a.Attempt }).IsUnique();
+        });
         modelBuilder.Entity<Conversation>(entity =>
         {
             entity.ToTable("conversations");

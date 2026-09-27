@@ -1,3 +1,4 @@
+using Aegis.Application.Reminders;
 using Aegis.Application.Common;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
@@ -18,7 +19,8 @@ public sealed class ChatService(
     IAegisToolLoop toolLoop,
     IConversationTitleJobQueue titleJobQueue,
     IActiveTurnRegistry turnRegistry,
-    IVoiceService voiceService) : IChatService
+    IVoiceService voiceService,
+    ReminderService? reminders = null) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -313,6 +315,8 @@ public sealed class ChatService(
                 (calendar.IsOpen() ? "Aceitação: calendar_confirm_pending_action; desistência: calendar_cancel_pending_action; correção da proposta: calendar_amend_pending_action." :
                     "A proposta expirou, mas possíveis efeitos permanecem; consulte a agenda. Cancelar a tentativa não reverte alterações."));
         if (states.Count > 1) states.Add("Há propostas pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
+        if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
+            states.Add(reminderContext);
         var pendingState = string.Join("\n", states);
         return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
     }
@@ -446,7 +450,7 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.4.1",
+                ["aegis_version"] = "0.5.0",
                 ["purpose"] = "Chat"
             },
             promptResult.InputItems);

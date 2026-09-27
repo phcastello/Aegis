@@ -1629,3 +1629,12 @@ button:disabled {
     flex-basis: 38px;
   }
 }
+
+.notification-control { order: 2; position: relative; }
+.notification-toggle { display: flex; align-items: center; gap: .4rem; border: 0; border-radius: 999px; padding: .55rem .7rem; color: var(--text-muted, #9ca3af); background: transparent; font-size: .75rem; cursor: pointer; }
+.notification-toggle:hover { background: rgba(255,255,255,.05); }
+.notification-toggle[aria-pressed="true"] { color: #7dd3b0; }
+.notification-toggle svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.notification-toggle:disabled { opacity: .5; cursor: wait; }
+.notification-control p { position: absolute; right: 0; top: 100%; width: min(300px, 75vw); padding: .75rem; border-radius: 14px; background: #172032; color: #d1d5db; font-size: .8rem; z-index: 10; }
+@media (max-width: 600px) { .notification-toggle span { display: none; } .notification-toggle { width: 36px; height: 36px; justify-content: center; } }

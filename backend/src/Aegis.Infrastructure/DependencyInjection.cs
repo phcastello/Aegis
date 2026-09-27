@@ -1,3 +1,5 @@
+using Aegis.Application.Reminders;
+using Aegis.Infrastructure.Reminders;
 using Aegis.Application.Common;
 using Aegis.Application.Chat;
 using Aegis.Application.Calendar;
@@ -222,6 +224,25 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds + 2));
         });
         services.AddHostedService<ConversationTitleWorker>();
+        services.AddOptions<WebPushOptions>().Configure(o =>
+        {
+            configuration.GetSection("WebPush").Bind(o);
+            o.Subject = Read(configuration, "AEGIS_WEB_PUSH_SUBJECT", o.Subject);
+            o.PublicKey = Read(configuration, "AEGIS_WEB_PUSH_PUBLIC_KEY", o.PublicKey);
+            o.PrivateKey = Read(configuration, "AEGIS_WEB_PUSH_PRIVATE_KEY", o.PrivateKey);
+            o.PollSeconds = ReadInt(configuration, "AEGIS_REMINDER_POLL_SECONDS", o.PollSeconds);
+        }).Validate(o => o.PollSeconds is >= 1 and <= 60, "Reminder polling must be between 1 and 60 seconds.")
+          .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
+              "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
+          .ValidateOnStart();
+        services.AddScoped<ReminderStore>();
+        services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
+        services.AddScoped<ReminderProcessor>();
+        services.AddScoped<IReminderInteractionTokens, ReminderInteractionTokens>();
+        services.AddHttpClient<IWebPushClient, WebPushService>(client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RemoveAllLoggers();
+        services.AddHostedService<ReminderWorker>();
 
         return services;
     }

@@ -7,11 +7,14 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       includeAssets: ['favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'v0.4.1 — "Booked!"',
+        description: 'v0.5.0 — Lembretes internos e Web Push',
         theme_color: '#101827',
         background_color: '#101827',
         display: 'standalone',
@@ -37,11 +40,7 @@ export default defineConfig({
           }
         ]
       },
-      workbox: {
-        navigateFallback: '/index.html',
-        // OAuth callbacks are browser navigations, but must reach the API.
-        navigateFallbackDenylist: [/^\/api(?:\/|$)/]
-      }
+      injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico}'] }
     })
   ]
 });

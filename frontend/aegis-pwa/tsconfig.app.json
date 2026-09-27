@@ -3,5 +3,6 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo"
   },
+  "exclude": ["src/sw.ts"],
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
 }
