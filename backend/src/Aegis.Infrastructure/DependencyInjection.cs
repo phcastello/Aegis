@@ -1,5 +1,8 @@
 using Aegis.Application.Common;
 using Aegis.Application.Chat;
+using Aegis.Application.Calendar;
+using Aegis.Application.Google;
+using Aegis.Infrastructure.Calendar;
 using Aegis.Application.Email;
 using Aegis.Application.Prompts;
 using Aegis.Application.Models;
@@ -170,7 +173,32 @@ public static class DependencyInjection
         });
         services.AddSingleton<EmailTokenProtector>();
         services.AddHttpClient<IEmailConnectionService, GmailConnectionService>();
+        services.AddHttpClient<IGoogleAccessTokenProvider, GoogleAccessTokenProvider>();
         services.AddHttpClient<IEmailService, GmailService>();
+        services.AddOptions<GoogleCalendarOptions>()
+            .Configure(options =>
+            {
+                var section = configuration.GetSection(GoogleCalendarOptions.SectionName);
+                options.TimedEventDefaultReminders = ReminderMinutes("AEGIS_CALENDAR_TIMED_REMINDERS",
+                    section.GetSection(nameof(options.TimedEventDefaultReminders)).Get<int[]>() ?? options.TimedEventDefaultReminders);
+                options.AllDayDefaultReminders = ReminderMinutes("AEGIS_CALENDAR_ALL_DAY_REMINDERS",
+                    section.GetSection(nameof(options.AllDayDefaultReminders)).Get<int[]>() ?? options.AllDayDefaultReminders);
+            })
+            .Validate(options => GoogleCalendarOptions.ValidMinutes(options.TimedEventDefaultReminders) &&
+                GoogleCalendarOptions.ValidMinutes(options.AllDayDefaultReminders),
+                "Calendar reminder defaults require at most five distinct minute values between 0 and 40320.")
+            .ValidateOnStart();
+        services.AddHttpClient<ICalendarService, GoogleCalendarService>();
+
+        int[] ReminderMinutes(string key, int[] fallback)
+        {
+            var value = configuration[key];
+            if (string.IsNullOrWhiteSpace(value)) return fallback;
+            var parts = value.Split(',', StringSplitOptions.TrimEntries);
+            if (parts.Any(part => !int.TryParse(part, out _)))
+                throw new OptionsValidationException(key, typeof(GoogleCalendarOptions), ["Use comma-separated integer minute values."]);
+            return parts.Select(int.Parse).ToArray();
+        }
 
         services.Configure<TitleOptions>(options =>
         {

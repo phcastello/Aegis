@@ -188,7 +188,7 @@ async function confirmEmailConnection(): Promise<void> {
   const controller = new AbortController();
   emailConnectionAbortController = controller;
   emailConnectionState.value = 'pending';
-  emailConnectionMessage.value = 'Conectando Gmail…';
+  emailConnectionMessage.value = 'Conectando conta Google…';
   let connectedEmail: string | null = null;
 
   const result = await waitForEmailConnection(
@@ -205,7 +205,7 @@ async function confirmEmailConnection(): Promise<void> {
   emailConnectionState.value = result === 'connected' ? 'connected' : 'failed';
   emailConnectionMessage.value = result === 'connected'
     ? emailConnectionSuccessMessage(connectedEmail)
-    : 'Não foi possível confirmar a conexão com o Gmail. Tente conectar novamente.';
+    : 'Não foi possível confirmar a conexão com a conta Google. Tente conectar novamente.';
 }
 
 function consumeEmailConnectStatusFromUrl(): void {

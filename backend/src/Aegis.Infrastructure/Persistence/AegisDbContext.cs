@@ -19,6 +19,10 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     public DbSet<EmailAccountConnection> EmailAccountConnections => Set<EmailAccountConnection>();
 
+    public DbSet<PendingCalendarAction> PendingCalendarActions => Set<PendingCalendarAction>();
+
+    public DbSet<CalendarActionAudit> CalendarActionAudits => Set<CalendarActionAudit>();
+
     public DbSet<PendingEmailAction> PendingEmailActions => Set<PendingEmailAction>();
 
     public DbSet<EmailActionAudit> EmailActionAudits => Set<EmailActionAudit>();
@@ -34,6 +38,10 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     IQueryable<LlmRequestAudit> IAegisDbContext.LlmRequestAudits => LlmRequestAudits;
 
     IQueryable<EmailAccountConnection> IAegisDbContext.EmailAccountConnections => EmailAccountConnections;
+
+    IQueryable<PendingCalendarAction> IAegisDbContext.PendingCalendarActions => PendingCalendarActions;
+
+    IQueryable<CalendarActionAudit> IAegisDbContext.CalendarActionAudits => CalendarActionAudits;
 
     IQueryable<PendingEmailAction> IAegisDbContext.PendingEmailActions => PendingEmailActions;
 
@@ -65,6 +73,10 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     {
         EmailAccountConnections.Add(connection);
     }
+
+    public void AddPendingCalendarAction(PendingCalendarAction action) => PendingCalendarActions.Add(action);
+
+    public void AddCalendarActionAudit(CalendarActionAudit audit) => CalendarActionAudits.Add(audit);
 
     public void AddPendingEmailAction(PendingEmailAction action)
     {
@@ -257,11 +269,43 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
                 action.ConfirmedAt == null &&
                 action.CancelledAt == null &&
                 action.ExecutedAt == null &&
+                action.SupersededAt == null &&
                 action.ExpiresAt > now)
             .OrderByDescending(action => action.CreatedAt)
             .ThenByDescending(action => action.Id)
             .FirstOrDefaultAsync(cancellationToken);
     }
+
+    public async Task<PendingCalendarAction?> GetLatestOpenPendingCalendarActionAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await PendingCalendarActions
+            .Where(action =>
+                action.ConversationId == conversationId &&
+                action.ConfirmedAt == null &&
+                action.CancelledAt == null &&
+                action.ExecutedAt == null &&
+                action.SupersededAt == null &&
+                action.ExpiresAt > now)
+            .OrderByDescending(action => action.CreatedAt)
+            .ThenByDescending(action => action.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    // Expiration does not erase a possibly sent request. Preparation must inspect these actions too.
+    public async Task<IReadOnlyList<PendingCalendarAction>> GetUnresolvedPendingCalendarActionsAsync(
+        Guid conversationId, CancellationToken cancellationToken = default) =>
+        await PendingCalendarActions.Where(action => action.ConversationId == conversationId && action.ConfirmedAt == null &&
+            action.CancelledAt == null && action.ExecutedAt == null && action.SupersededAt == null)
+            .OrderByDescending(action => action.CreatedAt).ThenByDescending(action => action.Id).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<PendingEmailAction>> GetUnresolvedPendingEmailActionsAsync(
+        Guid conversationId, CancellationToken cancellationToken = default) =>
+        await PendingEmailActions.Where(action => action.ConversationId == conversationId && action.ConfirmedAt == null &&
+            action.CancelledAt == null && action.ExecutedAt == null && action.SupersededAt == null)
+            .OrderByDescending(action => action.CreatedAt).ThenByDescending(action => action.Id).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<ToolContextEntry>> GetActiveToolContextEntriesAsync(
         Guid conversationId,
@@ -626,6 +670,101 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
                 .HasForeignKey(audit => audit.UserConfirmationMessageId)
                 .OnDelete(DeleteBehavior.NoAction);
 
+            entity.HasIndex(audit => audit.ConversationId);
+            entity.HasIndex(audit => audit.UserConfirmationMessageId);
+            entity.HasIndex(audit => audit.ActionType);
+            entity.HasIndex(audit => audit.CreatedAt);
+            entity.HasIndex(audit => audit.Success);
+        });
+
+        modelBuilder.Entity<PendingCalendarAction>(entity =>
+        {
+            entity.ToTable("pending_calendar_actions");
+            entity.HasKey(action => action.Id);
+
+            entity.Property(action => action.ActionType)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(action => action.PayloadJson)
+                .HasColumnType("jsonb")
+                .IsRequired();
+
+            entity.Property(action => action.CalendarId).HasMaxLength(1024).IsRequired();
+            entity.Property(action => action.EventId).HasMaxLength(1024).IsRequired();
+
+            entity.Property(action => action.HumanSummary)
+                .HasMaxLength(500)
+                .IsRequired();
+
+            entity.Property(action => action.ExpiresAt)
+                .IsRequired();
+
+            entity.Property(action => action.ConfirmedAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.CancelledAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.ExecutedAt)
+                .IsRequired(false);
+
+            entity.Property(action => action.MayHaveAppliedChanges)
+                .HasDefaultValue(false)
+                .IsRequired();
+
+            entity.Property(action => action.CreatedAt)
+                .IsRequired();
+
+            entity.Property(action => action.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(action => action.Conversation)
+                .WithMany()
+                .HasForeignKey(action => action.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(action => new { action.ConversationId, action.ExpiresAt });
+            entity.HasIndex(action => action.ActionType);
+        });
+
+        modelBuilder.Entity<CalendarActionAudit>(entity =>
+        {
+            entity.ToTable("calendar_action_audits");
+            entity.HasKey(audit => audit.Id);
+
+            entity.Property(audit => audit.ActionType)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(audit => audit.CalendarId).HasMaxLength(1024).IsRequired();
+
+            entity.Property(audit => audit.EventId)
+                .HasMaxLength(1024)
+                .IsRequired();
+
+            entity.Property(audit => audit.Success)
+                .IsRequired();
+
+            entity.Property(audit => audit.FailureReason);
+
+            entity.Property(audit => audit.CreatedAt)
+                .IsRequired();
+
+            entity.Property(audit => audit.UpdatedAt)
+                .IsRequired();
+
+            entity.HasOne(audit => audit.Conversation)
+                .WithMany()
+                .HasForeignKey(audit => audit.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(audit => audit.UserConfirmationMessage)
+                .WithMany()
+                .HasForeignKey(audit => audit.UserConfirmationMessageId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasIndex(audit => audit.PendingActionId);
             entity.HasIndex(audit => audit.ConversationId);
             entity.HasIndex(audit => audit.UserConfirmationMessageId);
             entity.HasIndex(audit => audit.ActionType);

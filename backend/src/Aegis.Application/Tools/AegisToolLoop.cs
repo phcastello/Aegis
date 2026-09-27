@@ -177,7 +177,15 @@ public sealed class AegisToolLoop(
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
         "email_get_status" => ("gmail", "Verificando conexão Gmail…", "Conexão verificada"),
-        "email_create_connect_link" => ("gmail", "Preparando conexão Gmail…", "Link de conexão pronto"),
+        "email_create_connect_link" => ("gmail", "Preparando conexão Google…", "Link de conexão pronto"),
+        "calendar_get_status" => ("calendar", "Verificando conexão Google…", "Conexão verificada"),
+        "calendar_create_connect_link" => ("calendar", "Preparando autorização Google…", "Link de autorização pronto"),
+        "calendar_list_calendars" => ("calendar", "Consultando calendários…", "Calendários consultados"),
+        "calendar_list_events" => ("calendar", "Consultando agenda…", "Agenda consultada"),
+        "calendar_get_event" => ("calendar", "Lendo compromisso…", "Compromisso lido"),
+        "calendar_create_event" or "calendar_update_event" or "calendar_delete_event" or "calendar_amend_pending_action" => ("calendar", "Preparando ação na agenda…", "Ação aguardando confirmação"),
+        "calendar_confirm_pending_action" => ("calendar", "Atualizando agenda…", "Ação na agenda concluída"),
+        "calendar_cancel_pending_action" => ("calendar", "Cancelando ação pendente…", "Ação pendente cancelada"),
         "email_search" => ("gmail", "Buscando e-mails…", "Busca concluída"),
         "email_read" or "email_read_thread" => ("gmail", "Lendo e-mail…", "E-mail lido"),
         "email_confirm_pending_action" => ("gmail", "Verificando alteração…", "Alteração concluída"),

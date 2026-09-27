@@ -11,12 +11,12 @@ const { emailConnectionFailureMessage, emailConnectionSuccessMessage } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
 test('successful OAuth displays the confirmed account when available', () => {
-  assert.equal(emailConnectionSuccessMessage('name@gmail.com'), 'Gmail conectado como name@gmail.com.');
-  assert.equal(emailConnectionSuccessMessage(null), 'Gmail conectado.');
+  assert.equal(emailConnectionSuccessMessage('name@gmail.com'), 'Conta Google conectada como name@gmail.com.');
+  assert.equal(emailConnectionSuccessMessage(null), 'Conta Google conectada.');
 });
 
 test('OAuth errors are useful and never surface raw provider text', () => {
   assert.match(emailConnectionFailureMessage('authorization_cancelled'), /cancelada/);
   assert.match(emailConnectionFailureMessage('connection_unconfirmed'), /não confirmou/);
-  assert.equal(emailConnectionFailureMessage('stack trace secret'), 'Falha ao conectar o Gmail.');
+  assert.equal(emailConnectionFailureMessage('stack trace secret'), 'Falha ao conectar a conta Google.');
 });

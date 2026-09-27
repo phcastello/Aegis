@@ -1,4 +1,6 @@
 using Aegis.Application.Chat;
+using Aegis.Application.Calendar;
+using Aegis.Application.Calendar.Tools;
 using Aegis.Application.Email;
 using Aegis.Application.Email.Tools;
 using Aegis.Application.Feedback;
@@ -26,6 +28,18 @@ public static class DependencyInjection
         services.AddSingleton<IActiveTurnRegistry, ActiveTurnRegistry>();
         services.AddScoped<IConversationTitleService, ConversationTitleService>();
         services.AddScoped<IMessageFeedbackService, MessageFeedbackService>();
+        services.AddScoped<CalendarToolContextService>();
+        services.AddScoped<IAegisTool, CalendarGetStatusTool>();
+        services.AddScoped<IAegisTool, CalendarCreateConnectLinkTool>();
+        services.AddScoped<IAegisTool, CalendarListCalendarsTool>();
+        services.AddScoped<IAegisTool, CalendarListEventsTool>();
+        services.AddScoped<IAegisTool, CalendarGetEventTool>();
+        services.AddScoped<IAegisTool, CalendarCreateEventTool>();
+        services.AddScoped<IAegisTool, CalendarUpdateEventTool>();
+        services.AddScoped<IAegisTool, CalendarDeleteEventTool>();
+        services.AddScoped<IAegisTool, CalendarAmendPendingActionTool>();
+        services.AddScoped<IAegisTool, CalendarConfirmPendingActionTool>();
+        services.AddScoped<IAegisTool, CalendarCancelPendingActionTool>();
         services.AddScoped<IEmailToolContextService, EmailToolContextService>();
         services.AddScoped<IAegisToolLoop, AegisToolLoop>();
         services.AddScoped<IAegisToolRegistry, AegisToolRegistry>();

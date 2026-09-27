@@ -4,6 +4,8 @@ public interface IEmailConnectionService
 {
     Task<EmailConnectionStatusResponse> GetStatusAsync(CancellationToken cancellationToken = default);
 
+    Task<EmailAuthorizationResponse> CreateConnectLinkAsync(CancellationToken cancellationToken = default);
+
     Task<EmailAuthorizationResponse> CreateAuthorizationUrlAsync(CancellationToken cancellationToken = default);
 
     Task HandleOAuthCallbackAsync(

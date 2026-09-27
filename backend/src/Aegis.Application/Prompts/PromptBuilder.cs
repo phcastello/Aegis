@@ -13,12 +13,12 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
     public async Task<PromptBuildResult> BuildPromptAsync(
         IReadOnlyList<ChatMessage> recentHistory,
         string currentUserMessage,
-        string? pendingEmailActionState = null,
+        string? pendingActionState = null,
         CancellationToken cancellationToken = default)
     {
         var identity = (await IdentityPrompt.Value.WaitAsync(cancellationToken)).Trim();
         var runtimeContext = await runtimeContextProvider.GetRuntimeContextAsync(cancellationToken);
-        var dynamicContext = string.Join("\n", new[] { runtimeContext?.Trim(), pendingEmailActionState?.Trim() }
+        var dynamicContext = string.Join("\n", new[] { runtimeContext?.Trim(), pendingActionState?.Trim() }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
         var input = new List<JsonElement>
         {

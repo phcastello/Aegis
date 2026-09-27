@@ -36,7 +36,7 @@ public sealed class EmailCreateConnectLinkTool(IEmailConnectionService connectio
 {
     public override string Name => "email_create_connect_link";
 
-    public override string Description => "Cria um link para Pedro autorizar a conexão com o Gmail.";
+    public override string Description => "Cria um link para Pedro autorizar a conta Google compartilhada por Gmail e Calendar.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -54,17 +54,16 @@ public sealed class EmailCreateConnectLinkTool(IEmailConnectionService connectio
         EmailAuthorizationResponse response;
         try
         {
-            response = await connectionService.CreateAuthorizationUrlAsync(cancellationToken);
+            response = await connectionService.CreateConnectLinkAsync(cancellationToken);
         }
         catch (EmailConnectionException exception)
         {
-            return Error(exception.Code, "Não foi possível criar o link de conexão Gmail.");
+            return Error(exception.Code, "Não foi possível criar o link de conexão Google.");
         }
         return Ok(new
         {
-            isConnected = false,
             authorizationUrl = response.AuthorizationUrl,
-            userMessage = "Ainda não estou conectada ao Gmail. Use este link para autorizar o acesso."
+            userMessage = "Use este link para autorizar a conta Google compartilhada por Gmail e Calendar."
         });
     }
 }
@@ -317,7 +316,7 @@ public sealed class EmailConfirmPendingActionTool(
     public override string Name => "email_confirm_pending_action";
 
     public override string Description =>
-        "Executa a última ação pendente de email apenas após Pedro confirmá-la explicitamente em um turno posterior ao preparo. O backend valida a ação, a expiração e a confirmação.";
+        "Executa a última ação pendente Gmail quando a mensagem atual aceita a proposta apresentada em turno anterior. Interprete intenção pelo contexto e linguagem natural, sem exigir frase específica. Correção prepara uma nova proposta; desistência usa email_cancel_pending_action. O backend valida conversa, mensagem, turno posterior, expiração e estado, e verifica o resultado no Gmail.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -332,10 +331,8 @@ public sealed class EmailConfirmPendingActionTool(
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (LooksLikeCancellation(context.UserContent) || !LooksLikeConfirmation(context.UserContent))
-        {
-            return Error("confirmation_required", "Peça uma confirmação explícita e isolada, como 'confirmo'. Nada foi alterado.");
-        }
+        if (arguments.ValueKind != JsonValueKind.Object || arguments.EnumerateObject().Any())
+            return RecoverableArgumentError(new { error = "invalid_email_tool_arguments", message = "Esta ferramenta não recebe parâmetros." });
 
         var action = await dbContext.GetLatestOpenPendingEmailActionAsync(context.ConversationId, cancellationToken);
         if (action is null)
@@ -343,17 +340,21 @@ public sealed class EmailConfirmPendingActionTool(
             return Error("no_pending_action", "There is no open pending email action for this conversation.");
         }
 
-        var userMessage = await dbContext.GetChatMessageAsync(context.UserMessageId, cancellationToken);
-        if (userMessage is null || action.CreatedAt >= userMessage.CreatedAt || !action.IsOpen())
+        if (action.ConversationId != context.ConversationId || !action.IsOpen() ||
+            !await PendingActionGuard.HasValidUserMessageAsync(dbContext, context, action.CreatedAt, cancellationToken))
         {
-            return Error("confirmation_required", "A ação precisa ser apresentada antes de uma confirmação em outro turno. Nada foi alterado.");
+            return Error("confirmation_required", "A ação precisa ser apresentada antes de uma confirmação em outro turno.");
         }
 
         var emailIds = DeserializeEmailIds(action.EmailIdsJson);
         var confirmedAt = DateTimeOffset.UtcNow;
+        var previousPossibleEffects = action.MayHaveAppliedChanges;
         var externalRequestMayHaveBeenSent = false;
         try
         {
+            // Persist uncertainty before a request, so interruption cannot hide possible external effects.
+            action.RecordPossibleExternalEffects();
+            await dbContext.SaveChangesAsync(cancellationToken);
             EmailModificationResult? result = null;
             Exception? modificationFailure = null;
             try
@@ -378,6 +379,7 @@ public sealed class EmailConfirmPendingActionTool(
 
             if (modificationFailure is EmailModificationAttemptException { RequestWasSent: false })
             {
+                if (!previousPossibleEffects) action.ClearPossibleExternalEffects();
                 dbContext.AddEmailActionAudit(new EmailActionAudit(
                     context.ConversationId, action.ActionType, action.EmailIdsJson,
                     context.UserMessageId, success: false, modificationFailure.InnerException?.Message));
@@ -434,7 +436,7 @@ public sealed class EmailConfirmPendingActionTool(
             }
 
             var confirmedCount = verification is null ? 0 : emailIds.Count - verification.FailedEmailIds.Count;
-            var possiblePartialEffects = verification is null || confirmedCount > 0;
+            var possiblePartialEffects = action.MayHaveAppliedChanges || verification is null || confirmedCount > 0;
             if (possiblePartialEffects)
             {
                 action.RecordPossibleExternalEffects();
@@ -466,19 +468,16 @@ public sealed class EmailConfirmPendingActionTool(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (externalRequestMayHaveBeenSent)
+            if (!externalRequestMayHaveBeenSent && !previousPossibleEffects) action.ClearPossibleExternalEffects();
+            using var bookkeepingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try
             {
-                action.RecordPossibleExternalEffects();
-                using var bookkeepingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                try
-                {
-                    await dbContext.SaveChangesAsync(bookkeepingTimeout.Token);
-                }
-                catch (Exception exception)
-                {
-                    logger?.LogError(exception,
-                        "Failed to persist possible Gmail effects after turn cancellation for action {PendingActionId}", action.Id);
-                }
+                await dbContext.SaveChangesAsync(bookkeepingTimeout.Token);
+            }
+            catch (Exception exception)
+            {
+                logger?.LogError(exception,
+                    "Failed to persist Gmail effect state after turn cancellation for action {PendingActionId}", action.Id);
             }
 
             throw;
@@ -552,7 +551,7 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
 {
     public override string Name => "email_cancel_pending_action";
 
-    public override string Description => "Cancela por texto a última ação pendente de email. Não reverte efeitos de tentativas anteriores.";
+    public override string Description => "Descarta a última proposta Gmail quando o usuário desiste, conforme intenção e contexto, sem exigir frase específica ou confirmação de cancelamento. Correções podem preparar uma nova proposta diretamente. Não reverte efeitos de tentativas anteriores; possíveis alterações permanecem explícitas.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -567,12 +566,12 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (!LooksLikeCancellation(context.UserContent))
-        {
-            return Error("ambiguous_cancellation", "The current user message is not a clear textual cancellation. Ask Pedro to confirm more clearly.");
-        }
-
-        var action = await dbContext.GetLatestOpenPendingEmailActionAsync(context.ConversationId, cancellationToken);
+        if (arguments.ValueKind != JsonValueKind.Object || arguments.EnumerateObject().Any())
+            return RecoverableArgumentError(new { error = "invalid_email_tool_arguments", message = "Esta ferramenta não recebe parâmetros." });
+        if (!await PendingActionGuard.HasValidUserMessageAsync(dbContext, context, cancellationToken: cancellationToken))
+            return RecoverableArgumentError(new { error = "invalid_email_tool_arguments", message = "A mensagem atual precisa pertencer a esta conversa." });
+        var action = (await dbContext.GetUnresolvedPendingEmailActionsAsync(context.ConversationId, cancellationToken))
+            .FirstOrDefault(a => a.IsOpen() || a.MayHaveAppliedChanges);
         if (action is null)
         {
             return Error("no_pending_action", "There is no open pending email action for this conversation.");
@@ -590,6 +589,7 @@ public sealed class EmailCancelPendingActionTool(IAegisDbContext dbContext) : Em
         return Ok(new
         {
             pendingActionId = action.Id,
+            possibleExternalEffects = action.MayHaveAppliedChanges,
             action.ActionType,
             action.HumanSummary,
             userMessage = action.MayHaveAppliedChanges
@@ -604,7 +604,7 @@ public abstract class PendingEmailModificationTool(
     IEmailToolContextService emailContextService) : EmailToolBase
 {
     public override string Description =>
-        $"Cria uma ação pendente para {Verb} emails em batch. Passe todos os emailIds selecionados em uma única chamada sempre que possível. Não executa a modificação; exige confirmação textual posterior.";
+        $"Prepara uma proposta para {Verb} emails em batch. Passe todos os emailIds selecionados em uma única chamada sempre que possível. Substitui propostas anteriores sem execução/efeitos externos diretamente, preservando auditoria. Não executa a modificação; exige aceitação da proposta em turno posterior, em linguagem natural.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {
@@ -637,6 +637,11 @@ public abstract class PendingEmailModificationTool(
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        if (!await PendingActionGuard.HasValidUserMessageAsync(dbContext, context, cancellationToken: cancellationToken))
+            return RecoverableArgumentError(new { error = "invalid_email_tool_arguments", message = "A mensagem atual precisa pertencer a esta conversa." });
+        var previous = await dbContext.GetUnresolvedPendingEmailActionsAsync(context.ConversationId, cancellationToken);
+        if (previous.Any(action => action.MayHaveAppliedChanges))
+            return Error("email_action_outcome_unknown", "Há uma tentativa anterior com possíveis efeitos, mesmo se expirada. Verifique os emails ou cancele explicitamente a tentativa; cancelar não reverte alterações.");
         var emailIds = GetStringArray(arguments, "emailIds")
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id.Trim())
@@ -680,6 +685,12 @@ public abstract class PendingEmailModificationTool(
             emailIdsJson,
             humanSummary,
             DateTimeOffset.UtcNow.AddMinutes(10));
+        foreach (var old in previous)
+        {
+            old.Supersede(pendingAction.Id);
+            dbContext.AddEmailActionAudit(new(context.ConversationId, "supersede_" + old.ActionType, old.EmailIdsJson,
+                context.UserMessageId, true, "Proposta " + old.Id + " substituída por " + pendingAction.Id));
+        }
         dbContext.AddPendingEmailAction(pendingAction);
 
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -687,12 +698,13 @@ public abstract class PendingEmailModificationTool(
         return Ok(new
         {
             pendingActionId = pendingAction.Id,
+            supersededActionIds = previous.Select(old => old.Id),
             pendingAction.ActionType,
             pendingAction.HumanSummary,
             emailCount = resolution.EmailIds.Count,
             selectionKey = resolution.SelectionKey,
             pendingAction.ExpiresAt,
-            userMessage = $"Posso {humanSummary}. Responda 'confirmo' em uma nova mensagem para executar."
+            userMessage = $"Proposta preparada: {humanSummary}. Apresente o resumo e peça confirmação em uma nova mensagem; ainda não executei a alteração."
         });
     }
 }
@@ -818,40 +830,4 @@ public abstract class EmailToolBase : IAegisTool
         return JsonSerializer.Deserialize<IReadOnlyList<string>>(emailIdsJson, JsonOptions) ?? [];
     }
 
-    protected static bool LooksLikeConfirmation(string userContent)
-    {
-        // A confirmation must be explicit and standalone; the model handles ambiguous language.
-        var normalized = NormalizeIntent(userContent);
-        return normalized is "sim" or "confirmo" or "pode fazer" or "pode executar" or "confirmado";
-    }
-
-    protected static bool LooksLikeCancellation(string userContent)
-    {
-        var normalized = NormalizeIntent(userContent);
-        return normalized is "nao"
-            or "não"
-            or "cancela"
-            or "cancelar"
-            or "cancele"
-            or "nao mexe"
-            or "não mexe"
-            or "deixa"
-            or "deixa quieto" ||
-            normalized.StartsWith("nao ", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("não ", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains(" cancela", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains(" cancele", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains(" cancelar", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("nao mexe", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("não mexe", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("deixa quieto", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeIntent(string value)
-    {
-        return value
-            .Trim()
-            .Trim('.', '!', '?', ',', ';', ':')
-            .ToLowerInvariant();
-    }
 }

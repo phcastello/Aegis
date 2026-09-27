@@ -3,7 +3,7 @@ using Aegis.Application;
 using Aegis.Application.Tools;
 using Microsoft.Extensions.DependencyInjection;
 
-// Export the registered production tools without executing them or connecting to Gmail.
+// Export the registered production tools without executing them or connecting to Google.
 // Tool constructors only capture dependencies; null values are safe until ExecuteAsync.
 var registeredTypes = new ServiceCollection().AddApplication()
     .Where(descriptor => descriptor.ServiceType == typeof(IAegisTool))

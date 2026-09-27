@@ -32,9 +32,11 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AEGIS_PUBLIC_APP_URL: ${AEGIS_PUBLIC_APP_URL:-http://localhost:5173}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8090/api/email/oauth/callback}
-      GOOGLE_OAUTH_SCOPES: ${GOOGLE_OAUTH_SCOPES:-https://www.googleapis.com/auth/gmail.modify}
+      GOOGLE_OAUTH_SCOPES: ${GOOGLE_OAUTH_SCOPES:-https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly}
       GOOGLE_OAUTH_SUCCESS_REDIRECT_PATH: ${GOOGLE_OAUTH_SUCCESS_REDIRECT_PATH:-/?email=connected}
       GOOGLE_OAUTH_FAILURE_REDIRECT_PATH: ${GOOGLE_OAUTH_FAILURE_REDIRECT_PATH:-/?email=connect_failed}
+      AEGIS_CALENDAR_TIMED_REMINDERS: ${AEGIS_CALENDAR_TIMED_REMINDERS:-}
+      AEGIS_CALENDAR_ALL_DAY_REMINDERS: ${AEGIS_CALENDAR_ALL_DAY_REMINDERS:-}
       AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-5.6-luna}
       AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}
       AEGIS_TITLE_MODEL: ${AEGIS_TITLE_MODEL:-gpt-5-nano}

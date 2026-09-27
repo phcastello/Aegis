@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using Aegis.Application.Email;
+using Aegis.Application.Google;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.DataProtection;
@@ -34,6 +35,15 @@ public sealed class GmailConnectionService(
                 connection.CreatedAt);
     }
 
+    public Task<EmailAuthorizationResponse> CreateConnectLinkAsync(CancellationToken cancellationToken = default)
+    {
+        var configured = GetConfiguredOptions();
+        // Only this short entry URL crosses the model. The browser obtains a fresh protected state
+        // from the existing connect endpoint, including when it opens an older chat message.
+        var connectUrl = new Uri(new Uri(configured.RedirectUri!), "../connect?redirect=true");
+        return Task.FromResult(new EmailAuthorizationResponse(connectUrl.AbsoluteUri));
+    }
+
     public Task<EmailAuthorizationResponse> CreateAuthorizationUrlAsync(
         CancellationToken cancellationToken = default)
     {
@@ -44,7 +54,8 @@ public sealed class GmailConnectionService(
             ["client_id"] = gmailOptions.ClientId,
             ["redirect_uri"] = gmailOptions.RedirectUri,
             ["response_type"] = "code",
-            ["scope"] = gmailOptions.Scopes,
+            ["scope"] = GoogleScopes.EnsureRequired(gmailOptions.Scopes),
+            ["include_granted_scopes"] = "true",
             ["access_type"] = "offline",
             ["prompt"] = "consent",
             ["state"] = state
@@ -98,12 +109,17 @@ public sealed class GmailConnectionService(
             ? null
             : tokenProtector.Protect(tokens.RefreshToken);
         var emailAddress = await GetEmailAddressAsync(tokens.AccessToken, cancellationToken);
-        var scopes = string.IsNullOrWhiteSpace(tokens.Scope) ? gmailOptions.Scopes : tokens.Scope;
+        var scopes = string.IsNullOrWhiteSpace(tokens.Scope) ? GoogleScopes.EnsureRequired(gmailOptions.Scopes) : tokens.Scope;
 
         var existing = await dbContext.EmailAccountConnections
             .Where(connection => connection.Provider == EmailAccountConnection.GmailProvider)
             .OrderByDescending(connection => connection.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
+
+        if (!GoogleScopes.Contains(scopes, GoogleScopes.Gmail))
+            throw new EmailConnectionException("connection_unconfirmed", "Google did not grant Gmail access. The existing connection was preserved.");
+        if (existing is not null && !string.Equals(existing.EmailAddress, emailAddress, StringComparison.OrdinalIgnoreCase))
+            throw new EmailConnectionException("google_account_mismatch", "Reauthorize with the Google account already connected.");
 
         if (string.IsNullOrWhiteSpace(emailAddress) ||
             (refreshTokenEncrypted is null && string.IsNullOrWhiteSpace(existing?.RefreshTokenEncrypted)))

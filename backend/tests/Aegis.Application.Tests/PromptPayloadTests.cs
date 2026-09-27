@@ -67,7 +67,7 @@ public sealed class PromptPayloadTests
             .BuildPromptAsync([], previousUser.Content);
         var second = await new PromptBuilder(new FixedRuntimeContext("Horário: 12:05"))
             .BuildPromptAsync([previousUser, previousAssistant], "segunda pergunta",
-                pendingEmailActionState: "Existe uma ação pendente de Gmail.");
+                pendingActionState: "Existe uma ação pendente de Gmail. Existe uma ação pendente Calendar: criar dentista.");
 
         Assert.Equal(first.InputItems[0].GetRawText(), second.InputItems[0].GetRawText());
         Assert.Equal(first.InputItems[1].GetRawText(), second.InputItems[1].GetRawText());
@@ -75,6 +75,8 @@ public sealed class PromptPayloadTests
         Assert.Equal("assistant", second.InputItems[2].GetProperty("role").GetString());
         Assert.Contains("12:05", second.InputItems[^1].GetProperty("content").GetString());
         Assert.Contains("ação pendente", second.InputItems[^1].GetProperty("content").GetString());
+        Assert.Contains("dentista", second.InputItems[^1].GetProperty("content").GetString());
+        Assert.DoesNotContain("dentista", second.InputItems[0].GetRawText());
     }
 
     [Fact]

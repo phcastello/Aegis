@@ -2,7 +2,7 @@ namespace Aegis.Infrastructure.Email;
 
 public sealed class GmailOptions
 {
-    public const string DefaultScope = "https://www.googleapis.com/auth/gmail.modify";
+    public const string DefaultScope = Aegis.Application.Google.GoogleScopes.Combined;
 
     public string? ClientId { get; set; }
 

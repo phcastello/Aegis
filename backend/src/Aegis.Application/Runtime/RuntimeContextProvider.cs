@@ -2,6 +2,7 @@ namespace Aegis.Application.Runtime;
 
 public sealed class RuntimeContextProvider : IRuntimeContextProvider
 {
+    public const string ReferenceTimeZoneId = "America/Sao_Paulo";
     private static readonly TimeZoneInfo BrasiliaTimeZone = ResolveBrasiliaTimeZone();
 
     public Task<string> GetRuntimeContextAsync(CancellationToken cancellationToken = default)
@@ -25,7 +26,7 @@ public sealed class RuntimeContextProvider : IRuntimeContextProvider
 
     private static TimeZoneInfo ResolveBrasiliaTimeZone()
     {
-        return TryFindTimeZone("America/Sao_Paulo")
+        return TryFindTimeZone(ReferenceTimeZoneId)
             ?? TryFindTimeZone("E. South America Standard Time")
             ?? throw new InvalidOperationException("Brasilia timezone could not be resolved on this host.");
     }

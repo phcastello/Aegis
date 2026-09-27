@@ -37,11 +37,11 @@ public sealed class EmailController(
         }
         catch (EmailConnectionException exception)
         {
-            logger.LogWarning(exception, "Gmail connection link could not be created.");
+            logger.LogWarning(exception, "Google connection link could not be created.");
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
             {
                 code = exception.Code,
-                error = "A conexão Gmail não está disponível neste servidor."
+                error = "A conexão Google não está disponível neste servidor."
             });
         }
     }
@@ -60,7 +60,7 @@ public sealed class EmailController(
                 ? "Google OAuth did not return an authorization code."
                 : $"Google OAuth returned error: {error}.";
             logger.LogWarning(
-                "Gmail OAuth callback failed. ErrorCode: {ErrorCode}. Message: {ErrorMessage}",
+                "Google OAuth callback failed. ErrorCode: {ErrorCode}. Message: {ErrorMessage}",
                 "oauth_callback_error",
                 message);
             var failureCode = string.Equals(error, "access_denied", StringComparison.Ordinal) ? "authorization_cancelled" : "google_rejected";
@@ -75,7 +75,7 @@ public sealed class EmailController(
                 code,
                 state,
                 applicationLifetime.ApplicationStopping);
-            logger.LogInformation("Gmail OAuth callback completed successfully.");
+            logger.LogInformation("Google OAuth callback completed successfully.");
             return Redirect(BuildRedirectUri(options, options.SuccessRedirectPath));
         }
         catch (HttpRequestException exception)
@@ -121,7 +121,7 @@ public sealed class EmailController(
         logger.Log(
             logLevel,
             exception,
-            "Gmail OAuth callback failed. ErrorCode: {ErrorCode}. ExceptionType: {ExceptionType}. Message: {ErrorMessage}",
+            "Google OAuth callback failed. ErrorCode: {ErrorCode}. ExceptionType: {ExceptionType}. Message: {ErrorMessage}",
             errorCode,
             exception.GetType().Name,
             exception.Message);
