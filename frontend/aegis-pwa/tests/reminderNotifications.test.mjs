@@ -18,6 +18,8 @@ test('payload validates type, identity and bounds; notification has OK and stabl
   assert.deepEqual(options.actions, [{ action: 'acknowledge', title: 'OK' }]);
   assert.equal(options.renotify, false);
   assert.equal(options.tag, reminderNotificationOptions(payload).tag);
+  assert.equal(options.badge, '/icons/notification-badge.png');
+  assert.equal(options.icon, '/icons/icon-192.png');
 });
 test('OK only records acknowledgement and never opens the application', async () => {
   const calls = [];

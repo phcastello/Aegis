@@ -16,7 +16,7 @@ export function parseReminderPush(value: unknown): ReminderPushPayload | null {
 }
 export function reminderNotificationOptions(payload: ReminderPushPayload) {
   return {
-    body: payload.text, icon: '/icons/icon-192.png', badge: '/favicon.svg',
+    body: payload.text, icon: '/icons/icon-192.png', badge: '/icons/notification-badge.png',
     tag: `aegis-reminder-${payload.reminderId}`, renotify: false,
     actions: [{ action: 'acknowledge', title: 'OK' }], data: payload
   };

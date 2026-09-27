@@ -12,7 +12,9 @@ const failureMessages: Record<NotificationFailureCode, string> = {
 export class NotificationSetupError extends Error {
   constructor(public readonly code: NotificationFailureCode) { super(failureMessages[code]); }
 }
-export function notificationFailureMessage(error: unknown): string {
+export function notificationFailureMessage(error: unknown, brave = false): string {
+  if (brave && error instanceof NotificationSetupError && error.code === 'push_subscription_failed')
+    return 'No Brave, confira “Usar serviços do Google para mensagens push” em Configurações → Privacidade e segurança. Depois reabra a Aegis.';
   return error instanceof NotificationSetupError ? error.message : 'Não foi possível concluir a ativação das notificações. Tente novamente.';
 }
 export interface PushConfiguration { enabled: boolean; publicKey: string | null }
@@ -121,7 +123,8 @@ export function createNotificationControl(browser: NotificationBrowser, backend:
     // Usually preloaded on opening: native permission remains in the explicit click.
     const current = config?.enabled && config.publicKey ? config : await configuration();
     configured(current);
-    const permission = await stage('push_subscription_failed', () => browser.requestPermission());
+    const permission = browser.permission() === 'granted' ? 'granted' :
+      await stage('push_subscription_failed', () => browser.requestPermission());
     if (permission !== 'granted') {
       await disableSaved();
       throw new NotificationSetupError('permission_denied');
@@ -158,5 +161,11 @@ export function createNotificationControl(browser: NotificationBrowser, backend:
       });
     }
   }
-  return { reconcile, activate, deactivate };
+  async function initialize(): Promise<boolean> {
+    if (await reconcile()) return true;
+    // A previous explicit grant already authorizes enrollment. Repair the browser
+    // subscription/backend record on opening without another permission prompt.
+    return browser.permission() === 'granted' ? activate() : false;
+  }
+  return { initialize, reconcile, activate, deactivate };
 }

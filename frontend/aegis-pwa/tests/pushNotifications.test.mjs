@@ -79,7 +79,49 @@ test('activation refreshes disabled configuration after the server is configured
   assert.equal(f.calls.includes('register'), false);
   f.config = { enabled: true, publicKey: 'AQID' }; f.calls.length = 0;
   assert.equal(await control.activate(), true);
-  assert.deepEqual(f.calls, ['configuration', 'permission', 'ready', 'getSubscription', 'subscribe', 'register', 'save', 'status', 'getSubscription']);
+  assert.deepEqual(f.calls, ['configuration', 'ready', 'getSubscription', 'subscribe', 'register', 'save', 'status', 'getSubscription']);
+});
+test('opening without notification permission never prompts or enrolls automatically', async () => {
+  for (const permission of ['default', 'denied']) {
+    const f = fixture(); f.permission = permission;
+    assert.equal(await f.controller().initialize(), false);
+    assert.deepEqual(f.calls, ['configuration']);
+  }
+});
+test('opening with granted permission creates and verifies the missing channel without another prompt', async () => {
+  const f = fixture(); f.permission = 'granted';
+  assert.equal(await f.controller().initialize(), true);
+  assert.deepEqual(f.calls, ['ready', 'getSubscription', 'configuration', 'ready', 'getSubscription', 'subscribe', 'register', 'save', 'status', 'getSubscription']);
+  assert.deepEqual(f.local, f.saved);
+});
+test('opening repairs missing backend registration for an existing browser subscription', async () => {
+  const f = fixture(); f.permission = 'granted'; f.actual = f.subscription;
+  assert.equal(await f.controller().initialize(), true);
+  assert.ok(f.calls.includes('register')); assert.ok(f.calls.includes('status'));
+  assert.equal(f.calls.includes('permission'), false); assert.equal(f.calls.includes('subscribe'), false);
+});
+test('opening an already active channel neither re-registers nor requests permission', async () => {
+  const f = fixture(); f.permission = 'granted'; f.actual = f.subscription; f.local = f.saved;
+  assert.equal(await f.controller().initialize(), true);
+  assert.deepEqual(f.calls, ['ready', 'getSubscription', 'configuration', 'status']);
+});
+test('automatic enrollment cannot succeed when the browser subscription fails', async () => {
+  const f = fixture(); f.permission = 'granted';
+  f.manager.subscribe = async () => { throw new DOMException('provider internals', 'AbortError'); };
+  await rejectsCode(f.controller().initialize(), 'push_subscription_failed');
+  assert.equal(f.calls.includes('register'), false); assert.equal(f.calls.includes('permission'), false);
+  assert.equal(f.local, null);
+});
+test('revoked permission disables the previous channel without automatic re-enrollment', async () => {
+  const f = fixture(); f.permission = 'denied'; f.local = f.saved;
+  assert.equal(await f.controller().initialize(), false);
+  assert.deepEqual(f.calls, ['disable', 'clear', 'configuration']);
+});
+test('Brave enrollment failures explain its push service setting without masking other failures', () => {
+  assert.match(notificationFailureMessage(new NotificationSetupError('push_subscription_failed'), true), /Brave.*Google.*push/);
+  assert.doesNotMatch(notificationFailureMessage(new NotificationSetupError('backend_registration_failed'), true), /Brave/);
+  assert.match(notificationFailureMessage(new NotificationSetupError('permission_denied'), true), /Permissão negada/);
+  assert.doesNotMatch(notificationFailureMessage(new NotificationSetupError('push_subscription_failed')), /Brave/);
 });
 test('unsupported browser and unavailable worker have distinct diagnostics', async () => {
   const f = fixture(); f.browser.supported = false;

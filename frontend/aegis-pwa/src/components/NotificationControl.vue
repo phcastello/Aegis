@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { createNotificationControl, readyForPush, readPushRegistration, notificationFailureMessage, NotificationSetupError } from '../services/pushNotifications';
 import { getPushConfiguration, registerPushSubscription, disablePushSubscription, getPushSubscriptionStatus } from '../services/aegisApi';
 
 const active = ref(false);
 const busy = ref(true);
 const message = ref('');
+const needsPermission = ref(false);
+const retryAvailable = ref(false);
+let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
 const controller = createNotificationControl({
   supported: window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window,
   permission: () => 'Notification' in window ? Notification.permission : undefined,
@@ -31,36 +34,64 @@ function reportFailure(error: unknown): void {
   active.value = false;
   // Stage only: never log browser errors, endpoints, keys or management credentials.
   console.warn('Aegis notifications:', error instanceof NotificationSetupError ? error.code : 'backend_registration_failed');
-  message.value = notificationFailureMessage(error);
+  feedback(notificationFailureMessage(error, 'brave' in navigator), 12000);
+  retryAvailable.value = !(error instanceof NotificationSetupError) || ![
+    'permission_denied', 'push_not_supported', 'backend_push_not_configured'
+  ].includes(error.code);
 }
-async function toggle(): Promise<void> {
+function dismiss(): void {
+  clearTimeout(feedbackTimer);
+  message.value = '';
+  needsPermission.value = false;
+  retryAvailable.value = false;
+}
+function feedback(text: string, timeout: number): void {
+  dismiss();
+  message.value = text;
+  feedbackTimer = setTimeout(dismiss, timeout);
+}
+async function activate(): Promise<void> {
   if (busy.value) return;
   busy.value = true;
-  message.value = '';
+  dismiss();
   try {
-    if (active.value) {
-      await controller.deactivate();
-      active.value = false;
-      message.value = 'Notificações desativadas neste dispositivo.';
-    } else {
-      active.value = await controller.activate();
-      message.value = 'Notificações ativadas. Você já pode pedir um lembrete pelo chat.';
-    }
+    active.value = await controller.activate();
+    feedback('Notificações ativadas. Você já pode pedir um lembrete pelo chat.', 5000);
   } catch (error) { reportFailure(error); }
   finally { busy.value = false; }
 }
+function offerSetup(): void {
+  if (active.value || busy.value) return;
+  dismiss();
+  if ('Notification' in window && Notification.permission === 'granted') { void activate(); return; }
+  if ('Notification' in window && Notification.permission === 'denied') {
+    reportFailure(new NotificationSetupError('permission_denied'));
+    return;
+  }
+  needsPermission.value = true;
+}
+function keydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') dismiss();
+}
 onMounted(async () => {
-  try { active.value = await controller.reconcile(); }
+  document.addEventListener('keydown', keydown);
+  try {
+    active.value = await controller.initialize();
+    needsPermission.value = !active.value && 'Notification' in window && Notification.permission === 'default';
+  }
   catch (error) { reportFailure(error); }
   finally { busy.value = false; }
 });
+onBeforeUnmount(() => {
+  clearTimeout(feedbackTimer);
+  document.removeEventListener('keydown', keydown);
+});
+defineExpose({ offerSetup });
 </script>
 <template>
-  <div class="notification-control">
-    <button type="button" class="notification-toggle" :disabled="busy" :aria-pressed="active" :aria-label="active ? 'Desativar notificações neste dispositivo' : 'Ativar notificações'" :title="active ? 'Notificações ativadas' : 'Ativar notificações'" @click="toggle">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
-      <span>{{ busy ? 'Aguarde…' : active ? 'Notificações ativadas' : 'Ativar notificações' }}</span>
-    </button>
-    <p v-if="message" role="status">{{ message }}</p>
+  <div v-if="needsPermission || message" class="notification-notice">
+    <p role="status">{{ message || 'Permita notificações para receber lembretes com a Aegis fechada.' }}</p>
+    <button v-if="needsPermission || retryAvailable" type="button" class="notification-notice__action" :disabled="busy" @click="activate">{{ needsPermission ? 'Permitir' : 'Tentar novamente' }}</button>
+    <button type="button" class="notification-notice__close" aria-label="Fechar aviso de notificações" @click="dismiss"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
   </div>
 </template>
