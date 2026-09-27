@@ -325,19 +325,42 @@ There is **no LLM in the trigger path**: PostgreSQL → ReminderWorker → encry
 
 The `Aegis` meter adds `aegis_reminders_{created,updated,cancelled,triggered,failed}_total`, `aegis_push_{attempts,accepted,failed}_total`, and histogram `aegis_reminder_trigger_delay_ms` (actual first processing time minus due time). These instruments contain no reminder text, IDs or subscription credentials. The API returns only the public VAPID key/configuration and minimal device registration/status responses. Subscription endpoints/keys never go to the model; network logging is disabled for the push client. The single-user deployment's existing access model is unchanged: keep the API inside the existing trusted access boundary. Subscription interaction endpoints require scoped signed tokens, and accepted subscription endpoints are restricted to Chromium's `fcm.googleapis.com` service to prevent arbitrary outbound requests.
 
-### Validation
+### Automated validation
 
 Run `dotnet test backend/Aegis.sln`, `npm test --prefix frontend/aegis-pwa` and `npm run build --prefix frontend/aegis-pwa`. The PostgreSQL integration test requires `AEGIS_REMINDER_TEST_DATABASE` pointing at a **disposable** database; it uses an isolated schema, applies migrations and exercises physical conversation deletion, concurrent connections and crash recovery. It is skipped when that variable is absent. Intent evaluation uses all 28 real tool schemas with stubbed data, never live Google operations or live push; see [v0.5.0 evaluation results](scripts/eval-results-v0.5.0.md).
 
-Physical acceptance is still pending; automated tests use fake push transport and cannot prove FCM or OS/browser delivery. Use the deployed built PWA over HTTPS:
+The final pre-merge checks on 27 September 2026 passed: **296/296 backend tests**, including **2/2 PostgreSQL integration scenarios**, **41/41 frontend tests**, backend Release build, frontend build/typechecks, `docker compose config --quiet`, and `git diff --check`. EF reports no pending model changes; this documentation pass adds no migration. The backend retains one existing xUnit2031 test warning. Commands, evaluation results and historical runs are recorded in the [v0.5.0 validation report](scripts/eval-results-v0.5.0.md). Automated push tests use fake transport; they validate processing and interactions independently of FCM or OS delivery.
+
+The final intent evaluation scored **146/147**: **113/114 legacy cases** and **33/33 new cases**. The sole failure offered a reminder for a promotional email, without creating one; this variation also occurred in the hardening history. The report preserves the earlier 146/147, 145/147 and 146/147 runs, including 114/114 legacy cases in the third hardening run. No prompt, schema or checker was changed to improve the score. All cases have passed in at least one recorded execution; that does not establish deterministic behavior.
+
+### Physical validation
+
+Real Web Push was verified on the deployed HTTPS PWA during the manual tests on 27 September 2026, after configuring VAPID and repairing activation/reconciliation and the notification UX. The Android user confirmed receipt; the persisted record independently shows push-service acceptance (HTTP 201), `TriggeredAt` and an explicit `AcknowledgedAt`, with `OpenedAt` unset. This replaces the earlier statement that physical Web Push had not been validated.
+
+| Scenario | Recorded evidence |
+| --- | --- |
+| Android Chrome/PWA activation and real notification | Confirmed in the manual test; a reminder requested through chat produced a real system notification. |
+| Real OK acknowledgement | Confirmed by the persisted acknowledgement for that reminder. Opening is a separate interaction; no `OpenedAt` was recorded. |
+| Multiple registered devices | A later reminder has two distinct device attempts accepted with HTTP 201 and a global acknowledgement. This proves technical acceptance, not visual receipt on both devices or suppression of a physically induced retry. |
+| Desktop Brave | Its push messaging setting was identified and documented. A separate desktop receipt/interaction checklist has not been recorded. |
+
+These observations do not establish that every physical subscenario was exercised. The simulated Chromium checks, including icon transparency and service worker updates, remain distinct from device testing.
+
+### Remaining physical validation
+
+Use the deployed built PWA over HTTPS to record the following separately:
 
 1. On desktop Chromium, allow notifications through the first-use notice (or reopen with existing permission) and verify backend registration is active. In Brave, also enable its Google push messaging setting. Ask “Me lembra daqui 2 minutos de testar o Web Push.” Confirm creation, close the Aegis windows and check a real system notification arrives. Press OK: it must close without opening Aegis and persist `AcknowledgedAt`.
 2. Use a separate reminder and click its body. Verify focus/open, `OpenedAt != null` and `AcknowledgedAt == null`.
-3. Repeat on Android Chrome/PWA when available. Register both devices, verify both receive a reminder, press OK on one and confirm pending retries for the other stop. Existing visible notifications can remain.
+3. Complete any unrecorded Android details, including receipt with the PWA closed and confirming OK does not open it. With desktop and Android registered, verify both visibly receive a reminder and confirm an actual pending retry on the other device stops after OK. Existing visible notifications can remain.
 4. Stop the backend before a reminder is due, let the due time pass and start it again. Verify the late push, `TriggeredAt`, trigger-delay metric and persisted attempts.
 5. Send a reminder, recreate the backend container with the same Data Protection volume and VAPID pair, then press OK on the already existing notification. Verify its interaction token still works.
 6. Revoke Chrome notification permission outside Aegis and reopen it. Confirm the device record is disabled. Restore browser permission and reopen: automatic enrollment must verify a real active channel again. No reminder may be created when Web Push is unconfigured or all device subscriptions are disabled.
 
-Only a successful real end-to-end check completes physical acceptance of v0.5.0 — "Knock Knock".
+Only the scenarios with recorded evidence above are marked as physically validated. The remaining checks must not be inferred from automated coverage or HTTP acceptance.
+
+### Known remaining limitations
+
+Web Push cannot guarantee exactly-once delivery: a crash after external acceptance but before committing `AcceptedAt` remains ambiguous. Accepted push does not prove visual receipt, and absence of `AcknowledgedAt` does not mean the user ignored the notification. Already displayed notifications on another device are not removed remotely. Without local management credentials, an old subscription may not be identifiable immediately; permission changes while the PWA is closed are reconciled when the app can next observe them or the push service rejects the subscription.
 
 Future work deliberately excluded: recurring reminders, cron/RRULE, priorities, reincidence/re-alerting, escalation, snooze, behavioral learning, a generic scheduler/automation engine, external conditions and autonomous monitoring. v0.5.0 stores useful telemetry without implementing adaptive decisions. No platform-specific Apple code or architecture is introduced.

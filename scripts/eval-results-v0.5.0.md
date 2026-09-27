@@ -2,6 +2,8 @@
 
 Branch `feat/v0.5.0-reminders`, criada após atualizar a `main` para `6ffc069`. Execução em 27/09/2026. Modelo preservado: `gpt-5.6-luna`, `reasoning.effort=medium`. Catálogo com **28 tools reais** exportadas do registry de produção, incluindo as quatro novas tools Reminder. Resultados das integrações são simulados; nenhum email, evento Google ou push real é enviado pelo eval.
 
+Este relatório preserva as rodadas históricas. O passe documental antes do merge registra abaixo a validação automatizada atual e a aceitação física já demonstrada, separada dos subcenários ainda pendentes.
+
 ## Resultado da implementação inicial
 
 **147/147 casos aprovados** em uma execução CLI sequencial, com o catálogo e a identidade finais. As **114/114 regressões anteriores** passaram, assim como **33/33 casos adicionais**. O runtime do eval é fixo: 26/09/2026 às 12h em Brasília (15h UTC), para verificar explicitamente horário absoluto, amanhã e intervalos relativos.
@@ -61,7 +63,7 @@ dotnet run --project scripts/Aegis.ToolCatalogExport --configuration Release > /
 python3 scripts/eval_tool_intent.py --tools-json /tmp/aegis-v050-tools.json --report-json /tmp/aegis-v050-eval.json
 ```
 
-## Builds, testes e verificações
+## Builds, testes e verificações da implementação inicial (histórico)
 
 O host não tem `dotnet`; os comandos .NET usaram `mcr.microsoft.com/dotnet/sdk:8.0` com o repositório montado. O PostgreSQL de validação era um container descartável, independente de `aegis-postgres`, com schema isolado por execução. Os serviços existentes não foram atualizados.
 
@@ -84,7 +86,7 @@ docker compose config --quiet
 
 ## Limites de validação
 
-A entrega física por FCM com a aplicação fechada e Android/Chrome real ainda exige configurar VAPID, HTTPS e subscriptions reais. Não foi afirmada entrega ponta a ponta em dispositivo físico. O README contém o procedimento para validar desktop + Android, OK/body click e downtime nesse ambiente.
+Os checks da implementação inicial desta seção usaram transporte simulado e não provaram entrega física. Posteriormente, VAPID foi configurado no ambiente HTTPS e houve entrega Web Push real no Android e acknowledgement persistido; a seção de aceitação física abaixo registra essas evidências separadamente dos cenários ainda não comprovados.
 
 Push aceito pelo serviço não prova entrega, leitura ou reconhecimento. Uma aceitação externa seguida de crash antes de gravar o resultado permanece ambígua; o processamento preserva a tentativa, limita recovery/retries e usa tag estável com `renotify: false`. Não há promessa de exactly-once nessa janela. Nenhum LLM integra o caminho de disparo.
 
@@ -96,17 +98,17 @@ Mantida a branch `feat/v0.5.0-reminders`; nenhuma branch nova ou alteração de 
 
 ### Diagnóstico e correções
 
-O ambiente existente foi inspecionado sem alterar seus containers: `/api/notifications/configuration` retornou `enabled: false` tanto pela API quanto pelo proxy da PWA. As três variáveis VAPID estavam ausentes no container API e vazias/ausentes no `.env` ignorado; o volume Data Protection estava montado. Uma reprodução automatizada sobre a PWA publicada, com permissão pré-concedida pelo Chromium, confirmou `permission = granted`, worker registrado, nenhuma PushSubscription criada, backend desabilitado, UI inativa e a mensagem de configuração indisponível. A permissão foi simulada nessa reprodução; o estado/configuração da API era real. O dispositivo físico que apresentou o problema não foi inspecionado.
+No início do hardening, o ambiente foi inspecionado sem alterar seus containers: `/api/notifications/configuration` retornou `enabled: false` tanto pela API quanto pelo proxy da PWA. As três variáveis VAPID estavam ausentes no container API e vazias/ausentes no `.env` ignorado; o volume Data Protection estava montado. Uma reprodução automatizada sobre a PWA publicada, com permissão pré-concedida pelo Chromium, confirmou `permission = granted`, worker registrado, nenhuma PushSubscription criada, backend desabilitado, UI inativa e a mensagem de configuração indisponível. A permissão foi simulada nessa reprodução; o estado/configuração da API era real. O dispositivo físico que apresentou o problema não foi inspecionado naquela reprodução. O setup e a validação manual posteriores estão registrados na seção de aceitação física.
 
 A causa encontrada nesse ambiente é a falta de configuração VAPID, combinada com a solicitação nativa antes da consulta de configuração. Conceder permissão não configurava o backend nem criava uma subscription. Também havia lacunas no código: ausência de confirmação de status após POST, ausência de reconciliação de revogação/subscription desaparecida e classificação genérica de `NotAllowedError` como permissão negada, mesmo após concessão.
 
-A UI agora confirma toda a cadeia antes de ativar: configuração, permissão, worker pronto, subscription, POST e status ativo para o endpoint atual do navegador, com uma última checagem da permissão/subscription. A configuração é pré-carregada ao abrir; não há prompt automático. O estado inicial é reconstruído do browser e do backend. Credenciais locais permitem desabilitar um registro anterior quando a permissão foi revogada ou a subscription desapareceu; falha offline mantém essas credenciais para reconciliação posterior. Um endpoint desabilitado é substituído na próxima ativação explícita. O requisito de canal funcional de `reminder_create` permanece intacto.
+A UI confirma toda a cadeia antes de considerar o canal ativo: configuração, permissão, worker pronto, subscription, POST e status ativo para o endpoint atual do navegador, com uma última checagem da permissão/subscription. No fluxo atual, autorização já concedida permite reconciliação e registro automático ao abrir a PWA; apenas o aviso contextual discreto acima do composer solicita permissão nativa após um clique explícito em **Permitir**. Não existe botão permanente de ativar/desativar notificações. Credenciais locais permitem desabilitar um registro anterior quando a permissão foi revogada ou a subscription desapareceu; falha offline mantém essas credenciais para reconciliação posterior. Registros desabilitados podem ser reparados pela reconciliação com permissão já concedida. O requisito de canal funcional de `reminder_create` permanece intacto.
 
 As etapas têm os códigos internos `permission_denied`, `push_not_supported`, `service_worker_unavailable`, `push_subscription_failed`, `backend_push_not_configured`, `backend_registration_failed` e `subscription_inactive`. O console registra apenas o código, nunca exceções brutas, endpoints ou tokens. A espera por worker e as requisições de setup têm limites de 10 segundos: [`serviceWorker.ready` pode esperar indefinidamente](https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/ready) quando não existe worker ativo. A UI recebe mensagens simples.
 
 ACK é global. `AcknowledgedAt` encerra o processamento como `Triggered`, libera a lease e impede novos claims/listagem ativa. O processor consulta o estado sob row lock antes de criar uma tentativa e novamente antes de enviar. ACK na janela entre persistência da tentativa e envio registra `push_skipped_acknowledged` sem enviar. Histórico já concluído, falhas, `AcceptedAt` e `RetryAt` anteriores são preservados. Nenhum ACK vira cancelamento. Linhas antigas já reconhecidas também são excluídas de claims/listas, mesmo se ainda tiverem status de retry; um replay de ACK normaliza esse status sem mudar `AcknowledgedAt`.
 
-### Validação automatizada do hardening
+### Validação automatizada do hardening (histórico)
 
 - `dotnet test backend/Aegis.sln`: **295/295**, zero falhas e zero skips, com PostgreSQL descartável habilitado. O SDK .NET 8 rodou em Docker porque não está instalado no host.
 - `dotnet build backend/Aegis.sln --configuration Release`: passou, zero erros; permanece apenas o warning xUnit2031 anterior em `CalendarTests.cs`.
@@ -131,7 +133,7 @@ Logs de trabalho: `/tmp/aegis-v050-hardening-backend.log`, `/tmp/aegis-v050-hard
 
 ### Evals executados no hardening
 
-Foram executadas três rodadas completas, com **147 casos, 28 tools e os mesmos critérios**. Nenhuma descrição, schema, regra de identidade ou checker foi alterado para tentar obter aprovação. Não houve uma rodada integral sem falhas; o critério de 147/147 em uma única execução permanece pendente.
+Foram executadas três rodadas completas, com **147 casos, 28 tools e os mesmos critérios**. Nenhuma descrição, schema, regra de identidade ou checker foi alterado para tentar obter aprovação. Nessas três rodadas não houve uma execução integral sem falhas; os resultados permanecem registrados como evidência de variabilidade probabilística.
 
 | Execução | Total | Casos legados | Casos novos | Falhas |
 | --- | --- | --- | --- | --- |
@@ -141,16 +143,101 @@ Foram executadas três rodadas completas, com **147 casos, 28 tools e os mesmos 
 
 Na primeira rodada, o modelo leu Calendar mas pediu outro horário para “uma semana antes”, tratando a antecedência como passada. Na segunda, ofereceu um lembrete para promoções sem chamar nenhuma tool de criação e chamou confirmação Calendar para “Manda bala” sem proposta pendente; o stub não executou nenhuma ação. Na terceira, pediu um título para uma reunião de uma hora, em vez de usar o nome simples da atividade e preparar a criação.
 
-Rechecagens isoladas, sem alterações: `calendar_reminder_add` **1/1**, `proactive_promotional` **1/1** e `clarify` **4/4**. A reunião da terceira rodada passou nas duas rodadas anteriores. Todos os 147 casos distintos tiveram uma execução aprovada, mas isso não equivale a uma rodada completa de 147/147 e não prova ausência estável de regressões. A última rodada passou nos **114/114 casos legados**; as falhas observadas são variações do modelo em esclarecimento/proatividade e não foram ocultadas ou toleradas pelo checker.
+Rechecagens isoladas, sem alterações: `calendar_reminder_add` **1/1**, `proactive_promotional` **1/1** e `clarify` **4/4**. A reunião da terceira rodada passou nas duas rodadas anteriores. Todos os 147 casos distintos tiveram uma execução aprovada, mas isso não equivale a uma rodada completa de 147/147 e não prova ausência estável de regressões. A terceira rodada de hardening passou nos **114/114 casos legados**; as falhas observadas são variações do modelo em esclarecimento/proatividade e não foram ocultadas ou toleradas pelo checker.
 
 Relatórios completos: `/tmp/aegis-v050-hardening-eval.json`, `/tmp/aegis-v050-hardening-eval-final.json`, `/tmp/aegis-v050-hardening-eval-validation.json`; logs com os mesmos nomes e extensão `.log`. Rechecagens: `/tmp/aegis-v050-hardening-eval-calendar-recheck.json`, `/tmp/aegis-v050-hardening-eval-promotional-recheck.json`, `/tmp/aegis-v050-hardening-eval-clarify-recheck.json`. Nenhum Google/push real foi executado nessas avaliações.
 
 ### Aceitação física e limites preservados
 
-**Web Push físico ainda NÃO validado.** Nenhum teste acima prova entrega pelo FCM com desktop ou Android fechados. A configuração VAPID do ambiente publicado continua pendente; nenhum segredo/default foi inventado, e os serviços publicados não foram atualizados neste trabalho. O README contém o roteiro completo para ativação HTTPS, entrega real, OK/body click, múltiplos dispositivos, downtime e recriação do container mantendo Data Protection. A versão só terá aceite físico completo depois dessa execução real.
+**Web Push real no Android e OK com acknowledgement foram validados após os ajustes operacionais e de UX.** A afirmação anterior de que nenhuma entrega física tinha sido validada ficou desatualizada. VAPID foi configurado por configuração privada no ambiente HTTPS publicado; API/PWA receberam os ajustes. Nenhuma chave privada ou credencial é incluída neste relatório. Os testes automatizados descritos anteriormente continuam sendo simulados e não são usados como prova de entrega física.
 
-Não há variáveis de ambiente novas. É necessário configurar as existentes `AEGIS_WEB_PUSH_SUBJECT`, `AEGIS_WEB_PUSH_PUBLIC_KEY` e `AEGIS_WEB_PUSH_PRIVATE_KEY`, manter o par e o volume de keys persistentes e recriar o container para receber a configuração. Permissão concedida não substitui esse setup.
+Não há variáveis de ambiente novas. O setup usa as existentes `AEGIS_WEB_PUSH_SUBJECT`, `AEGIS_WEB_PUSH_PUBLIC_KEY` e `AEGIS_WEB_PUSH_PRIVATE_KEY`; o par e o volume de Data Protection devem continuar persistentes. Mudanças de configuração exigem recriação do container. Permissão concedida não substitui esse setup.
+
+Evidências verificadas no histórico manual e, novamente neste passe, por consulta somente de leitura ao PostgreSQL publicado, sem texto de lembretes, endpoints ou tokens:
+
+| Cenário | Estado e evidência |
+| --- | --- |
+| Android Chrome/PWA: ativação, criação pelo chat e notificação real | Validado pelo relato do usuário na conversa `be02c911-eb16-4126-9047-e70837382560` e pelos registros do reminder `a4bedb69-2c22-46f6-ba8f-8548e7d3adae`. |
+| OK real / acknowledgement | `TriggeredAt=2026-09-27T15:45:13.351022Z`, push HTTP 201 aceito às `15:45:14.983695Z`, `AcknowledgedAt=15:45:26.478601Z`; `OpenedAt` permanece nulo. Isso registra reconhecimento explícito, não prova leitura cognitiva. |
+| Múltiplos dispositivos: aceitação técnica | Reminder `c55fc2bb-bc0c-46f6-b1f6-5c0c22fc63f9`: duas tentativas de dispositivos distintos, HTTP 201 às `16:05:07.448613Z` e `16:05:07.744418Z`; ACK global às `16:07:24.969360Z`. Não comprova que ambos exibiram a notificação nem uma falha física com retry pendente. |
+| Desktop Brave: entrega visível e interações | Pendente de registro específico. A necessidade de **Use Google services for push messaging** foi identificada; aceitação técnica não substitui confirmar visualmente o desktop. |
+| Clique no corpo | Pendente em dispositivo físico: abrir/focar a PWA, `OpenedAt != null`, sem ACK. Coberto com transporte/interação simulados. |
+| Android com PWA fechada e OK sem abrir a PWA | A entrega real foi confirmada; fechamento prévio e comportamento de foco após OK não foram registrados como checklist físico independente. Permanecem para confirmação específica. |
+| ACK interrompendo retry real em outro dispositivo | Pendente de induzir falha transitória física. Coberto nos testes, inclusive ACK durante processamento ativo com outra conexão PostgreSQL. |
+| Downtime e recuperação no ambiente publicado | Pendente de teste físico com horário vencendo enquanto o backend está parado. Coberto automaticamente com relógio falso e PostgreSQL. |
+| Recriação do backend/container e tokens já enviados | Pendente de clicar OK em notificação anterior à recriação, preservando VAPID e volume Data Protection. Reload do key ring e validação dos tokens têm cobertura automatizada. |
+| Revogação externa da permissão / subscription desaparecida | Pendente de registrar esse fluxo em dispositivo físico. Reconciliação/desativação e recuperação offline são cobertas automaticamente. |
+
+O badge monocromático da Aegis, o bitmap transparente para evitar o fallback do large icon, o botão OK, a tag estável e `renotify: false` foram preservados. A transparência do bitmap e a atualização do service worker foram verificadas em Chromium com push sintético; a aparência final no sistema Android não é inferida desse teste. O README mantém o roteiro dos cenários físicos restantes.
 
 Uma requisição push já iniciada pode terminar antes de o ACK obter o row lock; após o commit do ACK, nenhum novo envio começa. Uma aceitação externa seguida de crash antes do commit continua sujeita a duplicação ambígua: `push_outcome_unknown`, tag estável, `renotify: false`, tentativas persistidas e retries limitados foram preservados. Sem storage de management não é possível identificar com segurança um registro antigo; revogação enquanto a PWA está fechada só pode ser reconciliada quando ela reabre ou o serviço rejeita o endpoint. Notificações já visíveis em outros dispositivos não são removidas remotamente.
 
 Recorrência, cron/RRULE, snooze, prioridade, reincidência, escalada, adaptação, scheduler genérico, automations, monitoramento autônomo/triggers externos e plataformas fora de Chromium/Android continuam excluídos. Não foi introduzido LLM no disparo nem infraestrutura de exactly-once.
+
+## Passe final de documentação e validação
+
+Execução em **27/09/2026**, a partir do commit funcional `a55d381`, na mesma branch `feat/v0.5.0-reminders`. Este passe altera somente `README.md` e este relatório. Não modifica schema, migration, domínio, worker, claim/lease, retry, ACK, PushSubscription, tools, prompt comportamental ou UI. Não faz merge na `main`.
+
+### Consistência de versão e UX
+
+Verificados README/histórico, `AegisIdentityCard.vue`, `aegis_identity.md`, `vite.config.ts`, manifest gerado, `package.json`/lockfile, `AegisMetrics`, metadata de `ChatService` e `OpenAIResponsesClient`: versão **0.5.0**, com **"Knock Knock"** nos locais que apresentam codinome. Referências às versões anteriores no histórico e nos relatórios antigos permanecem como histórico. `name`/`short_name` continuam **Aegis**.
+
+O aviso contextual **Permitir** acima do composer, feedback dispensável/temporário, reconciliação automática de permissão já concedida e tratamento de revogação foram conferidos no código e descritos corretamente. Nenhum toggle permanente foi reintroduzido. Badge monocromático, bitmap transparente, OK, tag estável, `renotify: false` e Background Sync permanecem intactos.
+
+### Validação automatizada atual
+
+O host continua sem SDK .NET no PATH. Os comandos .NET foram executados em `mcr.microsoft.com/dotnet/sdk:8.0`, com o repositório montado em `/workspace`. PostgreSQL 16 rodou em container descartável e rede isolada dos serviços publicados, com `AEGIS_REMINDER_TEST_DATABASE` apontando exclusivamente para esse banco. Nenhum restart, envio real de push ou alteração do banco publicado foi necessário neste passe.
+
+| Check | Resultado |
+| --- | --- |
+| `dotnet test backend/Aegis.sln` com PostgreSQL habilitado | **296/296**, zero falhas, zero skips. |
+| Cenários PostgreSQL dentro da suíte | **2/2**: migrations/claim atômico/lease/recovery/vida independente/disparo; ACK commitado entre envios por dispositivos impedindo o próximo envio do processor ativo. |
+| `dotnet build backend/Aegis.sln --configuration Release` | Aprovado, zero erros; um warning preexistente xUnit2031 em `CalendarTests.cs:1138`. |
+| `npm test --prefix frontend/aegis-pwa` | **41/41**, zero falhas, zero skips. |
+| `npm run build --prefix frontend/aegis-pwa` | Aprovado; typechecks Vue/TypeScript e SW, Vite e injectManifest, 17 entradas de precache. |
+| `docker compose config --quiet` | Aprovado. |
+| `git diff --check` | Aprovado. |
+| `dotnet ef migrations has-pending-model-changes` | Nenhuma mudança pendente. **Nenhuma migration nova**; `20260927130234_AddRemindersAndWebPush` permanece intacta. |
+| Reexportação do catálogo de produção | **28 tools**, JSON idêntico ao catálogo do hardening. |
+
+Comandos executados no SDK container e no host, respectivamente:
+
+```bash
+# SDK container, com AEGIS_REMINDER_TEST_DATABASE no banco descartável:
+dotnet test backend/Aegis.sln --logger 'trx;LogFileName=premerge.trx' --results-directory /validation-output/aegis-v050-premerge-results
+dotnet build backend/Aegis.sln --configuration Release
+dotnet build scripts/Aegis.ToolCatalogExport --configuration Release
+dotnet run --project scripts/Aegis.ToolCatalogExport --configuration Release --no-build > /validation-output/aegis-v050-premerge-tools.json
+/tools/dotnet-ef migrations has-pending-model-changes --project backend/src/Aegis.Infrastructure --startup-project backend/src/Aegis.Api --configuration Release --no-build
+
+# Host:
+npm test --prefix frontend/aegis-pwa
+npm run build --prefix frontend/aegis-pwa
+docker compose config --quiet
+git diff --check
+python3 scripts/eval_tool_intent.py --tools-json /tmp/aegis-v050-premerge-tools.json --report-json /tmp/aegis-v050-premerge-eval.json
+```
+
+Evidências locais: `/tmp/aegis-v050-premerge-backend-tests.log`, `/tmp/aegis-v050-premerge-results/premerge.trx`, `/tmp/aegis-v050-premerge-backend-build.log`, `/tmp/aegis-v050-premerge-frontend-tests.log`, `/tmp/aegis-v050-premerge-frontend-build.log`, `/tmp/aegis-v050-premerge-model.log` e `/tmp/aegis-v050-premerge-tools.json`. O histórico de resultados anteriores acima não foi substituído por estes números.
+
+### Rodada final dos evals
+
+Executada uma rodada integral com `gpt-5.6-luna`, `reasoning.effort=medium`, os **147 casos** e as **28 tools** atuais. Os resultados das tools permanecem simulados; a avaliação não envia emails, eventos nem push. Catálogo reexportado, identidade e script/checkers foram conferidos sem alterações:
+
+- Catálogo: SHA-256 `1b57ae0fdbca7c3de4244979b802a09a995f70a2ffbc03afcb7c9a6506f41356`.
+- Identidade: SHA-256 `05ca5d849b95368d39d2a04018f4e3e7c11421221b19d219d260b7d81e39714c`.
+- Script/checkers: SHA-256 `766b50882c217caf7b92f29baf07cd3c7ddcf80bca96160e3bacccb87dfa13a0`.
+
+O histórico de **146/147, 145/147 e 146/147** do hardening permanece acima, incluindo **114/114 legados** na terceira rodada e execuções corretas para cada caso distinto. Não houve alteração de prompt, descrições ou checker, nem rechecagem seletiva neste passe. Uma execução perfeita, quando observada, não torna o modelo determinístico; tampouco combinar aprovações isoladas produz uma rodada perfeita.
+
+| Rodada | Total | Legados | Novos |
+| --- | --- | --- | --- |
+| Passe final antes do merge | **146/147** | **113/114** | **33/33** |
+
+Única falha: `proactive_promotional`, “Resume esse email da loja sobre as promoções de setembro.” As únicas chamadas foram `email_search` e `email_read`; não houve criação de Reminder ou evento. O modelo terminou o resumo oferecendo um lembrete para conferir cupons/vitrines. O checker atual rejeita essa oferta contextual dispensável. É a mesma classe de variação observada na segunda rodada do hardening; o caso passou em outras execuções já registradas. A falha permanece visível e não foi tolerada, removida ou reexecutada seletivamente.
+
+Todos os **33 casos novos** passaram nesta rodada. A terceira rodada histórica de hardening continua tendo **114/114 legados**, enquanto esta rodada final tem **113/114**; esses resultados não são intercambiáveis. Todos os 147 casos distintos já tiveram pelo menos uma execução correta, sem que isso prove estabilidade ou elimine as falhas probabilísticas registradas.
+
+Relatório completo: `/tmp/aegis-v050-premerge-eval.json` (SHA-256 `ac009f28d3ff123ad62c73c1aa59771f39ad55637378322667890817899a83ba`); log `/tmp/aegis-v050-premerge-eval.log`, com `RESULT 146/147 passed`. O processo retornou código 1 por essa falha semântica, sem erro de transporte/API. A ordem e a quantidade dos 147 resultados foram verificadas contra os casos atuais do script.
+
+A branch permanece preparada para revisão/merge como **Aegis v0.5.0 — "Knock Knock"**, com as pendências físicas explicitadas. Nenhuma migration foi criada e nenhum merge, squash ou remoção da branch foi executado.
