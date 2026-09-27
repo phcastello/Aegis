@@ -42,7 +42,7 @@ public sealed class AegisToolLoop(
             cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
                 new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
-                    DefaultMaxIterations, InputItems: inputItems), cancellationToken);
+                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1)), cancellationToken);
             responses.Add(response);
 
             if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
@@ -110,7 +110,7 @@ public sealed class AegisToolLoop(
             ModelToolStreamChunk? completed = null;
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
                 new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
-                    DefaultMaxIterations, InputItems: inputItems), cancellationToken))
+                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1)), cancellationToken))
             {
                 if (chunk.IsDone)
                 {
@@ -300,6 +300,15 @@ public sealed class AegisToolLoop(
                 responses = responseBodies
             }, JsonOptions)
         };
+    }
+
+    private static IReadOnlyList<JsonElement>? WithIdentityReminder(
+        IReadOnlyList<JsonElement>? inputItems, string identity, bool continuation)
+    {
+        if (!continuation || inputItems is null) return inputItems;
+        // Reassert trusted policy after tool data without accumulating reminders or
+        // changing the stable cached prefix. Tool content keeps its original role.
+        return [.. inputItems, ToJsonElement(new { role = "developer", content = identity })];
     }
 
     private static JsonElement CreateUserInputItem(string content)

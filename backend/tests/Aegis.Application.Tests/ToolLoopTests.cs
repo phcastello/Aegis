@@ -62,6 +62,47 @@ public sealed class ToolLoopTests
         Assert.True(chunks[^1].IsDone);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToolContinuationReassertsTrustedIdentityWithoutChangingNativeHistory(bool streaming)
+    {
+        const string identity = "Identidade confiável: ofereça ajuda útil, sem executar novas ações.";
+        var prefix = new[]
+        {
+            JsonSerializer.SerializeToElement(new { role = "developer", content = new[] {
+                new { type = "input_text", text = identity, prompt_cache_breakpoint = new { mode = "explicit" } }
+            } }),
+            JsonSerializer.SerializeToElement(new { role = "user", content = "Leia o conteúdo solicitado." }),
+            JsonSerializer.SerializeToElement(new { role = "developer", content = "Contexto operacional atual" })
+        };
+        var request = new ModelRequest(identity, "Leia o conteúdo solicitado.", InputItems: prefix);
+        var model = new FakeModelClient([Call("fake_tool"), Call("fake_tool"), Reply("Pronto")]);
+        var loop = CreateLoop(model, new FakeTool());
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        if (streaming)
+        {
+            await foreach (var _ in loop.StreamAsync(request, context)) { }
+        }
+        else
+        {
+            await loop.RunAsync(request, context);
+        }
+
+        Assert.Equal(3, model.Requests.Count);
+        Assert.Equal(prefix.Select(item => item.GetRawText()), model.Requests[0].InputItems!.Select(item => item.GetRawText()));
+        for (var iteration = 1; iteration < model.Requests.Count; iteration++)
+        {
+            var items = model.Requests[iteration].InputItems!;
+            Assert.Equal(prefix.Select(item => item.GetRawText()), items.Take(prefix.Length).Select(item => item.GetRawText()));
+            Assert.Equal("developer", items[^1].GetProperty("role").GetString());
+            Assert.Equal(identity, items[^1].GetProperty("content").GetString());
+            Assert.Equal(3, items.Count(item => item.TryGetProperty("role", out var role) && role.GetString() == "developer"));
+            Assert.Equal(iteration, items.Count(item => item.TryGetProperty("type", out var type) && type.GetString() == "function_call"));
+            Assert.Equal(iteration, items.Count(item => item.TryGetProperty("type", out var type) && type.GetString() == "function_call_output"));
+        }
+    }
+
     private static AegisToolLoop CreateLoop(FakeModelClient model, FakeTool tool) =>
         new(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
 
@@ -89,13 +130,15 @@ public sealed class ToolLoopTests
     private sealed class FakeModelClient(IReadOnlyList<ModelToolStreamChunk> responses) : IAegisModelClient
     {
         public int StreamCalls { get; private set; }
+        private int responseCalls;
         public List<ModelToolRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(
             ModelToolRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Requests.Add(request with { InputItems = request.InputItems?.ToList() });
-            var response = responses[StreamCalls++];
+            StreamCalls++;
+            var response = responses[responseCalls++];
             if (!string.IsNullOrEmpty(response.Content))
                 yield return new ModelToolStreamChunk(response.Content, false, [], []);
             await Task.Yield();
@@ -104,7 +147,14 @@ public sealed class ToolLoopTests
 
         public Task<ModelCompletionResponse> GenerateAsync(ModelRequest request, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public IAsyncEnumerable<ModelStreamChunk> StreamAsync(ModelRequest request, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request with { InputItems = request.InputItems?.ToList() ?? request.Request.InputItems?.ToList() });
+            var response = responses[responseCalls++];
+            return Task.FromResult(new ModelToolResponse(response.Content ?? "", response.Provider!, response.Model!,
+                response.Purpose!.Value, response.ToolCalls, response.OutputItems, response.ResponseId,
+                response.MetadataJson, response.AuditData!));
+        }
     }
 
     private sealed class FakeTool(bool throwError = false) : IAegisTool
