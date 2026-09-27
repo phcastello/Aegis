@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -17,6 +18,28 @@ ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = (ROOT / "backend/src/Aegis.Api/Prompts/aegis_identity.md").read_text()
 MODEL = "gpt-5.6-luna"
 EXISTING_NOTE = "Preciso levar os exames."
+PROACTIVITY_EMAILS = {
+    "proactive_webinar": {
+        "from": "Hackers do Bem <webinar@example.test>", "subject": "Próximo webinar do Hackers do Bem",
+        "bodyText": "Próximo webinar: Padronização — Da Tríade à Melhoria Contínua. Dia 30/09/2026 às 16h, horário de Brasília. Vamos discutir como padronizar processos e promover melhoria contínua. Transmissão online aberta aos participantes."
+    },
+    "proactive_timezone": {
+        "from": "OpenAI <devday@example.test>", "subject": "OpenAI DevDay keynote",
+        "bodyText": "Join the OpenAI DevDay keynote livestream on September 29, 2026 at 10 a.m. PT (Pacific Time). See the latest developer announcements and API demos."
+    },
+    "proactive_past": {
+        "from": "Comunidade <talk@example.test>", "subject": "Resumo da palestra da semana passada",
+        "bodyText": "Nossa palestra sobre acessibilidade aconteceu em 19/09/2026 às 14h, na semana passada. Discutimos navegação por teclado e leitores de tela. Este email compartilha os slides e a gravação; não há novo encontro marcado."
+    },
+    "proactive_incidental": {
+        "from": "História da tecnologia <history@example.test>", "subject": "Newsletter: uma retrospectiva",
+        "bodyText": "Em 1994 foi lançado o navegador Netscape Navigator. Nesta edição relembramos a evolução da web e como os navegadores mudaram a comunicação."
+    },
+    "proactive_promotional": {
+        "from": "Loja <offers@example.test>", "subject": "Newsletter de promoções",
+        "bodyText": "Ofertas de setembro: cupons em 28/09, novas vitrines em 29/09 e descontos até 30/09/2026. Confira livros e acessórios com preços especiais enquanto durarem os estoques. Você não tem inscrição, reserva ou compromisso com essas promoções."
+    },
+}
 CASES = [
     ("Meu professor falou que a prova vai ser difícil.", "none", None),
     ("Preciso responder uma pergunta da faculdade.", "none", None),
@@ -54,6 +77,14 @@ CASES = [
     ("Move aquela reunião para 10 de outubro das 16h às 17h.", "calendar_holiday_update", "calendar_update_event"),
     ("Leia e resuma o último email sobre a apresentação no Gmail e me ajude a organizar esse compromisso.", "cross", "email_read"),
 ]
+
+CASES.extend([
+    ("Vê aquele email do Hackers do Bem sobre o próximo webinar e me diz do que se trata.", "proactive_webinar", "email_read"),
+    ("Vê aquele email da OpenAI sobre DevDay e resume pra mim.", "proactive_timezone", "email_read"),
+    ("Resume esse email da comunidade sobre a palestra da semana passada.", "proactive_past", "email_read"),
+    ("Resume esse email da newsletter História da tecnologia.", "proactive_incidental", "email_read"),
+    ("Resume esse email da loja sobre as promoções de setembro.", "proactive_promotional", "email_read"),
+])
 
 # These variations exercise model intent, never backend text matching.
 for message in ["sim", "pode", "manda bala", "vai", "faz", "beleza", "confirmo", "pode criar", "é isso aí"]:
@@ -208,6 +239,17 @@ def reminder_result(values: dict, creating: bool) -> dict | None:
 
 
 def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state: dict) -> str:
+    if kind in PROACTIVITY_EMAILS:
+        email = {"id": "eval-message-1", "threadId": "eval-thread-1", **PROACTIVITY_EMAILS[kind]}
+        if name == "email_search":
+            return json.dumps({"emails": [{"id": email["id"], "threadId": email["threadId"],
+                               "from": email["from"], "subject": email["subject"], "snippet": email["bodyText"][:70],
+                               "isUnread": True, "isStarred": False, "isImportant": True}],
+                               "totalMatchingCount": 1, "returnedCount": 1})
+        if name == "email_read":
+            return json.dumps({"email": email})
+        if name == "email_read_thread":
+            return json.dumps({"thread": {"id": email["threadId"], "messages": [email]}})
     holiday_calendar = "pt.brazilian#holiday@group.v.calendar.google.com"
     holiday = {"eventId": "evalholiday1", "calendarId": holiday_calendar, "calendarName": "Feriados",
                "type": "holiday", "summary": "Dia da Comunidade", "start": "2026-10-10", "end": "2026-10-10",
@@ -412,7 +454,10 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
         state["calendarPending"] = {"summary": "Dentista", "start": "2026-09-27T14:00:00-03:00", "end": "2026-09-27T15:00:00-03:00", "allDay": False}
     final_text = ""
     for _ in range(6):
-        response = request_response(key, tools, input_items)
+        # Mirror AegisToolLoop: reassert the same trusted identity after tool results,
+        # keeping the native history and cached prefix unchanged between iterations.
+        model_input = input_items + [{"role": "developer", "content": IDENTITY}] if calls_seen else input_items
+        response = request_response(key, tools, model_input)
         calls = [item for item in response.get("output", []) if item.get("type") == "function_call"]
         final_text = output_text(response) or final_text
         if not calls:
@@ -459,6 +504,31 @@ def main() -> int:
             passed = not calls and bool(answer)
         elif kind == "email":
             passed = required_tool in calls and all(name in {"email_get_status", "email_search", "email_read", "email_read_thread"} for name in calls)
+        elif kind in PROACTIVITY_EMAILS:
+            # Assertions apply only to the eval, never to production tool routing.
+            text = answer.lower()
+            passed = "email_search" in calls and any(name in calls for name in {"email_read", "email_read_thread"}) and bool(answer)
+            passed = passed and all(name in {"email_get_status", "email_search", "email_read", "email_read_thread"} for name in calls)
+            calendar_mention = bool(re.search(r"\b(?:agenda|calend[aá]rio|calendar|agendar|agende|agendo|lembretes?)\b", text))
+            if kind in {"proactive_webinar", "proactive_timezone"}:
+                passed = passed and calendar_mention and bool(re.search(r"quer|posso|gostaria|se (?:você )?(?:quiser|preferir)|caso queira", text))
+                day = "30" if kind == "proactive_webinar" else "29"
+                passed = passed and bool(re.search(rf"\b{day}(?:/0?9|\s+(?:de\s+)?setembro)", text))
+                if kind == "proactive_webinar":
+                    passed = passed and "padronização" in text and "melhoria" in text and bool(re.search(r"\b16(?:h|:00)", text))
+                else:
+                    passed = passed and "devday" in text and (bool(re.search(r"\b14(?:h|:00)", text)) or bool(re.search(r"\b10(?:h|:00|\s*a\.?m\.?).{0,45}(?:\bpt\b|pac[ií]fic)", text)))
+                    # A future offer to convert is not a claim of a converted time.
+                    # Reject incorrect local hours when an actual conversion is shown.
+                    local_zone = r"(?:bras[ií]lia|s[aã]o paulo|seu (?:fuso|hor[aá]rio))"
+                    local_prefix = r"\s*(?:[,—–-]\s*|\(\s*)?(?:(?:no|em|do)\s+)?(?:hor[aá]rio\s+(?:de\s+)?)?"
+                    local_hours = re.findall(rf"\b(\d{{1,2}})(?:h|:\d{{2}}){local_prefix}{local_zone}", text)
+                    local_hours += re.findall(rf"{local_zone}\s*(?::|[—–-]|,?\s*(?:às|[ée]|ser[aá]|s[aã]o)\s+)\s*(\d{{1,2}})(?:h|:\d{{2}})", text)
+                    passed = passed and all(hour == "14" for hour in local_hours)
+            else:
+                passed = passed and not calendar_mention
+                expected = {"proactive_past": "acessibilidade", "proactive_incidental": "1994", "proactive_promotional": "descont"}[kind]
+                passed = passed and expected in text
         elif kind == "calendar_destination_clarify":
             passed = "calendar_list_calendars" in calls and "?" in answer and not any(name in calls for name in {"calendar_create_event", "calendar_confirm_pending_action"})
         elif kind in {"calendar_clarify", "calendar_missing_end"}:
@@ -606,7 +676,7 @@ def main() -> int:
         failures += not passed
         report.append({"message": message, "kind": kind, "passed": bool(passed), "calls": calls, "arguments": arguments, "answer": answer})
         details = ",".join(calls) or "none"
-        excerpt = answer if kind.startswith(("calendar_holiday_", "calendar_delegate_")) or kind == "calendar_replace" else answer[:100]
+        excerpt = answer if kind.startswith(("calendar_holiday_", "calendar_delegate_", "proactive_")) or kind == "calendar_replace" else answer[:100]
         print(f"{'PASS' if passed else 'FAIL'} [{kind}] {message} | tools={details} | answer={excerpt!r}", flush=True)
     if args.report_json:
         args.report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

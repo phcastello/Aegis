@@ -446,7 +446,7 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.4.0",
+                ["aegis_version"] = "0.4.1",
                 ["purpose"] = "Chat"
             },
             promptResult.InputItems);

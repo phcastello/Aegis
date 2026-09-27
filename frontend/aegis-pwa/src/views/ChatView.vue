@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
+import ConversationInfo from '../components/ConversationInfo.vue';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
   deleteConversation,
@@ -18,6 +19,7 @@ import {
 } from '../services/aegisApi';
 import { useAegisVoice } from '../composables/useAegisVoice';
 import { useAegisTranscription } from '../composables/useAegisTranscription';
+import { useSidebarGesture } from '../composables/useSidebarGesture';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
@@ -51,6 +53,8 @@ const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
 const sidebarDrawerQuery = window.matchMedia('(max-width: 1380px)');
 const isSidebarOpen = ref(!sidebarDrawerQuery.matches);
+const sidebarGestureSurface = ref<HTMLElement | null>(null);
+const sidebarGesture = useSidebarGesture(sidebarGestureSurface, isSidebarOpen, sidebarDrawerQuery);
 const activeConversationTitle = ref<string | null>(null);
 const activeConversationCreatedAt = ref<string | null>(null);
 const conversations = ref<ConversationSummary[]>([]);
@@ -806,7 +810,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell">
-    <div class="hideout-shell" :class="{ 'hideout-shell--sidebar-open': isSidebarOpen }">
+    <div ref="sidebarGestureSurface" class="hideout-shell" :class="{ 'hideout-shell--dragging': sidebarGesture.dragging.value }" :style="sidebarGesture.style.value">
       <button
         v-if="!isSidebarOpen"
         id="sidebar-expand-button"
@@ -848,6 +852,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="chat-voice-controls">
+          <ConversationInfo v-if="conversationId && !isRestoring" :conversation-id="conversationId" />
           <button
             type="button"
             class="voice-toggle"
