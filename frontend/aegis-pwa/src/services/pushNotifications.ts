@@ -5,7 +5,7 @@ const failureMessages: Record<NotificationFailureCode, string> = {
   push_not_supported: 'Use Chrome com uma conexão HTTPS para ativar notificações.',
   service_worker_unavailable: 'Não foi possível preparar notificações. Reabra a Aegis e tente novamente.',
   push_subscription_failed: 'Não foi possível concluir a ativação das notificações. Tente novamente.',
-  backend_push_not_configured: 'As notificações ainda não estão configuradas na Aegis.',
+  backend_push_not_configured: 'O envio de notificações ainda não está configurado no servidor da Aegis.',
   backend_registration_failed: 'Não foi possível concluir a ativação das notificações. Tente novamente.',
   subscription_inactive: 'A ativação das notificações não foi confirmada. Tente novamente.'
 };

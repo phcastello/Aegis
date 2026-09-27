@@ -70,6 +70,17 @@ test('unconfigured backend reproduces granted-permission incident and refuses ac
   await rejectsCode(f.controller().activate(), 'backend_push_not_configured');
   assert.deepEqual(f.calls, ['configuration']);
 });
+test('activation refreshes disabled configuration after the server is configured, without reopening', async () => {
+  const f = fixture(); f.permission = 'granted'; f.config = { enabled: false, publicKey: null };
+  const control = f.controller();
+  assert.equal(await control.reconcile(), false);
+  await rejectsCode(control.activate(), 'backend_push_not_configured');
+  assert.equal(f.calls.includes('subscribe'), false);
+  assert.equal(f.calls.includes('register'), false);
+  f.config = { enabled: true, publicKey: 'AQID' }; f.calls.length = 0;
+  assert.equal(await control.activate(), true);
+  assert.deepEqual(f.calls, ['configuration', 'permission', 'ready', 'getSubscription', 'subscribe', 'register', 'save', 'status', 'getSubscription']);
+});
 test('unsupported browser and unavailable worker have distinct diagnostics', async () => {
   const f = fixture(); f.browser.supported = false;
   await rejectsCode(f.controller().activate(), 'push_not_supported'); assert.deepEqual(f.calls, []);

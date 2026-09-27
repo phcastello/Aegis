@@ -14,6 +14,35 @@ namespace Aegis.Application.Tests;
 public sealed class ReminderTests
 {
     [Fact]
+    public async Task CreationReportsServerConfigurationSeparatelyFromMissingDeviceRegistration()
+    {
+        using var f = new Fixture();
+        var tool = new ReminderCreateTool(f.Service);
+        var args = JsonSerializer.SerializeToElement(new { text = "teste", dueAt = f.Due });
+        var context = new ToolExecutionContext(f.Conversation, Guid.NewGuid(), "me lembra daqui um minuto de testar");
+        f.Push.IsConfigured = false;
+        var result = await tool.ExecuteAsync(args, context);
+        Assert.False(result.Success);
+        var error = JsonDocument.Parse(result.Content).RootElement;
+        Assert.Equal("notifications_not_configured", error.GetProperty("error").GetString());
+        Assert.Contains("servidor", error.GetProperty("message").GetString());
+        Assert.DoesNotContain("Ative notificações", error.GetProperty("message").GetString());
+        Assert.Empty(f.Db.Reminders);
+
+        f.Push.IsConfigured = true;
+        result = await tool.ExecuteAsync(args, context);
+        Assert.False(result.Success);
+        error = JsonDocument.Parse(result.Content).RootElement;
+        Assert.Equal("notifications_unavailable", error.GetProperty("error").GetString());
+        Assert.Contains("Ative notificações", error.GetProperty("message").GetString());
+        Assert.Empty(f.Db.Reminders);
+
+        f.Subscribe(); await f.Db.SaveChangesAsync();
+        Assert.True((await tool.ExecuteAsync(args, context)).Success);
+        Assert.Single(f.Db.Reminders);
+    }
+
+    [Fact]
     public async Task CreationRequiresFunctionalChannelAndFutureAbsoluteTime()
     {
         using var f = new Fixture();

@@ -13,7 +13,9 @@ public sealed class ReminderService(IReminderStore store, IWebPushClient push, T
     {
         var due = ParseInstant(dueAt);
         var zone = ValidateTimeZone(timeZoneId ?? RuntimeContextProvider.ReferenceTimeZoneId);
-        if (!push.IsConfigured || !await store.HasActiveSubscriptionAsync(ct))
+        if (!push.IsConfigured)
+            throw new ReminderException("notifications_not_configured", "O envio de notificações ainda não está configurado no servidor da Aegis. Conceder permissão no navegador não resolve essa configuração; o lembrete ainda não foi criado.");
+        if (!await store.HasActiveSubscriptionAsync(ct))
             throw new ReminderException("notifications_unavailable", "Ative notificações na Aegis para eu conseguir avisar com a aplicação fechada. Depois, peça o lembrete novamente; ele ainda não foi criado.");
         var reminder = new Reminder(text, due, zone, conversationId, clock.GetUtcNow());
         await store.AddAsync(reminder, ct);
