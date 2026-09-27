@@ -20,7 +20,7 @@ public sealed class ReminderStore(AegisDbContext db) : IReminderStore
     }
     public async Task<IReadOnlyList<Reminder>> ListAsync(DateTimeOffset? from, DateTimeOffset? to, int limit, CancellationToken ct)
     {
-        var query = db.Reminders.Where(r => r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Processing);
+        var query = db.Reminders.Where(r => r.AcknowledgedAt == null && (r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Processing));
         if (from is not null) query = query.Where(r => r.DueAtUtc >= from);
         if (to is not null) query = query.Where(r => r.DueAtUtc < to);
         return await query.OrderBy(r => r.DueAtUtc).ThenBy(r => r.Id).Take(limit).ToListAsync(ct);
@@ -82,12 +82,12 @@ public sealed class ReminderStore(AegisDbContext db) : IReminderStore
         await using var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
         var candidate = db.Database.IsNpgsql()
             ? (await db.Reminders.FromSqlInterpolated($"""
-                SELECT * FROM reminders WHERE "DueAtUtc" <= {now} AND
+                SELECT * FROM reminders WHERE "AcknowledgedAt" IS NULL AND "DueAtUtc" <= {now} AND
                   (("Status" = 'Scheduled' AND "NextAttemptAt" <= {now}) OR
                    ("Status" = 'Processing' AND "LeaseExpiresAt" <= {now}))
                 ORDER BY "NextAttemptAt", "Id" LIMIT 1 FOR UPDATE SKIP LOCKED
                 """).AsNoTracking().ToListAsync(ct)).SingleOrDefault()
-            : await db.Reminders.AsNoTracking().Where(r => r.DueAtUtc <= now &&
+            : await db.Reminders.AsNoTracking().Where(r => r.AcknowledgedAt == null && r.DueAtUtc <= now &&
                 (r.Status == ReminderStatus.Scheduled && r.NextAttemptAt <= now || r.Status == ReminderStatus.Processing && r.LeaseExpiresAt <= now))
                 .OrderBy(r => r.NextAttemptAt).FirstOrDefaultAsync(ct);
         if (candidate is null) return null;

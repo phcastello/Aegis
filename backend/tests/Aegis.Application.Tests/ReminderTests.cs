@@ -135,6 +135,58 @@ public sealed class ReminderTests
         Assert.Equal(ReminderStatus.Triggered, Assert.Single(f.Db.Reminders).Status);
     }
     [Fact]
+    public async Task GlobalAcknowledgementStopsOtherDeviceRetryAndRetainsHistory()
+    {
+        using var f = new Fixture(); var reminder = await f.Create(); f.Subscribe(); await f.Db.SaveChangesAsync();
+        f.Push.Results.Enqueue(new PushResult(201)); f.Push.Results.Enqueue(new PushResult(503, "push_http_error"));
+        f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        var before = await f.Db.ReminderDeliveryAttempts.AsNoTracking().OrderBy(a => a.Id).ToListAsync();
+        Assert.Equal(2, before.Count); Assert.Single(before, a => a.RetryAt != null);
+        await f.Store.LockedAsync(reminder.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
+        var acknowledged = f.Clock.GetUtcNow(); f.Clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Equal(2, f.Push.Payloads.Count);
+        var actual = (await f.Db.Reminders.FindAsync(reminder.Id))!;
+        Assert.Equal(acknowledged, actual.AcknowledgedAt); Assert.Equal(ReminderStatus.Triggered, actual.Status);
+        Assert.Null(actual.CancelledAt); Assert.Null(actual.LeaseId); Assert.False(actual.CanClaim(f.Clock.GetUtcNow()));
+        var after = await f.Db.ReminderDeliveryAttempts.AsNoTracking().OrderBy(a => a.Id).ToListAsync();
+        Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(after));
+    }
+    [Fact]
+    public async Task PreviouslyAcknowledgedScheduledRowsCannotBeListedOrClaimed()
+    {
+        using var f = new Fixture(); var reminder = await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1));
+        await f.Processor.ProcessNextAsync();
+        await f.Store.LockedAsync(reminder.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
+        var original = (await f.Db.Reminders.FindAsync(reminder.Id))!.AcknowledgedAt;
+        // Reproduce rows acknowledged before ACK stopped scheduling retries.
+        f.Db.Entry((await f.Db.Reminders.FindAsync(reminder.Id))!).Property(r => r.Status).CurrentValue = ReminderStatus.Scheduled;
+        await f.Db.SaveChangesAsync();
+        Assert.Empty(await f.Store.ListAsync(null, null, 20, default));
+        Assert.Null(await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default));
+        await f.Store.LockedAsync(reminder.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
+        var actual = (await f.Db.Reminders.FindAsync(reminder.Id))!;
+        Assert.Equal(original, actual.AcknowledgedAt); Assert.Equal(ReminderStatus.Triggered, actual.Status);
+    }
+
+    [Fact]
+    public async Task AcknowledgementDuringProcessingReleasesLeaseWithoutCancelOrRecoverySend()
+    {
+        using var f = new Fixture(); var reminder = await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1));
+        var claim = (await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default))!.Value;
+        await f.Store.LockedAsync(reminder.Id, r => {
+            r.BeginTrigger(f.Clock.GetUtcNow()); Assert.Equal(ReminderStatus.Processing, r.Status);
+            r.Acknowledge(f.Clock.GetUtcNow());
+            Assert.False(r.OwnsLease(claim.LeaseId));
+            r.Finish(f.Clock.GetUtcNow().AddSeconds(10), false, f.Clock.GetUtcNow());
+            Assert.Equal(ReminderStatus.Triggered, r.Status);
+            return Task.FromResult(true);
+        }, default);
+        f.Clock.Advance(TimeSpan.FromMinutes(3));
+        Assert.Null(await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default));
+        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Empty(f.Push.Payloads);
+    }
+
+    [Fact]
     public async Task TransientFailuresExhaustFiveAttemptsWithBackoff()
     {
         using var f = new Fixture(); await f.Create();
@@ -165,10 +217,11 @@ public sealed class ReminderTests
         r = (await f.Db.Reminders.FindAsync(r.Id))!;
         Assert.NotNull(r.OpenedAt); Assert.Null(r.AcknowledgedAt);
         await f.Store.LockedAsync(r.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
-        r = (await f.Db.Reminders.FindAsync(r.Id))!; var first = r.AcknowledgedAt;
+        r = (await f.Db.Reminders.FindAsync(r.Id))!; var first = r.AcknowledgedAt; var updated = r.UpdatedAt;
         f.Clock.Advance(TimeSpan.FromMinutes(1));
         await f.Store.LockedAsync(r.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
         Assert.Equal(first, (await f.Db.Reminders.FindAsync(r.Id))!.AcknowledgedAt);
+        Assert.Equal(updated, (await f.Db.Reminders.FindAsync(r.Id))!.UpdatedAt);
     }
     [Fact]
     public void SignedInteractionIsBoundToReminderActionAndExpiry()

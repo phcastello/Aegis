@@ -64,7 +64,7 @@ public sealed class Reminder : AuditableEntity
             Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(text.Trim(), new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })) > 1900)
             throw new ArgumentException("O texto deve conter entre 1 e 600 caracteres.");
     }
-    public bool CanClaim(DateTimeOffset now) => DueAtUtc <= now &&
+    public bool CanClaim(DateTimeOffset now) => AcknowledgedAt is null && DueAtUtc <= now &&
         (Status == ReminderStatus.Scheduled && NextAttemptAt <= now ||
          Status == ReminderStatus.Processing && LeaseExpiresAt <= now);
     public void Claim(Guid leaseId, DateTimeOffset now)
@@ -87,8 +87,8 @@ public sealed class Reminder : AuditableEntity
     public void RenewLease(DateTimeOffset now) { LeaseExpiresAt = now.AddMinutes(2); Touch(now); }
     public void Finish(DateTimeOffset? retryAt, bool anyAccepted, DateTimeOffset now)
     {
-        Status = retryAt is not null ? ReminderStatus.Scheduled : anyAccepted ? ReminderStatus.Triggered : ReminderStatus.Failed;
-        if (retryAt is not null) NextAttemptAt = retryAt.Value;
+        Status = AcknowledgedAt is not null ? ReminderStatus.Triggered : retryAt is not null ? ReminderStatus.Scheduled : anyAccepted ? ReminderStatus.Triggered : ReminderStatus.Failed;
+        if (retryAt is not null && AcknowledgedAt is null) NextAttemptAt = retryAt.Value;
         LeaseId = null;
         LeaseExpiresAt = null;
         Touch(now);
@@ -96,7 +96,15 @@ public sealed class Reminder : AuditableEntity
     public void Acknowledge(DateTimeOffset now)
     {
         if (TriggeredAt is null) throw new ArgumentException("O lembrete ainda não disparou.");
-        if (AcknowledgedAt is null) { AcknowledgedAt = now; Touch(now); }
+        if (AcknowledgedAt is null)
+        {
+            AcknowledgedAt = now;
+            Touch(now);
+            // Global recognition fulfills notification work without cancelling the reminder.
+            // Existing delivery attempts retain their original outcomes/retry audit.
+        }
+        if (Status != ReminderStatus.Triggered || LeaseId is not null || LeaseExpiresAt is not null)
+            Finish(null, true, now);
     }
     public void Open(DateTimeOffset now)
     {

@@ -22,7 +22,7 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IW
         var (id, leaseId) = claim.Value;
         var started = await store.LockedAsync(id, r =>
         {
-            if (!r.OwnsLease(leaseId)) return Task.FromResult(false);
+            if (r.AcknowledgedAt is not null || !r.OwnsLease(leaseId)) return Task.FromResult(false);
             if (r.BeginTrigger(clock.GetUtcNow()))
             {
                 metrics.RemindersTriggered.Add(1);
@@ -38,7 +38,7 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IW
             // unknown outcome; recovery retries it within the same bounded budget.
             var attempt = await store.LockedAsync<ReminderDeliveryAttempt?>(id, async r =>
             {
-                if (!r.OwnsLease(leaseId)) return null;
+                if (r.AcknowledgedAt is not null || !r.OwnsLease(leaseId)) return null;
                 var last = await db.ReminderDeliveryAttempts.Where(a => a.ReminderId == id && a.PushSubscriptionId == subscription.Id).OrderByDescending(a => a.Attempt).FirstOrDefaultAsync(ct);
                 if (last is not null && (last.AcceptedAt is not null ||
                     last.FailureReason is not null && last.RetryAt is null || last.RetryAt > clock.GetUtcNow())) return null;
@@ -53,6 +53,12 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IW
             if (attempt is null) continue;
             await store.LockedAsync(id, async r =>
             {
+                // ACK may have committed after we persisted the attempt and before this lock.
+                if (r.AcknowledgedAt is not null)
+                {
+                    attempt.Complete(null, "push_skipped_acknowledged", null, clock.GetUtcNow());
+                    return false;
+                }
                 if (!r.OwnsLease(leaseId)) return false;
                 var payload = JsonSerializer.Serialize(new {
                     type = "reminder", reminderId = id, text = r.Text,
@@ -75,7 +81,7 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IW
         }
         await store.LockedAsync(id, async r =>
         {
-            if (!r.OwnsLease(leaseId)) return false;
+            if (r.AcknowledgedAt is not null || !r.OwnsLease(leaseId)) return false;
             var attempts = await db.ReminderDeliveryAttempts.Where(a => a.ReminderId == id).ToListAsync(ct);
             var latest = attempts.GroupBy(a => a.PushSubscriptionId).Select(g => g.MaxBy(a => a.Attempt)!).ToList();
             var active = await db.PushSubscriptions.Where(s => s.DisabledAt == null).Select(s => s.Id).ToListAsync(ct);

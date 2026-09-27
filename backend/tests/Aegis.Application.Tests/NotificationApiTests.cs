@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Aegis.Api.Controllers;
 using Aegis.Domain.Entities;
+using Aegis.Application.Reminders;
+using Aegis.Application.Observability;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Reminders;
 using Microsoft.AspNetCore.DataProtection;
@@ -32,6 +34,33 @@ public sealed class NotificationApiTests
         Assert.Null((await f.Db.PushSubscriptions.FindAsync(id))!.DisabledAt);
         Assert.Equal(2, f.Db.PushSubscriptions.Count());
     }
+    [Fact]
+    public async Task RealSubscriptionRegistrationAndStatusUnlockReminderCreation()
+    {
+        using var f = new Fixture(); using var metrics = new AegisMetrics();
+        using var http = new HttpClient();
+        var push = new WebPushService(http, Microsoft.Extensions.Options.Options.Create(f.Options), f.Clock);
+        var service = new ReminderService(new ReminderStore(f.Db), push, f.Clock, metrics);
+        var conversation = new Conversation(); f.Db.Conversations.Add(conversation); await f.Db.SaveChangesAsync();
+        await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
+        var request = f.Request();
+        var result = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Register(request, default)).Value);
+        var id = result.GetProperty("subscriptionId").GetGuid(); var token = result.GetProperty("token").GetString()!;
+        var status = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Status(id, new(token, request.Endpoint), default)).Value);
+        Assert.True(status.GetProperty("active").GetBoolean());
+        var mismatch = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Status(id, new(token, request.Endpoint + "other"), default)).Value);
+        Assert.False(mismatch.GetProperty("active").GetBoolean());
+        Assert.IsType<NotFoundResult>(await f.Api.Status(id, new("tampered", request.Endpoint), default));
+        Assert.NotNull(await service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
+        await f.Api.Disable(id, new(token), default);
+        status = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Status(id, new(token, request.Endpoint), default)).Value);
+        Assert.False(status.GetProperty("active").GetBoolean());
+        await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
+        Assert.Single(f.Db.Reminders);
+        await f.Api.Register(request, default); f.Options.PrivateKey = "";
+        await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
+    }
+
     [Fact]
     public async Task RotatingEndpointDisablesOnlySameDeviceAndManagementTokenCannotSelectAnotherRecord()
     {
@@ -87,6 +116,35 @@ public sealed class NotificationApiTests
         Assert.IsType<NoContentResult>(await f.Api.Acknowledge(r.Id, new(ack), default));
         Assert.Equal(timestamp, (await f.Db.Reminders.FindAsync(r.Id))!.AcknowledgedAt);
     }
+    [Fact]
+    public async Task NotificationAndManagementTokensSurviveKeyRingProviderRestart()
+    {
+        var directory = new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aegis-reminder-keys-" + Guid.NewGuid().ToString("N")));
+        directory.Create();
+        try
+        {
+            using var f = new Fixture();
+            var before = DataProtectionProvider.Create(directory, builder => builder.SetApplicationName("Aegis"));
+            var tokens = new ReminderInteractionTokens(before, f.Clock);
+            var api = new NotificationsController(f.Db, new ReminderStore(f.Db), tokens, before, f.Clock, Microsoft.Extensions.Options.Options.Create(f.Options));
+            var request = f.Request();
+            var registered = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await api.Register(request, default)).Value);
+            var id = registered.GetProperty("subscriptionId").GetGuid(); var management = registered.GetProperty("token").GetString()!;
+            var reminder = new Reminder("restart", f.Clock.GetUtcNow().AddMinutes(1), "America/Sao_Paulo", null, f.Clock.GetUtcNow());
+            f.Clock.Advance(TimeSpan.FromMinutes(1)); reminder.Claim(Guid.NewGuid(), f.Clock.GetUtcNow()); reminder.BeginTrigger(f.Clock.GetUtcNow());
+            f.Db.Reminders.Add(reminder); await f.Db.SaveChangesAsync();
+            var ack = tokens.Create(reminder.Id, id, "acknowledge");
+            // New provider loads the same persisted key ring, as a recreated container does.
+            var after = DataProtectionProvider.Create(directory, builder => builder.SetApplicationName("Aegis"));
+            var restartedTokens = new ReminderInteractionTokens(after, f.Clock);
+            var restarted = new NotificationsController(f.Db, new ReminderStore(f.Db), restartedTokens, after, f.Clock, Microsoft.Extensions.Options.Options.Create(f.Options));
+            Assert.IsType<OkObjectResult>(await restarted.Status(id, new(management, request.Endpoint), default));
+            Assert.IsType<NoContentResult>(await restarted.Acknowledge(reminder.Id, new(ack), default));
+            Assert.NotNull((await f.Db.Reminders.FindAsync(reminder.Id))!.AcknowledgedAt);
+        }
+        finally { directory.Delete(true); }
+    }
+
     private sealed class Fixture : IDisposable
     {
         public AegisDbContext Db { get; } = new(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);

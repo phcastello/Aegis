@@ -14,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'v0.5.0 — Lembretes internos e Web Push',
+        description: 'v0.5.0 — "Knock Knock"',
         theme_color: '#101827',
         background_color: '#101827',
         display: 'standalone',

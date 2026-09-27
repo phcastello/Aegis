@@ -1,67 +1,58 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { enrollNotifications, notificationFailureMessage, NotificationSetupError } from '../services/pushNotifications';
+import { createNotificationControl, readyForPush, readPushRegistration, notificationFailureMessage, NotificationSetupError } from '../services/pushNotifications';
 import { getPushConfiguration, registerPushSubscription, disablePushSubscription, getPushSubscriptionStatus } from '../services/aegisApi';
 
-const supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const active = ref(false);
-const busy = ref(false);
-let subscriptionDisabled = false;
+const busy = ref(true);
 const message = ref('');
-const storageKey = 'aegis.pushRegistration';
-const deviceKey = 'aegis.pushDeviceId';
-function deviceId(): string {
-  const id = localStorage.getItem(deviceKey) ?? crypto.randomUUID();
-  localStorage.setItem(deviceKey, id);
-  return id;
-}
-async function register(subscription: PushSubscription): Promise<void> {
-  const json = subscription.toJSON();
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new NotificationSetupError('Não foi possível registrar notificações neste dispositivo.');
-  const result = await registerPushSubscription({ deviceId: deviceId(), endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth, userAgent: navigator.userAgent.slice(0, 500) });
-  localStorage.setItem(storageKey, JSON.stringify(result));
+const controller = createNotificationControl({
+  supported: window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window,
+  permission: () => 'Notification' in window ? Notification.permission : undefined,
+  requestPermission: () => Notification.requestPermission(),
+  ready: () => readyForPush(navigator.serviceWorker.ready)
+}, {
+  configuration: getPushConfiguration,
+  register: async subscription => {
+    const json = subscription.toJSON();
+    if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new NotificationSetupError('push_subscription_failed');
+    const deviceId = localStorage.getItem('aegis.pushDeviceId') ?? crypto.randomUUID();
+    localStorage.setItem('aegis.pushDeviceId', deviceId);
+    return registerPushSubscription({ deviceId, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth, userAgent: navigator.userAgent.slice(0, 500) });
+  },
+  status: (saved, endpoint) => getPushSubscriptionStatus(saved.subscriptionId, saved.token, endpoint),
+  disable: saved => disablePushSubscription(saved.subscriptionId, saved.token)
+}, {
+  read: () => readPushRegistration(localStorage),
+  save: saved => localStorage.setItem('aegis.pushRegistration', JSON.stringify(saved)),
+  clear: () => localStorage.removeItem('aegis.pushRegistration')
+});
+function reportFailure(error: unknown): void {
+  active.value = false;
+  // Stage only: never log browser errors, endpoints, keys or management credentials.
+  console.warn('Aegis notifications:', error instanceof NotificationSetupError ? error.code : 'backend_registration_failed');
+  message.value = notificationFailureMessage(error);
 }
 async function toggle(): Promise<void> {
   if (busy.value) return;
-  if (!supported) { message.value = 'Use uma conexão HTTPS para ativar notificações.'; return; }
   busy.value = true;
   message.value = '';
   try {
     if (active.value) {
-      const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-      if (saved) await disablePushSubscription(saved.subscriptionId, saved.token);
-      const registration = await navigator.serviceWorker.ready;
-      await (await registration.pushManager.getSubscription())?.unsubscribe();
-      localStorage.removeItem(storageKey);
+      await controller.deactivate();
       active.value = false;
       message.value = 'Notificações desativadas neste dispositivo.';
     } else {
-      // Native permission is requested during this explicit click, before network awaits.
-      const permission = Notification.requestPermission();
-      const config = await getPushConfiguration();
-      const registration = await navigator.serviceWorker.ready;
-      if (subscriptionDisabled) await (await registration.pushManager.getSubscription())?.unsubscribe();
-      await enrollNotifications(config, () => permission, registration.pushManager, register);
-      subscriptionDisabled = false;
-      active.value = true;
+      active.value = await controller.activate();
       message.value = 'Notificações ativadas. Você já pode pedir um lembrete pelo chat.';
     }
-  } catch (e) {
-    message.value = notificationFailureMessage(e);
-  } finally { busy.value = false; }
+  } catch (error) { reportFailure(error); }
+  finally { busy.value = false; }
 }
 onMounted(async () => {
-  // Inspection only: loading the application never requests notification permission.
-  if (!supported || Notification.permission !== 'granted') return;
-  try {
-    const registration = await navigator.serviceWorker.ready;
-    if (!await registration.pushManager.getSubscription()) return;
-    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-    if (saved) {
-      active.value = (await getPushSubscriptionStatus(saved.subscriptionId, saved.token)).active;
-      subscriptionDisabled = !active.value;
-    }
-  } catch { active.value = false; }
+  try { active.value = await controller.reconcile(); }
+  catch (error) { reportFailure(error); }
+  finally { busy.value = false; }
 });
 </script>
 <template>

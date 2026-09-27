@@ -11,7 +11,7 @@ import AegisMark from './AegisMark.vue';
     <div class="identity-card__copy">
       <div class="identity-card__title">
         <h1>Aegis</h1>
-        <span>v0.5.0</span>
+        <span>v0.5.0 — "Knock Knock"</span>
       </div>
 
     </div>

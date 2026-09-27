@@ -5,6 +5,8 @@ using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Reminders;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using System.Data.Common;
 using Xunit;
 
 namespace Aegis.Application.Tests;
@@ -17,8 +19,15 @@ public sealed class ReminderPostgresTests
         public PostgresFactAttribute() { if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AEGIS_REMINDER_TEST_DATABASE"))) Skip = "Set AEGIS_REMINDER_TEST_DATABASE to a disposable PostgreSQL database."; }
     }
     private static readonly string Schema = "reminders_" + Guid.NewGuid().ToString("N");
-    private static AegisDbContext CreateDb() => new(new DbContextOptionsBuilder<AegisDbContext>()
-        .UseNpgsql(Environment.GetEnvironmentVariable("AEGIS_REMINDER_TEST_DATABASE") + ";Search Path=" + Schema, options => options.MigrationsHistoryTable("__EFMigrationsHistory", Schema)).Options);
+    private static AegisDbContext CreateDb(string? schema = null, IInterceptor? interceptor = null)
+    {
+        schema ??= Schema;
+        var builder = new DbContextOptionsBuilder<AegisDbContext>()
+            .UseNpgsql(Environment.GetEnvironmentVariable("AEGIS_REMINDER_TEST_DATABASE") + ";Search Path=" + schema,
+                options => options.MigrationsHistoryTable("__EFMigrationsHistory", schema));
+        if (interceptor is not null) builder.AddInterceptors(interceptor);
+        return new(builder.Options);
+    }
 
     [PostgresFact]
     public async Task MigrationAtomicClaimRecoveryIndependentLifetimeAndDispatchAreRealPostgres()
@@ -67,6 +76,52 @@ public sealed class ReminderPostgresTests
         finally { blocked.Release.TrySetResult(); }
         Assert.True(await dispatch);
     }
+    [PostgresFact]
+    public async Task AcknowledgementCommittedBetweenDeviceSendsStopsActiveProcessor()
+    {
+        var schema = "ack_" + Guid.NewGuid().ToString("N"); var clock = new ReminderTests.TestClock();
+        await using var setup = CreateDb(schema);
+        await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\"");
+        await setup.Database.MigrateAsync();
+        var reminder = new Reminder("ACK", clock.GetUtcNow().AddMinutes(1), "America/Sao_Paulo", null, clock.GetUtcNow());
+        setup.Reminders.Add(reminder);
+        for (var i = 0; i < 2; i++) setup.PushSubscriptions.Add(new PushSubscription("https://fcm.googleapis.com/ack/" + i, "key", "auth", Guid.NewGuid(), null, clock.GetUtcNow()));
+        await setup.SaveChangesAsync(); clock.Advance(TimeSpan.FromMinutes(1));
+        // Wait for technical acceptance to COMMIT, then a separate connection records
+        // the user's ACK while the original processor still owns its processing work.
+        var ack = new AcknowledgeAfterAcceptance(async () => {
+            await using var human = CreateDb(schema);
+            await new ReminderStore(human).LockedAsync(reminder.Id, r => {
+                Assert.Equal(ReminderStatus.Processing, r.Status);
+                r.Acknowledge(clock.GetUtcNow()); return Task.FromResult(true);
+            }, default);
+        });
+        await using var processing = CreateDb(schema, ack);
+        var push = new ReminderTests.FakePush(); using var metrics = new AegisMetrics();
+        var processor = new ReminderProcessor(processing, new ReminderStore(processing), push,
+            new ReminderInteractionTokens(new EphemeralDataProtectionProvider(), clock), clock, metrics);
+        Assert.True(await processor.ProcessNextAsync()); Assert.True(ack.Ran);
+        Assert.Single(push.Payloads);
+        await using var actual = CreateDb(schema);
+        var saved = await actual.Reminders.SingleAsync();
+        Assert.Equal(clock.GetUtcNow(), saved.AcknowledgedAt); Assert.Equal(ReminderStatus.Triggered, saved.Status);
+        Assert.Null(saved.CancelledAt); Assert.Null(saved.LeaseId); Assert.Null(saved.LeaseExpiresAt);
+        Assert.NotNull((await actual.ReminderDeliveryAttempts.SingleAsync()).AcceptedAt);
+        clock.Advance(TimeSpan.FromMinutes(10)); Assert.False(await processor.ProcessNextAsync());
+        Assert.Single(push.Payloads); Assert.Single(await actual.ReminderDeliveryAttempts.ToListAsync());
+    }
+    private sealed class AcknowledgeAfterAcceptance(Func<Task> acknowledge) : DbTransactionInterceptor
+    {
+        public bool Ran { get; private set; }
+        public override async Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+        {
+            if (!Ran && eventData.Context!.ChangeTracker.Entries<ReminderDeliveryAttempt>().Any(e => e.Entity.AcceptedAt is not null))
+            {
+                Ran = true; await acknowledge();
+            }
+        }
+    }
+
     private sealed class BlockingPush : IWebPushClient
     {
         public bool IsConfigured => true;

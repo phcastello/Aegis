@@ -21,6 +21,7 @@ public sealed class NotificationsController(AegisDbContext db, ReminderStore rem
     private readonly IDataProtector subscriptionTokens = protection.CreateProtector("Aegis.PushSubscriptionManagement.v1");
     public sealed record SubscriptionRequest(Guid DeviceId, string Endpoint, string P256dh, string Auth, string? UserAgent);
     public sealed record TokenRequest(string Token);
+    public sealed record StatusRequest(string Token, string? Endpoint = null);
     private sealed record SubscriptionClaims(Guid Id, Guid DeviceId);
 
     [HttpGet("configuration")]
@@ -57,11 +58,12 @@ public sealed class NotificationsController(AegisDbContext db, ReminderStore rem
     }
 
     [HttpPost("subscriptions/{id:guid}/status")]
-    public async Task<IActionResult> Status(Guid id, TokenRequest request, CancellationToken ct)
+    public async Task<IActionResult> Status(Guid id, StatusRequest request, CancellationToken ct)
     {
         if (!ValidateSubscriptionToken(id, request.Token)) return NotFound();
         var subscription = await db.PushSubscriptions.SingleOrDefaultAsync(s => s.Id == id, ct);
-        return subscription is null ? NotFound() : Ok(new { active = subscription.DisabledAt is null && options.Value.IsConfigured });
+        return subscription is null ? NotFound() : Ok(new { active = subscription.DisabledAt is null && options.Value.IsConfigured &&
+            (request.Endpoint is null || request.Endpoint == subscription.Endpoint) });
     }
 
     [HttpPost("subscriptions/{id:guid}/disable")]
