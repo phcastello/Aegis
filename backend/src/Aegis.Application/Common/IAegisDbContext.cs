@@ -15,6 +15,10 @@ public interface IAegisDbContext
 
     IQueryable<EmailAccountConnection> EmailAccountConnections { get; }
 
+    IQueryable<PendingCalendarAction> PendingCalendarActions { get; }
+
+    IQueryable<CalendarActionAudit> CalendarActionAudits { get; }
+
     IQueryable<PendingEmailAction> PendingEmailActions { get; }
 
     IQueryable<EmailActionAudit> EmailActionAudits { get; }
@@ -30,6 +34,10 @@ public interface IAegisDbContext
     void AddLlmRequestAudit(LlmRequestAudit audit);
 
     void AddEmailAccountConnection(EmailAccountConnection connection);
+
+    void AddPendingCalendarAction(PendingCalendarAction action);
+
+    void AddCalendarActionAudit(CalendarActionAudit audit);
 
     void AddPendingEmailAction(PendingEmailAction action);
 
@@ -68,9 +76,19 @@ public interface IAegisDbContext
         ConversationCursor? cursor = null,
         CancellationToken cancellationToken = default);
 
+    Task<PendingCalendarAction?> GetLatestOpenPendingCalendarActionAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
+
     Task<PendingEmailAction?> GetLatestOpenPendingEmailActionAsync(
         Guid conversationId,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PendingCalendarAction>> GetUnresolvedPendingCalendarActionsAsync(
+        Guid conversationId, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PendingEmailAction>> GetUnresolvedPendingEmailActionsAsync(
+        Guid conversationId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ToolContextEntry>> GetActiveToolContextEntriesAsync(
         Guid conversationId,

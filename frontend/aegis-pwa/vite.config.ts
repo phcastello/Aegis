@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: "Now We're Talking!",
+        description: 'v0.4.0 — "Booked!"',
         theme_color: '#101827',
         background_color: '#101827',
         display: 'standalone',

@@ -2,6 +2,7 @@
 import DOMPurify from 'dompurify';
 import MarkdownIt from 'markdown-it';
 import { computed, ref, watch } from 'vue';
+import { isGoogleAuthorizationLink } from '../services/emailConnectionLinks';
 
 const props = defineProps<{
   content: string;
@@ -21,21 +22,9 @@ const defaultLinkOpen =
   ((tokens, index, options, _environment, renderer) =>
     renderer.renderToken(tokens, index, options));
 
-function isGmailAuthorizationLink(href: string | null): boolean {
-  if (!href) return false;
-  try {
-    const url = new URL(href);
-    return url.protocol === 'https:' &&
-      url.hostname === 'accounts.google.com' &&
-      url.pathname === '/o/oauth2/v2/auth';
-  } catch {
-    return false;
-  }
-}
-
 markdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {
   // The OAuth callback must return to this app tab so its connection result is visible.
-  tokens[index].attrSet('target', isGmailAuthorizationLink(tokens[index].attrGet('href')) ? '_self' : '_blank');
+  tokens[index].attrSet('target', isGoogleAuthorizationLink(tokens[index].attrGet('href')) ? '_self' : '_blank');
   tokens[index].attrSet('rel', 'noopener noreferrer');
   return defaultLinkOpen(tokens, index, options, environment, renderer);
 };

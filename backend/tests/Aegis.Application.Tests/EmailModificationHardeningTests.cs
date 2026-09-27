@@ -219,7 +219,7 @@ public sealed class EmailModificationHardeningTests
         await db.SaveChangesAsync();
         var handler = new MetadataHandler();
         using var http = new HttpClient(handler);
-        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+        var service = new GmailService(http, Options.Create(new GmailOptions()), new GoogleAccessTokenProvider(db, http, Options.Create(new GmailOptions()), tokenProtector));
 
         var ids = Enumerable.Range(1, 8).Select(index => $"mail-{index}").ToArray();
         var emails = await service.ReadEmailMetadataBatchAsync(ids);
@@ -244,7 +244,7 @@ public sealed class EmailModificationHardeningTests
         await db.SaveChangesAsync();
         var handler = new PartialModificationHandler();
         using var http = new HttpClient(handler);
-        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+        var service = new GmailService(http, Options.Create(new GmailOptions()), new GoogleAccessTokenProvider(db, http, Options.Create(new GmailOptions()), tokenProtector));
 
         var failure = await Assert.ThrowsAsync<EmailModificationAttemptException>(() =>
             service.MarkReadAsync(["mail-1", "mail-2", "mail-3"]));
@@ -269,7 +269,7 @@ public sealed class EmailModificationHardeningTests
         cancellation.Cancel();
         var handler = new CancellingModificationHandler(cancellation);
         using var http = new HttpClient(handler);
-        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+        var service = new GmailService(http, Options.Create(new GmailOptions()), new GoogleAccessTokenProvider(db, http, Options.Create(new GmailOptions()), tokenProtector));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             service.MarkReadAsync(["mail-1"], cancellation.Token));
@@ -290,7 +290,7 @@ public sealed class EmailModificationHardeningTests
         using var cancellation = new CancellationTokenSource();
         var handler = new CancellingModificationHandler(cancellation);
         using var http = new HttpClient(handler);
-        var service = new GmailService(db, http, Options.Create(new GmailOptions()), tokenProtector);
+        var service = new GmailService(http, Options.Create(new GmailOptions()), new GoogleAccessTokenProvider(db, http, Options.Create(new GmailOptions()), tokenProtector));
 
         var failure = await Assert.ThrowsAsync<EmailModificationCancelledException>(() =>
             service.MarkReadAsync(["mail-1", "mail-2", "mail-3"], cancellation.Token));
@@ -299,6 +299,174 @@ public sealed class EmailModificationHardeningTests
         Assert.Equal(2, failure.CompletedCount);
         Assert.Equal(3, handler.PostCount);
     }
+
+    [Theory]
+    [InlineData("Manda bala")]
+    [InlineData("Pode")]
+    [InlineData("É isso aí")]
+    [InlineData("texto sem palavras reservadas")]
+    public async Task ConfirmationUsesSelectedToolAndPersistedStateWithoutMatchingUserText(string content)
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 1);
+        var context = await CreateContextAsync(db, conversation, content);
+        var service = new BatchEmailService();
+        var tool = new EmailConfirmPendingActionTool(db, service, new EmailToolContextService(db));
+        Assert.True((await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context with { UserContent = "outro texto" })).Success);
+        Assert.Equal(context.UserMessageId, db.EmailActionAudits.Single().UserConfirmationMessageId);
+        Assert.NotNull(action.ExecutedAt);
+        Assert.Equal("no_pending_action", (await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), await CreateContextAsync(db, conversation, content))).ErrorCode);
+        Assert.Equal(1, service.ModificationCalls);
+    }
+
+    [Theory]
+    [InlineData("Nah, deixa quieto")]
+    [InlineData("Esquece")]
+    [InlineData("texto interpretado pelo modelo")]
+    public async Task CancellationDoesNotRequireReservedWords(string content)
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 1);
+        var context = await CreateContextAsync(db, conversation, content);
+        var tool = new EmailCancelPendingActionTool(db);
+        Assert.True((await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context)).Success);
+        Assert.NotNull(action.CancelledAt);
+        Assert.Equal("no_pending_action", (await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context)).ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("other_conversation")]
+    [InlineData("assistant")]
+    public async Task ConfirmAndCancelRejectInvalidCurrentMessageIdentity(string invalidState)
+    {
+        using var db = CreateDb();
+        var (conversation, action) = await CreateActionAsync(db, 1);
+        var message = new ChatMessage(invalidState == "other_conversation" ? Guid.NewGuid() : conversation.Id,
+            invalidState == "assistant" ? ChatRoles.Assistant : ChatRoles.User, "Pode");
+        if (invalidState != "missing") db.AddChatMessage(message);
+        await db.SaveChangesAsync();
+        var context = new ToolExecutionContext(conversation.Id, message.Id, "Pode");
+        var service = new BatchEmailService();
+        Assert.Equal("confirmation_required", (await new EmailConfirmPendingActionTool(db, service, new EmailToolContextService(db))
+            .ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context)).ErrorCode);
+        Assert.False((await new EmailCancelPendingActionTool(db).ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context)).Success);
+        Assert.True(action.IsOpen());
+        Assert.Equal(0, service.ModificationCalls);
+    }
+
+    [Fact]
+    public async Task SameTurnConfirmationIsBlockedEvenWhenModelSelectsConfirm()
+    {
+        using var db = CreateDb();
+        var conversation = new Conversation();
+        db.AddConversation(conversation);
+        var context = await CreateContextAsync(db, conversation, "Pode marcar como lido");
+        db.AddPendingEmailAction(new(conversation.Id, EmailActionTypes.MarkRead, "[\"mail-1\"]", "Marcar como lido", DateTimeOffset.UtcNow.AddMinutes(10)));
+        await db.SaveChangesAsync();
+        var service = new BatchEmailService();
+        Assert.Equal("confirmation_required", (await new EmailConfirmPendingActionTool(db, service, new EmailToolContextService(db))
+            .ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context)).ErrorCode);
+        Assert.Equal(0, service.ModificationCalls);
+    }
+
+    [Theory]
+    [InlineData("expired")]
+    [InlineData("cancelled")]
+    [InlineData("executed")]
+    public async Task ClosedOrExpiredActionsCannotBeConfirmed(string state)
+    {
+        using var db = CreateDb();
+        var (conversation, original) = await CreateActionAsync(db, 1);
+        if (state == "expired")
+        {
+            original.Cancel();
+            db.AddPendingEmailAction(new(conversation.Id, original.ActionType, original.EmailIdsJson, original.HumanSummary, DateTimeOffset.UtcNow.AddMinutes(-1)));
+        }
+        else if (state == "cancelled") original.Cancel();
+        else { original.Confirm(); original.MarkExecuted(); }
+        await db.SaveChangesAsync();
+        var service = new BatchEmailService();
+        Assert.Equal("no_pending_action", (await ConfirmAsync(db, service, conversation)).ErrorCode);
+        Assert.Equal(0, service.ModificationCalls);
+    }
+
+    [Fact]
+    public async Task EmailPreparationSupersedesAllOldProposalsAndPreservesHistory()
+    {
+        using var db = CreateDb();
+        var (conversation, first) = await CreateActionAsync(db, 1);
+        var legacy = new PendingEmailAction(conversation.Id, first.ActionType, first.EmailIdsJson, first.HumanSummary, DateTimeOffset.UtcNow.AddMinutes(10));
+        db.AddPendingEmailAction(legacy);
+        await db.SaveChangesAsync();
+        var emailContext = new EmailToolContextService(db);
+        await emailContext.RememberModifiedEmailsAsync(conversation.Id, [Email("mail-1"), Email("mail-2")], "email_search");
+        var result = await new EmailMarkReadTool(db, emailContext).ExecuteAsync(JsonSerializer.SerializeToElement(new { emailIds = new[] { "mail-2" } }),
+            await CreateContextAsync(db, conversation, "Faz no segundo em vez disso"));
+        Assert.True(result.Success);
+        var latest = (await db.GetLatestOpenPendingEmailActionAsync(conversation.Id))!;
+        Assert.Equal(latest.Id, first.SupersededById);
+        Assert.Equal(latest.Id, legacy.SupersededById);
+        Assert.Null(first.CancelledAt);
+        Assert.Equal("[\"mail-1\"]", first.EmailIdsJson);
+        Assert.Single(await db.GetUnresolvedPendingEmailActionsAsync(conversation.Id));
+        var service = new BatchEmailService();
+        Assert.True((await ConfirmAsync(db, service, conversation)).Success);
+        Assert.Equal("mail-2", Assert.Single(service.ReadIds));
+        Assert.Empty(await db.GetUnresolvedPendingEmailActionsAsync(conversation.Id));
+        Assert.Equal(3, db.PendingEmailActions.Count());
+        Assert.Equal(2, db.EmailActionAudits.Count(a => a.ActionType == "supersede_mark_read"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmailPreparationCannotHidePossibleExternalEffectsEvenAfterExpiration(bool expired)
+    {
+        using var db = CreateDb();
+        var (conversation, original) = await CreateActionAsync(db, 1);
+        original.Cancel();
+        var action = new PendingEmailAction(conversation.Id, original.ActionType, original.EmailIdsJson, original.HumanSummary,
+            DateTimeOffset.UtcNow.AddMinutes(expired ? -1 : 10));
+        action.RecordPossibleExternalEffects();
+        db.AddPendingEmailAction(action);
+        await db.SaveChangesAsync();
+        var emailContext = new EmailToolContextService(db);
+        await emailContext.RememberModifiedEmailsAsync(conversation.Id, [Email("mail-2")], "email_search");
+        var result = await new EmailMarkReadTool(db, emailContext).ExecuteAsync(JsonSerializer.SerializeToElement(new { emailIds = new[] { "mail-2" } }),
+            await CreateContextAsync(db, conversation, "Troca o email"));
+        Assert.Equal("email_action_outcome_unknown", result.ErrorCode);
+        Assert.Null(action.SupersededAt);
+        Assert.Null(action.CancelledAt);
+        var cancel = await new EmailCancelPendingActionTool(db).ExecuteAsync(JsonSerializer.SerializeToElement(new { }),
+            await CreateContextAsync(db, conversation, "Esquece essa tentativa"));
+        Assert.True(cancel.Success);
+        Assert.Contains("não foram revertidas", JsonDocument.Parse(cancel.Content).RootElement.GetProperty("userMessage").GetString());
+        Assert.True(action.MayHaveAppliedChanges);
+    }
+
+    [Fact]
+    public async Task EmailConfirmationDoesNotRequireCancellingAnUnrelatedCalendarProposal()
+    {
+        using var db = CreateDb();
+        var (conversation, _) = await CreateActionAsync(db, 1);
+        var calendar = new PendingCalendarAction(conversation.Id, CalendarActionTypes.Create, "new-id", "{}", "Dentista", DateTimeOffset.UtcNow.AddMinutes(10));
+        db.AddPendingCalendarAction(calendar);
+        await db.SaveChangesAsync();
+        Assert.True((await ConfirmAsync(db, new BatchEmailService(), conversation)).Success);
+        Assert.True(calendar.IsOpen());
+    }
+
+    [Fact]
+    public async Task EmailUncertaintyIsPersistedBeforeSendingTheMutation()
+    {
+        using var db = CreateDb();
+        var (conversation, _) = await CreateActionAsync(db, 1);
+        var service = new BatchEmailService { BeforeModification = () => Assert.True(db.PendingEmailActions.AsNoTracking().Single().MayHaveAppliedChanges) };
+        Assert.True((await ConfirmAsync(db, service, conversation)).Success);
+    }
+
+    private static EmailSummaryData Email(string id) => new(id, "thread", null, null, null, null, null, ["UNREAD"], [], true, false, false);
 
     private static AegisDbContext CreateDb() => new(new DbContextOptionsBuilder<AegisDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -335,6 +503,7 @@ public sealed class EmailModificationHardeningTests
 
     private sealed class BatchEmailService : IEmailService
     {
+        public Action? BeforeModification { get; set; }
         public int? FailAfterMessages { get; set; }
         public bool FailAfterAll { get; set; }
         public bool FailMetadata { get; set; }
@@ -345,6 +514,7 @@ public sealed class EmailModificationHardeningTests
         public HashSet<string> ReadIds { get; } = new(StringComparer.Ordinal);
         public Task<EmailModificationResult> MarkReadAsync(IReadOnlyList<string> ids, CancellationToken token = default)
         {
+            BeforeModification?.Invoke();
             ModificationCalls++;
             var modified = 0;
             foreach (var id in ids)

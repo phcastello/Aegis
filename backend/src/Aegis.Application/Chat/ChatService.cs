@@ -297,13 +297,23 @@ public sealed class ChatService(
         Guid conversationId,
         CancellationToken cancellationToken)
     {
-        var pendingAction = await dbContext.GetLatestOpenPendingEmailActionAsync(conversationId, cancellationToken);
-        var pendingState = pendingAction is null ? null :
-            $"Existe uma ação pendente de Gmail do tipo {pendingAction.ActionType}, válida até {pendingAction.ExpiresAt:O}. " +
-            (pendingAction.MayHaveAppliedChanges
-                ? "Uma tentativa anterior pode ter aplicado parte das alterações; repetir a operação é seguro e idempotente. "
-                : string.Empty) +
-            "Use email_confirm_pending_action somente se a mensagem atual confirmar essa ação; o backend valida a confirmação.";
+        var states = new List<string>();
+        var email = (await dbContext.GetUnresolvedPendingEmailActionsAsync(conversationId, cancellationToken))
+            .FirstOrDefault(action => action.IsOpen() || action.MayHaveAppliedChanges);
+        if (email is not null)
+            states.Add($"Ação pendente Gmail: {email.HumanSummary}; válida até {email.ExpiresAt:O}. " +
+                (email.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter aplicado alterações; retry é idempotente. " : "") +
+                (email.IsOpen() ? "Aceitação: email_confirm_pending_action; desistência: email_cancel_pending_action; correção: prepare uma nova proposta." :
+                    "A proposta expirou, mas possíveis efeitos permanecem; consulte os emails. Cancelar a tentativa não reverte alterações."));
+        var calendar = (await dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken))
+            .FirstOrDefault(action => action.IsOpen() || action.MayHaveAppliedChanges);
+        if (calendar is not null)
+            states.Add($"Ação pendente Calendar: {calendar.HumanSummary}; válida até {calendar.ExpiresAt:O}. " +
+                (calendar.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter alterado a agenda; retry é idempotente. " : "") +
+                (calendar.IsOpen() ? "Aceitação: calendar_confirm_pending_action; desistência: calendar_cancel_pending_action; correção da proposta: calendar_amend_pending_action." :
+                    "A proposta expirou, mas possíveis efeitos permanecem; consulte a agenda. Cancelar a tentativa não reverte alterações."));
+        if (states.Count > 1) states.Add("Há propostas pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
+        var pendingState = string.Join("\n", states);
         return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
     }
 
@@ -436,7 +446,7 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.3.2",
+                ["aegis_version"] = "0.4.0",
                 ["purpose"] = "Chat"
             },
             promptResult.InputItems);

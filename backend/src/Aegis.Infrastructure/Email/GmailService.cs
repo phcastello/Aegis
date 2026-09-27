@@ -1,23 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Aegis.Application.Email;
+using Aegis.Application.Google;
 using Aegis.Domain;
-using Aegis.Domain.Entities;
-using Aegis.Infrastructure.Persistence;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Aegis.Infrastructure.Email;
 
 public sealed partial class GmailService(
-    AegisDbContext dbContext,
     HttpClient httpClient,
     IOptions<GmailOptions> options,
-    EmailTokenProtector tokenProtector) : IEmailService
+    IGoogleAccessTokenProvider tokenProvider) : IEmailService
 {
     private const int DefaultSearchLimit = 10;
     private const int MaxSearchLimit = 50;
@@ -286,101 +282,8 @@ public sealed partial class GmailService(
             ?? throw new InvalidOperationException("Gmail returned an empty message response.");
     }
 
-    private async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
-    {
-        var connection = await dbContext.EmailAccountConnections
-            .Where(item =>
-                item.Provider == EmailAccountConnection.GmailProvider &&
-                item.DisconnectedAt == null)
-            .OrderByDescending(item => item.UpdatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (connection is null)
-        {
-            throw new EmailNotConnectedException();
-        }
-
-        if (connection.AccessTokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(1))
-        {
-            try
-            {
-                return tokenProtector.Unprotect(connection.AccessTokenEncrypted);
-            }
-            catch (CryptographicException)
-            {
-                connection.Disconnect();
-                await dbContext.SaveChangesAsync(cancellationToken);
-                throw new EmailNotConnectedException();
-            }
-        }
-
-        return await RefreshAccessTokenAsync(connection, cancellationToken);
-    }
-
-    private async Task<string> RefreshAccessTokenAsync(
-        EmailAccountConnection connection,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(connection.RefreshTokenEncrypted))
-        {
-            connection.Disconnect();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            throw new EmailNotConnectedException();
-        }
-
-        var gmailOptions = options.Value;
-        string refreshToken;
-        try
-        {
-            refreshToken = tokenProtector.Unprotect(connection.RefreshTokenEncrypted);
-        }
-        catch (CryptographicException)
-        {
-            connection.Disconnect();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            throw new EmailNotConnectedException();
-        }
-
-        using var response = await httpClient.PostAsync(
-            "https://oauth2.googleapis.com/token",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["client_id"] = gmailOptions.ClientId ?? string.Empty,
-                ["client_secret"] = gmailOptions.ClientSecret ?? string.Empty,
-                ["refresh_token"] = refreshToken,
-                ["grant_type"] = "refresh_token"
-            }),
-            cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-            {
-                connection.Disconnect();
-                await dbContext.SaveChangesAsync(cancellationToken);
-                throw new EmailNotConnectedException();
-            }
-
-            throw new HttpRequestException("Google token refresh is temporarily unavailable.", null, response.StatusCode);
-        }
-
-        var tokens = await response.Content.ReadFromJsonAsync<GoogleTokenResponse>(
-            cancellationToken: cancellationToken)
-            ?? throw new InvalidOperationException("Google returned an empty refresh response.");
-
-        if (string.IsNullOrWhiteSpace(tokens.AccessToken))
-        {
-            connection.Disconnect();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            throw new EmailNotConnectedException();
-        }
-
-        var expiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, tokens.ExpiresIn));
-        connection.UpdateAccessToken(tokenProtector.Protect(tokens.AccessToken), expiresAt);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        return tokens.AccessToken;
-    }
+    private Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) =>
+        tokenProvider.GetAccessTokenAsync(GoogleScopes.Gmail, cancellationToken);
 
     private async Task<T?> SendGmailAsync<T>(
         HttpMethod method,
@@ -695,12 +598,4 @@ public sealed partial class GmailService(
         [property: JsonPropertyName("addLabelIds")] IReadOnlyList<string> AddLabelIds,
         [property: JsonPropertyName("removeLabelIds")] IReadOnlyList<string> RemoveLabelIds);
 
-    private sealed class GoogleTokenResponse
-    {
-        [JsonPropertyName("access_token")]
-        public string? AccessToken { get; init; }
-
-        [JsonPropertyName("expires_in")]
-        public int ExpiresIn { get; init; }
-    }
 }

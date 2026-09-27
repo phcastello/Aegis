@@ -2,27 +2,34 @@ using Aegis.Domain;
 
 namespace Aegis.Domain.Entities;
 
-public sealed class PendingEmailAction : AuditableEntity
+public sealed class PendingCalendarAction : AuditableEntity
 {
-    private PendingEmailAction()
+    private PendingCalendarAction()
     {
     }
 
-    public PendingEmailAction(
+    public PendingCalendarAction(
         Guid conversationId,
         string actionType,
-        string emailIdsJson,
+        string eventId,
+        string payloadJson,
         string humanSummary,
-        DateTimeOffset expiresAt)
+        DateTimeOffset expiresAt,
+        string calendarId = "primary")
     {
-        if (!EmailActionTypes.IsKnown(actionType))
+        if (!CalendarActionTypes.IsKnown(actionType))
         {
-            throw new ArgumentException($"Unsupported email action '{actionType}'.", nameof(actionType));
+            throw new ArgumentException($"Unsupported calendar action '{actionType}'.", nameof(actionType));
         }
 
-        if (string.IsNullOrWhiteSpace(emailIdsJson))
+        if (string.IsNullOrWhiteSpace(eventId))
         {
-            throw new ArgumentException("Email ids are required.", nameof(emailIdsJson));
+            throw new ArgumentException("Event id is required.", nameof(eventId));
+        }
+
+        if (string.IsNullOrWhiteSpace(payloadJson))
+        {
+            throw new ArgumentException("Calendar payload is required.", nameof(payloadJson));
         }
 
         if (string.IsNullOrWhiteSpace(humanSummary))
@@ -30,10 +37,15 @@ public sealed class PendingEmailAction : AuditableEntity
             throw new ArgumentException("Human summary is required.", nameof(humanSummary));
         }
 
+        if (string.IsNullOrWhiteSpace(calendarId) || calendarId.Length > 1024)
+            throw new ArgumentException("Calendar id is required and must fit storage.", nameof(calendarId));
+
         InitializeAudit();
+        CalendarId = calendarId;
         ConversationId = conversationId;
         ActionType = actionType;
-        EmailIdsJson = emailIdsJson;
+        EventId = eventId;
+        PayloadJson = payloadJson;
         HumanSummary = humanSummary.Trim();
         ExpiresAt = expiresAt;
     }
@@ -42,7 +54,11 @@ public sealed class PendingEmailAction : AuditableEntity
 
     public string ActionType { get; private set; } = string.Empty;
 
-    public string EmailIdsJson { get; private set; } = "[]";
+    public string CalendarId { get; private set; } = "primary";
+
+    public string EventId { get; private set; } = string.Empty;
+
+    public string PayloadJson { get; private set; } = "{}";
 
     public string HumanSummary { get; private set; } = string.Empty;
 
@@ -76,7 +92,7 @@ public sealed class PendingEmailAction : AuditableEntity
     {
         if (!IsOpen(now))
         {
-            throw new InvalidOperationException("Pending email action is not open.");
+            throw new InvalidOperationException("Pending calendar action is not open.");
         }
 
         ConfirmedAt = now ?? DateTimeOffset.UtcNow;
@@ -110,16 +126,17 @@ public sealed class PendingEmailAction : AuditableEntity
         Touch(SupersededAt);
     }
 
+    // Used only when a preflight/cancellation proves this attempt sent no mutation.
+    public void ClearPossibleExternalEffects()
+    {
+        MayHaveAppliedChanges = false;
+        Touch();
+    }
+
     public void RecordPossibleExternalEffects()
     {
         if (MayHaveAppliedChanges) return;
         MayHaveAppliedChanges = true;
-        Touch();
-    }
-
-    public void ClearPossibleExternalEffects()
-    {
-        MayHaveAppliedChanges = false;
         Touch();
     }
 }
