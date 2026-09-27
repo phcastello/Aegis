@@ -17,6 +17,8 @@ export function parseReminderPush(value: unknown): ReminderPushPayload | null {
 export function reminderNotificationOptions(payload: ReminderPushPayload) {
   return {
     body: payload.text, badge: '/icons/notification-badge.png',
+    // Chromium generates a large icon when omitted; a valid transparent bitmap avoids that fallback.
+    icon: '/icons/notification-transparent.png',
     tag: `aegis-reminder-${payload.reminderId}`, renotify: false,
     actions: [{ action: 'acknowledge', title: 'OK' }], data: payload
   };
