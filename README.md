@@ -1,6 +1,6 @@
 # Aegis v0.6.0 — "Yeah, I know."
 
-Aegis v0.6.0 begins with Memory Foundation: explicit persistent knowledge in PostgreSQL, evidence, lifecycle, canonical entities/relations and durable projection jobs. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
+Aegis v0.6.0 now includes Memory Foundation and Semantic Memory: canonical knowledge in PostgreSQL, durable projection jobs, Qdrant semantic search and PostgreSQL validation. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
 
 Version history:
 
@@ -20,7 +20,7 @@ Version history:
 
 - v0.5.0 — "Knock Knock" — lembretes internos únicos, worker temporal persistente, Web Push e acknowledgement explícito.
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
-- v0.6.0 — "Yeah, I know." — fundação canônica de memória (etapa 1 de 4).
+- v0.6.0 — "Yeah, I know." — fundação canônica e projeção semântica de memória (etapas 1–2 de 4).
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -33,7 +33,7 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 - PostgreSQL
 - Entity Framework Core
 - Docker Compose
-- Qdrant prepared for future vector memory work
+- Qdrant semantic projection for persistent memory
 - Vue 3
 - Vite
 - TypeScript
@@ -41,22 +41,48 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 
 ## Aegis Memory
 
-Memory Foundation is the first of four v0.6.0 stages. PostgreSQL stores the canonical state. Qdrant will be a rebuildable semantic projection in Part 2; Neo4j will be a rebuildable relational projection in Part 3. Neither Qdrant nor Neo4j is integrated with Memory yet. Automatic memory extraction, hybrid retrieval and proactive behavior belong to Part 4.
+PostgreSQL stores the canonical state. Part 2 projects `MemoryRecord` into Qdrant for semantic retrieval; Qdrant can be rebuilt from PostgreSQL. Neo4j is planned as a rebuildable relational projection in Part 3 and is **not integrated yet**. Automatic memory extraction, semantic plus graph retrieval and proactive behavior belong to Part 4.
 
 `MemoryRecord` stores up to 2,000 characters of readable knowledge about any useful subject, with optional explicit `ValidFrom`/`ValidUntil`. A record starts `Active`. Corrections create a new record and mark the old one `Superseded`, with `SupersededAt` and `SupersededById`; forgetting marks the active record `Forgotten` with `ForgottenAt`. Historical records remain in PostgreSQL. Exact normalized duplicates reuse an active record. Content corrections retain the old validity unless new dates are supplied; changing only the dates of an unchanged fact is not supported in this stage. A separate `MemoryEvidence` row records each distinct observation, its source kind, time and optional conversation/message references. Deleting the source conversation leaves the memory and evidence intact and clears those references.
 
-`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records for future graph navigation. Names, aliases and predicates receive deterministic validation; no semantic entity resolution or relation extraction runs yet. Every canonical change that needs a future projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. Jobs remain `Pending` until real consumers exist. PostgreSQL alone can rebuild both future projections.
+`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records for future graph navigation. Names, aliases and predicates receive deterministic validation; no semantic entity resolution or relation extraction runs yet. Every canonical change that needs a projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. The Semantic worker consumes only Semantic jobs; Graph jobs remain Pending. PostgreSQL alone can rebuild the Qdrant projection and the future graph projection.
 
 Four conversational tools are available now:
 
 | Tool | Contract | Effect |
 | --- | --- | --- |
 | `memory_remember` | `{"content":"Aegis usa PostgreSQL.","validFrom":"2026-09-01T00:00:00Z"}` (`validFrom`/`validUntil` optional) | Explicitly stores knowledge with provenance from the current user turn. |
-| `memory_search` | `{"query":"PostgreSQL","limit":10}` (`limit` default 10, max 30) | Searches active, currently valid canonical text in PostgreSQL and records 30-minute observed references. |
+| `memory_search` | `{"query":"qual banco a Aegis usa?","limit":10}` (`limit` default 10, max 30) | Embeds the query, ranks Qdrant candidates, validates current status and validity in PostgreSQL, then records 30-minute observed references. Textual PostgreSQL search supplements results and handles technical fallback. |
 | `memory_update` | `{"memoryId":"<observed id>","content":"Aegis usa outro banco."}` | Supersedes one observed active memory in one transaction. |
 | `memory_forget` | `{"memoryId":"<observed id>"}` | Soft-forgets one observed active memory, idempotently. |
 
-The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Casual statements do not write memory. Search is deterministic canonical text search only: no embeddings, vector search, automatic turn retrieval or Qdrant calls occur in this stage. Broad topic deletion is not available. Memory content stays out of metrics; only requested tool results enter the model context.
+The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Casual statements do not write memory. `memory_search` is tool driven; no memory block is injected into every prompt. Broad topic deletion is unavailable. Memory content stays out of metrics; only requested tool results enter the model context.
+
+### Semantic projection and configuration
+
+The backend calls OpenAI `POST /v1/embeddings` directly, defaulting to `text-embedding-3-small` with 1,536 dimensions. It sends **only `MemoryRecord.Content`** (or the requested search query) to the external embedding provider. It sends no provenance, conversation/message IDs, aliases or other memory records. Embedding calls have API cost; `aegis_memory_embedding_input_tokens_total` records numeric input usage. Embeddings are never stored in PostgreSQL and no conversational LLM call is used to prepare them.
+
+Qdrant uses one collection, `aegis_memory_semantic_v1`, with cosine distance and the configured vector size. Point ID equals `MemoryRecord.Id`; payload contains only `memoryId`, `revision`, `contentHash`, `model` and `dimensions`. The worker validates an existing collection's dimension and distance and **never deletes an incompatible collection**. Changing embedding model or dimensions requires an explicit new collection name and rebuild; simultaneous model migration is not supported.
+
+The worker atomically claims only Semantic jobs in PostgreSQL using `FOR UPDATE SKIP LOCKED`, a two minute recoverable lease and an ownership token. It retries transient failures after 10 seconds, 30 seconds, 2 minutes, 5 minutes and 30 minutes, then marks the job Failed. `LastError` stores a small technical category only. Before every Qdrant write, it reads the current canonical record under a row lock: Active means upsert; Superseded, Forgotten or missing means delete, regardless of the old job's operation. Existing points with matching revision, hash and model skip a new embedding call. At worker startup, and whenever a missing collection is recreated, it reopens the current unique Semantic jobs for Active records. Repeating this rebuild does not create new memories or duplicate points. Graph jobs are untouched.
+
+Writes commit in PostgreSQL without waiting for Qdrant. Semantic indexing is eventually consistent. Search overfetches candidates, applies a configurable similarity threshold, then loads candidates in one PostgreSQL query and filters by Active status and `ValidFrom`/`ValidUntil`. It preserves vector order. A stale Qdrant point cannot expose a forgotten or superseded memory. Canonical text matches supplement semantic results, including during indexing lag; if embeddings or Qdrant are unavailable or semantic mode is disabled, search falls back to PostgreSQL text search. The default threshold of 0.45 is a starting point, not factual confidence.
+
+Backend environment variables (never sent to the PWA):
+
+| Variable | Default |
+| --- | --- |
+| `AEGIS_MEMORY_SEMANTIC_ENABLED` | `true` |
+| `AEGIS_MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` |
+| `AEGIS_MEMORY_EMBEDDING_DIMENSIONS` | `1536` |
+| `AEGIS_MEMORY_EMBEDDING_BASE_URL` | `https://api.openai.com` |
+| `AEGIS_MEMORY_EMBEDDING_API_KEY` | empty; falls back to `OPENAI_API_KEY`, never the STT key |
+| `AEGIS_MEMORY_QDRANT_URL` | `http://qdrant:6333` |
+| `AEGIS_MEMORY_QDRANT_COLLECTION` | `aegis_memory_semantic_v1` |
+| `AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD` | `0.45` |
+| `AEGIS_MEMORY_PROJECTION_POLL_SECONDS` | `5` |
+
+For a disposable physical Qdrant integration test, set `AEGIS_MEMORY_TEST_QDRANT_URL`; the test creates and removes only a random test collection. No new migration is needed for Part 2. The known uniqueness of an Active relation despite expired validity remains for Part 3 to review.
 
 ## Project Layout
 
@@ -354,7 +380,7 @@ Run `dotnet test backend/Aegis.sln`, `npm test --prefix frontend/aegis-pwa` and 
 
 The v0.5.1 checks on 28 September 2026 passed: **325/325 backend tests**, including **2/2 PostgreSQL integration scenarios** against a disposable container, **41/41 frontend tests**, backend Release build, frontend build/typechecks and `git diff --check`. Focused live-model intent evals passed **7/7** for creation/selection and **1/1** for recurring pending amendment. The backend retains one existing xUnit2031 test warning. Commands, scope, eval inputs and limits are in the [v0.5.1 validation report](scripts/eval-results-v0.5.1.md). The [v0.5.0 validation report](scripts/eval-results-v0.5.0.md) remains the historical record for that release.
 
-The v0.6.0 Memory Foundation checks passed **329/329 backend tests** with a disposable PostgreSQL database, **41/41 frontend tests**, both builds, Compose validation, EF model-change check and `git diff --check`. Focused live-model intent evals passed **18/18 Memory** and **45/45 representative regression** cases with the 32-tool production catalog. Details and limits are in the [v0.6.0 Memory validation report](scripts/eval-results-v0.6.0-memory.md).
+The v0.6.0 Memory Foundation and Semantic Memory checks passed **336/336 backend tests** with disposable PostgreSQL and a physical disposable Qdrant collection, **41/41 frontend tests**, both builds, Compose validation, EF model-change check and `git diff --check`. Focused live-model intent evals and their fixture correction are recorded in the [cumulative v0.6.0 Memory validation report](scripts/eval-results-v0.6.0-memory.md).
 
 ### Physical validation
 

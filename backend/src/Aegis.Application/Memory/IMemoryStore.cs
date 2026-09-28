@@ -9,6 +9,7 @@ public interface IMemoryStore
     Task<MemoryRecord?> FindRecordAsync(Guid id, CancellationToken ct);
     Task<bool> HasEvidenceAsync(Guid memoryId, MemorySourceKind kind, Guid? messageId, CancellationToken ct);
     Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> LoadActiveByIdsAsync(IReadOnlyList<Guid> ids, DateTimeOffset now, CancellationToken ct);
     void Add(MemoryRecord record);
     void Add(MemoryEvidence evidence);
     void Add(MemoryEntity entity);

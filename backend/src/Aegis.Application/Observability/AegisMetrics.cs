@@ -14,6 +14,18 @@ public sealed class AegisMetrics : IDisposable
     public Counter<long> MemorySearches { get; }
     public Histogram<long> MemorySearchResults { get; }
     public Counter<long> MemoryProjectionJobsCreated { get; }
+    public Counter<long> MemoryEmbeddingRequests { get; }
+    public Counter<long> MemoryEmbeddingFailures { get; }
+    public Counter<long> MemoryEmbeddingInputTokens { get; }
+    public Counter<long> MemorySemanticProjectionCompleted { get; }
+    public Counter<long> MemorySemanticProjectionFailed { get; }
+    public Counter<long> MemorySemanticProjectionRetries { get; }
+    public Histogram<double> MemorySemanticProjectionLag { get; }
+    public Counter<long> MemorySemanticSearches { get; }
+    public Counter<long> MemorySemanticSearchFallbacks { get; }
+    public Histogram<long> MemorySemanticSearchCandidates { get; }
+    public Histogram<long> MemorySemanticSearchResults { get; }
+    public Histogram<double> MemorySemanticSearchDuration { get; }
     public Counter<long> RemindersUpdated { get; }
     public Counter<long> RemindersCancelled { get; }
     public Counter<long> RemindersTriggered { get; }
@@ -58,6 +70,18 @@ public sealed class AegisMetrics : IDisposable
         MemorySearches = meter.CreateCounter<long>("aegis_memory_search_total");
         MemorySearchResults = meter.CreateHistogram<long>("aegis_memory_search_results");
         MemoryProjectionJobsCreated = meter.CreateCounter<long>("aegis_memory_projection_jobs_created_total");
+        MemoryEmbeddingRequests = meter.CreateCounter<long>("aegis_memory_embedding_requests_total");
+        MemoryEmbeddingFailures = meter.CreateCounter<long>("aegis_memory_embedding_failures_total");
+        MemoryEmbeddingInputTokens = meter.CreateCounter<long>("aegis_memory_embedding_input_tokens_total");
+        MemorySemanticProjectionCompleted = meter.CreateCounter<long>("aegis_memory_semantic_projection_completed_total");
+        MemorySemanticProjectionFailed = meter.CreateCounter<long>("aegis_memory_semantic_projection_failed_total");
+        MemorySemanticProjectionRetries = meter.CreateCounter<long>("aegis_memory_semantic_projection_retries_total");
+        MemorySemanticProjectionLag = meter.CreateHistogram<double>("aegis_memory_semantic_projection_lag_ms", "ms");
+        MemorySemanticSearches = meter.CreateCounter<long>("aegis_memory_semantic_search_total");
+        MemorySemanticSearchFallbacks = meter.CreateCounter<long>("aegis_memory_semantic_search_fallback_total");
+        MemorySemanticSearchCandidates = meter.CreateHistogram<long>("aegis_memory_semantic_search_candidates");
+        MemorySemanticSearchResults = meter.CreateHistogram<long>("aegis_memory_semantic_search_results");
+        MemorySemanticSearchDuration = meter.CreateHistogram<double>("aegis_memory_semantic_search_duration_ms", "ms");
         RemindersCreated = meter.CreateCounter<long>("aegis_reminders_created_total");
         RemindersUpdated = meter.CreateCounter<long>("aegis_reminders_updated_total");
         RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");

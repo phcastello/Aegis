@@ -15,6 +15,8 @@ using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
 using Aegis.Infrastructure.Voice;
 using Aegis.Infrastructure.Voice.Transcription;
+using Aegis.Application.Memory;
+using Aegis.Infrastructure.Memory;
 using Aegis.Application.Voice;
 using Aegis.Application.Voice.Transcription;
 using Microsoft.AspNetCore.DataProtection;
@@ -235,7 +237,37 @@ public static class DependencyInjection
           .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
               "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
           .ValidateOnStart();
-        services.AddScoped<Aegis.Application.Memory.IMemoryStore, Aegis.Infrastructure.Memory.MemoryStore>();
+        var semantic = new MemorySemanticOptions();
+        configuration.GetSection("MemorySemantic").Bind(semantic);
+        semantic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_SEMANTIC_ENABLED", semantic.Enabled);
+        semantic.EmbeddingModel = Read(configuration, "AEGIS_MEMORY_EMBEDDING_MODEL", semantic.EmbeddingModel);
+        semantic.EmbeddingDimensions = ReadInt(configuration, "AEGIS_MEMORY_EMBEDDING_DIMENSIONS", semantic.EmbeddingDimensions);
+        semantic.EmbeddingBaseUrl = Read(configuration, "AEGIS_MEMORY_EMBEDDING_BASE_URL", semantic.EmbeddingBaseUrl);
+        semantic.EmbeddingApiKey = ReadAny(configuration, semantic.EmbeddingApiKey, "AEGIS_MEMORY_EMBEDDING_API_KEY", "OPENAI_API_KEY");
+        semantic.QdrantBaseUrl = Read(configuration, "AEGIS_MEMORY_QDRANT_URL", semantic.QdrantBaseUrl);
+        semantic.CollectionName = Read(configuration, "AEGIS_MEMORY_QDRANT_COLLECTION", semantic.CollectionName);
+        semantic.WorkerPollSeconds = ReadInt(configuration, "AEGIS_MEMORY_PROJECTION_POLL_SECONDS", semantic.WorkerPollSeconds);
+        if (double.TryParse(configuration["AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD"], System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var threshold)) semantic.SearchScoreThreshold = threshold;
+        if (semantic.EmbeddingDimensions is < 1 or > 3072 || semantic.WorkerPollSeconds is < 1 or > 60 ||
+            semantic.SearchScoreThreshold is < 0 or > 1 || !double.IsFinite(semantic.SearchScoreThreshold) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(semantic.CollectionName, "^[A-Za-z0-9_-]{1,100}$"))
+            throw new InvalidOperationException("Invalid MemorySemantic configuration.");
+        services.AddSingleton(semantic);
+        services.AddHttpClient<IMemoryEmbeddingClient, OpenAiMemoryEmbeddingClient>(client =>
+        {
+            client.BaseAddress = new Uri(semantic.EmbeddingBaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(30);
+        }).RemoveAllLoggers();
+        services.AddHttpClient<IMemoryVectorStore, QdrantMemoryVectorStore>(client =>
+        {
+            client.BaseAddress = new Uri(semantic.QdrantBaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(20);
+        }).RemoveAllLoggers();
+        services.AddScoped<IMemoryStore, MemoryStore>();
+        services.AddScoped<IMemorySemanticProjectionStore, MemorySemanticProjectionStore>();
+        services.AddScoped<MemorySemanticProjectionProcessor>();
+        services.AddHostedService<MemorySemanticProjectionWorker>();
         services.AddScoped<ReminderStore>();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();

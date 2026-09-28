@@ -171,4 +171,55 @@ public sealed class MemoryProjectionJob : AuditableEntity
     public DateTimeOffset? LeaseExpiresAt { get; private set; }
     public Guid? LeaseId { get; private set; }
     public DateTimeOffset? CompletedAt { get; private set; }
+
+    public void Claim(Guid leaseId, DateTimeOffset now, TimeSpan duration)
+    {
+        if (Status == MemoryProjectionStatus.Completed || (Status == MemoryProjectionStatus.Processing && LeaseExpiresAt > now))
+            throw new InvalidOperationException("Projection job is not claimable.");
+        Status = MemoryProjectionStatus.Processing;
+        Attempt++;
+        ProcessingStartedAt = now;
+        LeaseExpiresAt = now.Add(duration);
+        LeaseId = leaseId;
+        NextAttemptAt = null;
+        LastError = null;
+        CompletedAt = null;
+        Touch(now);
+    }
+
+    public bool Complete(Guid leaseId, DateTimeOffset now)
+    {
+        if (Status != MemoryProjectionStatus.Processing || LeaseId != leaseId) return false;
+        Status = MemoryProjectionStatus.Completed;
+        CompletedAt = now;
+        LeaseId = null;
+        LeaseExpiresAt = null;
+        Touch(now);
+        return true;
+    }
+
+    public bool Fail(Guid leaseId, string errorCode, DateTimeOffset now, TimeSpan? retryDelay)
+    {
+        if (Status != MemoryProjectionStatus.Processing || LeaseId != leaseId) return false;
+        Status = retryDelay is null ? MemoryProjectionStatus.Failed : MemoryProjectionStatus.Pending;
+        LastError = errorCode;
+        NextAttemptAt = retryDelay is null ? null : now.Add(retryDelay.Value);
+        LeaseId = null;
+        LeaseExpiresAt = null;
+        Touch(now);
+        return true;
+    }
+
+    public void Requeue(DateTimeOffset now)
+    {
+        if (Status == MemoryProjectionStatus.Processing && LeaseExpiresAt > now) return;
+        Status = MemoryProjectionStatus.Pending;
+        Attempt = 0;
+        NextAttemptAt = null;
+        LeaseId = null;
+        LeaseExpiresAt = null;
+        CompletedAt = null;
+        LastError = null;
+        Touch(now);
+    }
 }

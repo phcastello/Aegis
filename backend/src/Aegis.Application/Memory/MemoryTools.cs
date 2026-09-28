@@ -59,13 +59,13 @@ public sealed class MemoryRememberTool(MemoryService service) : MemoryToolBase(s
 public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(service)
 {
     public override string Name => "memory_search";
-    public override string Description => "Busca texto nas memórias canônicas vigentes no PostgreSQL. Use para perguntas sobre o que a Aegis lembra, sem fingir recordar. query curta com palavra ou expressão do assunto; default 10, máximo 30. Retorna memoryId observado por 30 minutos para correção/esquecimento. Não busca RAM, cache, Calendar, Gmail nem lembretes.";
+    public override string Description => "Busca conhecimento persistente relevante mesmo quando a formulação difere do texto armazenado. Use para perguntas sobre o que a Aegis lembra, sem fingir recordar. Retorna apenas memórias canônicas vigentes e cria referências temporárias de 30 minutos para correção/esquecimento. query curta sobre o assunto; default 10, máximo 30. Não busca RAM, cache, Calendar, Gmail nem lembretes.";
     public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":30}},"required":["query"],"additionalProperties":false}""");
     protected override async Task<AegisToolResult> RunAsync(JsonElement args, ToolExecutionContext context, CancellationToken ct)
     {
         var a = args.Deserialize<Arguments>(JsonOptions)!;
-        var results = await Service.SearchAsync(a.Query, a.Limit, context.ConversationId, ct);
-        return Ok(new { memories = results.Select((record, i) => new { position = i + 1, memory = View(record) }), searchMode = "canonical_text" });
+        var (results, mode) = await Service.SearchWithModeAsync(a.Query, a.Limit, context.ConversationId, ct);
+        return Ok(new { memories = results.Select((record, i) => new { position = i + 1, memory = View(record) }), searchMode = mode });
     }
     private sealed record Arguments(string Query, int Limit = MemoryService.DefaultSearchLimit);
 }

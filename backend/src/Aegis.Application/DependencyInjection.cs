@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<ReminderService>();
         services.AddScoped<MemoryService>();
+        services.AddScoped<MemorySemanticSearch>();
         services.AddScoped<IAegisTool, MemoryRememberTool>();
         services.AddScoped<IAegisTool, MemorySearchTool>();
         services.AddScoped<IAegisTool, MemoryUpdateTool>();

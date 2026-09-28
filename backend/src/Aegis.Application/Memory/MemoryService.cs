@@ -4,7 +4,7 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Memory;
 
-public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisMetrics metrics)
+public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisMetrics metrics, MemorySemanticSearch? semantic = null)
 {
     public const int DefaultSearchLimit = 10;
     public const int MaxSearchLimit = 30;
@@ -38,15 +38,20 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
         return result;
     }
 
-    public async Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, Guid conversationId, CancellationToken ct)
+    public async Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, Guid conversationId, CancellationToken ct) =>
+        (await SearchWithModeAsync(query, limit, conversationId, ct)).Results;
+
+    public async Task<(IReadOnlyList<MemoryRecord> Results, string Mode)> SearchWithModeAsync(string query, int limit, Guid conversationId, CancellationToken ct)
     {
         if (limit is < 1 or > MaxSearchLimit) throw new ArgumentException("Limite deve estar entre 1 e 30.");
         var clean = MemoryText.Clean(query, 200);
         var now = clock.GetUtcNow();
-        var results = await store.SearchAsync(clean, limit, now, ct);
+        var (results, mode) = semantic is null
+            ? (await store.SearchAsync(clean, limit, now, ct), "canonical_text_fallback")
+            : await semantic.SearchAsync(clean, limit, ct);
         await store.ObserveAsync(conversationId, results, "memory_search", now, ct);
         metrics.MemorySearches.Add(1); metrics.MemorySearchResults.Record(results.Count);
-        return results;
+        return (results, mode);
     }
 
     public async Task<MemoryRecord> UpdateAsync(Guid id, string content, DateTimeOffset? validFrom, DateTimeOffset? validUntil, ToolExecutionContext context, CancellationToken ct)

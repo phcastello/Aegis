@@ -159,6 +159,8 @@ CASES.extend([
     ("Eu prefiro backend.", "memory_casual", None),
     ("O que você lembra sobre a Aegis?", "memory_search", "memory_search"),
     ("O que você lembra sobre meu PC?", "memory_search", "memory_search"),
+    ("Qual era mesmo aquela decisão sobre protocolo de integração da Aegis?", "memory_search", "memory_search"),
+    ("O que eu tinha decidido sobre a interface entre os serviços da Aegis?", "memory_search", "memory_search"),
     ("Esquece aquela informação da GPU.", "memory_forget_lookup", "memory_forget"),
     ("Esquece a segunda.", "memory_forget_second", "memory_forget"),
     ("Isso está errado, agora é uma 5080.", "memory_update_observed", "memory_update"),
@@ -359,9 +361,16 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
             {"memoryId": MCP_MEMORY_ID, "content": "Aegis não usa MCP.", "status": "Active"},
             {"memoryId": SECOND_MEMORY_ID, "content": "Sakamoto namora Bisky.", "status": "Active"},
         ]
-        memories = [item for item in catalog if query and query in item["content"].lower()][:arguments.get("limit", 10)]
+        # Intent eval fixture: emulate a few semantic matches. Retrieval quality is tested
+        # separately with deterministic embeddings and a physical Qdrant integration test.
+        related = set()
+        if any(word in query for word in ("gpu", "placa de vídeo", "placa de video", "6700", "pc")):
+            related.add(MEMORY_ID)
+        if any(word in query for word in ("protocolo", "integração", "integracao", "interface entre", "mcp")):
+            related.add(MCP_MEMORY_ID)
+        memories = [item for item in catalog if query and (query in item["content"].lower() or item["memoryId"] in related)][:arguments.get("limit", 10)]
         state["observedMemories"] = {item["memoryId"] for item in memories}
-        return json.dumps({"memories": [{"position": i + 1, "memory": item} for i, item in enumerate(memories)], "searchMode": "canonical_text"})
+        return json.dumps({"memories": [{"position": i + 1, "memory": item} for i, item in enumerate(memories)], "searchMode": "semantic"})
     if name == "memory_remember":
         content = arguments.get("content", "")
         if not isinstance(content, str) or not content.strip():

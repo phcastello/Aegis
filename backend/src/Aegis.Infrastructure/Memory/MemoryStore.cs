@@ -31,6 +31,9 @@ public sealed class MemoryStore(AegisDbContext db) : IMemoryStore
                 (x.ValidUntil == null || x.ValidUntil > now) && x.Content.ToUpper().Contains(normalized))
             .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Take(limit).ToListAsync(ct);
     }
+    public async Task<IReadOnlyList<MemoryRecord>> LoadActiveByIdsAsync(IReadOnlyList<Guid> ids, DateTimeOffset now, CancellationToken ct) =>
+        await db.MemoryRecords.AsNoTracking().Where(x => ids.Contains(x.Id) && x.Status == MemoryStatus.Active &&
+            (x.ValidFrom == null || x.ValidFrom <= now) && (x.ValidUntil == null || x.ValidUntil > now)).ToListAsync(ct);
     public void Add(MemoryRecord record) => db.MemoryRecords.Add(record);
     public void Add(MemoryEvidence evidence) => db.MemoryEvidences.Add(evidence);
     public void Add(MemoryEntity entity) => db.MemoryEntities.Add(entity);
