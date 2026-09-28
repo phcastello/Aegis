@@ -73,7 +73,7 @@ public sealed class MemorySemanticProjectionWorker(IServiceScopeFactory scopes, 
                 {
                     await using var scope = scopes.CreateAsyncScope();
                     await scope.ServiceProvider.GetRequiredService<IMemorySemanticProjectionStore>()
-                        .RequeueActiveAsync(clock.GetUtcNow(), stoppingToken);
+                        .RequeueCurrentStateAsync(clock.GetUtcNow(), stoppingToken);
                     initialized = true;
                 }
                 for (var i = 0; i < 20; i++)

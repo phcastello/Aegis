@@ -75,28 +75,30 @@ public sealed class MemorySemanticProjectionStore(AegisDbContext db, TimeProvide
     }
 
     // Run after collection validation on every worker start and again after collection loss.
-    // Reopening the current unique job preserves the existing idempotency constraint.
-    public async Task<int> RequeueActiveAsync(DateTimeOffset now, CancellationToken ct)
+    // Reopen one job for each record's desired state, not its historical operations.
+    // The current unique key preserves idempotency across repeated reconciliation.
+    public async Task<int> RequeueCurrentStateAsync(DateTimeOffset now, CancellationToken ct)
     {
         db.ChangeTracker.Clear();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(6080, 1)", ct);
-        var records = await db.MemoryRecords.AsNoTracking().Where(x => x.Status == MemoryStatus.Active)
-            .Select(x => new { x.Id, x.Revision }).ToListAsync(ct);
+        var records = await db.MemoryRecords.AsNoTracking()
+            .Select(x => new { x.Id, x.Revision, x.Status }).ToListAsync(ct);
         var jobs = await db.MemoryProjectionJobs.Where(x => x.ProjectionTarget == MemoryProjectionTarget.Semantic &&
-            x.AggregateType == MemoryAggregateType.MemoryRecord && x.Operation == MemoryProjectionOperation.Upsert).ToListAsync(ct);
-        var byKey = jobs.ToDictionary(x => (x.AggregateId, x.AggregateRevision));
+            x.AggregateType == MemoryAggregateType.MemoryRecord).ToListAsync(ct);
+        var byKey = jobs.ToDictionary(x => (x.AggregateId, x.AggregateRevision, x.Operation));
         var count = 0;
         foreach (var record in records)
         {
-            if (byKey.TryGetValue((record.Id, record.Revision), out var job))
+            var operation = record.Status == MemoryStatus.Active ? MemoryProjectionOperation.Upsert : MemoryProjectionOperation.Delete;
+            if (byKey.TryGetValue((record.Id, record.Revision, operation), out var job))
             {
                 if (job.Status == MemoryProjectionStatus.Pending && (job.NextAttemptAt is null || job.NextAttemptAt <= now) ||
                     job.Status == MemoryProjectionStatus.Processing && job.LeaseExpiresAt > now) continue;
                 job.Requeue(now);
             }
             else db.MemoryProjectionJobs.Add(new MemoryProjectionJob(MemoryProjectionTarget.Semantic, MemoryAggregateType.MemoryRecord,
-                record.Id, record.Revision, MemoryProjectionOperation.Upsert, now));
+                record.Id, record.Revision, operation, now));
             count++;
         }
         await db.SaveChangesAsync(ct);

@@ -52,10 +52,15 @@ public sealed class MemoryPostgresTests
     private sealed class FakeVectors : IMemoryVectorStore
     {
         public Dictionary<Guid, MemoryVectorPoint> Points { get; } = [];
+        public bool FailDeletes { get; set; }
         public Task<bool> EnsureCollectionAsync(CancellationToken ct) => Task.FromResult(false);
         public Task<MemoryVectorPoint?> GetPointAsync(Guid id, CancellationToken ct) => Task.FromResult(Points.GetValueOrDefault(id));
         public Task UpsertAsync(MemoryVectorPoint point, float[] vector, CancellationToken ct) { Points[point.MemoryId] = point; return Task.CompletedTask; }
-        public Task DeleteAsync(Guid id, CancellationToken ct) { Points.Remove(id); return Task.CompletedTask; }
+        public Task DeleteAsync(Guid id, CancellationToken ct)
+        {
+            if (FailDeletes) throw new MemorySemanticException("qdrant_unavailable");
+            Points.Remove(id); return Task.CompletedTask;
+        }
         public Task<IReadOnlyList<MemoryVectorCandidate>> SearchAsync(float[] vector, int limit, double threshold, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<MemoryVectorCandidate>>(Points.Keys.Take(limit).Select(id => new MemoryVectorCandidate(id, 0.9)).ToArray());
     }
@@ -68,6 +73,124 @@ public sealed class MemoryPostgresTests
         public Task UpsertAsync(MemoryVectorPoint point, float[] vector, CancellationToken ct) => throw Offline();
         public Task DeleteAsync(Guid id, CancellationToken ct) => throw Offline();
         public Task<IReadOnlyList<MemoryVectorCandidate>> SearchAsync(float[] vector, int limit, double threshold, CancellationToken ct) => throw Offline();
+    }
+
+    [PostgresFact]
+    public Task FailedForgottenDeleteReconcilesAfterRecovery() => FailedDeleteReconcilesAsync(supersede: false);
+
+    [PostgresFact]
+    public Task FailedSupersededDeleteReconcilesAfterRecovery() => FailedDeleteReconcilesAsync(supersede: true);
+
+    private static async Task FailedDeleteReconcilesAsync(bool supersede)
+    {
+        var schema = "memory_" + Guid.NewGuid().ToString("N");
+        await using var db = CreateDb(schema);
+        await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\"");
+        try
+        {
+            await db.Database.MigrateAsync();
+            var conversation = new Conversation();
+            var message = conversation.AddMessage("user", "Lembra que Pedro usa RX 6700 XT.");
+            db.Conversations.Add(conversation); await db.SaveChangesAsync();
+            var clock = new FixedClock(); using var metrics = new AegisMetrics();
+            var service = new MemoryService(new MemoryStore(db), clock, metrics);
+            var jobs = new MemorySemanticProjectionStore(db, clock);
+            var vectors = new FakeVectors();
+            var processor = new MemorySemanticProjectionProcessor(jobs, new FakeEmbedding(), vectors,
+                new MemorySemanticOptions { EmbeddingDimensions = 3, EmbeddingModel = "fake" }, clock, metrics);
+            var old = (await service.RememberAsync("Pedro usa RX 6700 XT.", null, null,
+                new ToolExecutionContext(conversation.Id, message.Id, message.Content), default)).Record;
+            await service.CreateEntityAsync("Pedro", "Person", default);
+            var graphBefore = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.ProjectionTarget == MemoryProjectionTarget.Graph);
+            Assert.True(await processor.ProcessNextAsync(default));
+            Assert.Contains(old.Id, vectors.Points.Keys);
+
+            MemoryRecord? replacement = null;
+            if (supersede)
+                replacement = await service.UpdateAsync(old.Id, "Pedro usa RTX 5080.", null, null,
+                    new ToolExecutionContext(conversation.Id, message.Id, message.Content), default);
+            else await service.ForgetAsync(old.Id, conversation.Id, default);
+            var desiredDelete = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.AggregateId == old.Id &&
+                x.AggregateRevision == 2 && x.Operation == MemoryProjectionOperation.Delete);
+            vectors.FailDeletes = true;
+            var backoff = new[] { 11, 31, 121, 301, 1801 };
+            for (var attempt = 1; attempt <= 6; attempt++)
+            {
+                if (attempt > 1) clock.Now = clock.Now.AddSeconds(backoff[attempt - 2]);
+                // The replacement Upsert may be claimed before the old Delete.
+                for (var i = 0; i < 3; i++)
+                {
+                    var state = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.Id == desiredDelete.Id);
+                    if (state.Attempt == attempt) break;
+                    Assert.True(await processor.ProcessNextAsync(default));
+                }
+                var failedAttempt = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.Id == desiredDelete.Id);
+                Assert.Equal(attempt, failedAttempt.Attempt);
+            }
+            while (await processor.ProcessNextAsync(default)) { } // finish replacement Upsert, if any
+            var failed = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.Id == desiredDelete.Id);
+            Assert.Equal(MemoryProjectionStatus.Failed, failed.Status);
+            Assert.Contains(old.Id, vectors.Points.Keys);
+            Assert.Equal(supersede ? MemoryStatus.Superseded : MemoryStatus.Forgotten,
+                (await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == old.Id)).Status);
+            if (replacement is not null) Assert.Contains(replacement.Id, vectors.Points.Keys);
+
+            vectors.FailDeletes = false;
+            Assert.Equal(supersede ? 2 : 1, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.Equal(0, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.Equal(0, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            for (var i = 0; i < (supersede ? 2 : 1); i++) Assert.True(await processor.ProcessNextAsync(default));
+            Assert.DoesNotContain(old.Id, vectors.Points.Keys);
+            if (replacement is not null) Assert.Contains(replacement.Id, vectors.Points.Keys);
+            Assert.Equal(MemoryProjectionStatus.Completed, (await db.MemoryProjectionJobs.AsNoTracking()
+                .SingleAsync(x => x.Id == desiredDelete.Id)).Status);
+            Assert.Equal(supersede ? 3 : 2, await db.MemoryProjectionJobs.CountAsync(x => x.ProjectionTarget == MemoryProjectionTarget.Semantic));
+            var graphAfter = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.Id == graphBefore.Id);
+            Assert.Equal(graphBefore.Status, graphAfter.Status);
+            Assert.Equal(graphBefore.Attempt, graphAfter.Attempt);
+            Assert.Equal(graphBefore.LeaseId, graphAfter.LeaseId);
+            Assert.Equal(graphBefore.LeaseExpiresAt, graphAfter.LeaseExpiresAt);
+            Assert.Equal(graphBefore.UpdatedAt, graphAfter.UpdatedAt);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); }
+    }
+
+    [PostgresFact]
+    public async Task CompletedDeleteRepairsArtificialPointDrift()
+    {
+        var schema = "memory_" + Guid.NewGuid().ToString("N");
+        await using var db = CreateDb(schema);
+        await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\"");
+        try
+        {
+            await db.Database.MigrateAsync();
+            var conversation = new Conversation();
+            var message = conversation.AddMessage("user", "Lembra que Aegis não usa MCP.");
+            db.Conversations.Add(conversation); await db.SaveChangesAsync();
+            var clock = new FixedClock(); using var metrics = new AegisMetrics();
+            var service = new MemoryService(new MemoryStore(db), clock, metrics);
+            var jobs = new MemorySemanticProjectionStore(db, clock);
+            var vectors = new FakeVectors();
+            var processor = new MemorySemanticProjectionProcessor(jobs, new FakeEmbedding(), vectors,
+                new MemorySemanticOptions { EmbeddingDimensions = 3, EmbeddingModel = "fake" }, clock, metrics);
+            var record = (await service.RememberAsync("Aegis não usa MCP.", null, null,
+                new ToolExecutionContext(conversation.Id, message.Id, message.Content), default)).Record;
+            Assert.True(await processor.ProcessNextAsync(default));
+            var stalePoint = vectors.Points[record.Id];
+            await service.ForgetAsync(record.Id, conversation.Id, default);
+            Assert.True(await processor.ProcessNextAsync(default));
+            Assert.Empty(vectors.Points);
+            vectors.Points[record.Id] = stalePoint;
+            Assert.Equal(1, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.Equal(0, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.True(await processor.ProcessNextAsync(default));
+            Assert.Empty(vectors.Points);
+            Assert.Equal(MemoryProjectionStatus.Completed, (await db.MemoryProjectionJobs.AsNoTracking()
+                .SingleAsync(x => x.AggregateId == record.Id && x.Operation == MemoryProjectionOperation.Delete)).Status);
+            Assert.Equal(MemoryProjectionStatus.Completed, (await db.MemoryProjectionJobs.AsNoTracking()
+                .SingleAsync(x => x.AggregateId == record.Id && x.Operation == MemoryProjectionOperation.Upsert)).Status);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); }
     }
 
     [PostgresQdrantFact]
@@ -114,7 +237,10 @@ public sealed class MemoryPostgresTests
             using (var deleted = await http.DeleteAsync("collections/" + collection)) deleted.EnsureSuccessStatusCode();
             Assert.True(await vectors.EnsureCollectionAsync(default));
             Assert.Null(await vectors.GetPointAsync(current.Id, default));
-            Assert.Equal(1, await jobs.RequeueActiveAsync(clock.Now, default));
+            Assert.Equal(2, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.Equal(0, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.Equal(0, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.True(await processor.ProcessNextAsync(default));
             Assert.True(await processor.ProcessNextAsync(default));
             Assert.Equal(current.Id, (await vectors.GetPointAsync(current.Id, default))!.MemoryId);
             Assert.Equal(current.Id, Assert.Single((await search.SearchAsync("o banco canônico", 10, default)).Results).Id);
@@ -220,19 +346,22 @@ public sealed class MemoryPostgresTests
             Assert.Equal(1, retry.Attempt);
             Assert.False(await processor.ProcessNextAsync(default));
             // Collection recovery reopens a delayed current job immediately.
-            Assert.Equal(1, await jobs.RequeueActiveAsync(clock.Now, default));
+            Assert.Equal(2, await jobs.RequeueCurrentStateAsync(clock.Now, default));
             var reopened = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.AggregateId == active.Id);
             Assert.Null(reopened.NextAttemptAt);
             Assert.Equal(0, reopened.Attempt);
             embedding.Fail = false;
             Assert.True(await processor.ProcessNextAsync(default));
-            Assert.Contains(active.Id, vectors.Points.Keys);
-            vectors.Points.Clear(); // lost Qdrant collection
-            Assert.Equal(1, await jobs.RequeueActiveAsync(clock.Now, default));
             Assert.True(await processor.ProcessNextAsync(default));
             Assert.Contains(active.Id, vectors.Points.Keys);
-            await jobs.RequeueActiveAsync(clock.Now, default);
+            vectors.Points.Clear(); // lost Qdrant collection
+            Assert.Equal(2, await jobs.RequeueCurrentStateAsync(clock.Now, default));
+            Assert.True(await processor.ProcessNextAsync(default));
+            Assert.True(await processor.ProcessNextAsync(default));
+            Assert.Contains(active.Id, vectors.Points.Keys);
+            await jobs.RequeueCurrentStateAsync(clock.Now, default);
             Assert.Equal(3, await db.MemoryProjectionJobs.CountAsync(x => x.ProjectionTarget == MemoryProjectionTarget.Semantic));
+            Assert.True(await processor.ProcessNextAsync(default));
             Assert.True(await processor.ProcessNextAsync(default));
 
             var thirdMessage = new ChatMessage(conversation.Id, "user", "Guarda que Bisky estuda na Unicentro.");

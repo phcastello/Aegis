@@ -53,5 +53,5 @@ public interface IMemorySemanticProjectionStore
     Task<MemoryProjectionJob?> ClaimAsync(DateTimeOffset now, TimeSpan lease, CancellationToken ct);
     Task<bool> ReconcileClaimAsync(MemoryProjectionJob claim, Func<MemoryRecord?, CancellationToken, Task> reconcile, CancellationToken ct);
     Task<bool> FailAsync(MemoryProjectionJob claim, string code, DateTimeOffset now, TimeSpan? retryDelay, CancellationToken ct);
-    Task<int> RequeueActiveAsync(DateTimeOffset now, CancellationToken ct);
+    Task<int> RequeueCurrentStateAsync(DateTimeOffset now, CancellationToken ct);
 }
