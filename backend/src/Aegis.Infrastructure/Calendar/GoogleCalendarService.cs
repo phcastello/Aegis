@@ -152,6 +152,8 @@ public sealed class GoogleCalendarService(HttpClient httpClient, IGoogleAccessTo
         CancellationToken cancellationToken = default)
     {
         ValidateReminderArguments(changes, actionType == CalendarActionTypes.Create);
+        if (changes.Recurrence is not null && actionType != CalendarActionTypes.Create)
+            throw Invalid("Recorrência só pode ser definida numa criação ainda pendente.");
         var token = await AccessTokenAsync(cancellationToken);
         var calendar = await GetCalendarAsync(calendarId, token, cancellationToken);
         RequireWrite(calendar);
@@ -161,6 +163,13 @@ public sealed class GoogleCalendarService(HttpClient httpClient, IGoogleAccessTo
         if (current is not null && current["recurrence"] is JsonArray { Count: > 0 })
             throw Invalid("Selecione uma ocorrência específica da série pela listagem. Esta versão não altera séries recorrentes completas.");
         var fields = actionType == CalendarActionTypes.Delete ? new JsonObject() : BuildFields(changes, current);
+        CalendarRecurrenceData? recurrence = null;
+        if (actionType == CalendarActionTypes.Create)
+        {
+            var built = CalendarRecurrenceRules.Build(changes.Recurrence, fields["start"]!.AsObject(), fields["end"]!.AsObject());
+            recurrence = built.Normalized;
+            if (built.Rule is not null) fields["recurrence"] = new JsonArray(built.Rule);
+        }
         var expected = current?.DeepClone() as JsonObject ?? new JsonObject();
         ApplyFields(expected, fields);
         var eventData = Map(expected, calendar, true);
@@ -172,9 +181,10 @@ public sealed class GoogleCalendarService(HttpClient httpClient, IGoogleAccessTo
             ? "; anotação removida" : $"; anotação: {changes.Description}";
         var reminderSummary = fields["reminders"] is JsonObject reminders
             ? ReminderSummary(reminders, changes.ReminderMode ?? (current is null ? "aegis_default" : "keep"), eventData.AllDay) : "";
-        var summaryBudget = 500 - reminderSummary.Length;
+        var recurrenceSummary = recurrence is null ? "" : CalendarRecurrenceRules.Summary(recurrence, fields["start"]!.AsObject()) + "; feriados avaliados só na primeira ocorrência";
+        var summaryBudget = 500 - reminderSummary.Length - recurrenceSummary.Length;
         if (summary.Length > summaryBudget) summary = summary[..(summaryBudget - 3)] + "...";
-        summary += reminderSummary;
+        summary += recurrenceSummary + reminderSummary;
         var checksDates = actionType == CalendarActionTypes.Create || actionType == CalendarActionTypes.Update &&
             (changes.Start is not null || changes.End is not null || changes.AllDay is not null || changes.TimeZone is not null);
         var holidayCheck = checksDates
@@ -182,7 +192,7 @@ public sealed class GoogleCalendarService(HttpClient httpClient, IGoogleAccessTo
             : (Warnings: new List<CalendarHolidayWarning>(), HasMore: false);
         return new(status.EmailAddress ?? throw new CalendarException("calendar_not_connected", "Conta Google não confirmada."),
             current?["etag"]?.GetValue<string>(), fields, summary, holidayCheck.Warnings, holidayCheck.HasMore,
-            actionType == CalendarActionTypes.Delete ? null : changes.ReminderMode ?? (current is null ? "aegis_default" : "keep"));
+            actionType == CalendarActionTypes.Delete ? null : changes.ReminderMode ?? (current is null ? "aegis_default" : "keep"), recurrence);
     }
 
     public async Task ExecuteAsync(string actionType, string calendarId, string eventId, CalendarActionPayload payload,
@@ -545,6 +555,7 @@ public sealed class GoogleCalendarService(HttpClient httpClient, IGoogleAccessTo
 
     private static bool Matches(JsonObject item, JsonObject fields) => fields.All(field =>
     {
+        if (field.Key == "recurrence") return CalendarRecurrenceRules.Matches(item[field.Key], field.Value);
         if (field.Key == "reminders")
         {
             var expected = ReadReminders(field.Value);

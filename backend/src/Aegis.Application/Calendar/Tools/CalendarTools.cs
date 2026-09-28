@@ -29,6 +29,8 @@ public abstract class CalendarToolBase : IAegisTool
                 return Error("invalid_calendar_tool_arguments", "Faltam parâmetros obrigatórios. Obtenha os dados antes de preparar a ação.");
             if (arguments.TryGetProperty("description", out var description) && description.ValueKind != JsonValueKind.String)
                 return Error("invalid_calendar_tool_arguments", "description deve ser texto: omita para preservar a anotação, envie texto para substituir ou string vazia para limpar. Não use null.");
+            if (arguments.TryGetProperty("recurrence", out var recurrence) && recurrence.ValueKind != JsonValueKind.Object)
+                return Error("invalid_calendar_tool_arguments", "recurrence deve ser um objeto; omita para preservar na emenda ou use frequency=none para remover.");
             return await RunAsync(arguments, context, cancellationToken);
         }
         catch (CalendarException e) { return Error(e.Code, e.Message); }
@@ -200,13 +202,30 @@ public abstract class CalendarPrepareActionTool(IAegisDbContext db, ICalendarSer
                 : "ID do calendário de origem observado. Omitido: backend resolve se eventId for único no contexto recente."
         };
         if (!create) schema["properties"]!["eventId"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string", ["description"] = "ID observado em tools Calendar recentes desta conversa." };
+        if (create) schema["properties"]!["recurrence"] = RecurrenceSchema(false);
         return JsonSerializer.SerializeToElement(schema);
+    }
+
+    private static System.Text.Json.Nodes.JsonObject RecurrenceSchema(bool allowNone)
+    {
+        var schema = System.Text.Json.Nodes.JsonNode.Parse("""
+        {"type":"object","properties":{
+          "frequency":{"type":"string","enum":["daily","weekly","monthly","yearly"],"description":"daily, weekly, monthly ou yearly. Quinzenal: weekly com interval=2."},
+          "interval":{"type":"integer","minimum":1,"description":"A cada quantos dias/semanas/meses/anos; omitido equivale a 1."},
+          "daysOfWeek":{"type":"array","minItems":1,"maxItems":7,"uniqueItems":true,"items":{"type":"string","enum":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]},"description":"Só weekly: dias da semana. Omitido usa o dia da primeira ocorrência. Inclua o dia da primeira ocorrência."},
+          "count":{"type":"integer","minimum":1,"description":"Quantidade total de ocorrências; não combine com until."},
+          "until":{"type":"string","description":"Última data INCLUSIVA YYYY-MM-DD no timezone do evento; não combine com count."}
+        },"required":["frequency"],"additionalProperties":false}
+        """)!.AsObject();
+        if (allowNone) schema["properties"]!["frequency"]!["enum"] = new System.Text.Json.Nodes.JsonArray("none", "daily", "weekly", "monthly", "yearly");
+        return schema;
     }
 
     internal static JsonElement PendingMutationSchema()
     {
         var schema = System.Text.Json.Nodes.JsonNode.Parse(MutationSchema(false).GetRawText())!;
         schema["properties"]!.AsObject().Remove("eventId");
+        schema["properties"]!["recurrence"] = RecurrenceSchema(true);
         schema["properties"]!["calendarId"]!["description"] = "Omitido: preserva o calendário da proposta. Outra agenda somente para criação pendente, se explicitamente solicitada e observada.";
         schema["properties"]!["description"]!["description"] = "Anotação da proposta: omita para preservar, envie texto para substituir ou string vazia para limpar; não use null. Para acrescentar, envie o conteúdo completo preservando a anotação já apresentada na conversa. Somente conteúdo solicitado pelo usuário, sem metadata interna.";
         schema["required"] = new System.Text.Json.Nodes.JsonArray();
@@ -219,7 +238,7 @@ public sealed class CalendarCreateEventTool(IAegisDbContext db, ICalendarService
 {
     public override string Name => "calendar_create_event";
     protected override string ActionType => CalendarActionTypes.Create;
-    public override string Description => "Prepara criação com título, início e fim concretos: usa primary por padrão. O nome simples da atividade informada, como Reunião, já pode servir como summary; não exija um título elaborado. description é uma anotação opcional: só envie quando solicitada ou quando o conteúdo for claramente destinado à anotação; normalmente omita. Sem preferência de lembretes, omita reminderMode/reminders: o backend aplica automaticamente a policy Aegis, diferente para timed e all-day. Pedido explícito prevalece: custom + lista completa, none ou calendar_default. Não envie os defaults manualmente. Outro calendário somente quando o usuário indicar explicitamente o destino; resolva calendarId com calendar_list_calendars/eventos e esclareça nomes ambíguos. Se o usuário delegou explicitamente título, horário ou duração, escolha valores razoáveis, sem insistir em perguntas, e apresente as escolhas no resumo; informação ausente sem delegação pode exigir esclarecimento. Substitui propostas anteriores sem execução/efeitos externos; para mudar só alguns campos da proposta use calendar_amend_pending_action. Exige confirmação em turno posterior; não altera Google agora. Considere holidayWarnings ao pedir confirmação; feriados não bloqueiam. Sem convidados ou Meet.";
+    public override string Description => "Prepara criação de evento na agenda, único ou recorrente, com título, início e fim concretos da PRIMEIRA ocorrência; sua duração vale para a série. Para 'toda segunda, quarta e sexta', use recurrence={frequency:weekly,daysOfWeek:[monday,wednesday,friday]}; quinzenal usa weekly + interval=2; mensal e anual repetem a data da primeira ocorrência. count ou until (data inclusiva YYYY-MM-DD) são opcionais e exclusivos; sem ambos, a série não tem término. Omitir recurrence cria evento único. Uma rotina concreta informada com dias e horários, como 'tenho aula toda terça e quinta das 13h20 às 15h', pode ser preparada para confirmação. Para compromisso recorrente com hora e sem duração, escolha duração razoável, por exemplo uma hora, e apresente-a. Pedido apenas para lembrar em um horário, sem compromisso/agenda, pertence às tools Reminder; elas não criam séries Calendar. Usa primary por padrão. O nome simples da atividade já serve como summary: 'cria uma reunião' pode usar 'Reunião', sem pedir título elaborado. description é anotação opcional: só envie quando solicitada. Sem preferência de lembretes, omita reminderMode/reminders para usar a policy Aegis; pedidos explícitos podem usar custom, none ou calendar_default. Outro calendário somente quando o usuário indicar o destino; resolva calendarId. Se o usuário delegou título, horário ou duração, escolha valores razoáveis e apresente-os; esclareça ausências essenciais sem delegação. Correções da proposta usam calendar_amend_pending_action. Exige confirmação em turno posterior; não altera Google agora. holidayWarnings para série cobrem somente a primeira ocorrência; feriados não bloqueiam. Sem convidados ou Meet.";
     public override JsonElement ParametersSchema { get; } = MutationSchema(true);
 }
 
@@ -242,7 +261,7 @@ public sealed class CalendarDeleteEventTool(IAegisDbContext db, ICalendarService
 public sealed class CalendarAmendPendingActionTool(IAegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext) : CalendarToolBase
 {
     public override string Name => "calendar_amend_pending_action";
-    public override string Description => "Altera os campos fornecidos da última proposta Calendar de criação ou alteração ainda não executada, preservando os demais, incluindo description e a preferência de reminders. description substitui a anotação proposta; string vazia remove. Para acrescentar, envie a anotação completa preservando o conteúdo da proposta. Criação pendente com policy Aegis muda para a policy all-day/timed adequada ao novo tipo; custom permanece preservado. reminderMode/reminders permitem revisar a preferência antes da confirmação. Substitui a proposta diretamente, sem cancelar em outro turno e sem alterar Google; a nova proposta exige confirmação posterior. Não use eventId de uma criação pendente em calendar_update_event: ela ainda não existe no Google. Para mover horário/data preservando duração, forneça início e fim novos a partir do resumo da proposta. Use valores concretos; se um detalhe foi explicitamente delegado, escolha um valor razoável e apresente-o, sem perguntar novamente. Calendário alternativo somente quando solicitado explicitamente e observado; alteração de evento existente mantém sua origem. Retorna holidayWarnings para a nova data, que não bloqueiam. Recusa ações com possíveis efeitos externos.";
+    public override string Description => "Altera os campos fornecidos da última proposta Calendar ainda não executada e preserva os omitidos, inclusive recurrence e reminders. Numa criação pendente, envie recurrence completa para adicionar ou substituir a regra; recurrence={frequency:none} remove a recorrência e volta a evento único. Exemplo: para acrescentar quarta à segunda, envie weekly com daysOfWeek=[monday,wednesday]. Recurrence não se aplica à alteração de evento Google já existente. description substitui a anotação; string vazia remove. Criação pendente com policy Aegis muda para a policy all-day/timed adequada ao novo tipo; custom permanece preservado. reminderMode/reminders revisam a preferência. A nova proposta exige confirmação posterior e não altera Google agora. Para mover data/horário mantendo duração, forneça início e fim novos. Calendário alternativo somente quando solicitado e observado; alteração existente mantém sua origem. holidayWarnings para série cobrem só a primeira ocorrência. Recusa ações com possíveis efeitos externos.";
     public override JsonElement ParametersSchema { get; } = CalendarPrepareActionTool.PendingMutationSchema();
 
     protected override async Task<AegisToolResult> RunAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken)
@@ -262,6 +281,8 @@ public sealed class CalendarAmendPendingActionTool(IAegisDbContext db, ICalendar
             end, allDay, fields["start"]?["timeZone"]?.GetValue<string>(), Text("description"), Text("location"));
         var values = arguments.EnumerateObject().Where(p => p.Name != "calendarId").ToDictionary(p => p.Name, p => p.Value);
         var requested = JsonSerializer.SerializeToElement(values).Deserialize<CalendarEventChanges>(JsonOptions)!;
+        if (requested.Recurrence is not null && previous.ActionType != CalendarActionTypes.Create)
+            return Error("invalid_calendar_tool_arguments", "Recorrência só pode ser alterada numa criação ainda pendente.");
         if (requested.Reminders is not null && requested.ReminderMode != "custom")
             return Error("invalid_calendar_tool_arguments", "Informe reminderMode=custom junto da lista reminders.");
         var storedReminders = fields["reminders"]?.Deserialize<CalendarRemindersData>(JsonOptions);
@@ -277,7 +298,8 @@ public sealed class CalendarAmendPendingActionTool(IAegisDbContext db, ICalendar
         }
         var changes = new CalendarEventChanges(requested.Summary ?? original.Summary, requested.Start ?? original.Start,
             requested.End ?? original.End, requested.AllDay ?? original.AllDay, requested.TimeZone ?? (requested.AllDay == true ? null : original.TimeZone),
-            requested.Description ?? original.Description, requested.Location ?? original.Location, reminderMode, reminders);
+            requested.Description ?? original.Description, requested.Location ?? original.Location, reminderMode, reminders,
+            requested.Recurrence ?? payload.Recurrence);
         var calendarId = OptionalCalendarId(arguments) ?? previous.CalendarId;
         if (previous.ActionType == CalendarActionTypes.Create)
             await toolContext.RequireCalendarAsync(context.ConversationId, calendarId, cancellationToken);

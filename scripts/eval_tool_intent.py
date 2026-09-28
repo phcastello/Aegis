@@ -64,6 +64,11 @@ CASES = [
     ("Quando é minha próxima coisa marcada?", "calendar_read", "calendar_list_events"),
     ("Procura a prova de Grafos na minha agenda.", "calendar_read", "calendar_list_events"),
     ("Marca dentista amanhã às 14h por uma hora.", "calendar_create", "calendar_create_event"),
+    ("Coloca academia toda segunda, quarta e sexta às 18h na agenda.", "calendar_recurring_weekdays", "calendar_create_event"),
+    ("Tenho aula toda terça e quinta das 13:20 às 15h.", "calendar_recurring_classes", "calendar_create_event"),
+    ("Marca reunião quinzenal na sexta às 10.", "calendar_recurring_biweekly", "calendar_create_event"),
+    ("Todo ano dia 28 de setembro marca meu aniversário na agenda.", "calendar_recurring_yearly", "calendar_create_event"),
+    ("Quarta também.", "calendar_pending_recurrence", "calendar_amend_pending_action"),
     ("Quais agendas eu tenho?", "calendar_calendars", "calendar_list_calendars"),
     ("Marca dentista amanhã às 14h por uma hora no Diario.", "calendar_secondary", "calendar_create_event"),
     ("Cria o evento Futebol amanhã das 10h às 11h no Family.", "calendar_secondary", "calendar_create_event"),
@@ -149,6 +154,7 @@ CASES.extend([
     ("Me lembra daqui 20 minutos de tirar a pizza do forno.", "reminder_create_relative", "reminder_create"),
     ("Me lembra daqui 15 minutos de olhar o forno.", "reminder_create_relative", "reminder_create"),
     ("Me lembra às 18h de comprar leite.", "reminder_create_today", "reminder_create"),
+    ("Me lembra todo dia às 22h de tomar o remédio.", "reminder_recurring", None),
     ("Quais lembretes eu tenho?", "reminder_list", "reminder_list"),
     ("Quais lembretes eu tenho essa semana?", "reminder_list_week", "reminder_list"),
     ("Muda o lembrete da ração para 19h.", "reminder_update_time", "reminder_update"),
@@ -253,6 +259,38 @@ def valid_calendar_values(values: dict) -> bool:
         if values["allDay"]:
             return len(values["start"]) == len(values["end"]) == 10 and end >= start and values.get("timeZone") is None
         return start.tzinfo is not None and end.tzinfo is not None and end > start
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def valid_calendar_recurrence(values: dict) -> bool:
+    recurrence = values.get("recurrence")
+    if recurrence is None:
+        return "recurrence" not in values
+    if not isinstance(recurrence, dict) or not set(recurrence) <= {"frequency", "interval", "daysOfWeek", "count", "until"}:
+        return False
+    frequency = recurrence.get("frequency")
+    if frequency == "none":
+        return len(recurrence) == 1
+    if frequency not in {"daily", "weekly", "monthly", "yearly"}:
+        return False
+    interval = recurrence.get("interval", 1)
+    count = recurrence.get("count")
+    until = recurrence.get("until")
+    if type(interval) is not int or interval <= 0 or count is not None and (type(count) is not int or count <= 0):
+        return False
+    if count is not None and until is not None:
+        return False
+    days = recurrence.get("daysOfWeek")
+    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    if days is not None and (frequency != "weekly" or not isinstance(days, list) or not days
+                             or any(not isinstance(day, str) or day not in weekdays for day in days) or len(set(days)) != len(days)):
+        return False
+    try:
+        start = datetime.fromisoformat(values["start"].replace("Z", "+00:00")).date()
+        if days is not None and weekdays[start.weekday()] not in days:
+            return False
+        return until is None or datetime.fromisoformat(until).date() >= start and len(until) == 10
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -374,6 +412,8 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
             return json.dumps({"error": "invalid_calendar_tool_arguments", "message": "description deve ser string de até 8000 caracteres: omita para preservar, string vazia limpa."})
         if name != "calendar_delete_event" and not valid_calendar_values(values):
             return json.dumps({"error": "invalid_calendar_tool_arguments", "message": "Informe título, início, fim e allDay tecnicamente válidos. Campos omitidos na emenda preservam os anteriores."})
+        if name != "calendar_delete_event" and not valid_calendar_recurrence(values):
+            return json.dumps({"error": "invalid_calendar_tool_arguments", "message": "Recorrência inválida."})
         try:
             reminders = reminder_result(values, name == "calendar_create_event") if name != "calendar_delete_event" else None
         except ValueError as error:
@@ -384,6 +424,8 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
         state["preparedThisTurn"] = True
         warnings = [{"name": holiday["summary"], "date": holiday["start"], "calendarId": holiday_calendar, "calendarName": "Feriados"}]
         human_summary = f"Proposta: {values.get('summary')} de {values.get('start')} até {values.get('end')}"
+        if values.get("recurrence", {}).get("frequency") not in {None, "none"}:
+            human_summary += "; recorrência: " + values["recurrence"]["frequency"] + ("; sem término" if not values["recurrence"].get("count") and not values["recurrence"].get("until") else "")
         if "description" in arguments:
             human_summary += "; anotação: " + (arguments["description"] or "removida")
         return json.dumps({"pendingActionId": "eval-pending", "humanSummary": human_summary,
@@ -514,6 +556,10 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
         runtime += ("\nAção pendente Calendar: Criar X em primary, amanhã 2026-09-27 das 14h às 15h; anotação: Preciso levar os exames. "
                     "Válida até 2026-09-26T15:10:00Z, não executada, sem possíveis efeitos externos. "
                     "Correção da proposta: calendar_amend_pending_action; aceitação: calendar_confirm_pending_action.")
+    if kind == "calendar_pending_recurrence":
+        runtime += ("\nAção pendente Calendar: Criar Academia em primary, primeira ocorrência segunda 2026-09-28 das 18h às 19h, "
+                    "recorrência toda segunda sem término; válida até 2026-09-26T15:10:00Z, não executada, sem possíveis efeitos externos. "
+                    "Correção da proposta: calendar_amend_pending_action; aceitação: calendar_confirm_pending_action.")
     input_items.append({"role": "developer", "content": "Contexto operacional (use apenas quando relevante):\n" + runtime})
     calls_seen = []
     call_arguments = []
@@ -521,6 +567,10 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
     if kind == "calendar_note_pending":
         state["calendarPending"] = {"summary": "X", "start": "2026-09-27T14:00:00-03:00", "end": "2026-09-27T15:00:00-03:00",
                                     "allDay": False, "calendarId": "primary", "description": EXISTING_NOTE, "reminderMode": "aegis_default"}
+    if kind == "calendar_pending_recurrence":
+        state["calendarPending"] = {"summary": "Academia", "start": "2026-09-28T18:00:00-03:00", "end": "2026-09-28T19:00:00-03:00",
+                                    "allDay": False, "calendarId": "primary", "recurrence": {"frequency": "weekly", "daysOfWeek": ["monday"]},
+                                    "reminderMode": "aegis_default"}
     if kind == "calendar_replace":
         state["calendarPending"] = {"summary": "Entregar encomenda nos Correios", "start": "2026-10-28T14:00:00-03:00",
                                     "end": "2026-10-28T15:00:00-03:00", "allDay": False, "calendarId": "primary", "reminderMode": "aegis_default"}
@@ -574,6 +624,9 @@ def main() -> int:
             return 2
         if kind == "none":
             passed = not calls
+        elif kind == "reminder_recurring":
+            # Internal reminders are one-shot today; a repeated reminder must not become a Calendar series or a silent one-shot.
+            passed = bool(answer) and not any(name in {"calendar_create_event", "calendar_confirm_pending_action", "reminder_create"} for name in calls)
         elif kind.startswith("reminder_"):
             allowed = {"reminder_list", required_tool}
             if kind == "reminder_missing_time":
@@ -691,6 +744,14 @@ def main() -> int:
             # Listing already returns reminders; an extra GET is optional, not required.
             passed = any(name in calls for name in {"calendar_list_events", "calendar_get_event"}) and all(
                 name in {"calendar_get_status", "calendar_list_events", "calendar_get_event"} for name in calls)
+        elif kind == "calendar_pending_recurrence":
+            allowed = {"calendar_get_status", "calendar_amend_pending_action"}
+            writes = [call for call in arguments if call["name"] == "calendar_amend_pending_action"]
+            passed = len(writes) == 1 and all(name in allowed for name in calls) and "calendar_confirm_pending_action" not in calls
+            for call in writes:
+                recurrence = call["arguments"].get("recurrence", {})
+                passed = passed and recurrence.get("frequency") == "weekly" and set(recurrence.get("daysOfWeek", [])) == {"monday", "wednesday"}
+                passed = passed and "pendingActionId" in call["result"] and call["effectiveValues"].get("summary") == "Academia"
         elif kind.startswith("calendar_"):
             allowed = {"calendar_get_status", "calendar_list_calendars", "calendar_list_events", "calendar_get_event", required_tool}
             passed = required_tool in calls and all(name in allowed for name in calls)
@@ -709,6 +770,28 @@ def main() -> int:
                         passed = passed and not values["allDay"] and start.date().isoformat() == "2026-10-31" and start.hour == 19
                     elif "dentista" in message:
                         passed = passed and not values["allDay"] and start.date().isoformat() == "2026-09-27" and start.hour == 14
+        if kind.startswith("calendar_recurring_"):
+            writes = [call for call in arguments if call["name"] == "calendar_create_event"]
+            expected = {
+                "calendar_recurring_weekdays": ("weekly", 1, {"monday", "wednesday", "friday"}),
+                "calendar_recurring_classes": ("weekly", 1, {"tuesday", "thursday"}),
+                "calendar_recurring_biweekly": ("weekly", 2, {"friday"}),
+                "calendar_recurring_yearly": ("yearly", 1, set()),
+            }[kind]
+            passed = passed and len(writes) == 1 and "calendar_confirm_pending_action" not in calls
+            for call in writes:
+                values = call["arguments"]
+                recurrence = values.get("recurrence", {})
+                passed = passed and valid_calendar_values(values) and valid_calendar_recurrence(values)
+                passed = passed and "pendingActionId" in call["result"] and values.get("calendarId") in {None, "primary"}
+                passed = passed and recurrence.get("frequency") == expected[0] and recurrence.get("interval", 1) == expected[1]
+                if expected[0] == "weekly":
+                    first = datetime.fromisoformat(values["start"]).weekday()
+                    actual_days = set(recurrence.get("daysOfWeek", [["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][first]]))
+                    passed = passed and actual_days == expected[2] and not values["allDay"]
+                else:
+                    passed = passed and values["allDay"] and values["start"] == values["end"] == "2026-09-28"
+                passed = passed and recurrence.get("count") is None and recurrence.get("until") is None
         elif kind == "calendar_secondary":
             destination = "eval-diario" if "Diario" in message else "eval-family"
             passed = passed and "calendar_list_calendars" in calls and all(call["arguments"].get("calendarId") == destination for call in arguments if call["name"] == "calendar_create_event")

@@ -26,17 +26,21 @@ public sealed record CalendarEventData(string EventId, string CalendarId, string
 public sealed record CalendarEventList(IReadOnlyList<CalendarEventData> Events, IReadOnlyList<CalendarEventData> Holidays,
     bool HasMore, bool HasMoreEvents, bool HasMoreHolidays);
 public sealed record CalendarHolidayWarning(string Name, string Date, string CalendarId, string CalendarName, string? EndDate = null);
+// Semantic recurrence at the tool/Application boundary. Infrastructure owns Google RRULE encoding.
+public sealed record CalendarRecurrenceData([property: JsonRequired] string Frequency, int? Interval = null,
+    IReadOnlyList<string>? DaysOfWeek = null, int? Count = null, string? Until = null);
 
 // For all-day events Start and End are inclusive dates at the Application boundary.
 // Infrastructure converts End to Google's exclusive end.date.
 // Description omitted/null preserves the current note; a string replaces it, including "" to clear.
 public sealed record CalendarEventChanges(string? Summary = null, string? Start = null, string? End = null,
     bool? AllDay = null, string? TimeZone = null, string? Description = null, string? Location = null,
-    string? ReminderMode = null, IReadOnlyList<CalendarReminderData>? Reminders = null);
+    string? ReminderMode = null, IReadOnlyList<CalendarReminderData>? Reminders = null, CalendarRecurrenceData? Recurrence = null);
 
 // Normalized changes and contextual warnings are stored; no model input is needed at confirmation.
 public sealed record CalendarActionPayload(string AccountEmail, string? ExpectedETag, JsonObject Fields, string HumanSummary,
-    IReadOnlyList<CalendarHolidayWarning>? HolidayWarnings = null, bool HolidayWarningsHasMore = false, string? ReminderMode = null);
+    IReadOnlyList<CalendarHolidayWarning>? HolidayWarnings = null, bool HolidayWarningsHasMore = false, string? ReminderMode = null,
+    CalendarRecurrenceData? Recurrence = null);
 
 public class CalendarException(string code, string message) : Exception(message)
 {
