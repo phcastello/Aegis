@@ -10,6 +10,13 @@ namespace Aegis.Infrastructure.Persistence;
 public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
 {
     public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<MemoryRecord> MemoryRecords => Set<MemoryRecord>();
+    public DbSet<MemoryEvidence> MemoryEvidences => Set<MemoryEvidence>();
+    public DbSet<MemoryEntity> MemoryEntities => Set<MemoryEntity>();
+    public DbSet<MemoryEntityAlias> MemoryEntityAliases => Set<MemoryEntityAlias>();
+    public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
+    public DbSet<MemoryRelationEvidence> MemoryRelationEvidences => Set<MemoryRelationEvidence>();
+    public DbSet<MemoryProjectionJob> MemoryProjectionJobs => Set<MemoryProjectionJob>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<ReminderDeliveryAttempt> ReminderDeliveryAttempts => Set<ReminderDeliveryAttempt>();
 
@@ -389,6 +396,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureMemory();
         modelBuilder.Entity<Reminder>(e =>
         {
             e.ToTable("reminders");

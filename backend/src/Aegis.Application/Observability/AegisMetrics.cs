@@ -4,9 +4,16 @@ namespace Aegis.Application.Observability;
 
 public sealed class AegisMetrics : IDisposable
 {
-    private readonly Meter meter = new("Aegis", "0.5.1");
+    private readonly Meter meter = new("Aegis", "0.6.0");
     private int activeTurns;
     public Counter<long> RemindersCreated { get; }
+    public Counter<long> MemoryCreated { get; }
+    public Counter<long> MemoryDeduplicated { get; }
+    public Counter<long> MemorySuperseded { get; }
+    public Counter<long> MemoryForgotten { get; }
+    public Counter<long> MemorySearches { get; }
+    public Histogram<long> MemorySearchResults { get; }
+    public Counter<long> MemoryProjectionJobsCreated { get; }
     public Counter<long> RemindersUpdated { get; }
     public Counter<long> RemindersCancelled { get; }
     public Counter<long> RemindersTriggered { get; }
@@ -44,6 +51,13 @@ public sealed class AegisMetrics : IDisposable
     // Meter instruments are deliberately label-free: never attach turn/message UUIDs.
     public AegisMetrics()
     {
+        MemoryCreated = meter.CreateCounter<long>("aegis_memory_created_total");
+        MemoryDeduplicated = meter.CreateCounter<long>("aegis_memory_deduplicated_total");
+        MemorySuperseded = meter.CreateCounter<long>("aegis_memory_superseded_total");
+        MemoryForgotten = meter.CreateCounter<long>("aegis_memory_forgotten_total");
+        MemorySearches = meter.CreateCounter<long>("aegis_memory_search_total");
+        MemorySearchResults = meter.CreateHistogram<long>("aegis_memory_search_results");
+        MemoryProjectionJobsCreated = meter.CreateCounter<long>("aegis_memory_projection_jobs_created_total");
         RemindersCreated = meter.CreateCounter<long>("aegis_reminders_created_total");
         RemindersUpdated = meter.CreateCounter<long>("aegis_reminders_updated_total");
         RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");

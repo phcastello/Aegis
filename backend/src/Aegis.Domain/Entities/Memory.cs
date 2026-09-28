@@ -1,0 +1,174 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Aegis.Domain.Entities;
+
+public enum MemoryStatus { Active, Superseded, Forgotten }
+public enum MemorySourceKind { ExplicitMemoryRequest, UserStatement, ToolObservation, Inference }
+public enum MemoryProjectionTarget { Semantic, Graph }
+public enum MemoryAggregateType { MemoryRecord, MemoryEntity, MemoryRelation }
+public enum MemoryProjectionOperation { Upsert, Delete }
+public enum MemoryProjectionStatus { Pending, Processing, Completed, Failed }
+
+public static class MemoryText
+{
+    public const int MaxContentLength = 2000;
+    public static string Clean(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException("O texto não pode estar vazio.");
+        var clean = Regex.Replace(value.Trim().Normalize(NormalizationForm.FormKC), @"\s+", " ");
+        if (clean.Length > maxLength) throw new ArgumentException($"O texto excede {maxLength} caracteres.");
+        return clean;
+    }
+    public static string Normalize(string value, int maxLength) => Clean(value, maxLength).ToUpperInvariant();
+    public static string Hash(string normalized) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+}
+
+public sealed class MemoryRecord : AuditableEntity
+{
+    private MemoryRecord() { }
+    public MemoryRecord(string content, DateTimeOffset? validFrom, DateTimeOffset? validUntil, DateTimeOffset now)
+    {
+        if (validFrom is not null && validUntil is not null && validUntil <= validFrom) throw new ArgumentException("Intervalo de validade inválido.");
+        InitializeAudit(now);
+        Content = MemoryText.Clean(content, MemoryText.MaxContentLength);
+        ContentHash = MemoryText.Hash(MemoryText.Normalize(Content, MemoryText.MaxContentLength));
+        ValidFrom = validFrom?.ToUniversalTime(); ValidUntil = validUntil?.ToUniversalTime();
+        Status = MemoryStatus.Active; Revision = 1;
+    }
+    public string Content { get; private set; } = "";
+    public string ContentHash { get; private set; } = "";
+    public MemoryStatus Status { get; private set; }
+    public DateTimeOffset? ValidFrom { get; private set; }
+    public DateTimeOffset? ValidUntil { get; private set; }
+    public DateTimeOffset? SupersededAt { get; private set; }
+    public Guid? SupersededById { get; private set; }
+    public DateTimeOffset? ForgottenAt { get; private set; }
+    public int Revision { get; private set; }
+    public void Supersede(Guid replacementId, DateTimeOffset now)
+    {
+        if (Status != MemoryStatus.Active || replacementId == Id) throw new InvalidOperationException("Memória não pode ser substituída.");
+        Status = MemoryStatus.Superseded; SupersededAt = now; SupersededById = replacementId; Revision++; Touch(now);
+    }
+    public bool Forget(DateTimeOffset now)
+    {
+        if (Status == MemoryStatus.Forgotten) return false;
+        if (Status != MemoryStatus.Active) throw new InvalidOperationException("Memória não está vigente.");
+        Status = MemoryStatus.Forgotten; ForgottenAt = now; Revision++; Touch(now); return true;
+    }
+}
+
+public sealed class MemoryEvidence : AuditableEntity
+{
+    private MemoryEvidence() { }
+    public MemoryEvidence(Guid memoryId, MemorySourceKind sourceKind, Guid? conversationId, Guid? messageId, DateTimeOffset observedAt, DateTimeOffset now)
+    {
+        InitializeAudit(now); MemoryId = memoryId; SourceKind = sourceKind;
+        SourceConversationId = conversationId; SourceMessageId = messageId; ObservedAt = observedAt;
+    }
+    public Guid MemoryId { get; private set; }
+    public MemorySourceKind SourceKind { get; private set; }
+    public Guid? SourceConversationId { get; private set; }
+    public Guid? SourceMessageId { get; private set; }
+    public DateTimeOffset ObservedAt { get; private set; }
+}
+
+public sealed class MemoryEntity : AuditableEntity
+{
+    private MemoryEntity() { }
+    public MemoryEntity(string name, string? entityType, DateTimeOffset now)
+    {
+        InitializeAudit(now); CanonicalName = MemoryText.Clean(name, 200);
+        NormalizedName = MemoryText.Normalize(name, 200);
+        EntityType = entityType is null ? null : MemoryText.Normalize(entityType, 40); Revision = 1;
+    }
+    public string CanonicalName { get; private set; } = "";
+    public string NormalizedName { get; private set; } = "";
+    public string? EntityType { get; private set; }
+    public int Revision { get; private set; }
+    public DateTimeOffset? RetiredAt { get; private set; }
+    public void AliasChanged(DateTimeOffset now) { Revision++; Touch(now); }
+    public void Retire(DateTimeOffset now) { if (RetiredAt is null) { RetiredAt = now; Revision++; Touch(now); } }
+}
+
+public sealed class MemoryEntityAlias : AuditableEntity
+{
+    private MemoryEntityAlias() { }
+    public MemoryEntityAlias(Guid entityId, string alias, DateTimeOffset now)
+    {
+        InitializeAudit(now); EntityId = entityId; Alias = MemoryText.Clean(alias, 200);
+        NormalizedAlias = MemoryText.Normalize(alias, 200);
+    }
+    public Guid EntityId { get; private set; }
+    public string Alias { get; private set; } = "";
+    public string NormalizedAlias { get; private set; } = "";
+}
+
+public sealed class MemoryRelation : AuditableEntity
+{
+    private MemoryRelation() { }
+    public MemoryRelation(Guid subjectEntityId, string predicate, Guid objectEntityId, DateTimeOffset? validFrom, DateTimeOffset? validUntil, DateTimeOffset now)
+    {
+        if (validFrom is not null && validUntil is not null && validUntil <= validFrom) throw new ArgumentException("Intervalo de validade inválido.");
+        InitializeAudit(now); SubjectEntityId = subjectEntityId; ObjectEntityId = objectEntityId;
+        Predicate = MemoryText.Normalize(predicate, 80);
+        if (!Regex.IsMatch(Predicate, "^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")) throw new ArgumentException("Predicate deve usar UPPER_SNAKE_CASE.");
+        ValidFrom = validFrom?.ToUniversalTime(); ValidUntil = validUntil?.ToUniversalTime(); Status = MemoryStatus.Active; Revision = 1;
+    }
+    public Guid SubjectEntityId { get; private set; }
+    public string Predicate { get; private set; } = "";
+    public Guid ObjectEntityId { get; private set; }
+    public MemoryStatus Status { get; private set; }
+    public DateTimeOffset? ValidFrom { get; private set; }
+    public DateTimeOffset? ValidUntil { get; private set; }
+    public DateTimeOffset? SupersededAt { get; private set; }
+    public Guid? SupersededById { get; private set; }
+    public DateTimeOffset? ForgottenAt { get; private set; }
+    public int Revision { get; private set; }
+    public void Supersede(Guid replacementId, DateTimeOffset now)
+    {
+        if (Status != MemoryStatus.Active || replacementId == Id) throw new InvalidOperationException("Relação não pode ser substituída.");
+        Status = MemoryStatus.Superseded; SupersededAt = now; SupersededById = replacementId; Revision++; Touch(now);
+    }
+    public bool Forget(DateTimeOffset now)
+    {
+        if (Status == MemoryStatus.Forgotten) return false;
+        if (Status != MemoryStatus.Active) throw new InvalidOperationException("Relação não está vigente.");
+        Status = MemoryStatus.Forgotten; ForgottenAt = now; Revision++; Touch(now); return true;
+    }
+}
+
+public sealed class MemoryRelationEvidence
+{
+    private MemoryRelationEvidence() { }
+    public MemoryRelationEvidence(Guid relationId, Guid memoryId, DateTimeOffset now)
+    { RelationId = relationId; MemoryId = memoryId; CreatedAt = now; }
+    public Guid RelationId { get; private set; }
+    public Guid MemoryId { get; private set; }
+    public DateTimeOffset CreatedAt { get; private set; }
+}
+
+public sealed class MemoryProjectionJob : AuditableEntity
+{
+    private MemoryProjectionJob() { }
+    public MemoryProjectionJob(MemoryProjectionTarget target, MemoryAggregateType type, Guid aggregateId, int revision, MemoryProjectionOperation operation, DateTimeOffset now)
+    {
+        if (revision < 1) throw new ArgumentException("Revision deve ser positiva.");
+        InitializeAudit(now); ProjectionTarget = target; AggregateType = type; AggregateId = aggregateId;
+        AggregateRevision = revision; Operation = operation; Status = MemoryProjectionStatus.Pending;
+    }
+    public MemoryProjectionTarget ProjectionTarget { get; private set; }
+    public MemoryAggregateType AggregateType { get; private set; }
+    public Guid AggregateId { get; private set; }
+    public int AggregateRevision { get; private set; }
+    public MemoryProjectionOperation Operation { get; private set; }
+    public MemoryProjectionStatus Status { get; private set; }
+    public int Attempt { get; private set; }
+    public DateTimeOffset? NextAttemptAt { get; private set; }
+    public string? LastError { get; private set; }
+    public DateTimeOffset? ProcessingStartedAt { get; private set; }
+    public DateTimeOffset? LeaseExpiresAt { get; private set; }
+    public Guid? LeaseId { get; private set; }
+    public DateTimeOffset? CompletedAt { get; private set; }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only live tool-selection eval using the production Gmail + Calendar + Reminder tool catalog."""
+"""Read-only live tool-selection eval using the production Gmail + Calendar + Reminder + Memory tool catalog."""
 
 import argparse
 import json
@@ -148,6 +148,34 @@ CASES.extend([
 
 REMINDER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 SECOND_REMINDER_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+MEMORY_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+SECOND_MEMORY_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+AEGIS_MEMORY_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+MCP_MEMORY_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+CASES.extend([
+    ("Lembra que eu prefiro backend.", "memory_remember", "memory_remember"),
+    ("Guarda que Sakamoto namora Bisky.", "memory_remember", "memory_remember"),
+    ("Meu amigo Sakamoto namora Bisky.", "memory_casual", None),
+    ("Eu prefiro backend.", "memory_casual", None),
+    ("O que você lembra sobre a Aegis?", "memory_search", "memory_search"),
+    ("O que você lembra sobre meu PC?", "memory_search", "memory_search"),
+    ("Esquece aquela informação da GPU.", "memory_forget_lookup", "memory_forget"),
+    ("Esquece a segunda.", "memory_forget_second", "memory_forget"),
+    ("Isso está errado, agora é uma 5080.", "memory_update_observed", "memory_update"),
+    ("Isso está errado, agora é uma 5080.", "memory_update_unobserved", None),
+    ("Esquece tudo sobre mim.", "memory_bulk", None),
+    ("Qual memória RAM eu tenho?", "memory_search", "memory_search"),
+    ("Você lembra do que eu te falei sobre MCP?", "memory_search", "memory_search"),
+    ("Minha memória RAM é DDR5.", "memory_casual", None),
+    ("O que é memória cache?", "memory_technical", None),
+    ("Como funciona memória virtual?", "memory_technical", None),
+    ("O que é Qdrant?", "memory_technical", None),
+    ("Explique grafos em ciência da computação.", "memory_technical", None),
+    ("Quais lembretes eu tenho?", "reminder_list", "reminder_list"),
+    ("Tem algum evento amanhã no Calendar?", "calendar_read", "calendar_list_events"),
+    ("Procura email da Unicentro no Gmail.", "email", "email_search"),
+])
+
 CASES.extend([
     ("Me lembra amanhã às 14h de entregar o trabalho.", "reminder_create_tomorrow", "reminder_create"),
     ("Me lembra amanhã às 18h de comprar ração.", "reminder_create_tomorrow", "reminder_create"),
@@ -215,8 +243,8 @@ def load_tools(path: Path | None) -> list[dict]:
             cwd=ROOT, text=True,
         ))
     names = [tool["name"] for tool in tools]
-    if len(names) != 28 or names != sorted(names) or len(set(names)) != len(names):
-        raise ValueError(f"Expected 28 sorted production tools, got {names!r}")
+    if len(names) != 32 or names != sorted(names) or len(set(names)) != len(names):
+        raise ValueError(f"Expected 32 sorted production tools, got {names!r}")
     return tools
 
 
@@ -323,6 +351,30 @@ def reminder_result(values: dict, creating: bool) -> dict | None:
 
 
 def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state: dict) -> str:
+    if name == "memory_search":
+        query = arguments.get("query", "").lower()
+        catalog = [
+            {"memoryId": AEGIS_MEMORY_ID, "content": "Aegis usa PostgreSQL.", "status": "Active"},
+            {"memoryId": MEMORY_ID, "content": "Pedro usa GPU RX 6700 XT.", "status": "Active"},
+            {"memoryId": MCP_MEMORY_ID, "content": "Aegis não usa MCP.", "status": "Active"},
+            {"memoryId": SECOND_MEMORY_ID, "content": "Sakamoto namora Bisky.", "status": "Active"},
+        ]
+        memories = [item for item in catalog if query and query in item["content"].lower()][:arguments.get("limit", 10)]
+        state["observedMemories"] = {item["memoryId"] for item in memories}
+        return json.dumps({"memories": [{"position": i + 1, "memory": item} for i, item in enumerate(memories)], "searchMode": "canonical_text"})
+    if name == "memory_remember":
+        content = arguments.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            return json.dumps({"error": "invalid_tool_arguments"})
+        state.setdefault("observedMemories", set()).add(MEMORY_ID)
+        return json.dumps({"memory": {"memoryId": MEMORY_ID, "content": content, "status": "Active"}, "deduplicated": False})
+    if name in {"memory_update", "memory_forget"}:
+        memory_id = arguments.get("memoryId")
+        if memory_id not in state.get("observedMemories", set()):
+            return json.dumps({"error": "memory_reference_required", "message": "Consulte memory_search e escolha uma memória inequívoca."})
+        if name == "memory_update":
+            return json.dumps({"memory": {"memoryId": SECOND_MEMORY_ID, "content": arguments.get("content", ""), "status": "Active"}})
+        return json.dumps({"memory": {"memoryId": memory_id, "status": "Forgotten"}})
     if name == "reminder_list":
         items = reminder_fixture(kind)
         state["observedReminders"] = {item["reminderId"] for item in items}
@@ -537,6 +589,16 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
             {"role": "user", "content": "Tenho que entregar o trabalho amanhã."},
             {"role": "assistant", "content": "Se quiser, posso te lembrar de entregar o trabalho. Qual horário?"},
         ])
+    if kind in {"memory_update_observed", "memory_forget_second"}:
+        input_items.extend([
+            {"role": "user", "content": "Lembra que Pedro usa RX 6700 XT."},
+            {"role": "assistant", "content": "Guardei que Pedro usa RX 6700 XT."},
+        ])
+    if kind == "memory_forget_second":
+        input_items.extend([
+            {"role": "user", "content": "O que você lembra sobre a GPU e o Sakamoto?"},
+            {"role": "assistant", "content": "1. Pedro usa RX 6700 XT. 2. Sakamoto namora Bisky."},
+        ])
     input_items.append({"role": "user", "content": message})
     # Fixed runtime makes date-sensitive cases reproducible and mirrors the production runtime context.
     now = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)
@@ -579,6 +641,12 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
     if kind == "reminder_cancel_second":
         state["observedReminders"] = {REMINDER_ID, SECOND_REMINDER_ID}
         input_items.append({"role": "developer", "content": "Referências observadas por reminder_list nesta conversa, válidas por 30 minutos: " + json.dumps(reminder_fixture(kind))})
+    if kind in {"memory_update_observed", "memory_forget_second"}:
+        memories = [{"position": 1, "memoryId": MEMORY_ID, "content": "Pedro usa RX 6700 XT."}]
+        if kind == "memory_forget_second":
+            memories.append({"position": 2, "memoryId": SECOND_MEMORY_ID, "content": "Sakamoto namora Bisky."})
+        state["observedMemories"] = {item["memoryId"] for item in memories}
+        input_items.append({"role": "developer", "content": "Referências Memory observadas nesta conversa, válidas por 30 minutos. Última busca, na ordem exibida: " + json.dumps(memories)})
     final_text = ""
     for _ in range(6):
         # Mirror AegisToolLoop: reassert the same trusted identity after tool results,
@@ -624,6 +692,31 @@ def main() -> int:
             return 2
         if kind == "none":
             passed = not calls
+        elif kind.startswith("memory_"):
+            if kind in {"memory_casual", "memory_technical"}:
+                passed = not any(name.startswith("memory_") for name in calls) and bool(answer)
+            elif kind == "memory_update_unobserved":
+                passed = all(name == "memory_search" for name in calls) and bool(answer)
+            elif kind == "memory_bulk":
+                passed = "memory_forget" not in calls and "memory_update" not in calls and bool(answer)
+            elif kind == "memory_forget_lookup":
+                passed = calls[:2] == ["memory_search", "memory_forget"] and all(name in {"memory_search", "memory_forget"} for name in calls)
+            elif kind == "memory_forget_second":
+                passed = "memory_forget" in calls and all(name in {"memory_search", "memory_forget"} for name in calls)
+            elif kind == "memory_update_observed":
+                passed = "memory_update" in calls and all(name in {"memory_search", "memory_update"} for name in calls)
+            else:
+                passed = required_tool in calls and all(name == required_tool for name in calls)
+            for call in arguments:
+                if call["name"] in {"memory_remember", "memory_update", "memory_forget"}:
+                    passed = passed and "error" not in call["result"]
+                if call["name"] in {"memory_update", "memory_forget"}:
+                    expected = SECOND_MEMORY_ID if kind == "memory_forget_second" else MEMORY_ID
+                    passed = passed and call["arguments"].get("memoryId") == expected
+                if kind == "memory_update_observed" and call["name"] == "memory_update":
+                    passed = passed and "5080" in call["arguments"].get("content", "")
+                if kind == "memory_remember" and call["name"] == "memory_remember":
+                    passed = passed and isinstance(call["arguments"].get("content"), str)
         elif kind == "reminder_recurring":
             # Internal reminders are one-shot today; a repeated reminder must not become a Calendar series or a silent one-shot.
             passed = bool(answer) and not any(name in {"calendar_create_event", "calendar_confirm_pending_action", "reminder_create"} for name in calls)

@@ -235,6 +235,7 @@ public static class DependencyInjection
           .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
               "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
           .ValidateOnStart();
+        services.AddScoped<Aegis.Application.Memory.IMemoryStore, Aegis.Infrastructure.Memory.MemoryStore>();
         services.AddScoped<ReminderStore>();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();

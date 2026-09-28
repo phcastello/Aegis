@@ -1,6 +1,6 @@
-# Aegis v0.5.1
+# Aegis v0.6.0 — "Yeah, I know."
 
-Aegis v0.5.1 adds creation of real recurring Google Calendar events through the existing prepare → confirmation → execution flow. It retains the internal one-shot reminders and Web Push introduced in v0.5.0.
+Aegis v0.6.0 begins with Memory Foundation: explicit persistent knowledge in PostgreSQL, evidence, lifecycle, canonical entities/relations and durable projection jobs. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
 
 Version history:
 
@@ -20,6 +20,7 @@ Version history:
 
 - v0.5.0 — "Knock Knock" — lembretes internos únicos, worker temporal persistente, Web Push e acknowledgement explícito.
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
+- v0.6.0 — "Yeah, I know." — fundação canônica de memória (etapa 1 de 4).
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -37,6 +38,25 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 - Vite
 - TypeScript
 - PWA
+
+## Aegis Memory
+
+Memory Foundation is the first of four v0.6.0 stages. PostgreSQL stores the canonical state. Qdrant will be a rebuildable semantic projection in Part 2; Neo4j will be a rebuildable relational projection in Part 3. Neither Qdrant nor Neo4j is integrated with Memory yet. Automatic memory extraction, hybrid retrieval and proactive behavior belong to Part 4.
+
+`MemoryRecord` stores up to 2,000 characters of readable knowledge about any useful subject, with optional explicit `ValidFrom`/`ValidUntil`. A record starts `Active`. Corrections create a new record and mark the old one `Superseded`, with `SupersededAt` and `SupersededById`; forgetting marks the active record `Forgotten` with `ForgottenAt`. Historical records remain in PostgreSQL. Exact normalized duplicates reuse an active record. Content corrections retain the old validity unless new dates are supplied; changing only the dates of an unchanged fact is not supported in this stage. A separate `MemoryEvidence` row records each distinct observation, its source kind, time and optional conversation/message references. Deleting the source conversation leaves the memory and evidence intact and clears those references.
+
+`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records for future graph navigation. Names, aliases and predicates receive deterministic validation; no semantic entity resolution or relation extraction runs yet. Every canonical change that needs a future projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. Jobs remain `Pending` until real consumers exist. PostgreSQL alone can rebuild both future projections.
+
+Four conversational tools are available now:
+
+| Tool | Contract | Effect |
+| --- | --- | --- |
+| `memory_remember` | `{"content":"Aegis usa PostgreSQL.","validFrom":"2026-09-01T00:00:00Z"}` (`validFrom`/`validUntil` optional) | Explicitly stores knowledge with provenance from the current user turn. |
+| `memory_search` | `{"query":"PostgreSQL","limit":10}` (`limit` default 10, max 30) | Searches active, currently valid canonical text in PostgreSQL and records 30-minute observed references. |
+| `memory_update` | `{"memoryId":"<observed id>","content":"Aegis usa outro banco."}` | Supersedes one observed active memory in one transaction. |
+| `memory_forget` | `{"memoryId":"<observed id>"}` | Soft-forgets one observed active memory, idempotently. |
+
+The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Casual statements do not write memory. Search is deterministic canonical text search only: no embeddings, vector search, automatic turn retrieval or Qdrant calls occur in this stage. Broad topic deletion is not available. Memory content stays out of metrics; only requested tool results enter the model context.
 
 ## Project Layout
 
@@ -118,7 +138,7 @@ Event reads expose compact `reminders` with `useDefault` and overrides; an empty
 
 Google errors distinguish `calendar_api_disabled` (including `SERVICE_DISABLED`/`accessNotConfigured`), insufficient scopes, missing calendars/events, denied access, and temporary failures. Backend diagnostics log HTTP status, Google reason/code, service and operation without credentials or raw error bodies. Calendar/event pagination is bounded at 20 pages and discovery at 1,000 calendars; exceeding a traversal bound returns an explicit incomplete-query error rather than silently hiding calendars.
 
-Calendar has no dedicated screen, background monitoring, push/watch, scheduler, administration or memory integration. Aegis remains an assistant without autonomous monitoring; its independent Reminder worker only handles time. Gmail content can lead to a Calendar suggestion only after a user-requested read puts that content in the conversation. Recurring occurrences returned by `singleEvents=true` can be edited individually; editing or deleting a whole existing series, “this and following”, invitations, and Meet creation remain outside v0.5.1. API and tool-flow tests use simulated Google responses; real-account OAuth and operations still require your configured Google project and consent.
+Calendar has no dedicated screen, background monitoring, push/watch, scheduler or administration. Aegis remains an assistant without autonomous monitoring; its independent Reminder worker only handles time. Gmail content can lead to a Calendar suggestion only after a user-requested read puts that content in the conversation. Recurring occurrences returned by `singleEvents=true` can be edited individually; editing or deleting a whole existing series, “this and following”, invitations, and Meet creation remain outside the current Calendar integration. API and tool-flow tests use simulated Google responses; real-account OAuth and operations still require your configured Google project and consent.
 
 Chat uses `AEGIS_CHAT_MODEL=gpt-5.6-luna` with configurable `AEGIS_CHAT_REASONING_EFFORT=medium`. Async conversation titles use `AEGIS_TITLE_MODEL=gpt-5-nano`, `AEGIS_TITLE_REASONING_EFFORT=minimal`, `OPENAI_API_KEY`, and `AEGIS_TITLE_MAX_OUTPUT_TOKENS=64`; no local model is required. These title settings are configurable for a future model change. `AEGIS_OPENAI_BASE_URL=https://api.openai.com` and `AEGIS_MAX_OUTPUT_TOKENS=4000` apply to chat. The model receives the Gmail, Calendar and Reminder tools with automatic selection. The backend still validates arguments, pending actions, confirmation, and effects.
 
@@ -330,9 +350,11 @@ The `Aegis` meter adds `aegis_reminders_{created,updated,cancelled,triggered,fai
 
 ### Automated validation
 
-Run `dotnet test backend/Aegis.sln`, `npm test --prefix frontend/aegis-pwa` and `npm run build --prefix frontend/aegis-pwa`. The PostgreSQL integration tests require `AEGIS_REMINDER_TEST_DATABASE` pointing at a **disposable** database; they are skipped when it is absent. Intent evaluation uses all 28 production tool schemas with simulated integration results, never live Google operations or live push.
+Run `dotnet test backend/Aegis.sln`, `npm test --prefix frontend/aegis-pwa` and `npm run build --prefix frontend/aegis-pwa`. PostgreSQL integration tests require `AEGIS_REMINDER_TEST_DATABASE` and/or `AEGIS_MEMORY_TEST_DATABASE` pointing at a **disposable** database; each suite is skipped when its variable is absent. Intent evaluation uses all 32 production tool schemas with simulated integration results, never live Google operations or live push.
 
 The v0.5.1 checks on 28 September 2026 passed: **325/325 backend tests**, including **2/2 PostgreSQL integration scenarios** against a disposable container, **41/41 frontend tests**, backend Release build, frontend build/typechecks and `git diff --check`. Focused live-model intent evals passed **7/7** for creation/selection and **1/1** for recurring pending amendment. The backend retains one existing xUnit2031 test warning. Commands, scope, eval inputs and limits are in the [v0.5.1 validation report](scripts/eval-results-v0.5.1.md). The [v0.5.0 validation report](scripts/eval-results-v0.5.0.md) remains the historical record for that release.
+
+The v0.6.0 Memory Foundation checks passed **329/329 backend tests** with a disposable PostgreSQL database, **41/41 frontend tests**, both builds, Compose validation, EF model-change check and `git diff --check`. Focused live-model intent evals passed **18/18 Memory** and **45/45 representative regression** cases with the 32-tool production catalog. Details and limits are in the [v0.6.0 Memory validation report](scripts/eval-results-v0.6.0-memory.md).
 
 ### Physical validation
 

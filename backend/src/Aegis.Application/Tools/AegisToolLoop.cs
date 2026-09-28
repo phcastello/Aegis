@@ -72,10 +72,10 @@ public sealed class AegisToolLoop(
                     iteration,
                     callId = call.Id,
                     tool = call.Name,
-                    arguments = call.Arguments,
+                    arguments = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? (object)"[redacted]" : call.Arguments,
                     result.Success,
                     result.ErrorCode,
-                    result.Content,
+                    Content = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[redacted]" : result.Content,
                     result.AuditMetadataJson
                 });
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
@@ -176,6 +176,10 @@ public sealed class AegisToolLoop(
 
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
+        "memory_remember" => ("memory", "Guardando memória…", "Memória guardada"),
+        "memory_search" => ("memory", "Consultando memória…", "Memória consultada"),
+        "memory_update" => ("memory", "Corrigindo memória…", "Memória corrigida"),
+        "memory_forget" => ("memory", "Esquecendo memória…", "Memória esquecida"),
         "reminder_create" => ("reminder", "Criando lembrete…", "Lembrete criado"),
         "reminder_list" => ("reminder", "Consultando lembretes…", "Lembretes consultados"),
         "reminder_update" => ("reminder", "Alterando lembrete…", "Lembrete alterado"),

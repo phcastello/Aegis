@@ -20,7 +20,8 @@ public sealed class ChatService(
     IConversationTitleJobQueue titleJobQueue,
     IActiveTurnRegistry turnRegistry,
     IVoiceService voiceService,
-    ReminderService? reminders = null) : IChatService
+    ReminderService? reminders = null,
+    Aegis.Application.Memory.MemoryService? memory = null) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -317,6 +318,8 @@ public sealed class ChatService(
         if (states.Count > 1) states.Add("Há propostas pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
         if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
             states.Add(reminderContext);
+        if (memory is not null && await memory.GetContextAsync(conversationId, cancellationToken) is { } memoryContext)
+            states.Add(memoryContext);
         var pendingState = string.Join("\n", states);
         return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
     }
@@ -450,7 +453,7 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.5.1",
+                ["aegis_version"] = "0.6.0",
                 ["purpose"] = "Chat"
             },
             promptResult.InputItems);
