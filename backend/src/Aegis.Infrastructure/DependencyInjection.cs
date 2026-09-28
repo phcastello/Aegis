@@ -24,6 +24,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Neo4j.Driver;
 
 namespace Aegis.Infrastructure;
 
@@ -268,6 +269,29 @@ public static class DependencyInjection
         services.AddScoped<IMemorySemanticProjectionStore, MemorySemanticProjectionStore>();
         services.AddScoped<MemorySemanticProjectionProcessor>();
         services.AddHostedService<MemorySemanticProjectionWorker>();
+        var graph = new MemoryGraphOptions();
+        configuration.GetSection("MemoryGraph").Bind(graph);
+        graph.Enabled = ReadBool(configuration, "AEGIS_MEMORY_GRAPH_ENABLED", graph.Enabled);
+        graph.Neo4jUri = Read(configuration, "AEGIS_MEMORY_NEO4J_URI", graph.Neo4jUri);
+        graph.Neo4jUsername = Read(configuration, "AEGIS_MEMORY_NEO4J_USERNAME", graph.Neo4jUsername);
+        graph.Neo4jPassword = ReadAny(configuration, graph.Neo4jPassword, "AEGIS_MEMORY_NEO4J_PASSWORD", "NEO4J_PASSWORD");
+        graph.Neo4jDatabase = Read(configuration, "AEGIS_MEMORY_NEO4J_DATABASE", graph.Neo4jDatabase);
+        graph.WorkerPollSeconds = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_PROJECTION_POLL_SECONDS", graph.WorkerPollSeconds);
+        graph.MaxTraversalDepth = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_MAX_DEPTH", graph.MaxTraversalDepth);
+        graph.MaxTraversalResults = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_MAX_RESULTS", graph.MaxTraversalResults);
+        if (graph.WorkerPollSeconds is < 1 or > 60 || graph.MaxTraversalDepth is < 1 or > 3 ||
+            graph.MaxTraversalResults is < 1 or > 50 || !Uri.TryCreate(graph.Neo4jUri, UriKind.Absolute, out var neo4jUri) ||
+            neo4jUri.Scheme is not ("bolt" or "neo4j" or "bolt+s" or "neo4j+s") ||
+            string.IsNullOrWhiteSpace(graph.Neo4jDatabase) || string.IsNullOrWhiteSpace(graph.Neo4jUsername))
+            throw new InvalidOperationException("Invalid MemoryGraph configuration.");
+        services.AddSingleton(graph);
+        services.AddSingleton<IDriver>(_ => GraphDatabase.Driver(graph.Neo4jUri,
+            AuthTokens.Basic(graph.Neo4jUsername, graph.Neo4jPassword)));
+        services.AddSingleton<IMemoryGraphStore, Neo4jMemoryGraphStore>();
+        services.AddScoped<IMemoryGraphProjectionStore, MemoryGraphProjectionStore>();
+        services.AddScoped<MemoryGraphProjectionProcessor>();
+        services.AddScoped<MemoryGraphRebuild>();
+        services.AddHostedService<MemoryGraphProjectionWorker>();
         services.AddScoped<ReminderStore>();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();

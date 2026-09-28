@@ -22,6 +22,9 @@ public interface IMemoryStore
     Task<string?> GetContextAsync(Guid conversationId, DateTimeOffset now, CancellationToken ct);
     Task<MemoryEntity?> FindEntityAsync(Guid id, CancellationToken ct);
     Task<MemoryEntityAlias?> FindAliasAsync(Guid entityId, string normalizedAlias, CancellationToken ct);
-    Task<MemoryRelation?> FindActiveRelationAsync(Guid subjectId, string predicate, Guid objectId, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRelation>> FindActiveRelationsAsync(Guid subjectId, string predicate, Guid objectId, CancellationToken ct);
+    Task<MemoryRelation?> FindRelationAsync(Guid id, CancellationToken ct);
+    Task<IReadOnlyList<MemoryEntity>> FindCanonicalEntitiesAsync(string normalizedName, CancellationToken ct);
+    Task<IReadOnlyList<MemoryEntity>> FindAliasedEntitiesAsync(string normalizedAlias, CancellationToken ct);
     Task<bool> HasRelationEvidenceAsync(Guid relationId, Guid memoryId, CancellationToken ct);
 }

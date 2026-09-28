@@ -106,8 +106,17 @@ public sealed class MemoryStore(AegisDbContext db) : IMemoryStore
     public Task<MemoryEntity?> FindEntityAsync(Guid id, CancellationToken ct) => db.MemoryEntities.FirstOrDefaultAsync(x => x.Id == id, ct);
     public Task<MemoryEntityAlias?> FindAliasAsync(Guid entityId, string normalizedAlias, CancellationToken ct) =>
         db.MemoryEntityAliases.FirstOrDefaultAsync(x => x.EntityId == entityId && x.NormalizedAlias == normalizedAlias, ct);
-    public Task<MemoryRelation?> FindActiveRelationAsync(Guid subjectId, string predicate, Guid objectId, CancellationToken ct) =>
-        db.MemoryRelations.FirstOrDefaultAsync(x => x.SubjectEntityId == subjectId && x.Predicate == predicate && x.ObjectEntityId == objectId && x.Status == MemoryStatus.Active, ct);
+    public async Task<IReadOnlyList<MemoryRelation>> FindActiveRelationsAsync(Guid subjectId, string predicate, Guid objectId, CancellationToken ct) =>
+        await db.MemoryRelations.Where(x => x.SubjectEntityId == subjectId && x.Predicate == predicate &&
+            x.ObjectEntityId == objectId && x.Status == MemoryStatus.Active).ToListAsync(ct);
+    public Task<MemoryRelation?> FindRelationAsync(Guid id, CancellationToken ct) => db.MemoryRelations.FirstOrDefaultAsync(x => x.Id == id, ct);
+    public async Task<IReadOnlyList<MemoryEntity>> FindCanonicalEntitiesAsync(string normalizedName, CancellationToken ct) =>
+        await db.MemoryEntities.Where(x => x.NormalizedName == normalizedName).ToListAsync(ct);
+    public async Task<IReadOnlyList<MemoryEntity>> FindAliasedEntitiesAsync(string normalizedAlias, CancellationToken ct)
+    {
+        var ids = await db.MemoryEntityAliases.Where(x => x.NormalizedAlias == normalizedAlias).Select(x => x.EntityId).ToListAsync(ct);
+        return await db.MemoryEntities.Where(x => ids.Contains(x.Id)).ToListAsync(ct);
+    }
     public Task<bool> HasRelationEvidenceAsync(Guid relationId, Guid memoryId, CancellationToken ct) =>
         db.MemoryRelationEvidences.AnyAsync(x => x.RelationId == relationId && x.MemoryId == memoryId, ct);
 }

@@ -72,7 +72,7 @@ internal static class MemoryModelConfiguration
             e.HasOne<MemoryEntity>().WithMany().HasForeignKey(x => x.SubjectEntityId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<MemoryEntity>().WithMany().HasForeignKey(x => x.ObjectEntityId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<MemoryRelation>().WithMany().HasForeignKey(x => x.SupersededById).OnDelete(DeleteBehavior.Restrict);
-            e.HasIndex(x => new { x.SubjectEntityId, x.Predicate, x.ObjectEntityId }).IsUnique().HasFilter("\"Status\" = 'Active'");
+            e.HasIndex(x => new { x.SubjectEntityId, x.Predicate, x.ObjectEntityId }).HasFilter("\"Status\" = 'Active'");
         });
         model.Entity<MemoryRelationEvidence>(e =>
         {

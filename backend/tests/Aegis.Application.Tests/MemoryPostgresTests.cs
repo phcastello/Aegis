@@ -532,7 +532,8 @@ public sealed class MemoryPostgresTests
             Assert.Equal("O SAKAMOTO", alias.NormalizedAlias);
             var relation = await service.CreateRelationAsync(sakamoto.Id, "dates", bisky.Id,
                 clock.Now.AddMonths(-6), null, default);
-            Assert.Equal(relation.Id, (await service.CreateRelationAsync(sakamoto.Id, "DATES", bisky.Id, null, null, default)).Id);
+            Assert.Equal(relation.Id, (await service.CreateRelationAsync(sakamoto.Id, "DATES", bisky.Id,
+                clock.Now.AddMonths(-6), null, default)).Id);
             await service.SupportRelationAsync(relation.Id, remembered.Record.Id, default);
             await service.SupportRelationAsync(relation.Id, remembered.Record.Id, default);
             var supportingMessage = new ChatMessage(conversation.Id, "user", "Eles estão juntos há seis meses.");

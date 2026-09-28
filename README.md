@@ -1,6 +1,6 @@
 # Aegis v0.6.0 — "Yeah, I know."
 
-Aegis v0.6.0 now includes Memory Foundation and Semantic Memory: canonical knowledge in PostgreSQL, durable projection jobs, Qdrant semantic search and PostgreSQL validation. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
+Aegis v0.6.0 now includes Memory Foundation, Semantic Memory and the internal Knowledge Graph: canonical knowledge in PostgreSQL, rebuildable Qdrant and Neo4j projections, semantic search and bounded graph traversal. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
 
 Version history:
 
@@ -20,7 +20,7 @@ Version history:
 
 - v0.5.0 — "Knock Knock" — lembretes internos únicos, worker temporal persistente, Web Push e acknowledgement explícito.
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
-- v0.6.0 — "Yeah, I know." — fundação canônica e projeção semântica de memória (etapas 1–2 de 4).
+- v0.6.0 — "Yeah, I know." — fundação canônica, projeção semântica e knowledge graph interno (etapas 1–3 de 4).
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -34,6 +34,7 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 - Entity Framework Core
 - Docker Compose
 - Qdrant semantic projection for persistent memory
+- Neo4j Community 5.26.30 relational projection for memory
 - Vue 3
 - Vite
 - TypeScript
@@ -41,11 +42,11 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 
 ## Aegis Memory
 
-PostgreSQL stores the canonical state. Part 2 projects `MemoryRecord` into Qdrant for semantic retrieval; Qdrant can be rebuilt from PostgreSQL. Neo4j is planned as a rebuildable relational projection in Part 3 and is **not integrated yet**. Automatic memory extraction, semantic plus graph retrieval and proactive behavior belong to Part 4.
+PostgreSQL stores the canonical state. Qdrant projects `MemoryRecord` for semantic retrieval. Neo4j projects canonical entities and relations for internal traversal. Both projections can be rebuilt from PostgreSQL. Automatic memory extraction, semantic plus graph retrieval and proactive behavior belong to Part 4.
 
 `MemoryRecord` stores up to 2,000 characters of readable knowledge about any useful subject, with optional explicit `ValidFrom`/`ValidUntil`. A record starts `Active`. Corrections create a new record and mark the old one `Superseded`, with `SupersededAt` and `SupersededById`; forgetting marks the active record `Forgotten` with `ForgottenAt`. Historical records remain in PostgreSQL. Exact normalized duplicates reuse an active record. Content corrections retain the old validity unless new dates are supplied; changing only the dates of an unchanged fact is not supported in this stage. A separate `MemoryEvidence` row records each distinct observation, its source kind, time and optional conversation/message references. Deleting the source conversation leaves the memory and evidence intact and clears those references.
 
-`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records for future graph navigation. Names, aliases and predicates receive deterministic validation; no semantic entity resolution or relation extraction runs yet. Every canonical change that needs a projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. The Semantic worker consumes only Semantic jobs; Graph jobs remain Pending. PostgreSQL alone can rebuild the Qdrant projection and the future graph projection.
+`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records. Names, aliases and predicates receive deterministic validation; no automatic relation extraction runs yet. PostgreSQL entity resolution checks canonical names, then aliases, optionally by type. It ignores retired entities by default and returns ambiguity instead of guessing. Every canonical change that needs a projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. The Semantic worker consumes only Semantic jobs; the Graph worker consumes only Graph jobs.
 
 Four conversational tools are available now:
 
@@ -82,7 +83,32 @@ Backend environment variables (never sent to the PWA):
 | `AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD` | `0.45` |
 | `AEGIS_MEMORY_PROJECTION_POLL_SECONDS` | `5` |
 
-For a disposable physical Qdrant integration test, set `AEGIS_MEMORY_TEST_QDRANT_URL`; the test creates and removes only a random test collection. No new migration is needed for Part 2. The known uniqueness of an Active relation despite expired validity remains for Part 3 to review.
+For a disposable physical Qdrant integration test, set `AEGIS_MEMORY_TEST_QDRANT_URL`; the test creates and removes only a random test collection. No new migration was needed for Part 2.
+
+### Knowledge Graph projection and configuration
+
+Docker Compose includes Neo4j Community `5.26.30-community`, with persistent `neo4j_data`. The backend uses the official `Neo4j.Driver` 5.28.4. Set `NEO4J_PASSWORD` for local Compose; configure `AEGIS_MEMORY_NEO4J_PASSWORD` separately when connecting to a different instance. Compose binds Bolt and Browser HTTP to localhost by default. Keep these ports protected in production: the graph contains names, aliases and potentially sensitive relationships. Neo4j receives no `MemoryRecord.Content`, evidence, conversation IDs or message IDs.
+
+Each `MemoryEntity` projects to one `:AegisMemoryEntity` node identified by `entityId = MemoryEntity.Id`, with `canonicalName`, `normalizedName`, optional `entityType`, `aliases`, `revision` and optional `retiredAt`. Every relation is a fixed `:AEGIS_RELATION` edge identified by `relationId = MemoryRelation.Id`, with `predicate`, `revision` and optional `validFrom`/`validUntil`; predicates never become Cypher code. Unique ID constraints and a normalized name index are created automatically. PostgreSQL still owns entity identity, aliases, relation status and temporal validity.
+
+Active relations with the same subject, predicate and object may coexist when their half-open validity intervals `[ValidFrom, ValidUntil)` do not overlap; null endpoints mean unbounded time. Exact replay reuses a relation. Overlap is rejected in the serialized PostgreSQL write transaction. An Active relation whose interval ended remains projected as history; Superseded and Forgotten relations are soft retained in PostgreSQL and removed from Neo4j. The `RefineMemoryRelationsForKnowledgeGraph` migration replaces the earlier Active unique triple index with a nonunique lookup index without dropping data.
+
+The Graph worker claims only Graph entity/relation jobs with PostgreSQL `FOR UPDATE SKIP LOCKED`, a two minute recoverable lease, and limited retries at 10 seconds, 30 seconds, 2 minutes, 5 minutes and 30 minutes. Technical `LastError` codes contain no graph properties. For every job, the processor reads the *current* PostgreSQL aggregate: entities upsert with current aliases, Active relations upsert with current endpoints, other relations delete. Thus an old Upsert cannot restore a forgotten edge. Startup reconciliation reopens current Completed/Failed jobs, including Deletes; historical jobs are preserved. A maintenance `MemoryGraphRebuild` deletes only `:AegisMemoryEntity` nodes and their edges, then requeues current Graph jobs. Repeated runs preserve canonical IDs and do not alter Semantic jobs. Neo4j outages do not block canonical writes or semantic search.
+
+Internal graph traversal accepts canonical start IDs, direction, optional normalized predicates, depth 1–3 (default 2), result limit up to 50, and optional `asOf`. Neo4j filters **every edge in the path** by that instant; PostgreSQL then validates every candidate relation, interval and endpoint, and supplies current entity names. A stale graph edge is never returned as a valid fact. Graph traversal is intentionally not a public tool and `memory_search` still uses Qdrant plus PostgreSQL text fallback. Automatic writing and Semantic + Graph retrieval are Part 4 work.
+
+| Variable | Default |
+| --- | --- |
+| `AEGIS_MEMORY_GRAPH_ENABLED` | `true` |
+| `AEGIS_MEMORY_NEO4J_URI` | `bolt://neo4j:7687` |
+| `AEGIS_MEMORY_NEO4J_USERNAME` | `neo4j` |
+| `AEGIS_MEMORY_NEO4J_PASSWORD` | `NEO4J_PASSWORD` fallback; never sent to PWA |
+| `AEGIS_MEMORY_NEO4J_DATABASE` | `neo4j` |
+| `AEGIS_MEMORY_GRAPH_PROJECTION_POLL_SECONDS` | `5` |
+| `AEGIS_MEMORY_GRAPH_MAX_DEPTH` | `3` |
+| `AEGIS_MEMORY_GRAPH_MAX_RESULTS` | `50` |
+
+Physical Graph integration tests require a **disposable** PostgreSQL database (`AEGIS_MEMORY_TEST_DATABASE`) and/or Neo4j (`AEGIS_MEMORY_TEST_NEO4J_URI`, `AEGIS_MEMORY_TEST_NEO4J_USERNAME`, `AEGIS_MEMORY_TEST_NEO4J_PASSWORD`, optional `AEGIS_MEMORY_TEST_NEO4J_DATABASE`). Neo4j tests also require the explicit guard `AEGIS_MEMORY_TEST_NEO4J_DISPOSABLE=YES_DELETE_AEGIS_PROJECTION`; they clean only nodes labelled `:AegisMemoryEntity` and their edges. The graph worker never calls OpenAI.
 
 ## Project Layout
 
@@ -380,7 +406,7 @@ Run `dotnet test backend/Aegis.sln`, `npm test --prefix frontend/aegis-pwa` and 
 
 The v0.5.1 checks on 28 September 2026 passed: **325/325 backend tests**, including **2/2 PostgreSQL integration scenarios** against a disposable container, **41/41 frontend tests**, backend Release build, frontend build/typechecks and `git diff --check`. Focused live-model intent evals passed **7/7** for creation/selection and **1/1** for recurring pending amendment. The backend retains one existing xUnit2031 test warning. Commands, scope, eval inputs and limits are in the [v0.5.1 validation report](scripts/eval-results-v0.5.1.md). The [v0.5.0 validation report](scripts/eval-results-v0.5.0.md) remains the historical record for that release.
 
-The v0.6.0 Memory Foundation and Semantic Memory checks, including the desired-state Delete reconciliation fix, passed **339/339 backend tests** with disposable PostgreSQL and a physical disposable Qdrant collection, **41/41 frontend tests**, both builds, Compose validation, EF model-change check and `git diff --check`. Focused live-model intent evals and their fixture correction are recorded in the [cumulative v0.6.0 Memory validation report](scripts/eval-results-v0.6.0-memory.md).
+The v0.6.0 Memory Foundation, Semantic Memory and Knowledge Graph checks passed **345/345 backend tests** with disposable PostgreSQL, Qdrant and Neo4j, **41/41 frontend tests**, both builds, Compose validation, EF model-change check and `git diff --check`. Focused live-model intent evals from Parts 1–2 and the Part 3 physical Graph checks are recorded in the [cumulative v0.6.0 Memory validation report](scripts/eval-results-v0.6.0-memory.md).
 
 ### Physical validation
 

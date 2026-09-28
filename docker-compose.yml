@@ -22,6 +22,7 @@ services:
     depends_on:
       - postgres
       - qdrant
+      - neo4j
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8090
@@ -40,6 +41,14 @@ services:
       AEGIS_MEMORY_QDRANT_COLLECTION: ${AEGIS_MEMORY_QDRANT_COLLECTION:-aegis_memory_semantic_v1}
       AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD: ${AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD:-0.45}
       AEGIS_MEMORY_PROJECTION_POLL_SECONDS: ${AEGIS_MEMORY_PROJECTION_POLL_SECONDS:-5}
+      AEGIS_MEMORY_GRAPH_ENABLED: ${AEGIS_MEMORY_GRAPH_ENABLED:-true}
+      AEGIS_MEMORY_NEO4J_URI: ${AEGIS_MEMORY_NEO4J_URI:-bolt://neo4j:7687}
+      AEGIS_MEMORY_NEO4J_USERNAME: ${AEGIS_MEMORY_NEO4J_USERNAME:-neo4j}
+      AEGIS_MEMORY_NEO4J_PASSWORD: ${AEGIS_MEMORY_NEO4J_PASSWORD:-${NEO4J_PASSWORD:-aegis_dev_password}}
+      AEGIS_MEMORY_NEO4J_DATABASE: ${AEGIS_MEMORY_NEO4J_DATABASE:-neo4j}
+      AEGIS_MEMORY_GRAPH_PROJECTION_POLL_SECONDS: ${AEGIS_MEMORY_GRAPH_PROJECTION_POLL_SECONDS:-5}
+      AEGIS_MEMORY_GRAPH_MAX_DEPTH: ${AEGIS_MEMORY_GRAPH_MAX_DEPTH:-3}
+      AEGIS_MEMORY_GRAPH_MAX_RESULTS: ${AEGIS_MEMORY_GRAPH_MAX_RESULTS:-50}
       AEGIS_OPENAI_BASE_URL: ${AEGIS_OPENAI_BASE_URL:-https://api.openai.com}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -112,7 +121,19 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  neo4j:
+    image: neo4j:5.26.30-community
+    container_name: aegis-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-aegis_dev_password}
+    ports:
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j_data:/data
+
 volumes:
   postgres_data:
   qdrant_data:
+  neo4j_data:
   data_protection_keys:

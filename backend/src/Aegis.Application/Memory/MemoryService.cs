@@ -107,7 +107,7 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
         return record;
     }
 
-    // Internal canonical graph operations. No public graph tools or projection consumers exist yet.
+    // Internal canonical graph operations; there are no public graph tools.
     public async Task<MemoryEntity> CreateEntityAsync(string name, string? type, CancellationToken ct)
     {
         var now = clock.GetUtcNow(); var entity = new MemoryEntity(name, type, now);
@@ -134,13 +134,93 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
         var (relation, created) = await store.WriteAsync(async s =>
         {
             if (await s.FindEntityAsync(subjectId, ct) is null || await s.FindEntityAsync(objectId, ct) is null) throw new MemoryException("memory_entity_not_found", "Entidade não encontrada.");
-            var existing = await s.FindActiveRelationAsync(subjectId, candidate.Predicate, objectId, ct);
+            var existing = FindExactOrRejectOverlap(await s.FindActiveRelationsAsync(subjectId, candidate.Predicate, objectId, ct), candidate);
             if (existing is not null) return (existing, false);
             s.Add(candidate);
             s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryRelation, candidate.Id, candidate.Revision, MemoryProjectionOperation.Upsert, now));
             return (candidate, true);
         }, ct);
         if (created) metrics.MemoryProjectionJobsCreated.Add(1); return relation;
+    }
+
+    public async Task<MemoryRelation> SupersedeRelationAsync(Guid relationId, Guid subjectId, string predicate, Guid objectId,
+        DateTimeOffset? validFrom, DateTimeOffset? validUntil, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow(); var candidate = new MemoryRelation(subjectId, predicate, objectId, validFrom, validUntil, now);
+        var (replacement, changed, created) = await store.WriteAsync(async s =>
+        {
+            var old = await s.FindRelationAsync(relationId, ct) ?? throw new MemoryException("memory_relation_not_found", "Relação não encontrada.");
+            if (old.Status != MemoryStatus.Active) throw new MemoryException("memory_relation_not_active", "Relação não está vigente.");
+            if (old.SubjectEntityId == candidate.SubjectEntityId && old.Predicate == candidate.Predicate &&
+                old.ObjectEntityId == candidate.ObjectEntityId && old.ValidFrom == candidate.ValidFrom && old.ValidUntil == candidate.ValidUntil)
+                return (old, false, false);
+            if (await s.FindEntityAsync(subjectId, ct) is null || await s.FindEntityAsync(objectId, ct) is null)
+                throw new MemoryException("memory_entity_not_found", "Entidade não encontrada.");
+            var others = (await s.FindActiveRelationsAsync(subjectId, candidate.Predicate, objectId, ct))
+                .Where(x => x.Id != old.Id).ToArray();
+            var existing = FindExactOrRejectOverlap(others, candidate);
+            var current = existing ?? candidate;
+            if (existing is null)
+            {
+                s.Add(current);
+                s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryRelation,
+                    current.Id, current.Revision, MemoryProjectionOperation.Upsert, now));
+            }
+            old.Supersede(current.Id, now);
+            s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryRelation,
+                old.Id, old.Revision, MemoryProjectionOperation.Delete, now));
+            return (current, true, existing is null);
+        }, ct);
+        if (changed) metrics.MemoryProjectionJobsCreated.Add(created ? 2 : 1);
+        return replacement;
+    }
+
+    public async Task<MemoryRelation> ForgetRelationAsync(Guid relationId, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var (relation, changed) = await store.WriteAsync(async s =>
+        {
+            var found = await s.FindRelationAsync(relationId, ct) ?? throw new MemoryException("memory_relation_not_found", "Relação não encontrada.");
+            var changed = found.Forget(now);
+            if (changed) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryRelation,
+                found.Id, found.Revision, MemoryProjectionOperation.Delete, now));
+            return (found, changed);
+        }, ct);
+        if (changed) metrics.MemoryProjectionJobsCreated.Add(1);
+        return relation;
+    }
+
+    public async Task<MemoryEntity> RetireEntityAsync(Guid entityId, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var (entity, changed) = await store.WriteAsync(async s =>
+        {
+            var found = await s.FindEntityAsync(entityId, ct) ?? throw new MemoryException("memory_entity_not_found", "Entidade não encontrada.");
+            if (found.RetiredAt is not null) return (found, false);
+            found.Retire(now);
+            s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryEntity,
+                found.Id, found.Revision, MemoryProjectionOperation.Upsert, now));
+            return (found, true);
+        }, ct);
+        if (changed) metrics.MemoryProjectionJobsCreated.Add(1);
+        return entity;
+    }
+
+    private static MemoryRelation? FindExactOrRejectOverlap(IEnumerable<MemoryRelation> active, MemoryRelation candidate)
+    {
+        MemoryRelation? exact = null;
+        foreach (var relation in active)
+        {
+            if (relation.ValidFrom == candidate.ValidFrom && relation.ValidUntil == candidate.ValidUntil)
+            {
+                exact = relation;
+                continue;
+            }
+            if ((relation.ValidUntil is null || candidate.ValidFrom is null || relation.ValidUntil > candidate.ValidFrom) &&
+                (candidate.ValidUntil is null || relation.ValidFrom is null || candidate.ValidUntil > relation.ValidFrom))
+                throw new MemoryException("memory_relation_overlap", "Já existe uma relação Active com intervalo sobreposto.");
+        }
+        return exact;
     }
     public async Task SupportRelationAsync(Guid relationId, Guid memoryId, CancellationToken ct)
     {

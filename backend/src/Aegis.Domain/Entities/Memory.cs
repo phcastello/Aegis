@@ -22,6 +22,15 @@ public static class MemoryText
         return clean;
     }
     public static string Normalize(string value, int maxLength) => Clean(value, maxLength).ToUpperInvariant();
+    public static string NormalizePredicate(string value)
+    {
+        var clean = Clean(value, 80);
+        var snake = Regex.Replace(clean, "([a-z0-9])([A-Z])", "$1_$2");
+        snake = Regex.Replace(snake, @"[\s-]+", "_").ToUpperInvariant();
+        if (snake.Length > 80 || !Regex.IsMatch(snake, "^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$"))
+            throw new ArgumentException("Predicate deve usar UPPER_SNAKE_CASE.");
+        return snake;
+    }
     public static string Hash(string normalized) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
 }
 
@@ -112,8 +121,7 @@ public sealed class MemoryRelation : AuditableEntity
     {
         if (validFrom is not null && validUntil is not null && validUntil <= validFrom) throw new ArgumentException("Intervalo de validade inválido.");
         InitializeAudit(now); SubjectEntityId = subjectEntityId; ObjectEntityId = objectEntityId;
-        Predicate = MemoryText.Normalize(predicate, 80);
-        if (!Regex.IsMatch(Predicate, "^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")) throw new ArgumentException("Predicate deve usar UPPER_SNAKE_CASE.");
+        Predicate = MemoryText.NormalizePredicate(predicate);
         ValidFrom = validFrom?.ToUniversalTime(); ValidUntil = validUntil?.ToUniversalTime(); Status = MemoryStatus.Active; Revision = 1;
     }
     public Guid SubjectEntityId { get; private set; }

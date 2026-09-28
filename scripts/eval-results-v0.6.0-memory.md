@@ -77,3 +77,36 @@ Indexação é assíncrona; um novo fato pode aparecer primeiro apenas na busca 
 `RequeueCurrentStateAsync` substitui `RequeueActiveAsync`. Na inicialização e após recriar a collection, escolhe para **cada** `MemoryRecord` somente o job da revision atual: Active → Upsert; Forgotten/Superseded → Delete. Reabre os jobs atuais Completed e Failed, reutiliza Pending e respeita Processing com lease válida. Jobs históricos não são reproduzidos cegamente; jobs Graph permanecem inalterados. Isso repara Delete terminalmente falho depois que o Qdrant volta sem perder a collection e também corrige um point que reapareça após um Delete já Completed. Repetir a reconciliation três vezes não cria jobs ou points duplicados.
 
 Validação da correção em 28/09/2026: **339/339** testes backend, sem skips, com PostgreSQL descartável e integração Qdrant física em collection temporária; **11/11** cenários PostgreSQL Memory passaram, incluindo Failed Delete Forgotten, Failed Delete Superseded, Completed Delete com stale point reintroduzido, rebuild Active, idempotência e Graph intacto. Build Release backend, **41/41** testes frontend, build PWA, Compose, `git diff --check` e EF `has-pending-model-changes` passaram. Nenhuma migration foi criada. Evals live e fixtures não foram alterados ou executados nesta correção interna. Os testes de embedding continuaram usando fake; nenhuma chamada real à Embeddings API foi feita.
+
+---
+
+# Parte 3 — Knowledge Graph
+
+A versão permanece **Aegis v0.6.0 — “Yeah, I know.”**, na mesma branch. O relatório das Partes 1 e 2 acima é histórico e permanece preservado.
+
+## Arquitetura aplicada
+
+PostgreSQL continua sendo a única fonte de verdade. A migration `20260928153830_RefineMemoryRelationsForKnowledgeGraph` substitui apenas o índice único de relações Active por um índice de lookup não único; as sete tabelas canônicas permanecem. Operações internas criam/reutilizam relações exatas, rejeitam sobreposição de intervalos `[ValidFrom, ValidUntil)`, preservam relações históricas Active fora do instante atual e fazem supersession/forget com jobs Graph atômicos. Entidades têm resolução determinística por nome canônico e alias, com filtro opcional de tipo, entidades retired ignoradas por default e resultado Ambiguous sem adivinhação. Não há extração por LLM nem tools Graph públicas.
+
+Neo4j Community `5.26.30-community` usa o driver oficial `Neo4j.Driver` 5.28.4. Um node `:AegisMemoryEntity` por `MemoryEntity.Id` recebe nome, nome normalizado, tipo, aliases, revision e retiredAt. Uma edge fixa `:AEGIS_RELATION` por `MemoryRelation.Id` recebe predicate, revision e validade; IDs canônicos possuem constraints unique. O grafo não recebe texto de `MemoryRecord`, evidências ou IDs de conversa/mensagem. `MemoryGraphProjectionWorker` consome apenas jobs Graph por claim PostgreSQL `FOR UPDATE SKIP LOCKED`, lease recuperável de dois minutos e cinco backoffs até Failed, com códigos técnicos sanitizados. Cada job relê o estado canônico atual antes de escrever; Active relation faz upsert, Superseded/Forgotten fazem delete. Entity e alias atuais são relidos. Relation upsert garante os endpoint nodes independentemente da ordem dos jobs.
+
+Startup reabre somente os jobs da revision/operação desejadas agora, inclusive Completed/Failed, sem tocar no histórico ou nos jobs Semantic. `MemoryGraphRebuild` remove somente nodes Aegis e suas edges e reenfileira o estado atual. Traversal interna limita direção, profundidade 1–3, até 50 resultados, predicates normalizados e `asOf`; Neo4j filtra todas as edges do path por tempo, e PostgreSQL valida em lote status, validade, endpoints e nomes. `memory_search` segue apenas Semantic/Qdrant mais fallback textual. Nenhuma escrita automática, retrieval híbrido, nova tool, prompt ou eval live foi introduzido.
+
+## Validação da Parte 3
+
+Executada em 28/09/2026 com PostgreSQL, Qdrant v1.12.6 e Neo4j Community 5.26.30 em containers **descartáveis**. Os testes Graph físicos exigem `AEGIS_MEMORY_TEST_NEO4J_DISPOSABLE=YES_DELETE_AEGIS_PROJECTION`; só removem nodes `:AegisMemoryEntity` e suas relações, deixando um node externo de controle intacto durante o rebuild.
+
+| Verificação | Resultado |
+| --- | --- |
+| `dotnet test backend/Aegis.sln` | **345/345**, zero skips, incluindo integração PostgreSQL, Qdrant físico e Neo4j físico |
+| `dotnet build backend/Aegis.sln --configuration Release` | passou; apenas aviso xUnit2031 preexistente em `CalendarTests.cs` |
+| `npm test --prefix frontend/aegis-pwa` | **41/41** |
+| `npm run build --prefix frontend/aegis-pwa` | passou |
+| `docker compose config --quiet`, `git diff --check` | passaram |
+| `dotnet ef migrations has-pending-model-changes` | nenhuma mudança pendente após migration nova |
+
+Os testes novos cobrem canonical/alias/type/retired/ambiguous resolution, intervalos separados, conflito temporal, replay exato, supersession e forget de relação, aliases projetados no mesmo node, traversal de um e dois saltos, `asOf`, stale edge rejeitada no PostgreSQL, recuperação de lease, Failed Delete, drift após Completed Delete, job Upsert antigo processado depois do Delete, reconstrução real de Neo4j e preservação de jobs Semantic. Nenhuma chamada OpenAI ou embedding real foi feita. Evals live não foram executados porque tool schema e identity prompt permanecem inalterados.
+
+## Limitações e Parte 4
+
+`memory_search` ainda não navega no grafo; traversal é interna. A escrita de entidades e relações ainda depende de serviços internos, sem extração automática. O controle de sobreposição temporal usa a transação serializada da camada Memory; escritas diretas fora desse serviço devem respeitar a mesma regra. O rebuild percorre os agregados canônicos atuais de forma integral, adequado ao volume single-user atual; pode exigir paginação em escala maior. A Parte 4 fica responsável por escrita automática, extração de entidades/relações, resolução de contradições, retrieval Semantic + Graph, uso contextual/proativo e hardening final.
