@@ -17,6 +17,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     public DbSet<MemoryRelation> MemoryRelations => Set<MemoryRelation>();
     public DbSet<MemoryRelationEvidence> MemoryRelationEvidences => Set<MemoryRelationEvidence>();
     public DbSet<MemoryProjectionJob> MemoryProjectionJobs => Set<MemoryProjectionJob>();
+    public DbSet<MemoryExtractionJob> MemoryExtractionJobs => Set<MemoryExtractionJob>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<ReminderDeliveryAttempt> ReminderDeliveryAttempts => Set<ReminderDeliveryAttempt>();
 
@@ -69,6 +70,8 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     {
         ChatMessages.Add(message);
     }
+
+    public void AddMemoryExtractionJob(MemoryExtractionJob job) => MemoryExtractionJobs.Add(job);
 
     public void AddMessageFeedback(MessageFeedback feedback)
     {

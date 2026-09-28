@@ -8,5 +8,6 @@ public interface IPromptBuilder
         IReadOnlyList<ChatMessage> recentHistory,
         string currentUserMessage,
         string? pendingActionState = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? automaticMemoryContext = null);
 }

@@ -29,6 +29,8 @@ public interface IAegisDbContext
 
     void AddChatMessage(ChatMessage message);
 
+    void AddMemoryExtractionJob(MemoryExtractionJob job);
+
     void AddMessageFeedback(MessageFeedback feedback);
 
     void AddLlmRequestAudit(LlmRequestAudit audit);

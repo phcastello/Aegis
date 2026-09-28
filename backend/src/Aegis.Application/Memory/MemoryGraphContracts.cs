@@ -25,6 +25,7 @@ public sealed record MemoryGraphEntity(Guid Id, string CanonicalName, string? En
 public sealed record MemoryGraphRelation(Guid Id, Guid SubjectEntityId, string Predicate, Guid ObjectEntityId,
     DateTimeOffset? ValidFrom, DateTimeOffset? ValidUntil);
 public sealed record MemoryGraphPath(IReadOnlyList<MemoryGraphEntity> Entities, IReadOnlyList<MemoryGraphRelation> Relations);
+public sealed record MemoryRelationContext(MemoryRelation Relation, MemoryEntity Subject, MemoryEntity Object);
 public enum MemoryGraphDirection { Outgoing, Incoming, Both }
 public sealed record MemoryGraphTraversalRequest(IReadOnlyList<Guid> StartEntityIds, MemoryGraphDirection Direction,
     IReadOnlyList<string>? Predicates = null, int MaxDepth = 2, int Limit = 10, DateTimeOffset? AsOf = null);

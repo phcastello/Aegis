@@ -36,6 +36,26 @@ public sealed class AegisMetrics : IDisposable
     public Counter<long> MemoryGraphTraversals { get; }
     public Histogram<long> MemoryGraphTraversalResults { get; }
     public Histogram<double> MemoryGraphTraversalDuration { get; }
+    public Counter<long> MemoryExtractionJobsCreated { get; }
+    public Counter<long> MemoryExtractionJobsCompleted { get; }
+    public Counter<long> MemoryExtractionJobsFailed { get; }
+    public Counter<long> MemoryExtractionRetries { get; }
+    public Histogram<long> MemoryExtractionCandidates { get; }
+    public Counter<long> MemoryAutoCreated { get; }
+    public Counter<long> MemoryAutoReinforced { get; }
+    public Counter<long> MemoryAutoCorrected { get; }
+    public Counter<long> MemoryAutoTransitioned { get; }
+    public Counter<long> MemoryAutoSkipped { get; }
+    public Counter<long> MemoryExtractionInputTokens { get; }
+    public Counter<long> MemoryExtractionCachedInputTokens { get; }
+    public Counter<long> MemoryExtractionCacheWriteTokens { get; }
+    public Counter<long> MemoryExtractionOutputTokens { get; }
+    public Counter<long> MemoryAutoContextRequests { get; }
+    public Counter<long> MemoryAutoContextHits { get; }
+    public Counter<long> MemoryAutoContextTimeouts { get; }
+    public Histogram<long> MemoryAutoContextMemories { get; }
+    public Histogram<long> MemoryAutoContextGraphPaths { get; }
+    public Histogram<long> MemoryAutoContextChars { get; }
     public Counter<long> RemindersUpdated { get; }
     public Counter<long> RemindersCancelled { get; }
     public Counter<long> RemindersTriggered { get; }
@@ -102,6 +122,26 @@ public sealed class AegisMetrics : IDisposable
         MemoryGraphTraversals = meter.CreateCounter<long>("aegis_memory_graph_traversal_total");
         MemoryGraphTraversalResults = meter.CreateHistogram<long>("aegis_memory_graph_traversal_results");
         MemoryGraphTraversalDuration = meter.CreateHistogram<double>("aegis_memory_graph_traversal_duration_ms", "ms");
+        MemoryExtractionJobsCreated = meter.CreateCounter<long>("aegis_memory_extraction_jobs_created_total");
+        MemoryExtractionJobsCompleted = meter.CreateCounter<long>("aegis_memory_extraction_jobs_completed_total");
+        MemoryExtractionJobsFailed = meter.CreateCounter<long>("aegis_memory_extraction_jobs_failed_total");
+        MemoryExtractionRetries = meter.CreateCounter<long>("aegis_memory_extraction_retries_total");
+        MemoryExtractionCandidates = meter.CreateHistogram<long>("aegis_memory_extraction_candidates");
+        MemoryAutoCreated = meter.CreateCounter<long>("aegis_memory_auto_created_total");
+        MemoryAutoReinforced = meter.CreateCounter<long>("aegis_memory_auto_reinforced_total");
+        MemoryAutoCorrected = meter.CreateCounter<long>("aegis_memory_auto_corrected_total");
+        MemoryAutoTransitioned = meter.CreateCounter<long>("aegis_memory_auto_transitioned_total");
+        MemoryAutoSkipped = meter.CreateCounter<long>("aegis_memory_auto_skipped_total");
+        MemoryExtractionInputTokens = meter.CreateCounter<long>("aegis_memory_extraction_input_tokens_total");
+        MemoryExtractionCachedInputTokens = meter.CreateCounter<long>("aegis_memory_extraction_cached_input_tokens_total");
+        MemoryExtractionCacheWriteTokens = meter.CreateCounter<long>("aegis_memory_extraction_cache_write_tokens_total");
+        MemoryExtractionOutputTokens = meter.CreateCounter<long>("aegis_memory_extraction_output_tokens_total");
+        MemoryAutoContextRequests = meter.CreateCounter<long>("aegis_memory_auto_context_requests_total");
+        MemoryAutoContextHits = meter.CreateCounter<long>("aegis_memory_auto_context_hits_total");
+        MemoryAutoContextTimeouts = meter.CreateCounter<long>("aegis_memory_auto_context_timeout_total");
+        MemoryAutoContextMemories = meter.CreateHistogram<long>("aegis_memory_auto_context_memories");
+        MemoryAutoContextGraphPaths = meter.CreateHistogram<long>("aegis_memory_auto_context_graph_paths");
+        MemoryAutoContextChars = meter.CreateHistogram<long>("aegis_memory_auto_context_chars");
         RemindersCreated = meter.CreateCounter<long>("aegis_reminders_created_total");
         RemindersUpdated = meter.CreateCounter<long>("aegis_reminders_updated_total");
         RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");

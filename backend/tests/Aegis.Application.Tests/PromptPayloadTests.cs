@@ -116,6 +116,52 @@ public sealed class PromptPayloadTests
         Assert.Equal(10, values["aegis_llm_output_tokens_total"]);
     }
 
+    [Fact]
+    public async Task AutomaticMemoryReachesProviderButIsRedactedFromAudits()
+    {
+        const string marker = "ULTRA_PRIVATE_MEMORY_MARKER_123";
+        var prompt = await new PromptBuilder(new FixedRuntimeContext("Horário: 12:00"))
+            .BuildPromptAsync([], "Qual GPU faz sentido?", cancellationToken: default,
+                automaticMemoryContext: "Memória: " + marker);
+        Assert.Contains(marker, prompt.RuntimeContext);
+        Assert.DoesNotContain(marker, prompt.AuditRuntimeContext);
+        Assert.Equal("developer", prompt.InputItems[0].GetProperty("role").GetString());
+        Assert.Equal("user", prompt.InputItems[^2].GetProperty("role").GetString());
+        Assert.Contains(marker, prompt.InputItems[^2].GetRawText());
+        Assert.Equal("developer", prompt.InputItems[^1].GetProperty("role").GetString());
+
+        var handler = new CaptureHandler();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var client = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var response = await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest(prompt.Prompt,
+            "Qual GPU faz sentido?", InputItems: prompt.InputItems, AuditInputItems: prompt.AuditInputItems), []));
+        Assert.Contains(marker, handler.Body);
+        Assert.DoesNotContain(marker, response.AuditData.RequestPayloadJson);
+        var assistant = new ChatMessage(Guid.NewGuid(), ChatRoles.Assistant, "Resposta");
+        assistant.AttachAuditData(response.Model, prompt.Prompt, prompt.AuditRuntimeContext, null);
+        Assert.DoesNotContain(marker, assistant.RuntimeContextSnapshot);
+    }
+
+    [Fact]
+    public async Task MemoryToolOutputIsRedactedFromSubsequentRequestAudit()
+    {
+        const string marker = "ULTRA_PRIVATE_MEMORY_MARKER_123";
+        var output = JsonSerializer.SerializeToElement(new { type = "function_call_output", call_id = "call_1", output = marker });
+        var auditOutput = JsonSerializer.SerializeToElement(new { type = "function_call_output", call_id = "call_1",
+            output = "[memory_tool_output_redacted]" });
+        var handler = new CaptureHandler();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var client = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var response = await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest("identity", "query"), [],
+            InputItems: [output], AuditInputItems: [auditOutput]));
+        Assert.Contains(marker, handler.Body);
+        Assert.DoesNotContain(marker, response.AuditData.RequestPayloadJson);
+    }
+
     private sealed class FixedRuntimeContext(string text) : IRuntimeContextProvider
     {
         public Task<string> GetRuntimeContextAsync(CancellationToken cancellationToken = default) => Task.FromResult(text);

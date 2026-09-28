@@ -1,6 +1,6 @@
 # Aegis v0.6.0 — "Yeah, I know."
 
-Aegis v0.6.0 now includes Memory Foundation, Semantic Memory and the internal Knowledge Graph: canonical knowledge in PostgreSQL, rebuildable Qdrant and Neo4j projections, semantic search and bounded graph traversal. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
+Aegis v0.6.0 now includes Intelligent Memory: durable automatic extraction, canonical and temporal knowledge in PostgreSQL, rebuildable Qdrant and Neo4j projections, hybrid retrieval and bounded automatic context. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
 
 Version history:
 
@@ -20,7 +20,7 @@ Version history:
 
 - v0.5.0 — "Knock Knock" — lembretes internos únicos, worker temporal persistente, Web Push e acknowledgement explícito.
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
-- v0.6.0 — "Yeah, I know." — fundação canônica, projeção semântica e knowledge graph interno (etapas 1–3 de 4).
+- v0.6.0 — "Yeah, I know." — memória canônica, extração automática, histórico temporal, projeções semântica/relacional e recuperação híbrida.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -42,22 +42,22 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 
 ## Aegis Memory
 
-PostgreSQL stores the canonical state. Qdrant projects `MemoryRecord` for semantic retrieval. Neo4j projects canonical entities and relations for internal traversal. Both projections can be rebuilt from PostgreSQL. Automatic memory extraction, semantic plus graph retrieval and proactive behavior belong to Part 4.
+PostgreSQL stores the canonical state, evidence, lifecycle, temporal history and durable extraction jobs. Qdrant projects `MemoryRecord` for semantic retrieval. Neo4j projects canonical entities and relations for graph traversal. Both projections can be rebuilt from PostgreSQL. Automatic extraction runs after a user message commits; hybrid retrieval can add a small relevant context to a later chat turn. Neither projection owns knowledge.
 
-`MemoryRecord` stores up to 2,000 characters of readable knowledge about any useful subject, with optional explicit `ValidFrom`/`ValidUntil`. A record starts `Active`. Corrections create a new record and mark the old one `Superseded`, with `SupersededAt` and `SupersededById`; forgetting marks the active record `Forgotten` with `ForgottenAt`. Historical records remain in PostgreSQL. Exact normalized duplicates reuse an active record. Content corrections retain the old validity unless new dates are supplied; changing only the dates of an unchanged fact is not supported in this stage. A separate `MemoryEvidence` row records each distinct observation, its source kind, time and optional conversation/message references. Deleting the source conversation leaves the memory and evidence intact and clears those references.
+`MemoryRecord` stores up to 2,000 characters of readable knowledge about any useful subject, with optional `ValidFrom`/`ValidUntil`. A record starts `Active`. A factual correction creates a new record and marks the incorrect old one `Superseded`; a real change closes the old record's validity while it stays `Active`, and starts the new fact at the transition time. Forgetting marks a record `Forgotten`. Intervals are half open: `[ValidFrom, ValidUntil)`, with null endpoints unbounded. The same exact fact can recur in nonoverlapping intervals; exact replay reuses an existing record. `MemoryEvidence` records distinct explicit requests or user statements and their optional source conversation/message references. Deleting the source conversation leaves consolidated memory and evidence intact, while a pending extraction job skips a deleted source.
 
-`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records. Names, aliases and predicates receive deterministic validation; no automatic relation extraction runs yet. PostgreSQL entity resolution checks canonical names, then aliases, optionally by type. It ignores retired entities by default and returns ambiguity instead of guessing. Every canonical change that needs a projection writes a `MemoryProjectionJob` in the same PostgreSQL transaction, keyed by target, aggregate, revision and operation. The Semantic worker consumes only Semantic jobs; the Graph worker consumes only Graph jobs.
+`MemoryEntity`, `MemoryEntityAlias`, `MemoryRelation` and `MemoryRelationEvidence` are canonical PostgreSQL records. Automatic ingestion can create and reinforce entities/relations and attach evidence, using deterministic canonical-name/alias resolution. Ambiguous matches are skipped, never guessed. Only aliases explicitly stated in the target user message are accepted. Predicates remain validated UPPER_SNAKE_CASE strings. Relation transitions close validity while preserving history; corrections forget incorrect relations. Every canonical change and its `MemoryProjectionJob` commit in the same PostgreSQL transaction. The Semantic worker consumes only Semantic jobs; the Graph worker consumes only Graph jobs. Both reconcile current PostgreSQL state at startup and every 30 minutes by default, reopening Failed/Completed current jobs to repair drift.
 
 Four conversational tools are available now:
 
 | Tool | Contract | Effect |
 | --- | --- | --- |
 | `memory_remember` | `{"content":"Aegis usa PostgreSQL.","validFrom":"2026-09-01T00:00:00Z"}` (`validFrom`/`validUntil` optional) | Explicitly stores knowledge with provenance from the current user turn. |
-| `memory_search` | `{"query":"qual banco a Aegis usa?","limit":10}` (`limit` default 10, max 30) | Embeds the query, ranks Qdrant candidates, validates current status and validity in PostgreSQL, then records 30-minute observed references. Textual PostgreSQL search supplements results and handles technical fallback. |
+| `memory_search` | `{"query":"qual banco a Aegis usa?","limit":10,"asOf":"2025-03-01T12:00:00Z"}` (`limit` default 10, max 30; `asOf` optional) | Combines semantic candidates with bounded graph traversal, validates facts in PostgreSQL at `asOf` or now, and records 30-minute observed memory references. Text search handles technical fallback. |
 | `memory_update` | `{"memoryId":"<observed id>","content":"Aegis usa outro banco."}` | Supersedes one observed active memory in one transaction. |
 | `memory_forget` | `{"memoryId":"<observed id>"}` | Soft-forgets one observed active memory, idempotently. |
 
-The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Casual statements do not write memory. `memory_search` is tool driven; no memory block is injected into every prompt. Broad topic deletion is unavailable. Memory content stays out of metrics; only requested tool results enter the model context.
+The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Useful casual user statements may be learned silently by the background extractor; the chat model does not call `memory_remember` for them. Automatic context enters only after the current user message, beyond the stable prompt cache prefix, and creates no invisible tool references. Broad topic deletion is unavailable. Stored memory is untrusted data, never an instruction or authorization for external actions; current Gmail, Calendar and Reminder state must come from their tools.
 
 ### Semantic projection and configuration
 
@@ -95,7 +95,7 @@ Active relations with the same subject, predicate and object may coexist when th
 
 The Graph worker claims only Graph entity/relation jobs with PostgreSQL `FOR UPDATE SKIP LOCKED`, a two minute recoverable lease, and limited retries at 10 seconds, 30 seconds, 2 minutes, 5 minutes and 30 minutes. Technical `LastError` codes contain no graph properties. For every job, the processor reads the *current* PostgreSQL aggregate: entities upsert with current aliases, Active relations upsert with current endpoints, other relations delete. Thus an old Upsert cannot restore a forgotten edge. Startup reconciliation reopens current Completed/Failed jobs, including Deletes; historical jobs are preserved. A maintenance `MemoryGraphRebuild` deletes only `:AegisMemoryEntity` nodes and their edges, then requeues current Graph jobs. Repeated runs preserve canonical IDs and do not alter Semantic jobs. Neo4j outages do not block canonical writes or semantic search.
 
-Internal graph traversal accepts canonical start IDs, direction, optional normalized predicates, depth 1–3 (default 2), result limit up to 50, and optional `asOf`. Neo4j filters **every edge in the path** by that instant; PostgreSQL then validates every candidate relation, interval and endpoint, and supplies current entity names. A stale graph edge is never returned as a valid fact. Graph traversal is intentionally not a public tool and `memory_search` still uses Qdrant plus PostgreSQL text fallback. Automatic writing and Semantic + Graph retrieval are Part 4 work.
+Internal graph traversal accepts canonical start IDs, direction, optional normalized predicates, depth 1–3 (default 2), result limit up to 50, and optional `asOf`. Neo4j filters **every edge in the path** by that instant; PostgreSQL then validates every candidate relation, interval, supporting memory and endpoint, and supplies current entity names. A stale graph edge is never returned as a valid fact. Graph traversal is not a public tool; `memory_search` uses it through the bounded hybrid retriever.
 
 | Variable | Default |
 | --- | --- |
@@ -109,6 +109,39 @@ Internal graph traversal accepts canonical start IDs, direction, optional normal
 | `AEGIS_MEMORY_GRAPH_MAX_RESULTS` | `50` |
 
 Physical Graph integration tests require a **disposable** PostgreSQL database (`AEGIS_MEMORY_TEST_DATABASE`) and/or Neo4j (`AEGIS_MEMORY_TEST_NEO4J_URI`, `AEGIS_MEMORY_TEST_NEO4J_USERNAME`, `AEGIS_MEMORY_TEST_NEO4J_PASSWORD`, optional `AEGIS_MEMORY_TEST_NEO4J_DATABASE`). Neo4j tests also require the explicit guard `AEGIS_MEMORY_TEST_NEO4J_DISPOSABLE=YES_DELETE_AEGIS_PROJECTION`; they clean only nodes labelled `:AegisMemoryEntity` and their edges. The graph worker never calls OpenAI.
+
+### Intelligent Memory
+
+Each committed user message and its `MemoryExtractionJob` are saved together. The worker claims one job atomically with a two minute lease, then calls the configured OpenAI Responses model **outside** a database transaction using strict JSON schema Structured Outputs and `store=false`. It receives the target user message, at most six short preceding messages for reference, up to ten relevant existing memories, relevant relation refs and a small predicate catalog. Only the target message may supply new facts. No raw extractor output is persisted or entered in `LlmRequestAudit`; metrics contain numeric counts and token usage only. A job with no useful candidates completes with zero candidates. Retries use bounded backoff; deleted source conversations or missing/non-user messages are skipped before extraction.
+
+The extractor proposes at most eight atomic claims, each applied in a short canonical transaction. `create` stores a new fact or reuses an exact temporal match; `reinforce` adds evidence; `correct` supersedes a false old record; `transition` closes a formerly true interval and starts a new one. Relation actions create/reinforce an edge, close a historical interval or forget an incorrect edge. References such as `m1` and `r1` are valid only for the supplied context; invalid references cannot trigger destructive changes. Entity ambiguity skips graph mutation while preserving a valid textual memory. Automatic evidence uses `UserStatement`; no inference is persisted. Passwords, API keys, tokens and similar obvious authentication secrets are rejected by backend guards, including explicit `memory_remember` and `memory_update`. Memory is not a secret manager.
+
+Hybrid retrieval uses semantic ranking and canonical text fallback, plus exact boundary-aware entity mentions and relation evidence as graph seeds. Graph traversal runs only with seeds, at bounded depth/results; PostgreSQL validates all candidates and supplies final names/content. Qdrant down yields lexical plus graph; Neo4j down yields semantic plus lexical; both down yields lexical. Automatic context uses a stricter default vector threshold (`0.60`), at most five memories, eight graph paths and 3,500 characters, with a 2.5 second deadline. It is optional to each chat turn and never blocks a response indefinitely. `memory_search` uses the same hybrid layer with its manual threshold (`0.45`) and optional historical `asOf`; only explicit tool search creates references for correction/forget.
+
+Automatic memory context and observed memory references are redacted from persisted `RuntimeContextSnapshot` and request audit payloads. Memory tool outputs in later model rounds have separate real and redacted request input lists. The network chat request still contains relevant memory as lower-trust data; stored audit data does not replicate it. User statements may be sent to the configured extraction provider, memory content/query text to the configured embedding provider, and selected memory context to the configured chat provider. Qdrant and Neo4j are local projections in normal Compose deployments. Conversation deletion does not erase already consolidated memory; use explicit search and forget for a specific fact. No Memory Manager UI, autonomous agent, Gmail/Calendar memory ingestion or broad forget is part of v0.6.0.
+
+Automatic memory adds roughly one extraction request per processed user message plus embeddings for newly projected memories and semantic queries. Actual token usage is counted by metrics; no price is hardcoded. Eventual projection lag means a new fact may appear in PostgreSQL/lexical search before Qdrant and Neo4j converge. A different embedding model/dimension requires a new collection and explicit rebuild.
+
+| Variable | Default |
+| --- | --- |
+| `AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED` | `true` |
+| `AEGIS_MEMORY_EXTRACTION_MODEL` | `gpt-5.6-luna` |
+| `AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT` | `low` |
+| `AEGIS_MEMORY_EXTRACTION_BASE_URL` | `https://api.openai.com` |
+| `AEGIS_MEMORY_EXTRACTION_API_KEY` | empty; falls back to `OPENAI_API_KEY`, never STT key |
+| `AEGIS_MEMORY_EXTRACTION_TIMEOUT_SECONDS` | `30` |
+| `AEGIS_MEMORY_EXTRACTION_MAX_OUTPUT_TOKENS` | `2000` |
+| `AEGIS_MEMORY_EXTRACTION_POLL_SECONDS` | `5` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_ENABLED` | `true` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_SCORE_THRESHOLD` | `0.60` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_MEMORY_LIMIT` | `5` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_PATH_LIMIT` | `8` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_DEPTH` | `2` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_MAX_CHARS` | `3500` |
+| `AEGIS_MEMORY_AUTO_CONTEXT_TIMEOUT_MS` | `2500` |
+| `AEGIS_MEMORY_RECONCILE_INTERVAL_MINUTES` | `30` (`0` disables periodic repair) |
+
+For physical acceptance, use a nonproduction deployment and wait for the extraction/projection jobs to complete: (A) say “Minha cerveja favorita é Heineken.”, then ask in a new conversation; (B) say “Sakamoto é meu amigo e namora Bisky.”, then ask who Sakamoto dates; (C) state an RX 6700 XT, then “Troquei por uma RTX 5080.” and check current and historical answers; (D) correct a false fact and confirm it does not become historical truth; (E) search and explicitly forget one memory, then confirm neither semantic search nor automatic context returns it. These manual deployed scenarios remain a checklist until actually run; deterministic disposable-store integration tests are separate evidence.
 
 ## Project Layout
 

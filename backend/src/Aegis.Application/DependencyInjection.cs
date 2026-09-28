@@ -29,6 +29,8 @@ public static class DependencyInjection
         services.AddScoped<MemorySemanticSearch>();
         services.AddScoped<MemoryEntityResolver>();
         services.AddScoped<MemoryGraphQuery>();
+        services.AddScoped<MemoryHybridRetriever>();
+        services.AddScoped<MemoryAutomaticIngestionService>();
         services.AddScoped<IAegisTool, MemoryRememberTool>();
         services.AddScoped<IAegisTool, MemorySearchTool>();
         services.AddScoped<IAegisTool, MemoryUpdateTool>();

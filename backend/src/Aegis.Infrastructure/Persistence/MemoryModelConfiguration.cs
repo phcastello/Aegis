@@ -23,7 +23,7 @@ internal static class MemoryModelConfiguration
             e.Property(x => x.ContentHash).HasMaxLength(64).IsRequired();
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             e.HasOne<MemoryRecord>().WithMany().HasForeignKey(x => x.SupersededById).OnDelete(DeleteBehavior.Restrict);
-            e.HasIndex(x => x.ContentHash).IsUnique().HasFilter("\"Status\" = 'Active'");
+            e.HasIndex(x => x.ContentHash).HasFilter("\"Status\" = 'Active'");
             e.HasIndex(x => new { x.Status, x.CreatedAt });
         });
         model.Entity<MemoryEvidence>(e =>
@@ -99,6 +99,22 @@ internal static class MemoryModelConfiguration
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             e.Property(x => x.LastError).HasMaxLength(1000);
             e.HasIndex(x => new { x.ProjectionTarget, x.AggregateType, x.AggregateId, x.AggregateRevision, x.Operation }).IsUnique();
+            e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
+        });
+        model.Entity<MemoryExtractionJob>(e =>
+        {
+            e.ToTable("memory_extraction_jobs", t =>
+            {
+                t.HasCheckConstraint("CK_memory_extraction_status", "\"Status\" IN ('Pending','Processing','Completed','Failed')");
+                t.HasCheckConstraint("CK_memory_extraction_attempt", "\"Attempt\" >= 0");
+                t.HasCheckConstraint("CK_memory_extraction_counts", "\"CandidatesCount\" >= 0 AND \"CreatedCount\" >= 0 AND \"ReinforcedCount\" >= 0 AND \"CorrectedCount\" >= 0 AND \"TransitionedCount\" >= 0 AND \"GraphMutationsCount\" >= 0 AND \"SkippedCount\" >= 0");
+            });
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            e.Property(x => x.LastError).HasMaxLength(100);
+            e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.UserMessageId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(x => x.UserMessageId).IsUnique().HasFilter("\"UserMessageId\" IS NOT NULL");
             e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
         });
     }

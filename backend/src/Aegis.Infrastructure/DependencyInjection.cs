@@ -266,6 +266,47 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(20);
         }).RemoveAllLoggers();
         services.AddScoped<IMemoryStore, MemoryStore>();
+        var automatic = new MemoryAutomaticOptions();
+        configuration.GetSection("MemoryAutomatic").Bind(automatic);
+        automatic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED", automatic.Enabled);
+        automatic.Model = Read(configuration, "AEGIS_MEMORY_EXTRACTION_MODEL", automatic.Model);
+        automatic.ReasoningEffort = Read(configuration, "AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT", automatic.ReasoningEffort);
+        automatic.BaseUrl = Read(configuration, "AEGIS_MEMORY_EXTRACTION_BASE_URL", automatic.BaseUrl);
+        automatic.ApiKey = ReadAny(configuration, automatic.ApiKey, "AEGIS_MEMORY_EXTRACTION_API_KEY", "OPENAI_API_KEY");
+        automatic.TimeoutSeconds = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_TIMEOUT_SECONDS", automatic.TimeoutSeconds);
+        automatic.MaxOutputTokens = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_MAX_OUTPUT_TOKENS", automatic.MaxOutputTokens);
+        automatic.PollSeconds = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_POLL_SECONDS", automatic.PollSeconds);
+        if (automatic.TimeoutSeconds is < 1 or > 90 || automatic.MaxOutputTokens is < 100 or > 8000 ||
+            automatic.PollSeconds is < 1 or > 60 || automatic.ReasoningEffort is not ("none" or "low" or "medium" or "high"))
+            throw new InvalidOperationException("Invalid MemoryAutomatic configuration.");
+        services.AddSingleton(automatic);
+        services.AddHttpClient<IMemoryExtractionClient, OpenAiMemoryExtractionClient>(client =>
+        {
+            client.BaseAddress = new Uri(automatic.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(automatic.TimeoutSeconds + 5);
+        }).RemoveAllLoggers();
+        services.AddScoped<IMemoryExtractionJobStore, MemoryExtractionJobStore>();
+        services.AddHostedService<MemoryExtractionWorker>();
+        var autoContext = new MemoryAutoContextOptions();
+        configuration.GetSection("MemoryAutoContext").Bind(autoContext);
+        autoContext.Enabled = ReadBool(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_ENABLED", autoContext.Enabled);
+        if (double.TryParse(configuration["AEGIS_MEMORY_AUTO_CONTEXT_SCORE_THRESHOLD"], System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var autoThreshold)) autoContext.ScoreThreshold = autoThreshold;
+        autoContext.MemoryLimit = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_MEMORY_LIMIT", autoContext.MemoryLimit);
+        autoContext.GraphPathLimit = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_PATH_LIMIT", autoContext.GraphPathLimit);
+        autoContext.GraphDepth = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_DEPTH", autoContext.GraphDepth);
+        autoContext.MaxChars = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_MAX_CHARS", autoContext.MaxChars);
+        autoContext.TimeoutMs = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_TIMEOUT_MS", autoContext.TimeoutMs);
+        if (!double.IsFinite(autoContext.ScoreThreshold) || autoContext.ScoreThreshold is < 0 or > 1 ||
+            autoContext.MemoryLimit is < 1 or > 30 || autoContext.GraphPathLimit is < 1 or > 50 ||
+            autoContext.GraphDepth is < 1 or > 3 || autoContext.MaxChars is < 200 or > 10000 ||
+            autoContext.TimeoutMs is < 100 or > 10000)
+            throw new InvalidOperationException("Invalid MemoryAutoContext configuration.");
+        services.AddSingleton(autoContext);
+        var reconcile = new MemoryReconcileOptions();
+        reconcile.IntervalMinutes = ReadInt(configuration, "AEGIS_MEMORY_RECONCILE_INTERVAL_MINUTES", reconcile.IntervalMinutes);
+        if (reconcile.IntervalMinutes is < 0 or > 1440) throw new InvalidOperationException("Invalid Memory reconcile interval.");
+        services.AddSingleton(reconcile);
         services.AddScoped<IMemorySemanticProjectionStore, MemorySemanticProjectionStore>();
         services.AddScoped<MemorySemanticProjectionProcessor>();
         services.AddHostedService<MemorySemanticProjectionWorker>();

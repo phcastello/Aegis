@@ -58,23 +58,26 @@ public sealed class MemorySemanticProjectionProcessor(IMemorySemanticProjectionS
 }
 
 public sealed class MemorySemanticProjectionWorker(IServiceScopeFactory scopes, IMemoryVectorStore vectors,
-    MemorySemanticOptions options, TimeProvider clock, ILogger<MemorySemanticProjectionWorker> logger) : BackgroundService
+    MemorySemanticOptions options, MemoryReconcileOptions reconcileOptions, TimeProvider clock,
+    ILogger<MemorySemanticProjectionWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Enabled) return;
         var initialized = false;
+        var nextReconcile = DateTimeOffset.MaxValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var created = await vectors.EnsureCollectionAsync(stoppingToken);
-                if (created || !initialized)
+                if (created || !initialized || reconcileOptions.IntervalMinutes > 0 && clock.GetUtcNow() >= nextReconcile)
                 {
                     await using var scope = scopes.CreateAsyncScope();
                     await scope.ServiceProvider.GetRequiredService<IMemorySemanticProjectionStore>()
                         .RequeueCurrentStateAsync(clock.GetUtcNow(), stoppingToken);
                     initialized = true;
+                    nextReconcile = clock.GetUtcNow().AddMinutes(Math.Max(1, reconcileOptions.IntervalMinutes));
                 }
                 for (var i = 0; i < 20; i++)
                 {

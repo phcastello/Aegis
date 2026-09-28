@@ -4,7 +4,8 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Memory;
 
-public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisMetrics metrics, MemorySemanticSearch? semantic = null)
+public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisMetrics metrics,
+    MemorySemanticSearch? semantic = null, MemoryHybridRetriever? hybrid = null)
 {
     public const int DefaultSearchLimit = 10;
     public const int MaxSearchLimit = 30;
@@ -12,17 +13,15 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
 
     public async Task<(MemoryRecord Record, bool Deduplicated)> RememberAsync(string content, DateTimeOffset? validFrom, DateTimeOffset? validUntil, ToolExecutionContext context, CancellationToken ct)
     {
+        MemorySecretGuard.RejectIfSecret(content);
         var now = clock.GetUtcNow();
         var candidate = new MemoryRecord(content, validFrom, validUntil, now);
         var result = await store.WriteAsync(async s =>
         {
-            var existing = await s.FindActiveByHashAsync(candidate.ContentHash, ct);
-            if (existing is not null && validFrom is null && validUntil is null &&
-                (existing.ValidFrom > now || existing.ValidUntil <= now))
-                throw new MemoryException("memory_not_current", "Existe uma memória temporal idêntica fora da validade atual; consulte e reformule a informação antes de guardar novamente.");
-            if (existing is not null && (validFrom is not null && existing.ValidFrom != candidate.ValidFrom ||
-                validUntil is not null && existing.ValidUntil != candidate.ValidUntil))
-                throw new MemoryException("memory_validity_conflict", "Já existe uma memória vigente com esse conteúdo e validade diferente; corrija a memória específica após consultá-la.");
+            var resolved = MemoryTemporal.Resolve(await s.FindActiveByHashAllAsync(candidate.ContentHash, ct),
+                candidate, now, validFrom is null && validUntil is null);
+            var existing = resolved.Existing;
+            candidate = resolved.Candidate;
             var record = existing ?? candidate;
             if (existing is null)
             {
@@ -43,19 +42,32 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
 
     public async Task<(IReadOnlyList<MemoryRecord> Results, string Mode)> SearchWithModeAsync(string query, int limit, Guid conversationId, CancellationToken ct)
     {
+        var result = await SearchHybridAsync(query, limit, null, conversationId, ct);
+        return (result.Memories, result.Mode);
+    }
+
+    public async Task<MemoryHybridResult> SearchHybridAsync(string query, int limit, DateTimeOffset? asOf,
+        Guid conversationId, CancellationToken ct)
+    {
         if (limit is < 1 or > MaxSearchLimit) throw new ArgumentException("Limite deve estar entre 1 e 30.");
         var clean = MemoryText.Clean(query, 200);
         var now = clock.GetUtcNow();
-        var (results, mode) = semantic is null
-            ? (await store.SearchAsync(clean, limit, now, ct), "canonical_text_fallback")
-            : await semantic.SearchAsync(clean, limit, ct);
-        await store.ObserveAsync(conversationId, results, "memory_search", now, ct);
-        metrics.MemorySearches.Add(1); metrics.MemorySearchResults.Record(results.Count);
-        return (results, mode);
+        MemoryHybridResult result;
+        if (hybrid is not null) result = await hybrid.SearchAsync(clean, limit, asOf, false, ct);
+        else if (semantic is not null)
+        {
+            var (ranked, mode) = await semantic.SearchDetailedAsync(clean, limit, asOf ?? now, 0.45, ct);
+            result = new(ranked.Select(x => x.Record).ToArray(), [], mode);
+        }
+        else result = new(await store.SearchAsync(clean, limit, asOf ?? now, ct), [], "canonical_text_fallback");
+        await store.ObserveAsync(conversationId, result.Memories, "memory_search", now, ct);
+        metrics.MemorySearches.Add(1); metrics.MemorySearchResults.Record(result.Memories.Count);
+        return result;
     }
 
     public async Task<MemoryRecord> UpdateAsync(Guid id, string content, DateTimeOffset? validFrom, DateTimeOffset? validUntil, ToolExecutionContext context, CancellationToken ct)
     {
+        MemorySecretGuard.RejectIfSecret(content);
         var now = clock.GetUtcNow();
         var (record, superseded, created) = await store.WriteAsync(async s =>
         {
@@ -73,7 +85,8 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
                     s.Add(new MemoryEvidence(old.Id, MemorySourceKind.ExplicitMemoryRequest, context.ConversationId, context.UserMessageId, now, now));
                 return (old, false, false);
             }
-            var existing = await s.FindActiveByHashAsync(candidate.ContentHash, ct);
+            var existing = MemoryTemporal.Resolve(await s.FindActiveByHashAllAsync(candidate.ContentHash, ct),
+                candidate, now, implicitCurrent: false).Existing;
             var replacement = existing ?? candidate;
             if (existing is null)
             {
@@ -84,6 +97,9 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
                 s.Add(new MemoryEvidence(replacement.Id, MemorySourceKind.ExplicitMemoryRequest, context.ConversationId, context.UserMessageId, now, now));
             old.Supersede(replacement.Id, now);
             s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Semantic, MemoryAggregateType.MemoryRecord, old.Id, old.Revision, MemoryProjectionOperation.Delete, now));
+            foreach (var relation in await s.FindRelationsExclusivelySupportedByMemoryAsync(old.Id, now, ct))
+                if (relation.Forget(now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
+                    MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Delete, now));
             await s.ObserveAsync(context.ConversationId, [replacement], "memory_update", now, ct);
             return (replacement, true, existing is null);
         }, ct);
@@ -101,10 +117,34 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
             var found = await s.FindRecordAsync(id, ct) ?? throw new MemoryException("memory_not_found", "Memória não encontrada.");
             var didChange = found.Forget(now);
             if (didChange) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Semantic, MemoryAggregateType.MemoryRecord, found.Id, found.Revision, MemoryProjectionOperation.Delete, now));
+            if (didChange)
+                foreach (var relation in await s.FindRelationsExclusivelySupportedByMemoryAsync(found.Id, now, ct))
+                    if (relation.Forget(now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
+                        MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Delete, now));
             return (found, didChange);
         }, ct);
         if (changed) { metrics.MemoryForgotten.Add(1); metrics.MemoryProjectionJobsCreated.Add(1); }
         return record;
+    }
+
+    public async Task<MemoryRecord> CloseRecordValidityAsync(Guid id, DateTimeOffset at, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        return await store.WriteAsync(async s =>
+        {
+            var record = await s.FindRecordAsync(id, ct) ?? throw new MemoryException("memory_not_found", "Memória não encontrada.");
+            if (record.CloseValidity(at, now))
+            {
+                s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Semantic, MemoryAggregateType.MemoryRecord,
+                    record.Id, record.Revision, MemoryProjectionOperation.Upsert, now));
+                foreach (var relation in await s.FindRelationsExclusivelySupportedByMemoryAsync(record.Id, at, ct))
+                    if (relation.ValidFrom is null || relation.ValidFrom < at)
+                        if (relation.ValidUntil is null || relation.ValidUntil > at)
+                            if (relation.CloseValidity(at, now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
+                                MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Upsert, now));
+            }
+            return record;
+        }, ct);
     }
 
     // Internal canonical graph operations; there are no public graph tools.
@@ -188,6 +228,19 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
         }, ct);
         if (changed) metrics.MemoryProjectionJobsCreated.Add(1);
         return relation;
+    }
+
+    public async Task<MemoryRelation> CloseRelationValidityAsync(Guid relationId, DateTimeOffset at, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        return await store.WriteAsync(async s =>
+        {
+            var relation = await s.FindRelationAsync(relationId, ct) ?? throw new MemoryException("memory_relation_not_found", "Relação não encontrada.");
+            if (relation.CloseValidity(at, now))
+                s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph, MemoryAggregateType.MemoryRelation,
+                    relation.Id, relation.Revision, MemoryProjectionOperation.Upsert, now));
+            return relation;
+        }, ct);
     }
 
     public async Task<MemoryEntity> RetireEntityAsync(Guid entityId, CancellationToken ct)

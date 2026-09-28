@@ -6,6 +6,7 @@ public interface IMemoryStore
 {
     Task<T> WriteAsync<T>(Func<IMemoryStore, Task<T>> action, CancellationToken ct);
     Task<MemoryRecord?> FindActiveByHashAsync(string hash, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> FindActiveByHashAllAsync(string hash, CancellationToken ct);
     Task<MemoryRecord?> FindRecordAsync(Guid id, CancellationToken ct);
     Task<bool> HasEvidenceAsync(Guid memoryId, MemorySourceKind kind, Guid? messageId, CancellationToken ct);
     Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, DateTimeOffset now, CancellationToken ct);
@@ -27,4 +28,12 @@ public interface IMemoryStore
     Task<IReadOnlyList<MemoryEntity>> FindCanonicalEntitiesAsync(string normalizedName, CancellationToken ct);
     Task<IReadOnlyList<MemoryEntity>> FindAliasedEntitiesAsync(string normalizedAlias, CancellationToken ct);
     Task<bool> HasRelationEvidenceAsync(Guid relationId, Guid memoryId, CancellationToken ct);
+    Task<bool> SourceIsAvailableAsync(Guid conversationId, Guid messageId, CancellationToken ct);
+    Task<IReadOnlyList<(MemoryEntity Entity, string Name)>> ListEntityNamesAsync(CancellationToken ct);
+    Task<IReadOnlyList<MemoryRelationContext>> FindRelationsByMemoryAsync(IReadOnlyList<Guid> memoryIds, DateTimeOffset asOf, int limit, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRelationContext>> FindRelationsByEntitiesAsync(IReadOnlyList<Guid> entityIds, DateTimeOffset asOf, int limit, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> FindSupportingMemoriesAsync(IReadOnlyList<Guid> relationIds, DateTimeOffset asOf, int limit, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListPredicatesAsync(int limit, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRelation>> FindRelationsExclusivelySupportedByMemoryAsync(Guid memoryId, DateTimeOffset at, CancellationToken ct);
+    Task<IReadOnlySet<Guid>> FindRelationsWithoutValidSupportAsync(IReadOnlyList<Guid> relationIds, DateTimeOffset at, CancellationToken ct);
 }

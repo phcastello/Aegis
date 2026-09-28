@@ -161,6 +161,8 @@ CASES.extend([
     ("O que você lembra sobre meu PC?", "memory_search", "memory_search"),
     ("Qual era mesmo aquela decisão sobre protocolo de integração da Aegis?", "memory_search", "memory_search"),
     ("O que eu tinha decidido sobre a interface entre os serviços da Aegis?", "memory_search", "memory_search"),
+    ("Quem é a namorada daquele meu amigo Sakamoto?", "memory_search", "memory_search"),
+    ("Qual GPU eu usava em março de 2025?", "memory_search", "memory_search"),
     ("Esquece aquela informação da GPU.", "memory_forget_lookup", "memory_forget"),
     ("Esquece a segunda.", "memory_forget_second", "memory_forget"),
     ("Isso está errado, agora é uma 5080.", "memory_update_observed", "memory_update"),
@@ -169,6 +171,7 @@ CASES.extend([
     ("Qual memória RAM eu tenho?", "memory_search", "memory_search"),
     ("Você lembra do que eu te falei sobre MCP?", "memory_search", "memory_search"),
     ("Minha memória RAM é DDR5.", "memory_casual", None),
+    ("Meu amigo começou a namorar alguém.", "memory_casual", None),
     ("O que é memória cache?", "memory_technical", None),
     ("Como funciona memória virtual?", "memory_technical", None),
     ("O que é Qdrant?", "memory_technical", None),
@@ -368,6 +371,8 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
             related.add(MEMORY_ID)
         if any(word in query for word in ("protocolo", "integração", "integracao", "interface entre", "mcp")):
             related.add(MCP_MEMORY_ID)
+        if "sakamoto" in query or "namorada" in query:
+            related.add(SECOND_MEMORY_ID)
         memories = [item for item in catalog if query and (query in item["content"].lower() or item["memoryId"] in related)][:arguments.get("limit", 10)]
         state["observedMemories"] = {item["memoryId"] for item in memories}
         return json.dumps({"memories": [{"position": i + 1, "memory": item} for i, item in enumerate(memories)], "searchMode": "semantic"})
@@ -704,8 +709,11 @@ def main() -> int:
         elif kind.startswith("memory_"):
             if kind in {"memory_casual", "memory_technical"}:
                 passed = not any(name.startswith("memory_") for name in calls) and bool(answer)
+                if kind == "memory_casual":
+                    passed = passed and not any(word in answer.lower() for word in ("guardei", "memorizei", "anotado", "guardei na memória"))
             elif kind == "memory_update_unobserved":
-                passed = all(name == "memory_search" for name in calls) and bool(answer)
+                passed = (calls in (["memory_search"], ["memory_search", "memory_update"]) or
+                          not calls and "?" in answer) and bool(answer)
             elif kind == "memory_bulk":
                 passed = "memory_forget" not in calls and "memory_update" not in calls and bool(answer)
             elif kind == "memory_forget_lookup":

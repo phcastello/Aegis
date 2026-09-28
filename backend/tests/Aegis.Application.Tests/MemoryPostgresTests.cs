@@ -502,7 +502,10 @@ public sealed class MemoryPostgresTests
             Assert.Single(await service.SearchAsync("temporário", 10, conversation.Id, default));
             clock.Now = clock.Now.AddMinutes(2);
             Assert.Empty(await service.SearchAsync("temporário", 10, conversation.Id, default));
-            await Assert.ThrowsAsync<MemoryException>(() => service.RememberAsync(temporary.Record.Content, null, null, thirdContext, default));
+            var recurring = await service.RememberAsync(temporary.Record.Content, null, null, thirdContext, default);
+            Assert.NotEqual(temporary.Record.Id, recurring.Record.Id);
+            Assert.Equal(clock.Now, recurring.Record.ValidFrom);
+            Assert.Single(await service.SearchAsync("temporário", 10, conversation.Id, default));
         }
         finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); }
     }

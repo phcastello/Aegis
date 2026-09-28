@@ -1,6 +1,8 @@
 using Aegis.Application.Reminders;
 using Aegis.Application.Common;
 using Aegis.Application.Llm;
+using Aegis.Application.Memory;
+using Aegis.Application.Observability;
 using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
@@ -21,7 +23,11 @@ public sealed class ChatService(
     IActiveTurnRegistry turnRegistry,
     IVoiceService voiceService,
     ReminderService? reminders = null,
-    Aegis.Application.Memory.MemoryService? memory = null) : IChatService
+    MemoryService? memory = null,
+    MemoryAutomaticOptions? automaticMemory = null,
+    TimeProvider? clock = null,
+    AegisMetrics? metrics = null,
+    MemoryHybridRetriever? hybrid = null) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -45,8 +51,14 @@ public sealed class ChatService(
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
+        if (automaticMemory?.Enabled == true)
+        {
+            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
+                (clock ?? TimeProvider.System).GetUtcNow()));
+        }
 
         await dbContext.SaveChangesAsync(turnToken);
+        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(
             conversation.Id,
@@ -71,7 +83,7 @@ public sealed class ChatService(
             assistantMessage.AttachAuditData(
                 completion.Model,
                 promptResult.Prompt,
-                promptResult.RuntimeContext,
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 completion.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
                 conversation.Id,
@@ -135,7 +147,13 @@ public sealed class ChatService(
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
+        if (automaticMemory?.Enabled == true)
+        {
+            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
+                (clock ?? TimeProvider.System).GetUtcNow()));
+        }
         await dbContext.SaveChangesAsync(turnToken);
+        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
@@ -178,7 +196,8 @@ public sealed class ChatService(
             }
 
             dbContext.AddChatMessage(assistantMessage);
-            assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt, promptResult.RuntimeContext, chunk.MetadataJson);
+            assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext, chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
             await dbContext.SaveChangesAsync(CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -318,10 +337,12 @@ public sealed class ChatService(
         if (states.Count > 1) states.Add("Há propostas pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
         if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
             states.Add(reminderContext);
-        if (memory is not null && await memory.GetContextAsync(conversationId, cancellationToken) is { } memoryContext)
-            states.Add(memoryContext);
         var pendingState = string.Join("\n", states);
-        return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
+        var automaticContext = hybrid is null ? null : await hybrid.BuildAutomaticContextAsync(userContent, cancellationToken);
+        var observedMemoryContext = memory is null ? null : await memory.GetContextAsync(conversationId, cancellationToken);
+        var memoryContext = string.Join("\n", new[] { observedMemoryContext, automaticContext }
+            .Where(x => !string.IsNullOrWhiteSpace(x)));
+        return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext);
     }
 
     private static ChatMessageResponse MapMessage(ChatMessage message)
@@ -456,7 +477,8 @@ public sealed class ChatService(
                 ["aegis_version"] = "0.6.0",
                 ["purpose"] = "Chat"
             },
-            promptResult.InputItems);
+            promptResult.InputItems,
+            promptResult.AuditInputItems);
     }
 
     private static string? CreatePreview(string? content)

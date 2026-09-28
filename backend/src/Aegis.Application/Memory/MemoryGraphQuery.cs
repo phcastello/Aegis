@@ -5,7 +5,7 @@ namespace Aegis.Application.Memory;
 
 // Internal graph retrieval for Part 4. Neo4j supplies paths; PostgreSQL decides every returned fact.
 public sealed class MemoryGraphQuery(IMemoryGraphStore graph, IMemoryGraphProjectionStore canonical,
-    MemoryGraphOptions options, TimeProvider clock, AegisMetrics metrics)
+    MemoryGraphOptions options, TimeProvider clock, AegisMetrics metrics, IMemoryStore? memoryStore = null)
 {
     public async Task<IReadOnlyList<MemoryGraphPath>> TraverseAsync(MemoryGraphTraversalRequest request, CancellationToken ct)
     {
@@ -25,6 +25,8 @@ public sealed class MemoryGraphQuery(IMemoryGraphStore graph, IMemoryGraphProjec
             var entityIds = candidates.SelectMany(x => x.EntityIds).Distinct().ToArray();
             var relationIds = candidates.SelectMany(x => x.RelationIds).Distinct().ToArray();
             var (entities, relations) = await canonical.LoadCandidatesAsync(entityIds, relationIds, ct);
+            var unsupported = memoryStore is null ? new HashSet<Guid>() :
+                await memoryStore.FindRelationsWithoutValidSupportAsync(relationIds, asOf, ct);
             var entityById = entities.ToDictionary(x => x.Id);
             var relationById = relations.ToDictionary(x => x.Id);
             var result = new List<MemoryGraphPath>();
@@ -42,6 +44,7 @@ public sealed class MemoryGraphQuery(IMemoryGraphStore graph, IMemoryGraphProjec
                 {
                     if (!relationById.TryGetValue(candidate.RelationIds[i], out var relation) ||
                         relation.Status != MemoryStatus.Active ||
+                        unsupported.Contains(relation.Id) ||
                         relation.ValidFrom is not null && relation.ValidFrom > asOf ||
                         relation.ValidUntil is not null && relation.ValidUntil <= asOf ||
                         predicates.Length > 0 && !predicates.Contains(relation.Predicate)) { valid = false; break; }

@@ -103,6 +103,24 @@ public sealed class ToolLoopTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MemoryToolContinuationSeparatesRealOutputFromAuditOutput(bool streaming)
+    {
+        const string marker = "ULTRA_PRIVATE_MEMORY_MARKER_123";
+        var model = new FakeModelClient([Call("memory_search"), Reply("Pronto")]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new MemoryFakeTool(marker)]),
+            NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
+        var request = new ModelRequest("identity", "O que você lembra?");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        if (streaming) await foreach (var _ in loop.StreamAsync(request, context)) { }
+        else await loop.RunAsync(request, context);
+        Assert.Contains(marker, JsonSerializer.Serialize(model.Requests[1].InputItems));
+        Assert.DoesNotContain(marker, JsonSerializer.Serialize(model.Requests[1].AuditInputItems));
+        Assert.Contains("[memory_tool_output_redacted]", JsonSerializer.Serialize(model.Requests[1].AuditInputItems));
+    }
+
     private static AegisToolLoop CreateLoop(FakeModelClient model, FakeTool tool) =>
         new(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
 
@@ -169,5 +187,14 @@ public sealed class ToolLoopTests
             if (throwError) throw new InvalidOperationException("secret internal error");
             return Task.FromResult(new AegisToolResult(true, "{\"ok\":true}"));
         }
+    }
+
+    private sealed class MemoryFakeTool(string marker) : IAegisTool
+    {
+        public string Name => "memory_search";
+        public string Description => "fake";
+        public JsonElement ParametersSchema => JsonSerializer.SerializeToElement(new { type = "object" });
+        public Task<AegisToolResult> ExecuteAsync(JsonElement arguments, ToolExecutionContext context,
+            CancellationToken cancellationToken = default) => Task.FromResult(new AegisToolResult(true, marker));
     }
 }

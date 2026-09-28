@@ -59,15 +59,23 @@ public sealed class MemoryRememberTool(MemoryService service) : MemoryToolBase(s
 public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(service)
 {
     public override string Name => "memory_search";
-    public override string Description => "Busca conhecimento persistente relevante mesmo quando a formulação difere do texto armazenado. Use para perguntas sobre o que a Aegis lembra, sem fingir recordar. Retorna apenas memórias canônicas vigentes e cria referências temporárias de 30 minutos para correção/esquecimento. query curta sobre o assunto; default 10, máximo 30. Não busca RAM, cache, Calendar, Gmail nem lembretes.";
-    public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":30}},"required":["query"],"additionalProperties":false}""");
+    public override string Description => "Busca conhecimento persistente com memória semântica e relações relevantes. Use para perguntas sobre fatos lembrados, inclusive históricos; asOf é opcional em RFC3339 com offset quando o usuário especifica um instante passado. Retorna conhecimento canônico válido naquele instante e referências temporárias para correção/esquecimento. Não busca RAM, cache, Calendar, Gmail nem lembretes.";
+    public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":30},"asOf":{"type":"string","description":"Opcional: instante histórico RFC3339 com offset."}},"required":["query"],"additionalProperties":false}""");
     protected override async Task<AegisToolResult> RunAsync(JsonElement args, ToolExecutionContext context, CancellationToken ct)
     {
         var a = args.Deserialize<Arguments>(JsonOptions)!;
-        var (results, mode) = await Service.SearchWithModeAsync(a.Query, a.Limit, context.ConversationId, ct);
-        return Ok(new { memories = results.Select((record, i) => new { position = i + 1, memory = View(record) }), searchMode = mode });
+        var result = await Service.SearchHybridAsync(a.Query, a.Limit, Instant(a.AsOf), context.ConversationId, ct);
+        var relations = result.Paths.SelectMany(x => x.Relations.Select(r => new
+        {
+            subject = x.Entities.First(e => e.Id == r.SubjectEntityId).CanonicalName,
+            predicate = r.Predicate,
+            @object = x.Entities.First(e => e.Id == r.ObjectEntityId).CanonicalName,
+            r.ValidFrom, r.ValidUntil
+        })).Distinct().Take(a.Limit);
+        return Ok(new { memories = result.Memories.Select((record, i) => new { position = i + 1, memory = View(record) }),
+            relations, searchMode = result.Mode });
     }
-    private sealed record Arguments(string Query, int Limit = MemoryService.DefaultSearchLimit);
+    private sealed record Arguments(string Query, int Limit = MemoryService.DefaultSearchLimit, string? AsOf = null);
 }
 
 public sealed class MemoryUpdateTool(MemoryService service) : MemoryToolBase(service)

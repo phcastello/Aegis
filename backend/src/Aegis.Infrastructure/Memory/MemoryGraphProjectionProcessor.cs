@@ -74,23 +74,26 @@ public sealed class MemoryGraphProjectionProcessor(IMemoryGraphProjectionStore j
 }
 
 public sealed class MemoryGraphProjectionWorker(IServiceScopeFactory scopes, IMemoryGraphStore graph,
-    MemoryGraphOptions options, TimeProvider clock, ILogger<MemoryGraphProjectionWorker> logger) : BackgroundService
+    MemoryGraphOptions options, MemoryReconcileOptions reconcileOptions, TimeProvider clock,
+    ILogger<MemoryGraphProjectionWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Enabled) return;
         var initialized = false;
+        var nextReconcile = DateTimeOffset.MaxValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (!initialized)
+                if (!initialized || reconcileOptions.IntervalMinutes > 0 && clock.GetUtcNow() >= nextReconcile)
                 {
                     await graph.EnsureSchemaAsync(stoppingToken);
                     await using var scope = scopes.CreateAsyncScope();
                     await scope.ServiceProvider.GetRequiredService<IMemoryGraphProjectionStore>()
                         .RequeueCurrentStateAsync(clock.GetUtcNow(), stoppingToken);
                     initialized = true;
+                    nextReconcile = clock.GetUtcNow().AddMinutes(Math.Max(1, reconcileOptions.IntervalMinutes));
                 }
                 for (var i = 0; i < 20; i++)
                 {

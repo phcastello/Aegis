@@ -10,6 +10,7 @@ public enum MemoryProjectionTarget { Semantic, Graph }
 public enum MemoryAggregateType { MemoryRecord, MemoryEntity, MemoryRelation }
 public enum MemoryProjectionOperation { Upsert, Delete }
 public enum MemoryProjectionStatus { Pending, Processing, Completed, Failed }
+public enum MemoryExtractionStatus { Pending, Processing, Completed, Failed }
 
 public static class MemoryText
 {
@@ -59,6 +60,14 @@ public sealed class MemoryRecord : AuditableEntity
     {
         if (Status != MemoryStatus.Active || replacementId == Id) throw new InvalidOperationException("Memória não pode ser substituída.");
         Status = MemoryStatus.Superseded; SupersededAt = now; SupersededById = replacementId; Revision++; Touch(now);
+    }
+    public bool CloseValidity(DateTimeOffset at, DateTimeOffset now)
+    {
+        at = at.ToUniversalTime();
+        if (Status != MemoryStatus.Active || ValidFrom is not null && at <= ValidFrom || ValidUntil is not null && ValidUntil != at)
+            throw new InvalidOperationException("Memória não pode ser fechada nesse instante.");
+        if (ValidUntil == at) return false;
+        ValidUntil = at; Revision++; Touch(now); return true;
     }
     public bool Forget(DateTimeOffset now)
     {
@@ -138,6 +147,14 @@ public sealed class MemoryRelation : AuditableEntity
     {
         if (Status != MemoryStatus.Active || replacementId == Id) throw new InvalidOperationException("Relação não pode ser substituída.");
         Status = MemoryStatus.Superseded; SupersededAt = now; SupersededById = replacementId; Revision++; Touch(now);
+    }
+    public bool CloseValidity(DateTimeOffset at, DateTimeOffset now)
+    {
+        at = at.ToUniversalTime();
+        if (Status != MemoryStatus.Active || ValidFrom is not null && at <= ValidFrom || ValidUntil is not null && ValidUntil != at)
+            throw new InvalidOperationException("Relação não pode ser fechada nesse instante.");
+        if (ValidUntil == at) return false;
+        ValidUntil = at; Revision++; Touch(now); return true;
     }
     public bool Forget(DateTimeOffset now)
     {
@@ -229,5 +246,57 @@ public sealed class MemoryProjectionJob : AuditableEntity
         CompletedAt = null;
         LastError = null;
         Touch(now);
+    }
+}
+
+public sealed class MemoryExtractionJob : AuditableEntity
+{
+    private MemoryExtractionJob() { }
+    public MemoryExtractionJob(Guid conversationId, Guid userMessageId, DateTimeOffset now)
+    {
+        InitializeAudit(now);
+        ConversationId = conversationId;
+        UserMessageId = userMessageId;
+        Status = MemoryExtractionStatus.Pending;
+    }
+
+    public Guid? ConversationId { get; private set; }
+    public Guid? UserMessageId { get; private set; }
+    public MemoryExtractionStatus Status { get; private set; }
+    public int Attempt { get; private set; }
+    public DateTimeOffset? NextAttemptAt { get; private set; }
+    public DateTimeOffset? ProcessingStartedAt { get; private set; }
+    public DateTimeOffset? LeaseExpiresAt { get; private set; }
+    public Guid? LeaseId { get; private set; }
+    public string? LastError { get; private set; }
+    public int CandidatesCount { get; private set; }
+    public int CreatedCount { get; private set; }
+    public int ReinforcedCount { get; private set; }
+    public int CorrectedCount { get; private set; }
+    public int TransitionedCount { get; private set; }
+    public int GraphMutationsCount { get; private set; }
+    public int SkippedCount { get; private set; }
+    public DateTimeOffset? CompletedAt { get; private set; }
+
+    public bool Complete(Guid leaseId, DateTimeOffset now, int candidates, int created, int reinforced,
+        int corrected, int transitioned, int graphMutations, int skipped)
+    {
+        if (Status != MemoryExtractionStatus.Processing || LeaseId != leaseId) return false;
+        Status = MemoryExtractionStatus.Completed;
+        CandidatesCount = candidates; CreatedCount = created; ReinforcedCount = reinforced;
+        CorrectedCount = corrected; TransitionedCount = transitioned;
+        GraphMutationsCount = graphMutations; SkippedCount = skipped;
+        CompletedAt = now; LeaseId = null; LeaseExpiresAt = null; NextAttemptAt = null; LastError = null;
+        Touch(now); return true;
+    }
+
+    public bool Fail(Guid leaseId, string code, DateTimeOffset now, TimeSpan? retryDelay)
+    {
+        if (Status != MemoryExtractionStatus.Processing || LeaseId != leaseId) return false;
+        Status = retryDelay is null ? MemoryExtractionStatus.Failed : MemoryExtractionStatus.Pending;
+        LastError = code;
+        NextAttemptAt = retryDelay is null ? null : now.Add(retryDelay.Value);
+        LeaseId = null; LeaseExpiresAt = null;
+        Touch(now); return true;
     }
 }
