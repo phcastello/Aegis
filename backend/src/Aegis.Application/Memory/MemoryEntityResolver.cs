@@ -54,14 +54,14 @@ public sealed class MemoryEntityResolver(IMemoryStore store, TimeProvider clock,
     {
         var normalized = MemoryText.Normalize(mention, 200);
         var type = entityType is null ? null : MemoryText.Normalize(entityType, 40);
-        var exact = Filter(await s.FindCanonicalEntitiesAsync(normalized, ct), type, includeRetired);
-        if (exact.Count != 0) return Result(exact);
-        return Result(Filter(await s.FindAliasedEntitiesAsync(normalized, ct), type, includeRetired));
+        var canonical = await s.FindCanonicalEntitiesAsync(normalized, ct);
+        var aliased = await s.FindAliasedEntitiesAsync(normalized, ct);
+        return Result(Filter(canonical.Concat(aliased), type, includeRetired));
     }
 
     private static IReadOnlyList<MemoryEntity> Filter(IEnumerable<MemoryEntity> source, string? type, bool includeRetired) =>
         source.Where(x => (includeRetired || x.RetiredAt is null) && (type is null || x.EntityType == type))
-            .DistinctBy(x => x.Id).OrderBy(x => x.CanonicalName).ThenBy(x => x.Id).ToArray();
+            .DistinctBy(x => x.Id).OrderBy(x => x.NormalizedName, StringComparer.Ordinal).ThenBy(x => x.Id).ToArray();
 
     private static MemoryEntityResolution Result(IReadOnlyList<MemoryEntity> candidates) =>
         new(candidates.Count switch { 0 => MemoryEntityResolutionKind.NotFound, 1 => MemoryEntityResolutionKind.Resolved,

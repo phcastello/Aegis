@@ -94,6 +94,86 @@ public sealed class MemoryGraphTests
     }
 
     [PostgresFact]
+    public async Task CanonicalAndAliasCollisionIsAmbiguousWithoutCreatingEntityOrJob()
+    {
+        var schema = "graph_" + Guid.NewGuid().ToString("N");
+        var db = await CreateDbAsync(schema);
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            var resolver = new MemoryEntityResolver(store, clock, metrics);
+            var bisky = await service.CreateEntityAsync("Bisky", "Person", default);
+            var beatriz = await service.CreateEntityAsync("Beatriz", "Person", default);
+            await service.AddAliasAsync(beatriz.Id, "Bisky", default);
+
+            var resolution = await resolver.ResolveAsync("  BISKy  ");
+            Assert.Equal(MemoryEntityResolutionKind.Ambiguous, resolution.Kind);
+            Assert.Equal(new[] { beatriz.Id, bisky.Id }, resolution.Candidates.Select(x => x.Id));
+
+            var entityCount = await db.MemoryEntities.CountAsync();
+            var jobCount = await db.MemoryProjectionJobs.CountAsync();
+            var error = await Assert.ThrowsAsync<MemoryException>(() => resolver.ResolveOrCreateAsync("Bisky"));
+            Assert.Equal("memory_entity_ambiguous", error.Code);
+            Assert.Equal(entityCount, await db.MemoryEntities.CountAsync());
+            Assert.Equal(jobCount, await db.MemoryProjectionJobs.CountAsync());
+        }
+        finally { await DropDbAsync(db, schema); }
+    }
+
+    [PostgresFact]
+    public async Task CanonicalAndAliasOfSameEntityResolveOnce()
+    {
+        var schema = "graph_" + Guid.NewGuid().ToString("N");
+        var db = await CreateDbAsync(schema);
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            var resolver = new MemoryEntityResolver(store, clock, metrics);
+            var sakamoto = await service.CreateEntityAsync("Sakamoto", "Person", default);
+            await service.AddAliasAsync(sakamoto.Id, "SAKAMOTO", default);
+
+            var resolution = await resolver.ResolveAsync("  sakamoto  ");
+            Assert.Equal(MemoryEntityResolutionKind.Resolved, resolution.Kind);
+            Assert.Equal(sakamoto.Id, Assert.Single(resolution.Candidates).Id);
+            var jobsBefore = await db.MemoryProjectionJobs.CountAsync();
+            Assert.Equal(sakamoto.Id, (await resolver.ResolveOrCreateAsync("SAKAMOTO")).Id);
+            Assert.Equal(1, await db.MemoryEntities.CountAsync());
+            Assert.Equal(jobsBefore, await db.MemoryProjectionJobs.CountAsync());
+        }
+        finally { await DropDbAsync(db, schema); }
+    }
+
+    [PostgresFact]
+    public async Task EntityTypeAndRetiredFiltersApplyAfterCanonicalAliasUnion()
+    {
+        var schema = "graph_" + Guid.NewGuid().ToString("N");
+        var db = await CreateDbAsync(schema);
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            var resolver = new MemoryEntityResolver(store, clock, metrics);
+            var person = await service.CreateEntityAsync("Atlas", "Person", default);
+            var project = await service.CreateEntityAsync("Projeto Atlas", "Project", default);
+            await service.AddAliasAsync(project.Id, "Atlas", default);
+
+            Assert.Equal(MemoryEntityResolutionKind.Ambiguous, (await resolver.ResolveAsync("Atlas")).Kind);
+            Assert.Equal(person.Id, (await resolver.ResolveAsync("Atlas", "Person")).Entity!.Id);
+            Assert.Equal(project.Id, (await resolver.ResolveAsync("Atlas", "Project")).Entity!.Id);
+            await service.RetireEntityAsync(project.Id, default);
+            Assert.Equal(person.Id, (await resolver.ResolveAsync("Atlas")).Entity!.Id);
+            Assert.Equal(MemoryEntityResolutionKind.NotFound, (await resolver.ResolveAsync("Atlas", "Project")).Kind);
+            var includingRetired = await resolver.ResolveAsync("Atlas", includeRetired: true);
+            Assert.Equal(MemoryEntityResolutionKind.Ambiguous, includingRetired.Kind);
+            Assert.Equal(2, includingRetired.Candidates.Select(x => x.Id).Distinct().Count());
+            Assert.Equal(project.Id, (await resolver.ResolveAsync("Atlas", "Project", includeRetired: true)).Entity!.Id);
+        }
+        finally { await DropDbAsync(db, schema); }
+    }
+
+    [PostgresFact]
     public async Task GraphFailedDeleteLeaseRecoveryAndCompletedDriftConvergeWithoutSemanticWrites()
     {
         var schema = "graph_" + Guid.NewGuid().ToString("N");
