@@ -65,15 +65,21 @@ public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(ser
     {
         var a = args.Deserialize<Arguments>(JsonOptions)!;
         var result = await Service.SearchHybridAsync(a.Query, a.Limit, Instant(a.AsOf), context.ConversationId, ct);
-        var relations = result.Paths.SelectMany(x => x.Relations.Select(r => new
+        var relationItems = result.Paths.SelectMany(x => x.Relations.Select(r => new
         {
+            id = r.Id,
             subject = x.Entities.First(e => e.Id == r.SubjectEntityId).CanonicalName,
             predicate = r.Predicate,
             @object = x.Entities.First(e => e.Id == r.ObjectEntityId).CanonicalName,
             r.ValidFrom, r.ValidUntil
-        })).Distinct().Take(a.Limit);
-        return Ok(new { memories = result.Memories.Select((record, i) => new { position = i + 1, memory = View(record) }),
-            relations, searchMode = result.Mode });
+        })).DistinctBy(x => (x.subject, x.predicate, x.@object, x.ValidFrom, x.ValidUntil))
+            .Take(a.Limit).ToArray();
+        var response = Ok(new { memories = result.Memories.Select((record, i) => new { position = i + 1, memory = View(record) }),
+            relations = relationItems.Select(x => new { x.subject, x.predicate, x.@object, x.ValidFrom, x.ValidUntil }),
+            searchMode = result.Mode });
+        await Service.RecordConsultedAsync(context, result.Memories.Select(x => x.Id).ToArray(),
+            relationItems.Select(x => x.id).ToArray(), ct);
+        return response;
     }
     private sealed record Arguments(string Query, int Limit = MemoryService.DefaultSearchLimit, string? AsOf = null);
 }

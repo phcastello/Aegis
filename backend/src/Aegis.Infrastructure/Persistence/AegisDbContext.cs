@@ -18,6 +18,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     public DbSet<MemoryRelationEvidence> MemoryRelationEvidences => Set<MemoryRelationEvidence>();
     public DbSet<MemoryProjectionJob> MemoryProjectionJobs => Set<MemoryProjectionJob>();
     public DbSet<MemoryExtractionJob> MemoryExtractionJobs => Set<MemoryExtractionJob>();
+    public DbSet<MemoryActivityEvent> MemoryActivityEvents => Set<MemoryActivityEvent>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<ReminderDeliveryAttempt> ReminderDeliveryAttempts => Set<ReminderDeliveryAttempt>();
 

@@ -21,6 +21,7 @@ public interface IMemoryStore
     Task<bool> WasObservedAsync(Guid conversationId, Guid memoryId, DateTimeOffset now, CancellationToken ct);
     Task ObserveAsync(Guid conversationId, IReadOnlyList<MemoryRecord> records, string sourceTool, DateTimeOffset now, CancellationToken ct);
     Task<string?> GetContextAsync(Guid conversationId, DateTimeOffset now, CancellationToken ct);
+    Task<MemoryObservedContextResult> GetContextResultAsync(Guid conversationId, DateTimeOffset now, CancellationToken ct);
     Task<MemoryEntity?> FindEntityAsync(Guid id, CancellationToken ct);
     Task<MemoryEntityAlias?> FindAliasAsync(Guid entityId, string normalizedAlias, CancellationToken ct);
     Task<IReadOnlyList<MemoryRelation>> FindActiveRelationsAsync(Guid subjectId, string predicate, Guid objectId, CancellationToken ct);

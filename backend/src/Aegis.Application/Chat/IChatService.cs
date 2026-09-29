@@ -14,6 +14,9 @@ public interface IChatService
         Guid conversationId,
         CancellationToken cancellationToken = default);
 
+    Task<Aegis.Application.Memory.MemoryActivitySnapshot?> GetMemoryActivityAsync(
+        Guid assistantMessageId, CancellationToken cancellationToken = default);
+
     Task<ConversationPageResponse> GetRecentConversationsAsync(
         int limit = 30,
         string? cursor = null,

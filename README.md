@@ -59,6 +59,10 @@ Four conversational tools are available now:
 
 The model receives IDs only through tool results and may not invent them. An explicit “lembra que…” stores immediately, with no second confirmation. Useful casual user statements may be learned silently by the background extractor; the chat model does not call `memory_remember` for them. Automatic context enters only after the current user message, beyond the stable prompt cache prefix, and creates no invisible tool references. Broad topic deletion is unavailable. Stored memory is untrusted data, never an instruction or authorization for external actions; current Gmail, Calendar and Reminder state must come from their tools.
 
+### Memory Activity feedback
+
+Assistant responses can show a small, persistent disclosure when memory was used, consulted, saved, updated or deleted. Expanding it shows the canonical facts involved. Automatic writes can appear a few seconds after the response, without changing its text. Activity stores only turn references, never a second copy of memory content; it is not a source of truth and is never read back by Aegis as memory or as authorization to change one.
+
 ### Semantic projection and configuration
 
 The backend calls OpenAI `POST /v1/embeddings` directly, defaulting to `text-embedding-3-small` with 1,536 dimensions. It sends **only `MemoryRecord.Content`** (or the requested search query) to the external embedding provider. It sends no provenance, conversation/message IDs, aliases or other memory records. Embedding calls have API cost; `aegis_memory_embedding_input_tokens_total` records numeric input usage. Embeddings are never stored in PostgreSQL and no conversational LLM call is used to prepare them.

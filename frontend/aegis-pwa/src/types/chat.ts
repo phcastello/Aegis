@@ -1,5 +1,16 @@
 export type ChatRole = 'user' | 'assistant' | 'system' | string;
 
+export type MemoryActivityKind = 'used' | 'consulted' | 'created' | 'updated' | 'deleted';
+export interface MemoryActivitySection {
+  kind: MemoryActivityKind;
+  items: string[];
+  totalCount: number;
+}
+export interface MemoryActivitySnapshot {
+  pending: boolean;
+  sections: MemoryActivitySection[];
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -7,6 +18,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   model?: string | null;
+  memoryActivity?: MemoryActivitySnapshot | null;
 }
 
 export interface Conversation {
@@ -49,6 +61,7 @@ export interface SendMessageResponse {
 
 export interface LocalChatMessage extends ChatMessage {
   serverId?: string;
+  memoryActivity?: MemoryActivitySnapshot | null;
   pending?: boolean;
   streaming?: boolean;
   interrupted?: boolean;
@@ -64,6 +77,7 @@ export interface ChatStreamHandlers {
     messageId: string;
     conversationTitle?: string | null;
     titleSource?: string | null;
+    memoryActivity?: MemoryActivitySnapshot | null;
   }) => void;
   onError: (message: string) => void;
 }

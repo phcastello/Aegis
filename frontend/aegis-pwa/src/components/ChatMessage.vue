@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import MarkdownMessage from './MarkdownMessage.vue';
+import MemoryActivityDisclosure from './MemoryActivityDisclosure.vue';
 import type { FeedbackRating, LocalChatMessage } from '../types/chat';
 
 const props = defineProps<{
@@ -40,6 +41,8 @@ async function copy(): Promise<void> {
       <div v-else-if="message.interrupted" class="assistant-activity assistant-activity--interrupted" role="status">
         <span class="assistant-activity__text">Raciocínio interrompido</span>
       </div>
+      <MemoryActivityDisclosure v-if="message.role === 'assistant' && message.memoryActivity?.sections.length"
+        :activity="message.memoryActivity" />
       <div v-if="message.role === 'user' || message.content.trim() || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
         <p v-if="message.role === 'user'">{{ message.content }}</p>
         <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming" />

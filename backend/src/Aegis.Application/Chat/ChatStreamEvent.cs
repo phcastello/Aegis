@@ -1,3 +1,5 @@
+using Aegis.Application.Memory;
+
 namespace Aegis.Application.Chat;
 
 public sealed record ChatStreamEvent(
@@ -11,7 +13,8 @@ public sealed record ChatStreamEvent(
     string? TitleSource = null,
     string? Category = null,
     string? State = null,
-    string? Message = null)
+    string? Message = null,
+    MemoryActivitySnapshot? MemoryActivity = null)
 {
     public static ChatStreamEvent Conversation(Guid turnId, Guid conversationId) =>
         new("conversation", turnId, ConversationId: conversationId);
@@ -27,7 +30,8 @@ public sealed record ChatStreamEvent(
         Guid conversationId,
         Guid messageId,
         string? conversationTitle,
-        string? titleSource) =>
+        string? titleSource,
+        MemoryActivitySnapshot? memoryActivity = null) =>
         new(
             "done",
             turnId,
@@ -35,5 +39,6 @@ public sealed record ChatStreamEvent(
             MessageId: messageId,
             AssistantMessageId: messageId,
             ConversationTitle: conversationTitle,
-            TitleSource: titleSource);
+            TitleSource: titleSource,
+            MemoryActivity: memoryActivity);
 }

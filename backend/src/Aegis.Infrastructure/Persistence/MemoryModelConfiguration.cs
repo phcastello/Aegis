@@ -7,6 +7,25 @@ internal static class MemoryModelConfiguration
 {
     public static void ConfigureMemory(this ModelBuilder model)
     {
+        model.Entity<MemoryActivityEvent>(e =>
+        {
+            e.ToTable("memory_activity_events", t =>
+            {
+                t.HasCheckConstraint("CK_memory_activity_kind", "\"Kind\" IN ('Used','Consulted','Created','Updated','Deleted')");
+                t.HasCheckConstraint("CK_memory_activity_source", "\"Source\" IN ('AutomaticContext','ObservedContext','AutomaticExtraction','ExplicitTool')");
+                t.HasCheckConstraint("CK_memory_activity_target", "\"TargetType\" IN ('MemoryRecord','MemoryRelation')");
+            });
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20).IsRequired();
+            e.Property(x => x.Source).HasConversion<string>().HasMaxLength(30).IsRequired();
+            e.Property(x => x.TargetType).HasConversion<string>().HasMaxLength(20).IsRequired();
+            e.Property(x => x.DedupeKey).HasMaxLength(64).IsRequired();
+            e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.UserMessageId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(x => x.DedupeKey).IsUnique();
+            e.HasIndex(x => x.UserMessageId);
+            e.HasIndex(x => x.ConversationId);
+        });
         model.Entity<MemoryRecord>(e =>
         {
             e.ToTable("memory_records", t =>

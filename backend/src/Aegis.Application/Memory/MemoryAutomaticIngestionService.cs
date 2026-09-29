@@ -4,7 +4,7 @@ using Aegis.Domain.Entities;
 namespace Aegis.Application.Memory;
 
 public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySemanticSearch semantic,
-    TimeProvider clock, AegisMetrics metrics)
+    TimeProvider clock, AegisMetrics metrics, IMemoryActivityStore? activity = null)
 {
     public async Task<MemoryExtractionInput> BuildInputAsync(MemoryExtractionSource source, CancellationToken ct)
     {
@@ -65,7 +65,7 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
 
     private sealed record Applied(string Action, int GraphMutations = 0, int GraphSkipped = 0, bool Skipped = false);
 
-    private static async Task<Applied> ApplyCandidateAsync(IMemoryStore s, MemoryExtractionSource source,
+    private async Task<Applied> ApplyCandidateAsync(IMemoryStore s, MemoryExtractionSource source,
         MemoryExtractionInput input, MemoryExtractionCandidate c, DateTimeOffset now, CancellationToken ct)
     {
         if (!await s.SourceIsAvailableAsync(source, ct)) return new(c.Action, Skipped: true);
@@ -133,6 +133,10 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
         if (!await s.HasEvidenceAsync(record.Id, MemorySourceKind.UserStatement, source.UserMessageId, ct))
             s.Add(new MemoryEvidence(record.Id, MemorySourceKind.UserStatement, source.ConversationId,
                 source.UserMessageId, source.ObservedAt, now));
+        if (activity is not null && c.Action is ("create" or "correct" or "transition"))
+            await activity.RecordAsync(new(source.ConversationId, source.UserMessageId,
+                c.Action == "create" ? MemoryActivityKind.Created : MemoryActivityKind.Updated,
+                MemoryActivitySource.AutomaticExtraction, MemoryActivityTargetType.MemoryRecord, record.Id, now), ct);
 
         if (c.Entities.Count == 0 && c.Relations.Count == 0)
             return new(c.Action);

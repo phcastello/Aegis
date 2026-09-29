@@ -266,6 +266,7 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(20);
         }).RemoveAllLoggers();
         services.AddScoped<IMemoryStore, MemoryStore>();
+        services.AddScoped<IMemoryActivityStore, MemoryActivityStore>();
         var automatic = new MemoryAutomaticOptions();
         configuration.GetSection("MemoryAutomatic").Bind(automatic);
         automatic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED", automatic.Enabled);

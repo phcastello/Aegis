@@ -5,11 +5,29 @@ using Aegis.Domain.Entities;
 namespace Aegis.Application.Memory;
 
 public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisMetrics metrics,
-    MemorySemanticSearch? semantic = null, MemoryHybridRetriever? hybrid = null)
+    MemorySemanticSearch? semantic = null, MemoryHybridRetriever? hybrid = null,
+    IMemoryActivityStore? activity = null)
 {
     public const int DefaultSearchLimit = 10;
     public const int MaxSearchLimit = 30;
     public Task<string?> GetContextAsync(Guid conversationId, CancellationToken ct) => store.GetContextAsync(conversationId, clock.GetUtcNow(), ct);
+    public Task<MemoryObservedContextResult> GetContextResultAsync(Guid conversationId, CancellationToken ct) =>
+        store.GetContextResultAsync(conversationId, clock.GetUtcNow(), ct);
+
+    public async Task RecordConsultedAsync(ToolExecutionContext context, IReadOnlyList<Guid> memoryIds,
+        IReadOnlyList<Guid> relationIds, CancellationToken ct)
+    {
+        if (activity is null) return;
+        var now = clock.GetUtcNow();
+        foreach (var id in memoryIds.Distinct())
+            await activity.RecordAsync(new(context.ConversationId, context.UserMessageId,
+                MemoryActivityKind.Consulted, MemoryActivitySource.ExplicitTool,
+                MemoryActivityTargetType.MemoryRecord, id, now), ct);
+        foreach (var id in relationIds.Distinct())
+            await activity.RecordAsync(new(context.ConversationId, context.UserMessageId,
+                MemoryActivityKind.Consulted, MemoryActivitySource.ExplicitTool,
+                MemoryActivityTargetType.MemoryRelation, id, now), ct);
+    }
 
     public async Task<(MemoryRecord Record, bool Deduplicated)> RememberAsync(string content, DateTimeOffset? validFrom, DateTimeOffset? validUntil, ToolExecutionContext context, CancellationToken ct)
     {
@@ -31,6 +49,10 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
             if (!await s.HasEvidenceAsync(record.Id, MemorySourceKind.ExplicitMemoryRequest, context.UserMessageId, ct))
                 s.Add(new MemoryEvidence(record.Id, MemorySourceKind.ExplicitMemoryRequest, context.ConversationId, context.UserMessageId, now, now));
             await s.ObserveAsync(context.ConversationId, [record], "memory_remember", now, ct);
+            if (activity is not null)
+                await activity.RecordAsync(new(context.ConversationId, context.UserMessageId,
+                    MemoryActivityKind.Created, MemoryActivitySource.ExplicitTool,
+                    MemoryActivityTargetType.MemoryRecord, record.Id, now), ct);
             return (record, existing is not null);
         }, ct);
         if (result.Item2) metrics.MemoryDeduplicated.Add(1); else { metrics.MemoryCreated.Add(1); metrics.MemoryProjectionJobsCreated.Add(1); }
@@ -101,6 +123,10 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
                 if (relation.Forget(now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
                     MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Delete, now));
             await s.ObserveAsync(context.ConversationId, [replacement], "memory_update", now, ct);
+            if (activity is not null)
+                await activity.RecordAsync(new(context.ConversationId, context.UserMessageId,
+                    MemoryActivityKind.Updated, MemoryActivitySource.ExplicitTool,
+                    MemoryActivityTargetType.MemoryRecord, replacement.Id, now), ct);
             return (replacement, true, existing is null);
         }, ct);
         if (superseded) { metrics.MemorySuperseded.Add(1); metrics.MemoryProjectionJobsCreated.Add(created ? 2 : 1); }
@@ -122,6 +148,10 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
                     if (relation.Forget(now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
                         MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Delete, now));
             await s.SuppressExtractionForMessageAsync(context.UserMessageId, now, ct);
+            if (didChange && activity is not null)
+                await activity.RecordAsync(new(context.ConversationId, context.UserMessageId,
+                    MemoryActivityKind.Deleted, MemoryActivitySource.ExplicitTool,
+                    MemoryActivityTargetType.MemoryRecord, found.Id, now), ct);
             return (found, didChange);
         }, ct);
         if (changed) { metrics.MemoryForgotten.Add(1); metrics.MemoryProjectionJobsCreated.Add(1); }

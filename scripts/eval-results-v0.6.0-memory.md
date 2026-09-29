@@ -183,3 +183,21 @@ Nas duas rotas do `AegisToolLoop`, uma rodada cujo response contenha qualquer ch
 | “Eu prefiro backend.” | Antes do ajuste: **2/3**, com uma resposta `Anotado`; depois de proibir confirmações de gravação sem pedido explícito: **3/3**, nenhuma memory tool |
 
 As integrações físicas foram executadas sequencialmente para evitar que dois testes limpem a mesma projeção Neo4j. Nenhuma aceitação manual/deployed A–E foi inventada ou executada nesta etapa. O eval live da extração testa intenção do modelo e formato de saída; a garantia contra ressurreição após forget vem da transação PostgreSQL e da verificação do job antes de cada candidate.
+
+## Memory Activity UX — 29/09/2026
+
+A migration `20260929063414_AddMemoryActivityFeedback` adiciona `memory_activity_events` com Kind, Source, TargetType/TargetId, vínculo opcional de conversa e mensagem de usuário, horário e chave SHA-256 determinística de deduplicação. O índice único e `ON CONFLICT DO NOTHING` tornam retries idempotentes; o evento não contém texto da memória. `Used` guarda apenas IDs presentes nas linhas efetivamente enviadas ao modelo e é confirmado na mesma transação da resposta. `Consulted` vem dos resultados entregues por `memory_search`. Escritas explícitas e candidates automáticos `create`, `correct` e `transition` registram eventos na transação canônica; `reinforce` não cria atividade visual. `memory_forget` registra `Deleted` e mantém a supressão da extração.
+
+O snapshot resolve os textos diretamente de PostgreSQL e usa `LlmRequestAudit.UserMessageId`/`AssistantMessageId` para associar eventos ao turno. O histórico carrega os snapshots em lote; `done` e a resposta sem streaming incluem o snapshot atual. Um endpoint por mensagem atualiza o resultado da extração assíncrona; o frontend consulta aproximadamente a cada segundo, no máximo por 20 segundos, e cancela ao trocar de conversa ou desmontar a tela. O disclosure nativo `<details>` começa fechado, é neutro, sem card/badge/emoji e mostra até três fatos por seção, com total restante. Os títulos são `Usou memória`, `Consultou memória`, `Guardou memória`, `Atualizou memória` e `Apagou memória`; múltiplos tipos usam `Memória`. O status temporário de `memory_forget` usa `Apagando memória…`/`Memória apagada`.
+
+| Verificação | Resultado |
+| --- | --- |
+| Backend `dotnet test backend/Aegis.sln` | **374 aprovados, 0 falhas, 5 skips físicos condicionais**; PostgreSQL Memory e Reminder executados no banco descartável. |
+| PostgreSQL integration | Cinco cenários novos com banco descartável e schemas isolados: restore/explicit tools, atomicidade/retry/reinforce, pending/zero/failed/suppressed, extraction após `done` e limite real do contexto automático. |
+| Frontend tests | **47/47**; apresentação, limite de três, marcação nativa acessível, polling pending → completed, cancelamento e timeout. |
+| Frontend build | passou, incluindo typecheck e PWA. |
+| Backend Release | passou; somente aviso xUnit2031 preexistente em `CalendarTests.cs`. |
+| Compose, diff, EF | `docker compose config --quiet`, `git diff --check` e `has-pending-model-changes` passaram; nenhuma alteração pendente no modelo. |
+| Eval focado Memory | **23/23** antes do ajuste adicional de vocabulário; **6/6** nos casos de forget e declarações casuais após o ajuste. A suíte live completa não foi repetida. |
+
+Aceitação manual visual **não executada** neste relatório. Roteiro mínimo: com `Meu time favorito de R6 é a FaZe Clan.` já persistido, perguntar `Qual meu time favorito de R6?` e verificar `Usou memória` com o fato ao expandir; enviar `Minha cerveja favorita é Heineken.` e verificar `Guardou memória` após a extração; consultar um fato e pedir `Apaga essa informação.`, verificando `Apagou memória`, nunca `Esqueceu memória`. Esses são resultados esperados, não observações de uma sessão manual.
