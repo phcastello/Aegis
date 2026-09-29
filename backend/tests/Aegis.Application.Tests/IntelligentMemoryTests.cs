@@ -1,9 +1,12 @@
 using Aegis.Application.Memory;
 using Aegis.Application.Observability;
+using Aegis.Application.Tools;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Memory;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Aegis.Application.Tests;
@@ -52,6 +55,19 @@ public sealed class IntelligentMemoryTests
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return [1, 0, 0];
         }
+    }
+
+    private sealed class PausingExtractor : IMemoryExtractionClient
+    {
+        private readonly TaskCompletionSource<MemoryExtractionOutput> released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<MemoryExtractionOutput> ExtractAsync(MemoryExtractionInput input, CancellationToken ct)
+        {
+            Started.TrySetResult(true);
+            return released.Task.WaitAsync(ct);
+        }
+        public void Release(MemoryExtractionOutput output) => released.TrySetResult(output);
     }
 
     private sealed class FakeVectors : IMemoryVectorStore
@@ -301,6 +317,142 @@ public sealed class IntelligentMemoryTests
     }
 
     [PostgresFact]
+    public async Task ExplicitForgetSuppressesAlreadyClaimedExtractionBeforeCandidateWrite()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db);
+            var service = new MemoryService(store, clock, metrics);
+            var initial = await SourceAsync(db, "Lembra que eu prefiro backend.");
+            var record = (await service.RememberAsync("Pedro prefere backend.", null, null,
+                new(initial.ConversationId, initial.UserMessageId, initial.Target), default)).Record;
+            var forget = await SourceAsync(db, "Esquece que eu prefiro backend.");
+            db.MemoryExtractionJobs.Add(new MemoryExtractionJob(forget.ConversationId, forget.UserMessageId, clock.Now));
+            await store.ObserveAsync(forget.ConversationId, [record], "memory_search", clock.Now, default);
+            await db.SaveChangesAsync();
+
+            var extractor = new PausingExtractor();
+            using var services = new ServiceCollection().AddLogging()
+                .AddSingleton<TimeProvider>(clock).AddSingleton(metrics)
+                .AddSingleton<IMemoryExtractionClient>(extractor)
+                .AddSingleton(new MemorySemanticOptions { Enabled = false })
+                .AddSingleton<IMemoryEmbeddingClient>(new NoEmbedding())
+                .AddSingleton<IMemoryVectorStore>(new NoVectors())
+                .AddScoped(_ => Db(schema))
+                .AddScoped<IMemoryStore, MemoryStore>()
+                .AddScoped<IMemoryExtractionJobStore, MemoryExtractionJobStore>()
+                .AddScoped<MemorySemanticSearch>()
+                .AddScoped<MemoryAutomaticIngestionService>()
+                .BuildServiceProvider();
+            var worker = new MemoryExtractionWorker(services.GetRequiredService<IServiceScopeFactory>(),
+                new MemoryAutomaticOptions(), clock, metrics, NullLogger<MemoryExtractionWorker>.Instance);
+            var running = worker.ProcessNextAsync(default);
+            await extractor.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await service.ForgetAsync(record.Id,
+                new ToolExecutionContext(forget.ConversationId, forget.UserMessageId, forget.Target), default);
+            extractor.Release(new([Candidate("Pedro prefere backend.")]));
+            Assert.True(await running.WaitAsync(TimeSpan.FromSeconds(15)));
+
+            Assert.Equal(MemoryStatus.Forgotten, (await db.MemoryRecords.AsNoTracking().SingleAsync()).Status);
+            Assert.Empty(await db.MemoryRecords.AsNoTracking().Where(x => x.Status == MemoryStatus.Active).ToListAsync());
+            Assert.Empty(await db.MemoryEvidences.AsNoTracking().Where(x => x.SourceMessageId == forget.UserMessageId &&
+                x.SourceKind == MemorySourceKind.UserStatement).ToListAsync());
+            Assert.Equal(MemoryExtractionStatus.Suppressed,
+                (await db.MemoryExtractionJobs.AsNoTracking().SingleAsync()).Status);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task ExplicitForgetSuppressesPendingExtractionJobIdempotently()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            var initial = await SourceAsync(db, "Lembra que eu prefiro backend.");
+            var record = (await service.RememberAsync("Pedro prefere backend.", null, null,
+                new(initial.ConversationId, initial.UserMessageId, initial.Target), default)).Record;
+            var forget = await SourceAsync(db, "Esquece que eu prefiro backend.");
+            db.MemoryExtractionJobs.Add(new MemoryExtractionJob(forget.ConversationId, forget.UserMessageId, clock.Now));
+            await store.ObserveAsync(forget.ConversationId, [record], "memory_search", clock.Now, default);
+            await db.SaveChangesAsync();
+            var context = new ToolExecutionContext(forget.ConversationId, forget.UserMessageId, forget.Target);
+            await service.ForgetAsync(record.Id, context, default);
+            var suppressed = await db.MemoryExtractionJobs.AsNoTracking().SingleAsync();
+            Assert.Equal(MemoryExtractionStatus.Suppressed, suppressed.Status);
+            Assert.Null(await new MemoryExtractionJobStore(db).ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default));
+            await service.ForgetAsync(record.Id, context, default);
+            Assert.Equal(suppressed.CompletedAt, (await db.MemoryExtractionJobs.AsNoTracking().SingleAsync()).CompletedAt);
+            Assert.Single(await db.MemoryProjectionJobs.AsNoTracking().Where(x => x.AggregateId == record.Id &&
+                x.Operation == MemoryProjectionOperation.Delete).ToListAsync());
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task ExtractionBeforeExplicitForgetEndsForgottenAndRemovesHistoricalRelation()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            var initial = await SourceAsync(db, "Lembra que Sakamoto namora Bisky.");
+            var record = (await service.RememberAsync("Sakamoto namora Bisky.", null, null,
+                new(initial.ConversationId, initial.UserMessageId, initial.Target), default)).Record;
+            var sakamoto = await service.CreateEntityAsync("Sakamoto", "PERSON", default);
+            var bisky = await service.CreateEntityAsync("Bisky", "PERSON", default);
+            var relation = await service.CreateRelationAsync(sakamoto.Id, "DATES", bisky.Id, null, null, default);
+            await service.SupportRelationAsync(relation.Id, record.Id, default);
+            var forget = await SourceAsync(db, "Esquece que Sakamoto namora Bisky.");
+            db.MemoryExtractionJobs.Add(new MemoryExtractionJob(forget.ConversationId, forget.UserMessageId, clock.Now));
+            await store.ObserveAsync(forget.ConversationId, [record], "memory_search", clock.Now, default);
+            await db.SaveChangesAsync();
+            var jobs = new MemoryExtractionJobStore(db);
+            var claim = (await jobs.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default))!;
+            var source = (await jobs.ReadSourceAsync(claim, default))!;
+            var input = new MemoryExtractionInput(source.Target, [], [new("m1", record)], [], []);
+            await Ingestion(db, clock, metrics).ApplyAsync(source, input,
+                new([Candidate(record.Content, "reinforce", "m1")]), default);
+            Assert.Single(await db.MemoryEvidences.AsNoTracking().Where(x => x.SourceMessageId == forget.UserMessageId).ToListAsync());
+
+            await service.ForgetAsync(record.Id,
+                new ToolExecutionContext(forget.ConversationId, forget.UserMessageId, forget.Target), default);
+            Assert.Equal(MemoryStatus.Forgotten, (await db.MemoryRecords.AsNoTracking().SingleAsync()).Status);
+            Assert.Equal(MemoryStatus.Forgotten, (await db.MemoryRelations.AsNoTracking().SingleAsync()).Status);
+            Assert.Contains(await db.MemoryProjectionJobs.AsNoTracking().ToListAsync(), x => x.AggregateId == record.Id &&
+                x.Operation == MemoryProjectionOperation.Delete && x.ProjectionTarget == MemoryProjectionTarget.Semantic);
+            Assert.Contains(await db.MemoryProjectionJobs.AsNoTracking().ToListAsync(), x => x.AggregateId == relation.Id &&
+                x.Operation == MemoryProjectionOperation.Delete && x.ProjectionTarget == MemoryProjectionTarget.Graph);
+            Assert.Equal(MemoryExtractionStatus.Suppressed, (await db.MemoryExtractionJobs.AsNoTracking().SingleAsync()).Status);
+            Assert.False(await jobs.CompleteAsync(claim, new(1, 0, 1, 0, 0, 0, 0), clock.Now, default));
+
+            var graph = new FakeGraph();
+            graph.Paths.Add(new([sakamoto.Id, bisky.Id], [relation.Id])); // stale projected edge
+            var vectors = new FakeVectors(); vectors.Candidates.Add(new(record.Id, 0.9)); // stale point
+            var semanticOptions = new MemorySemanticOptions { EmbeddingDimensions = 3 };
+            var graphOptions = new MemoryGraphOptions();
+            var semantic = new MemorySemanticSearch(store, new FakeEmbedding(), vectors,
+                semanticOptions, clock, metrics);
+            var query = new MemoryGraphQuery(graph, new MemoryGraphProjectionStore(db, clock),
+                graphOptions, clock, metrics, store);
+            var hybrid = new MemoryHybridRetriever(store, semantic, query, graphOptions, semanticOptions,
+                new MemoryAutoContextOptions(), clock, metrics);
+            foreach (var asOf in new DateTimeOffset?[] { null, initial.ObservedAt })
+            {
+                var result = await hybrid.SearchAsync("Sakamoto", 5, asOf, false, default);
+                Assert.Empty(result.Memories);
+                Assert.Empty(result.Paths);
+            }
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
     public async Task ExplicitAliasAndPurchaseModalityAreConservative()
     {
         var (db, schema) = await NewDbAsync();
@@ -393,7 +545,7 @@ public sealed class IntelligentMemoryTests
                 new MemorySemanticOptions { EmbeddingDimensions = 3 }, new MemoryAutoContextOptions { TimeoutMs = 100 },
                 clock, metrics);
             Assert.Null(await slow.BuildAutomaticContextAsync("Uma pergunta demorada", default));
-            await service.ForgetAsync(friend.Id, source.ConversationId, default);
+            await service.ForgetAsync(friend.Id, new ToolExecutionContext(source.ConversationId, source.UserMessageId, source.Target), default);
             Assert.Equal(MemoryStatus.Forgotten, (await db.MemoryRelations.AsNoTracking()
                 .SingleAsync(x => x.Id == friendRelation.Id)).Status);
         }

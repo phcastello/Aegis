@@ -687,6 +687,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tools-json", type=Path, help="catalog exported by Aegis.ToolCatalogExport")
     parser.add_argument("--kind", action="append", help="Run only the selected case kind(s).")
+    parser.add_argument("--prompt", help="Run only cases whose user prompt exactly matches this text.")
     parser.add_argument("--report-json", type=Path, help="Save full responses, arguments and results for review.")
     args = parser.parse_args()
     key = load_key()
@@ -696,7 +697,8 @@ def main() -> int:
     tools = load_tools(args.tools_json)
     print(f"model={MODEL} effort=medium production_tools={len(tools)}", flush=True)
     failures = 0
-    cases = [case for case in CASES if not args.kind or case[1] in args.kind]
+    cases = [case for case in CASES if (not args.kind or case[1] in args.kind) and
+        (not args.prompt or case[0] == args.prompt)]
     report = []
     for message, kind, required_tool in cases:
         try:

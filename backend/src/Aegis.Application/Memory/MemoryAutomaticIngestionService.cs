@@ -68,7 +68,7 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
     private static async Task<Applied> ApplyCandidateAsync(IMemoryStore s, MemoryExtractionSource source,
         MemoryExtractionInput input, MemoryExtractionCandidate c, DateTimeOffset now, CancellationToken ct)
     {
-        if (!await s.SourceIsAvailableAsync(source.ConversationId, source.UserMessageId, ct)) return new(c.Action, Skipped: true);
+        if (!await s.SourceIsAvailableAsync(source, ct)) return new(c.Action, Skipped: true);
         var oldRef = input.ExistingMemories.FirstOrDefault(x => x.Ref == c.ExistingMemoryRef);
         if (c.Action == "create" && c.ExistingMemoryRef is not null ||
             c.Action != "create" && (oldRef is null || c.ExistingMemoryRef is null)) return new(c.Action, Skipped: true);

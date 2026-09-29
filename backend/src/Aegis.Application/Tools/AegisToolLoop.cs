@@ -243,7 +243,7 @@ public sealed class AegisToolLoop(
             ResponseBody = JsonSerializer.Serialize(new
             {
                 type = "tool_loop",
-                responses = responses.Select(response => response.AuditData?.ResponseBody)
+                responses = responses.Select(response => SafeResponseBody(response.ToolCalls, response.AuditData?.ResponseBody))
             }, JsonOptions)
         };
     }
@@ -300,7 +300,7 @@ public sealed class AegisToolLoop(
             {
                 iteration = index + 1,
                 response.AuditData.HttpStatusCode,
-                response.AuditData.ResponseBody
+                ResponseBody = SafeResponseBody(response.ToolCalls, response.AuditData.ResponseBody)
             })
             .ToList();
 
@@ -329,6 +329,11 @@ public sealed class AegisToolLoop(
         // changing the stable cached prefix. Tool content keeps its original role.
         return [.. inputItems, ToJsonElement(new { role = "developer", content = identity })];
     }
+
+    private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
+        calls.Any(call => call.Name.StartsWith("memory_", StringComparison.Ordinal))
+            ? "[memory_response_redacted]"
+            : body;
 
     private static JsonElement CreateUserInputItem(string content)
     {

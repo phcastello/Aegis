@@ -132,13 +132,36 @@ public sealed class MemoryStore(AegisDbContext db) : IMemoryStore
     public Task<bool> HasRelationEvidenceAsync(Guid relationId, Guid memoryId, CancellationToken ct) =>
         db.MemoryRelationEvidences.AnyAsync(x => x.RelationId == relationId && x.MemoryId == memoryId, ct);
 
-    public async Task<bool> SourceIsAvailableAsync(Guid conversationId, Guid messageId, CancellationToken ct)
+    public async Task<bool> SourceIsAvailableAsync(MemoryExtractionSource source, CancellationToken ct)
     {
-        // Called inside WriteAsync. The row lock serializes a candidate with conversation deletion.
+        // Called inside WriteAsync. Its advisory lock orders every candidate against explicit forget.
+        if (source.JobId is { } jobId)
+        {
+            var job = await db.MemoryExtractionJobs.FromSqlInterpolated(
+                $"SELECT * FROM memory_extraction_jobs WHERE \"Id\" = {jobId} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+            if (job is null || job.Status != MemoryExtractionStatus.Processing ||
+                job.LeaseId != source.LeaseId || job.UserMessageId != source.UserMessageId) return false;
+        }
+        // The conversation lock also serializes a candidate with conversation deletion.
         var conversation = await db.Conversations.FromSqlInterpolated(
-            $"SELECT * FROM conversations WHERE \"Id\" = {conversationId} FOR UPDATE").SingleOrDefaultAsync(ct);
+            $"SELECT * FROM conversations WHERE \"Id\" = {source.ConversationId} FOR UPDATE").SingleOrDefaultAsync(ct);
         if (conversation?.DeletedAt is not null || conversation is null) return false;
-        return await db.ChatMessages.AnyAsync(x => x.Id == messageId && x.ConversationId == conversationId && x.Role == "user", ct);
+        return await db.ChatMessages.AnyAsync(x => x.Id == source.UserMessageId &&
+            x.ConversationId == source.ConversationId && x.Role == "user", ct);
+    }
+
+    public async Task SuppressExtractionForMessageAsync(Guid? messageId, DateTimeOffset now, CancellationToken ct)
+    {
+        if (messageId is null || messageId == Guid.Empty) return;
+        // This UPDATE shares the caller's canonical transaction and locks the durable job row.
+        // SQL avoids a stale tracked copy of the job from ChatService's initial SaveChanges.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE memory_extraction_jobs SET "Status" = 'Suppressed', "LeaseId" = NULL,
+              "LeaseExpiresAt" = NULL, "NextAttemptAt" = NULL, "LastError" = NULL,
+              "CompletedAt" = COALESCE("CompletedAt", {now}), "UpdatedAt" = {now}
+            WHERE "UserMessageId" = {messageId} AND "Status" <> 'Suppressed'
+            """, ct);
     }
 
     public async Task<IReadOnlyList<(MemoryEntity Entity, string Name)>> ListEntityNamesAsync(CancellationToken ct)

@@ -28,7 +28,8 @@ public interface IMemoryStore
     Task<IReadOnlyList<MemoryEntity>> FindCanonicalEntitiesAsync(string normalizedName, CancellationToken ct);
     Task<IReadOnlyList<MemoryEntity>> FindAliasedEntitiesAsync(string normalizedAlias, CancellationToken ct);
     Task<bool> HasRelationEvidenceAsync(Guid relationId, Guid memoryId, CancellationToken ct);
-    Task<bool> SourceIsAvailableAsync(Guid conversationId, Guid messageId, CancellationToken ct);
+    Task<bool> SourceIsAvailableAsync(MemoryExtractionSource source, CancellationToken ct);
+    Task SuppressExtractionForMessageAsync(Guid? messageId, DateTimeOffset now, CancellationToken ct);
     Task<IReadOnlyList<(MemoryEntity Entity, string Name)>> ListEntityNamesAsync(CancellationToken ct);
     Task<IReadOnlyList<MemoryRelationContext>> FindRelationsByMemoryAsync(IReadOnlyList<Guid> memoryIds, DateTimeOffset asOf, int limit, CancellationToken ct);
     Task<IReadOnlyList<MemoryRelationContext>> FindRelationsByEntitiesAsync(IReadOnlyList<Guid> entityIds, DateTimeOffset asOf, int limit, CancellationToken ct);

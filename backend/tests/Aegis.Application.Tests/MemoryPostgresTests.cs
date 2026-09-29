@@ -109,7 +109,7 @@ public sealed class MemoryPostgresTests
             if (supersede)
                 replacement = await service.UpdateAsync(old.Id, "Pedro usa RTX 5080.", null, null,
                     new ToolExecutionContext(conversation.Id, message.Id, message.Content), default);
-            else await service.ForgetAsync(old.Id, conversation.Id, default);
+            else await service.ForgetAsync(old.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             var desiredDelete = await db.MemoryProjectionJobs.AsNoTracking().SingleAsync(x => x.AggregateId == old.Id &&
                 x.AggregateRevision == 2 && x.Operation == MemoryProjectionOperation.Delete);
             vectors.FailDeletes = true;
@@ -177,7 +177,7 @@ public sealed class MemoryPostgresTests
                 new ToolExecutionContext(conversation.Id, message.Id, message.Content), default)).Record;
             Assert.True(await processor.ProcessNextAsync(default));
             var stalePoint = vectors.Points[record.Id];
-            await service.ForgetAsync(record.Id, conversation.Id, default);
+            await service.ForgetAsync(record.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             Assert.True(await processor.ProcessNextAsync(default));
             Assert.Empty(vectors.Points);
             vectors.Points[record.Id] = stalePoint;
@@ -222,7 +222,7 @@ public sealed class MemoryPostgresTests
             await service.CreateEntityAsync("Pedro", "Person", default);
             Assert.True(await processor.ProcessNextAsync(default));
             Assert.Equal(old.Id, (await vectors.GetPointAsync(old.Id, default))!.MemoryId);
-            await service.ForgetAsync(old.Id, conversation.Id, default);
+            await service.ForgetAsync(old.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             var search = new MemorySemanticSearch(store, embedding, vectors, options, clock, metrics);
             Assert.Empty((await search.SearchAsync("consulta indireta", 10, default)).Results); // point still present
             Assert.True(await processor.ProcessNextAsync(default));
@@ -279,7 +279,7 @@ public sealed class MemoryPostgresTests
             Assert.Equal(old.Id, Assert.Single(fallback.Results).Id);
             var replacement = await service.UpdateAsync(old.Id, "Pedro usa RTX 5080.", null, null,
                 new ToolExecutionContext(conversation.Id, message.Id, message.Content), default);
-            await service.ForgetAsync(replacement.Id, conversation.Id, default);
+            await service.ForgetAsync(replacement.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             Assert.Equal(MemoryStatus.Superseded, (await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == old.Id)).Status);
             Assert.Equal(MemoryStatus.Forgotten, (await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == replacement.Id)).Status);
             Assert.Equal(4, await db.MemoryProjectionJobs.CountAsync(x => x.ProjectionTarget == MemoryProjectionTarget.Semantic));
@@ -324,7 +324,7 @@ public sealed class MemoryPostgresTests
             Assert.All(await db.MemoryProjectionJobs.Where(x => x.ProjectionTarget == MemoryProjectionTarget.Graph).ToListAsync(),
                 x => { Assert.Equal(MemoryProjectionStatus.Pending, x.Status); Assert.Equal(0, x.Attempt); });
 
-            await service.ForgetAsync(record.Id, conversation.Id, default);
+            await service.ForgetAsync(record.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             var search = new MemorySemanticSearch(new MemoryStore(db), embedding, vectors, options, clock, metrics);
             Assert.Empty((await search.SearchAsync("sem relação lexical", 10, default)).Results); // stale Qdrant point
             Assert.True(await processor.ProcessNextAsync(default)); // rev2 Delete
@@ -473,9 +473,9 @@ public sealed class MemoryPostgresTests
             Assert.Contains(await db.MemoryProjectionJobs.ToListAsync(), x => x.AggregateId == old.Id && x.AggregateRevision == 2 && x.Operation == MemoryProjectionOperation.Delete);
             Assert.Contains(await db.MemoryProjectionJobs.ToListAsync(), x => x.AggregateId == replacement.Id && x.Operation == MemoryProjectionOperation.Upsert);
 
-            var forgotten = await service.ForgetAsync(replacement.Id, conversation.Id, default);
+            var forgotten = await service.ForgetAsync(replacement.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             var timestamp = forgotten.ForgottenAt;
-            await service.ForgetAsync(replacement.Id, conversation.Id, default);
+            await service.ForgetAsync(replacement.Id, new ToolExecutionContext(conversation.Id, Guid.Empty, ""), default);
             Assert.Equal(timestamp, forgotten.ForgottenAt);
             Assert.Empty(await service.SearchAsync("CockroachDB", 10, conversation.Id, default));
             Assert.Null(await service.GetContextAsync(conversation.Id, default));

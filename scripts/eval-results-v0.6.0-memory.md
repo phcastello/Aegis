@@ -152,3 +152,34 @@ Testes novos cobrem replay idempotente, validade temporal de fatos recorrentes, 
 Versões físicas consultadas: PostgreSQL **16.14**, Qdrant **1.12.6**, Neo4j Community **5.26.30**. Os testes usaram schema/collections temporários e uma instância Neo4j descartável; nenhum banco de produção foi usado. As cinco integrações físicas condicionais foram executadas uma a uma para impedir que dois testes apaguem simultaneamente os nodes `:AegisMemoryEntity` da mesma instância de teste.
 
 O caso live de `Anotado` é variância de resposta do modelo, apesar da regra explícita no identity prompt; deve ser observado na aceitação manual. O checklist manual/deployed A–E do README **não foi executado** e não é apresentado como validação física real de conversas em produção. A branch aguarda aceitação física e o eval live de extração opt-in antes de qualquer decisão de merge.
+
+## Final pre-acceptance hardening — 28/09/2026
+
+### Explicit forget e extração concorrente
+
+`memory_forget` agora recebe o `ToolExecutionContext` completo. No mesmo commit PostgreSQL que marca o `MemoryRecord` como `Forgotten`, cria os Delete jobs e remove relações exclusivamente sustentadas, a operação marca o `MemoryExtractionJob` da mesma `UserMessageId` como `Suppressed`. A migration `20260928234638_SuppressMemoryExtractionAfterForget` apenas amplia a constraint de status; não altera as tabelas canônicas. Supressão revoga lease/retry e preserva os contadores já registrados, sem guardar o conteúdo esquecido no job.
+
+Todo candidate do worker verifica dentro de `MemoryStore.WriteAsync`, sob o advisory lock canônico e lock do job, que o status ainda é `Processing` e que `LeaseId` e `UserMessageId` continuam correspondendo ao claim. Assim, uma resposta tardia do extractor não grava depois do forget; `CompleteAsync`/`FailAsync` também não sobrescrevem `Suppressed`. Se o reforço automático entra primeiro, o forget posterior vence e cria Semantic Delete e Graph Delete quando a relação depende exclusivamente da memória. `memory_remember` e `memory_update` não suprimem jobs. A policy do extractor foi ampliada para não transformar o objeto de pedidos de forget em fatos novos, sem confundir “tinha esquecido de comentar” com comando de forget.
+
+### Privacidade do tool loop
+
+Nas duas rotas do `AegisToolLoop`, uma rodada cujo response contenha qualquer chamada `memory_*` persiste `[memory_response_redacted]` em seu `ResponseBody` combinado. O modelo e a tool continuam recebendo os argumentos e outputs reais; as listas `AuditInputItems` e os outputs redigidos das rodadas seguintes permanecem separados. Rodadas sem memória mantêm os detalhes de auditoria existentes. Testes com `ULTRA_PRIVATE_MEMORY_MARKER_123` cobrem `memory_remember` e `memory_search`, com e sem streaming, no primeiro tool call; o marcador chega ao fluxo real e não aparece em `RequestPayloadJson` nem `ResponseBody` combinados.
+
+### Validação deste hardening
+
+| Verificação | Resultado |
+| --- | --- |
+| Backend com PostgreSQL/Reminder descartáveis | **368 aprovados, 0 falhas, 5 skips físicos condicionais**; os cinco foram executados separadamente abaixo |
+| Corrida e histórico | Pending job suprimido de forma idempotente e nunca reclamado; claim + extractor fake pausado + explicit forget + resposta tardia: job `Suppressed`, fato `Forgotten`, zero novo Active/evidence. Ordem inversa: forget vence, Semantic Delete e Graph Delete; stale edge ausente em busca atual e histórica `asOf` |
+| Auditoria | `memory_remember` e `memory_search` no primeiro call, streaming e não streaming; argumentos redigidos. Resposta de tool não Memory permanece auditável |
+| Qdrant físico | **2/2** testes em collection temporária |
+| Neo4j físico | **2/2** testes em instância descartável |
+| Ponta a ponta física | **1/1**, fake extractor/embedding com PostgreSQL, Qdrant e Neo4j reais |
+| Backend Release | Passou; só o aviso preexistente xUnit2031 em `CalendarTests.cs` |
+| Frontend | **41/41** testes e build PWA passaram |
+| Compose, diff, EF | `docker compose config --quiet`, `git diff --check` e `has-pending-model-changes` passaram; zero mudanças pendentes |
+| Eval live de extração, rodada única | **16/16** com `store=false`; inclui quatro formulações de forget (todas zero candidates), “esquecido de comentar” (um candidate) e “esqueci o nome” (zero). Usage numérico: 12.359 input tokens, 1.795 output tokens, 0 cached tokens reportados |
+| Eval focado de intenção Memory | **23/23** após ajuste mínimo do identity prompt; suíte completa de 179 casos não foi repetida |
+| “Eu prefiro backend.” | Antes do ajuste: **2/3**, com uma resposta `Anotado`; depois de proibir confirmações de gravação sem pedido explícito: **3/3**, nenhuma memory tool |
+
+As integrações físicas foram executadas sequencialmente para evitar que dois testes limpem a mesma projeção Neo4j. Nenhuma aceitação manual/deployed A–E foi inventada ou executada nesta etapa. O eval live da extração testa intenção do modelo e formato de saída; a garantia contra ressurreição após forget vem da transação PostgreSQL e da verificação do job antes de cada candidate.

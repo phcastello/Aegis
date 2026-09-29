@@ -10,7 +10,7 @@ public enum MemoryProjectionTarget { Semantic, Graph }
 public enum MemoryAggregateType { MemoryRecord, MemoryEntity, MemoryRelation }
 public enum MemoryProjectionOperation { Upsert, Delete }
 public enum MemoryProjectionStatus { Pending, Processing, Completed, Failed }
-public enum MemoryExtractionStatus { Pending, Processing, Completed, Failed }
+public enum MemoryExtractionStatus { Pending, Processing, Completed, Failed, Suppressed }
 
 public static class MemoryText
 {

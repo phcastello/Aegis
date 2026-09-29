@@ -16,7 +16,8 @@ public sealed class MemoryAutomaticOptions
 
 public sealed record MemoryRecentMessage(string Role, string Content);
 public sealed record MemoryExtractionSource(Guid ConversationId, Guid UserMessageId, string Target,
-    DateTimeOffset ObservedAt, IReadOnlyList<MemoryRecentMessage> Recent);
+    DateTimeOffset ObservedAt, IReadOnlyList<MemoryRecentMessage> Recent,
+    Guid? JobId = null, Guid? LeaseId = null);
 public sealed record MemoryExtractionMemory(string Ref, MemoryRecord Record);
 public sealed record MemoryExtractionRelation(string Ref, MemoryRelation Relation, string SubjectName, string ObjectName);
 public sealed record MemoryExtractionInput(string Target, IReadOnlyList<MemoryRecentMessage> Recent,

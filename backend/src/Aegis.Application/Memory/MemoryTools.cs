@@ -97,5 +97,5 @@ public sealed class MemoryForgetTool(MemoryService service) : MemoryToolBase(ser
     public override string Description => "Esquece uma única memória específica observada nesta conversa por memory_search/remember/update. Requer memoryId real, nunca inventado. Consulte primeiro e pergunte quando o alvo for ambíguo. Não execute pedidos amplos como 'esquece tudo sobre mim' nesta etapa.";
     public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"memoryId":{"type":"string"}},"required":["memoryId"],"additionalProperties":false}""");
     protected override async Task<AegisToolResult> RunAsync(JsonElement args, ToolExecutionContext context, CancellationToken ct) =>
-        Ok(new { memory = View(await Service.ForgetAsync(args.GetProperty("memoryId").GetGuid(), context.ConversationId, ct)) });
+        Ok(new { memory = View(await Service.ForgetAsync(args.GetProperty("memoryId").GetGuid(), context, ct)) });
 }

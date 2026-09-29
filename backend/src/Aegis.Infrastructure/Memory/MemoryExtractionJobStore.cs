@@ -43,6 +43,8 @@ public sealed class MemoryExtractionJobStore(AegisDbContext db) : IMemoryExtract
     public async Task<MemoryExtractionSource?> ReadSourceAsync(MemoryExtractionJob job, CancellationToken ct)
     {
         if (job.ConversationId is not { } conversationId || job.UserMessageId is not { } messageId) return null;
+        var current = await db.MemoryExtractionJobs.AsNoTracking().SingleOrDefaultAsync(x => x.Id == job.Id, ct);
+        if (current?.Status != MemoryExtractionStatus.Processing || current.LeaseId != job.LeaseId) return null;
         var conversation = await db.Conversations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == conversationId, ct);
         if (conversation is null || conversation.DeletedAt is not null) return null;
         var target = await db.ChatMessages.AsNoTracking().SingleOrDefaultAsync(x => x.Id == messageId &&
@@ -55,7 +57,7 @@ public sealed class MemoryExtractionJobStore(AegisDbContext db) : IMemoryExtract
             .Select(x => new { x.Role, x.Content }).ToListAsync(ct);
         return new(conversationId, messageId, target.Content[..Math.Min(target.Content.Length, 12000)], target.CreatedAt,
             recent.AsEnumerable().Reverse().Select(x => new MemoryRecentMessage(x.Role,
-                x.Content[..Math.Min(x.Content.Length, 800)])).ToArray());
+                x.Content[..Math.Min(x.Content.Length, 800)])).ToArray(), job.Id, job.LeaseId);
     }
 
     public Task<bool> CompleteAsync(MemoryExtractionJob job, MemoryExtractionSummary summary, DateTimeOffset now, CancellationToken ct) =>

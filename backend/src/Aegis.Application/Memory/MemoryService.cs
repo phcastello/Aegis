@@ -108,12 +108,12 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
         return record;
     }
 
-    public async Task<MemoryRecord> ForgetAsync(Guid id, Guid conversationId, CancellationToken ct)
+    public async Task<MemoryRecord> ForgetAsync(Guid id, ToolExecutionContext context, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
         var (record, changed) = await store.WriteAsync(async s =>
         {
-            if (!await s.WasObservedAsync(conversationId, id, now, ct)) throw new MemoryException("memory_reference_required", "Consulte memory_search e escolha uma memória inequívoca e ainda válida.");
+            if (!await s.WasObservedAsync(context.ConversationId, id, now, ct)) throw new MemoryException("memory_reference_required", "Consulte memory_search e escolha uma memória inequívoca e ainda válida.");
             var found = await s.FindRecordAsync(id, ct) ?? throw new MemoryException("memory_not_found", "Memória não encontrada.");
             var didChange = found.Forget(now);
             if (didChange) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Semantic, MemoryAggregateType.MemoryRecord, found.Id, found.Revision, MemoryProjectionOperation.Delete, now));
@@ -121,6 +121,7 @@ public sealed class MemoryService(IMemoryStore store, TimeProvider clock, AegisM
                 foreach (var relation in await s.FindRelationsExclusivelySupportedByMemoryAsync(found.Id, now, ct))
                     if (relation.Forget(now)) s.Add(new MemoryProjectionJob(MemoryProjectionTarget.Graph,
                         MemoryAggregateType.MemoryRelation, relation.Id, relation.Revision, MemoryProjectionOperation.Delete, now));
+            await s.SuppressExtractionForMessageAsync(context.UserMessageId, now, ct);
             return (found, didChange);
         }, ct);
         if (changed) { metrics.MemoryForgotten.Add(1); metrics.MemoryProjectionJobsCreated.Add(1); }

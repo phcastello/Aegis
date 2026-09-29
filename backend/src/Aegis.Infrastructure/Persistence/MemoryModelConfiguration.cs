@@ -105,7 +105,7 @@ internal static class MemoryModelConfiguration
         {
             e.ToTable("memory_extraction_jobs", t =>
             {
-                t.HasCheckConstraint("CK_memory_extraction_status", "\"Status\" IN ('Pending','Processing','Completed','Failed')");
+                t.HasCheckConstraint("CK_memory_extraction_status", "\"Status\" IN ('Pending','Processing','Completed','Failed','Suppressed')");
                 t.HasCheckConstraint("CK_memory_extraction_attempt", "\"Attempt\" >= 0");
                 t.HasCheckConstraint("CK_memory_extraction_counts", "\"CandidatesCount\" >= 0 AND \"CreatedCount\" >= 0 AND \"ReinforcedCount\" >= 0 AND \"CorrectedCount\" >= 0 AND \"TransitionedCount\" >= 0 AND \"GraphMutationsCount\" >= 0 AND \"SkippedCount\" >= 0");
             });
