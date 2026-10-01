@@ -131,6 +131,7 @@ internal static class MemoryModelConfiguration
             e.HasKey(x => x.Id);
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             e.Property(x => x.LastError).HasMaxLength(100);
+            e.Property(x => x.OutcomeJson).HasColumnType("jsonb");
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.UserMessageId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => x.UserMessageId).IsUnique().HasFilter("\"UserMessageId\" IS NOT NULL");

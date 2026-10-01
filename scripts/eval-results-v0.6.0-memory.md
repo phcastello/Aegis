@@ -201,3 +201,154 @@ O snapshot resolve os textos diretamente de PostgreSQL e usa `LlmRequestAudit.Us
 | Eval focado Memory | **23/23** antes do ajuste adicional de vocabulário; **6/6** nos casos de forget e declarações casuais após o ajuste. A suíte live completa não foi repetida. |
 
 Aceitação manual visual **não executada** neste relatório. Roteiro mínimo: com `Meu time favorito de R6 é a FaZe Clan.` já persistido, perguntar `Qual meu time favorito de R6?` e verificar `Usou memória` com o fato ao expandir; enviar `Minha cerveja favorita é Heineken.` e verificar `Guardou memória` após a extração; consultar um fato e pedir `Apaga essa informação.`, verificando `Apagou memória`, nunca `Esqueceu memória`. Esses são resultados esperados, não observações de uma sessão manual.
+
+## Manual Acceptance Failure & Reliability Hardening — 29/09/2026
+
+### Reprovação observada e causa comprovada
+
+A aceitação manual posterior à seção anterior **reprovou** a v0.6.0. A pergunta sobre o segundo time após a FaZe mostrou monitor e Aegis em Memory Activity. Declarações factuais receberam reformulações tautológicas. A correção de monitor apareceu correta na conversa corrente, mas 4K/144 voltou em conversas novas. O fato PostgreSQL/Aegis e a RAM persistidos não foram recuperados.
+
+Inspeção somente de leitura do PostgreSQL da sessão original confirmou: a memória Aegis/PostgreSQL estava `Active`; 16 GB e 32 GB estavam ambos `Active` sem intervalos temporais; 4K/144 e QHD/180 estavam ambos `Active`, sem `SupersededById`. O job da segunda mensagem da RAM terminou `Completed`, `Created=1`, `Transitioned=0`, `Skipped=1`; o job da correção terminou `Completed`, `Created=1`, `Corrected=0`. Portanto, a falha do monitor era **canônica**, não um point stale do Qdrant. O extractor não recebeu a memória anterior de forma confiável porque o contexto existente dependia de busca semântica durante a janela anterior à projeção. O JSON bruto do extractor antigo não foi persistido, então o motivo exato daquele candidate descartado não pode ser reconstituído.
+
+Isso descarta as hipóteses de “0 candidates” para essas mensagens e de “somente Qdrant stale” para o monitor. A falha de acesso ao embedding confirma um caminho concreto pelo qual o contexto antigo ficou incompleto; sem payload antigo nem trace original, não é possível provar que foi o único mecanismo de falha do extractor.
+
+Os jobs Semantic dos fatos citados falharam com `embedding_auth_failed` na primeira tentativa. Isso explica a indisponibilidade semântica dos fatos PostgreSQL e RAM na sessão original; o fallback textual de frase inteira também não cobria bem perguntas indiretas. A chave da sessão retornou HTTP 403 `model_not_found` para `text-embedding-3-small`. Após o usuário informar liberação de `text-embedding-3-large`, a tentativa imediata com a mesma chave também retornou HTTP 403 `model_not_found`; nesta continuação a rede passou a negar a chamada antes de qualquer HTTP. Não há score real de embedding ou calibração válida a registrar. Os thresholds manuais `0.45` e automáticos `0.60` não foram elevados por palpite.
+
+Um trace determinístico anterior à correção do Graph, com FaZe semântico score **0.90** (fake embedding, **não** score do provider real), reproduziu: memória FaZe → evidência Pedro–FaZe → seed Pedro → paths Pedro–monitor e Pedro–Aegis → supporting memories irrelevantes. A causa do fan-out foi confirmada nesse caminho. O score real de monitor/Aegis na consulta de aceitação permanece **desconhecido** por falta do embedding autorizado; não se pode excluir uma contribuição semântica adicional.
+
+### Mudanças implementadas
+
+- `MemoryExtractionSource.Recent` preserva IDs; `BuildInputAsync` busca `MemoryEvidence.SourceMessageId` e `MemoryRecord` no PostgreSQL da mesma conversa antes da busca semântica. Deduplica por ID e envia somente `mN` com `source=recent_conversation` ou `semantic`. Testes determinísticos com Qdrant desligado cobriram correction 4K/144 → `Superseded` + QHD/180 `Active` e transition 16 GB `Active` com `ValidUntil=T` → 32 GB `Active` com `ValidFrom=T`. Uma etapa posterior de retomada da projeção fake e convergência dos jobs foi adicionada ao teste, mas ainda não executada.
+- `ClaimAsync` respeita `(ChatMessage.CreatedAt, Id)` dentro de cada conversa. Jobs Pending, Processing e retries anteriores bloqueiam o próximo; terminal Completed, Suppressed ou Failed não bloqueia. O diagnóstico indica a falha terminal anterior. O teste físico PostgreSQL com dois stores/workers verificou bloqueio na mesma conversa, claims simultâneos em conversas distintas e progresso após Failed terminal.
+- O Graph ancora a relação apoiada por evidência e expande um hop da entidade específica, sem usar Pedro como seed universal vindo de uma relação. Mesmo a menção literal de Pedro em uma pergunta específica não o torna seed irrestrito; consultas amplas sobre Pedro ainda podem expandir. O teste de hub original deixou monitor/Aegis fora e a busca indireta Sakamoto–Bisky passou antes da restrição do ambiente; uma variante adicional com Pedro mencionado literalmente foi adicionada, mas ainda não executada. A busca lexical PostgreSQL passou a aceitar tokens relevantes, com ordenação e histórico, para cobrir atraso/indisponibilidade de Qdrant.
+- O identity prompt proíbe reformulação tautológica de declarações sem pedido. O eval live declarativo focado passou **6/6 em uma rodada**; os três trials exigidos ainda não rodaram. O eval live de extração passou **28/28** após ajuste de alias Vecna; três repetições focadas do alias passaram **3/3**. O eval focado de intenção Memory passou **23/23**.
+- `AEGIS_MEMORY_DIAGNOSTICS_ENABLED=false` por padrão. Os endpoints DEV de mensagem, retrieval, alias e ambiente retornam 404 desabilitados. O diagnóstico de mensagem consulta fatos/evidence/relations/projections/Activity canônicos sob demanda; `OutcomeJson` guarda apenas contagens por código técnico de skip. O trace de retrieval contém candidatos semânticos com score/validade, fallback lexical, anchors, seeds, paths e resultado final, sem vectors. `scripts/memory_diagnose.py` formata essas rotas. Não há cópia de conteúdo no job nem no trace persistido.
+- A fixture `memory_v060_manual_acceptance.json` preserva literalmente as mensagens 001–022. O harness opt-in testa resposta (inclusive julgamentos estruturados para papagaio e semântica temporal), PostgreSQL canônico, retrieval e Activity, usa estados de job/projeção em vez de sleeps fixos, e imprime diagnóstico em falhas. `eval_memory_focused_trials.py` exige três APIs limpas com bancos e collections diferentes e roda os grupos A–E uma vez em cada uma. `run_memory_acceptance_disposable.py` foi adicionado para provisionar uma stack do replay e três dos trials via Compose, executar os evals e remover stacks/volumes no `finally`; usa `text-embedding-3-large` em collections novas. O Compose do runner e o gate sem opt-in passaram validação estática; nenhuma das quatro stacks pôde ser iniciada nesta continuação. Assim, sequência live, benchmark e focused trials permanecem **não executados**.
+
+### Validação desta continuação
+
+| Gate | Resultado verificável |
+| --- | --- |
+| Backend Release após últimas alterações | passou, 0 erros; aviso xUnit2031 preexistente |
+| Backend `dotnet test` após últimas alterações | **não executou**: VSTest abortou antes do primeiro teste com `SocketException (13) Permission denied` ao abrir listener local |
+| PostgreSQL físico | testes de recent canonical, ordenação multiworker, fallback lexical e diagnostics passaram antes da restrição do ambiente; não repetidos após as últimas edições |
+| Qdrant/Neo4j físicos | teste conjunto com fakes passou antes da restrição do ambiente; repetição atual bloqueada por acesso negado ao Docker |
+| Frontend | `npm test` e `npm run build` passaram após a restrição do ambiente |
+| Compose / diff | `docker compose config --quiet`, configuração do Compose descartável com placeholders, e `git diff --check` passaram |
+| EF pending model changes | passou: nenhuma mudança de modelo pendente após a migration |
+| Eval de extração / intenção | 28/28 e 23/23, respectivamente, antes da restrição de rede |
+| Eval de qualidade declarativa | 6/6 em uma rodada; faltam os três trials |
+| Scores reais / relevance benchmark | bloqueados por 403 inicial e rede negada nesta continuação |
+| Replay exato 001–022 / três trials críticos | **não executados**; requerem embedding e infraestrutura descartável acessíveis |
+
+### Replay manual 001–022 — estado desta execução
+
+`N/E` significa **não executado**; `—` significa camada não aplicável ao turno. O runner gera a mesma tabela com resposta e resultado de cada assert quando o ambiente live puder ser executado. Não há PASS inferido de testes unitários.
+
+| Conversation | Message | Expected | Response | Canonical | Retrieval | Activity | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 001 | qual é meu time favorito? | FaZe | N/E | — | N/E | N/E | NOT RUN |
+| 002 | Qual time eu mais torço no competitivo de Siege? | FaZe | N/E | — | N/E | N/E | NOT RUN |
+| 003 | esqueça que O time favorito de Rainbow Six do Pedro é a FaZe Clan. | seed Forgotten; job Suppressed | N/E | N/E | — | N/E | NOT RUN |
+| 004.1 | qual é meu time favorito? | não afirmar FaZe | N/E | — | N/E | N/E | NOT RUN |
+| 004.2 | Meu time favorito de R6 é a FaZe Clan. | Active; sem papagaio | N/E | N/E | — | N/E | NOT RUN |
+| 005 | Qual é meu time favorito de R6? | FaZe | N/E | — | N/E | N/E | NOT RUN |
+| 006 | Qual time eu mais torço no competitivo de Siege? | FaZe | N/E | — | N/E | N/E | NOT RUN |
+| 007.1 | Eu desenvolvo você, a Aegis. | conhecimento útil Active | N/E | N/E | — | N/E | NOT RUN |
+| 007.2 | A Aegis usa PostgreSQL como fonte canônica do sistema de memória. | PostgreSQL Active; sem papagaio | N/E | N/E | — | N/E | NOT RUN |
+| 008 | Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo? | PostgreSQL; Pedro→Aegis→PostgreSQL | N/E | — | N/E | N/E | NOT RUN |
+| 009.1 | Meu PC tinha 16 GB de RAM. | 16 GB Active; sem papagaio | N/E | N/E | — | N/E | NOT RUN |
+| 009.2 | Troquei a memória do PC e agora ele tem 32 GB de RAM. | transition; 16 Active fechado, 32 Active | N/E | N/E | — | N/E | NOT RUN |
+| 010 | Quanto de RAM meu PC tem hoje? | 32 GB; sem fatos alheios | N/E | — | N/E | N/E | NOT RUN |
+| 011 | Quanto de RAM meu PC tem hoje? e quanto tinha no passado? | 32 atual, 16 passado | N/E | — | N/E | N/E | NOT RUN |
+| 012.1 | Meu monitor é 4K 144 Hz. | 4K/144 Active inicial | N/E | N/E | — | N/E | NOT RUN |
+| 012.2 | Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz. | correct; 4K Superseded, QHD Active | N/E | N/E | — | N/E | NOT RUN |
+| 013 | Qual é a resolução e a frequência do meu monitor? | QHD/180, sem 4K/144 | N/E | — | N/E | N/E | NOT RUN |
+| 014.1 | Meu monitor já foi 4K 144 Hz? | negar história falsa | N/E | — | N/E | N/E | NOT RUN |
+| 014.2 | O que você sabe sobre meu monitor? | QHD/180 | N/E | — | N/E | N/E | NOT RUN |
+| 015 | Depois da FaZe, meu time de R6 favorito é a DarkZero. | segundo favorito Active | N/E | N/E | — | N/E | NOT RUN |
+| 016.1 | Depois da FaZe, qual time de R6 eu mais gosto? | DarkZero | N/E | — | N/E | N/E | NOT RUN |
+| 016.2 | Esquece essa informação sobre a DarkZero. | Forgotten; Suppressed; relation removida | N/E | N/E | — | N/E | NOT RUN |
+| 017 | Depois da FaZe, qual time de R6 eu mais gosto? | não DarkZero | N/E | — | N/E | N/E | NOT RUN |
+| 018 | Qual time eu mais gosto no competitivo de Siege tirando a FaZe? | não DarkZero | N/E | — | N/E | N/E | NOT RUN |
+| 019 | Historicamente, qual time eu dizia gostar mais depois da FaZe? | sem DarkZero e sem monitor/Aegis/RAM/Vecna | N/E | — | N/E | N/E | NOT RUN |
+| 020 | Meu segundo time favorito de R6 é a DarkZero. | conhecimento Active novamente | N/E | N/E | — | N/E | NOT RUN |
+| 021 | Na faculdade me chamam de Vecna. | memória Active; alias de Pedro | N/E | N/E | — | N/E | NOT RUN |
+| 022 | Qual é meu apelido na faculdade? | Vecna | N/E | — | N/E | N/E | NOT RUN |
+
+**Status: NOT READY.** Não há base para `READY FOR RE-ACCEPTANCE` até o replay 001–022, asserts canônicos/de retrieval, calibração com provider real e 3/3 trials críticos passarem. O registro anterior permanece como evidência histórica e não substitui a aceitação que reprovou.
+
+O ambiente desta continuação passou a negar sockets locais ao VSTest, acesso ao daemon Docker e saída de rede. Um banco PostgreSQL descartável de teste e um container Neo4j descartável criados antes dessa mudança ainda precisam de cleanup quando o daemon voltar; nenhum recurso de produção deve ser removido. `git add` falhou com `.git/index.lock: Read-only file system`; por isso nenhum commit/push foi feito nesta etapa e não houve merge.
+## Retomada com acesso restaurado — 29/09/2026
+
+A seção anterior documenta a etapa em que o ambiente negava rede, Docker e VSTest. O usuário restabeleceu o acesso e confirmou a autorização de `text-embedding-3-large`; a mesma chave respondeu HTTP 200 com vetor de 1.536 dimensões. As evidências abaixo são da retomada, em recursos descartáveis. A reprovação original permanece registrada acima.
+
+### Causas confirmadas e calibração real
+
+- No PostgreSQL original, 4K/144 e QHD/180 estavam ambos `Active`, sem `SupersededById`; 16 e 32 GB estavam ambos `Active`, sem intervalo. O extractor gerou candidate para a segunda mensagem de RAM e para a correção de monitor, mas não realizou `transition` nem `correct`. Assim, o monitor falhou no conhecimento canônico, não apenas em Qdrant. O JSON bruto daquele extractor não foi persistido, logo a razão exata de cada candidate antigo não pode ser recuperada. O contexto anterior dependia de Qdrant na janela entre commit e projeção, falha arquitetural reproduzida e removida com lookup direto por `MemoryEvidence.SourceMessageId` no PostgreSQL.
+- A chave antiga não autorizava `text-embedding-3-small`; jobs de projeção Semantic do fato Aegis/PostgreSQL e da RAM terminaram com `embedding_auth_failed`. O fallback lexical anterior falhava em perguntas indiretas. O padrão agora é `text-embedding-3-large`, 1.536 dimensões, em `aegis_memory_semantic_large_v1`. A collection nova impede mistura de embeddings antigos; a reconciliação na inicialização projeta de novo os registros canônicos.
+- O fan-out Graph anterior foi reproduzido antes da mudança com âncora FaZe e score fake 0,90: relação Pedro–FaZe tornava Pedro seed e alcançava Pedro–monitor e Pedro–Aegis. Após instrumentação, a pergunta literal da conversa 019 marcou FaZe **0,565**, RAM **0,243**, Aegis **0,226** e monitor **0,220** no modelo real: os três últimos ficaram abaixo de 0,45. Mesmo assim, o primeiro replay live registrou Aegis/RAM/monitor em `Consultou memória` porque a tool aceitou uma query expandida do chat model. Assim, foram confirmadas duas vias independentes de irrelevância: traversal pelo hub e query de tool mais ampla que a pergunta original. Não há trace da sessão manual original para atribuir qual via gerou cada item nela. `memory_search` agora ancora perguntas curtas terminadas em `?` na frase original, com fallback à query do modelo se a original não trouxer resultado.
+- Graph preserva a relação relevante como âncora e expande apenas um hop da fronteira específica. Pedro, quando é só o outro endpoint, não vira ponte para siblings. O teste Pedro–FaZe / Pedro–monitor / Pedro–Aegis excluiu monitor e Aegis; o teste indireto Pedro–Sakamoto–Bisky chegou em Bisky. O teste físico com Neo4j confirmou traversal, projection, rebuild e reconciliation. Relações exclusivamente sustentadas por memória apagada são removidas.
+- Na primeira execução live, a frase sobre DarkZero depois da FaZe foi interpretada como `transition` e encerrou a validade da FaZe, embora indicasse o segundo time favorito. O benchmark então falhou 1/4. A policy e uma normalização canônica preservam a FaZe `Active` e criam DarkZero como preferência secundária. O replay final passou o assert específico, e o benchmark passou 4/4.
+- As quatro consultas do benchmark final com o provider real tiveram scores positivos **0,553–0,722** e negativos da fixture até **0,340**. No caso histórico da FaZe, a relevância foi 0,565 versus irrelevantes 0,156–0,243. Um caso de monitor mais amplo teve positivo 0,499 e negativo máximo 0,314; a pergunta histórica de monitor teve negativo RAM 0,408 e positivo QHD 0,667. Mantivemos 0,45 manual, entre 0,408 e 0,499 nessa amostra, e 0,60 automático para maior precisão. Não há cutoff relativo. Esses números vêm da fixture pequena da aceitação, não provam separação universal ou estabilidade futura do modelo. `limit=10` permaneceu máximo, não meta de preenchimento.
+
+### Correção, ordenação e diagnósticos
+
+`MemoryRecentMessage` agora conserva `MessageId`. O extractor recebe primeiro memórias canônicas da mesma conversa via PostgreSQL/evidence, deduplicadas por ID com as semânticas relevantes e identificadas como `source=recent_conversation`; refs continuam efêmeras `mN`. Um teste determinístico e outro com Qdrant físico sem processar pontos confirmaram monitor 4K `Superseded` → QHD/180 `Active` e RAM 16 GB `Active` com `ValidUntil=T` → 32 GB `Active` com `ValidFrom=T`. Após retomar o processador, os projection jobs convergiram. A memória corrigida ativa guarda só a especificação verdadeira; o vínculo `SupersededById` fornece ao retrieval histórico a informação de que a declaração antiga era erro, sem tratá-la como fato histórico.
+
+`ClaimAsync` usa `(ChatMessage.CreatedAt, Id)` e impede claim de mensagem posterior na mesma conversa enquanto a anterior estiver `Pending` ou `Processing`, inclusive retry agendado. Duas instâncias de store/worker não claimed a segunda antes da primeira; conversas distintas progrediram ao mesmo tempo. `Completed`, `Suppressed` e `Failed` terminal liberam os próximos; diagnostics mostra uma falha anterior. O teste físico PostgreSQL passou.
+
+A identity policy agora evita reformulação tautológica de declaração factual sem pedido. `AEGIS_MEMORY_DIAGNOSTICS_ENABLED=false` mantém rotas DEV em 404 por padrão. O endpoint por mensagem lê job, contagens, `OutcomeJson` apenas com códigos/counts, fatos, relações, projeções e Activity do PostgreSQL; o endpoint retrieval detalha scores, validade canônica, fallback lexical, mentions, âncoras, seeds, paths, supporting IDs e final. Não armazena vectors nem trace, e aplica `MemorySecretGuard`. O CLI foi executado contra endpoints físicos descartáveis para `message` e `retrieval`.
+
+### Replay literal completo e resultados físicos
+
+A execução completa 001–022 em PostgreSQL, Qdrant e Neo4j descartáveis, com modelos reais de chat, extração e embedding, passou **28/28**. O harness aguardou estados `Completed`/`Suppressed` e projeções `Completed` por polling técnico. A tabela separa a prova canônica nas escritas, retrieval nas buscas, Activity e resposta textual. `—` marca camada não aplicável; os PASS vêm da execução, com expectativas específicas.
+
+| Conversation | Message | Expected | Response | Canonical | Retrieval | Activity | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 001 | qual é meu time favorito? | FaZe | Seu time favorito de Rainbow Six é a FaZe Clan. | — | PASS | PASS | PASS |
+| 002 | Qual time eu mais torço no competitivo de Siege? | FaZe | Você mais torce pela FaZe Clan no competitivo de Rainbow Six. | — | PASS | PASS | PASS |
+| 003 | esqueça que O time favorito de Rainbow Six do Pedro é a FaZe Clan. | seed Forgotten; job Suppressed | Apaguei essa memória. | PASS | — | PASS | PASS |
+| 004 | qual é meu time favorito? | sem FaZe persistida | Não sei qual é o seu time favorito. | — | PASS | PASS | PASS |
+| 004 | Meu time favorito de R6 é a FaZe Clan. | FaZe Active; sem papagaio | Certo. | PASS | — | PASS | PASS |
+| 005 | Qual é meu time favorito de R6? | FaZe | Seu time favorito de R6 é a FaZe Clan. | — | PASS | PASS | PASS |
+| 006 | Qual time eu mais torço no competitivo de Siege? | FaZe | Você mais torce pela FaZe Clan no competitivo de Rainbow Six Siege. | — | PASS | PASS | PASS |
+| 007 | Eu desenvolvo você, a Aegis. | Pedro desenvolve Aegis; Active | Certo. | PASS | — | PASS | PASS |
+| 007 | A Aegis usa PostgreSQL como fonte canônica do sistema de memória. | Aegis usa PostgreSQL; Active | Entendi. | PASS | — | PASS | PASS |
+| 008 | Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo? | PostgreSQL; vínculo Pedro–Aegis | PostgreSQL. | — | PASS | PASS | PASS |
+| 009 | Meu PC tinha 16 GB de RAM. | 16 GB Active; sem papagaio | Certo. | PASS | — | PASS | PASS |
+| 009 | Troquei a memória do PC e agora ele tem 32 GB de RAM. | transition; 16 GB Active fechado; 32 GB Active | Entendi. | PASS | — | PASS | PASS |
+| 010 | Quanto de RAM meu PC tem hoje? | 32 GB atual; sem fatos alheios | Seu PC tem 32 GB de RAM, segundo a informação disponível. | — | PASS | PASS | PASS |
+| 011 | Quanto de RAM meu PC tem hoje? e quanto tinha no passado? | 32 GB atual; 16 GB passado | Hoje, seu PC tem **32 GB de RAM**.   No passado, tinha **16 GB de RAM**. | — | PASS | PASS | PASS |
+| 012 | Meu monitor é 4K 144 Hz. | 4K/144 inicial Active | Certo. | PASS | — | PASS | PASS |
+| 012 | Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz. | correct; 4K Superseded; QHD/180 Active | Certo — vou considerar a especificação correta: QHD a 180 Hz. | PASS | — | PASS | PASS |
+| 013 | Qual é a resolução e a frequência do meu monitor? | QHD/180; sem 4K/144 verdadeiro | Seu monitor tem resolução **QHD (2560 × 1440)** e frequência de **180 Hz**. | — | PASS | PASS | PASS |
+| 014 | Meu monitor já foi 4K 144 Hz? | nega história 4K/144 falsa | Pelo que tenho registrado, não. A informação de 4K a 144 Hz foi corrigida como errada; seu monitor é QHD a 180 Hz. | — | PASS | PASS | PASS |
+| 014 | O que você sabe sobre meu monitor? | QHD/180; não afirma 4K/144 verdadeiro | Sei apenas que seu monitor tem:  - Resolução **QHD** - Taxa de atualização de **180 Hz**  Não tenho registrado o modelo, tamanho, painel, tempo de resposta ou outras especificações. | — | PASS | PASS | PASS |
+| 015 | Depois da FaZe, meu time de R6 favorito é a DarkZero. | DarkZero segundo favorito Active; FaZe permanece Active | Certo. | PASS | — | PASS | PASS |
+| 016 | Depois da FaZe, qual time de R6 eu mais gosto? | DarkZero | DarkZero. | — | PASS | PASS | PASS |
+| 016 | Esquece essa informação sobre a DarkZero. | DarkZero Forgotten; job Suppressed | Apaguei essa informação. | PASS | — | PASS | PASS |
+| 017 | Depois da FaZe, qual time de R6 eu mais gosto? | sem DarkZero | Não tenho essa informação — só sei que a FaZe Clan é a sua favorita. | — | PASS | PASS | PASS |
+| 018 | Qual time eu mais gosto no competitivo de Siege tirando a FaZe? | sem DarkZero | Não sei — só tenho registrado que você gosta da FaZe. Qual é o outro time? | — | PASS | PASS | PASS |
+| 019 | Historicamente, qual time eu dizia gostar mais depois da FaZe? | sem DarkZero, monitor, Aegis, RAM ou Vecna | Não encontrei memória de qual time você dizia gostar mais depois da FaZe Clan. | — | PASS | PASS | PASS |
+| 020 | Meu segundo time favorito de R6 é a DarkZero. | DarkZero Active novamente | Certo. | PASS | — | PASS | PASS |
+| 021 | Na faculdade me chamam de Vecna. | Vecna alias único de Pedro; Active | Entendi. | PASS | — | PASS | PASS |
+| 022 | Qual é meu apelido na faculdade? | Vecna | Vecna. | — | PASS | PASS | PASS |
+
+O benchmark de relevance sem chat passou **4/4**: FaZe 0,722 (DarkZero secundária 0,696), monitor QHD/180 0,553, RAM atual 0,577 e Aegis/PostgreSQL 0,646. Na pergunta PostgreSQL, o resultado final também continha Pedro desenvolve Aegis por Graph, apesar do score semântico isolado dessa memória ser 0,278. A conversa 019 retornou só conhecimento pertinente à FaZe e não exibiu monitor/Aegis/PostgreSQL/RAM/Vecna em `Consultou` ou `Usou`. As conversas 003 e 016 suprimiram extração após forget, e a busca histórica não recuperou DarkZero apagada.
+
+O eval de extração passou **28/28**, incluindo todas as frases exatas requeridas, correction/transition com `m1` canônico recente, a preferência secundária com FaZe existente, alias Vecna e dois forgets com zero candidates. O eval de resposta declarativa passou **18/18** em três rodadas; o eval de intenção Memory passou **23/23** após disponibilizar o SDK .NET no `PATH`. A primeira tentativa de intenção falhou antes de chamar o modelo por ausência de `dotnet` no `PATH` do shell, não por decisão de tool.
+
+O backend final passou **387/395** testes (8 físicos opt-in ignorados nessa chamada); **13/13** testes físicos PostgreSQL/Qdrant/Neo4j passaram separadamente, incluindo commit canônico da correção e transição antes de qualquer point no Qdrant e convergência após retomar o processador. Frontend: **47/47** e build de produção passaram. Backend Release passou com 0 erros e um aviso xUnit2031 preexistente. Compose principal e descartável, `git diff --check`, Python compile e `dotnet ef migrations has-pending-model-changes` passaram.
+
+A primeira rodada de três trials focados terminou **2/3**: trial 1 e 3 passaram A–E; trial 2 falhou num assert textual que confundiu a resolução QHD `2560 × 1440` com frequência `144 Hz`. O diagnóstico desse turno mostrava resposta QHD/180, memória ativa QHD/180 e retrieval final só QHD/180. O assert foi corrigido para reconhecer `144 Hz` como unidade e permitir `1440` pixels. Isso foi uma falha do harness, registrada aqui sem apagá-la.
+
+Na rodada seguinte, um trial revelou variância real na resposta à transição da RAM: “Entendi — agora o PC tem 32 GB de RAM.” A transição canônica e retrieval estavam corretos, mas a resposta apenas parafraseava o usuário. A rodada foi interrompida após esse achado. Foi adicionada uma proteção restrita em `ChatService` para declarações factuais: ela compara os termos informativos da resposta curta aos da declaração e substitui uma reformulação óbvia por reação mínima; perguntas, pedidos de ação e comentários com informação nova permanecem. O streaming de declarações é acumulado até essa verificação, para que o texto exibido coincida com o persistido. Nove testes determinísticos cobrem os exemplos reprovados e comentários úteis. A identity policy também proíbe explicitamente “Entendi” seguido da mesma informação.
+
+### Fechamento da retomada — 01/10/2026
+
+A rodada final, iniciada em **três stacks limpas independentes**, passou **3/3** para cada grupo crítico A–E: Aegis/PostgreSQL e retrieval; RAM transition; monitor correction; precisão da consulta 019; e resposta declarativa sem paráfrase. Todos os grupos passaram em todos os trials, sem repetir a suíte até obter êxito. Depois disso, o replay completo com o código final passou novamente **28/28**, e o benchmark isolado passou **4/4**. A avaliação direta da policy declarativa, repetida após o último ajuste, passou **18/18**. A extração live passou **28/28** e a intenção Memory **23/23**. Falhas e variação anteriores permanecem descritas acima; não restou failure na rodada final.
+
+O ambiente de teste usou PostgreSQL, Qdrant e Neo4j descartáveis e collections próprias, com modelos reais de chat, extração e `text-embedding-3-large`; os recursos das stacks foram removidos após os runs. A base real de Pedro foi apenas inspecionada, sem reparação automática nesta branch: as memórias erradas já existentes lá continuam exigindo uma decisão de migração/correção operacional fora desta suíte isolada. O resultado desta branch não deve ser interpretado como correção retroativa de dados de produção.
+
+**Status final da branch: READY FOR RE-ACCEPTANCE.** A decisão de aceitação manual continua com o usuário; não houve merge na `main` nem alteração de versão.

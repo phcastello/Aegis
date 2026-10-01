@@ -35,7 +35,7 @@ def extract(label, target, memories=(), relations=(), recent=()):
         "existingPredicates": ["FRIEND_OF", "DATES", "USES", "OWNS", "PREFERS", "CONSIDERS_BUYING"],
     }
     payload = {
-        "model": setting("AEGIS_MEMORY_EXTRACTION_MODEL", "gpt-5.6-luna"),
+        "model": setting("AEGIS_MEMORY_EXTRACTION_MODEL", "gpt-6-luna"),
         "reasoning": {"effort": setting("AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT", "low")},
         "input": [
             {"role": "developer", "content": [{"type": "input_text", "text": POLICY,
@@ -68,6 +68,41 @@ def main():
         return 2
     m1 = [{"ref": "m1", "content": "Pedro usa RX 6700 XT.", "validFrom": None, "validUntil": None}]
     cases = [
+        ("manual_faze", "Meu time favorito de R6 é a FaZe Clan.", (), (),
+            lambda c: any(x["action"] == "create" and "FaZe" in x["content"] for x in c)),
+        ("manual_develops", "Eu desenvolvo você, a Aegis.", (), (),
+            lambda c: any(x["action"] == "create" and "Aegis" in x["content"] for x in c)),
+        ("manual_postgres", "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.", (), (),
+            lambda c: any(x["action"] == "create" and "PostgreSQL" in x["content"] for x in c)),
+        ("manual_ram_old", "Meu PC tinha 16 GB de RAM.", (), (),
+            lambda c: any(x["action"] == "create" and "16" in x["content"] and "RAM" in x["content"] for x in c)),
+        ("manual_ram_transition", "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+            [{"ref": "m1", "source": "recent_conversation", "content": "O PC de Pedro tinha 16 GB de RAM.",
+              "validFrom": None, "validUntil": None}], (),
+            lambda c: any(x["action"] == "transition" and x["existingMemoryRef"] == "m1" and
+                "32" in x["content"] for x in c)),
+        ("manual_monitor_old", "Meu monitor é 4K 144 Hz.", (), (),
+            lambda c: any(x["action"] == "create" and "4K" in x["content"] and "144" in x["content"] for x in c)),
+        ("manual_monitor_correction", "Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz.",
+            [{"ref": "m1", "source": "recent_conversation", "content": "O monitor de Pedro é 4K 144 Hz.",
+              "validFrom": None, "validUntil": None}], (),
+            lambda c: any(x["action"] == "correct" and x["existingMemoryRef"] == "m1" and
+                "QHD" in x["content"] and "180" in x["content"] for x in c)),
+        ("manual_darkzero_after", "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+            [{"ref": "m1", "source": "semantic", "content":
+              "O time favorito de Pedro em Rainbow Six Siege é a FaZe Clan.",
+              "validFrom": None, "validUntil": None}], (),
+            lambda c: any(x["action"] == "create" and "DarkZero" in x["content"] for x in c)
+                and not any(x["action"] == "transition" for x in c)),
+        ("manual_darkzero_second", "Meu segundo time favorito de R6 é a DarkZero.", (), (),
+            lambda c: any(x["action"] in ("create", "reinforce") and "DarkZero" in x["content"] for x in c)),
+        ("manual_vecna", "Na faculdade me chamam de Vecna.", (), (),
+            lambda c: any("Vecna" in x["content"] and any("Vecna" in e["aliases"] and
+                e["canonicalName"] == "Pedro" for e in x["entities"]) for x in c)),
+        ("manual_forget_faze", "esqueça que O time favorito de Rainbow Six do Pedro é a FaZe Clan.", (), (),
+            lambda c: len(c) == 0),
+        ("manual_forget_darkzero", "Esquece essa informação sobre a DarkZero.", (), (),
+            lambda c: len(c) == 0),
         ("preference", "Prefiro trabalhar no backend.", (), (), lambda c: any("backend" in x["content"].lower() for x in c)),
         ("relationship", "Meu amigo Sakamoto namora Bisky.", (), (), lambda c: any(
             r["predicate"] == "DATES" for x in c for r in x["relations"])),

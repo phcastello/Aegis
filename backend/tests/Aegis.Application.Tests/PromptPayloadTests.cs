@@ -42,7 +42,7 @@ public sealed class PromptPayloadTests
 
         using var payload = JsonDocument.Parse(handler.Body!);
         var root = payload.RootElement;
-        Assert.Equal("gpt-5.6-luna", root.GetProperty("model").GetString());
+        Assert.Equal("gpt-6-luna", root.GetProperty("model").GetString());
         Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
         Assert.Equal("medium", root.GetProperty("reasoning").GetProperty("effort").GetString());
         var input = root.GetProperty("input");
@@ -175,7 +175,7 @@ public sealed class PromptPayloadTests
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("{\"model\":\"gpt-5.6-luna\",\"output_text\":\"ok\",\"output\":[],\"usage\":{\"input_tokens\":100,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":20},\"output_tokens\":10}}", Encoding.UTF8, "application/json")
+                Content = new StringContent("{\"model\":\"gpt-6-luna\",\"output_text\":\"ok\",\"output\":[],\"usage\":{\"input_tokens\":100,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":20},\"output_tokens\":10}}", Encoding.UTF8, "application/json")
             };
         }
     }

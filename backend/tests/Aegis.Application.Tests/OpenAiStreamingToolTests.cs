@@ -52,8 +52,8 @@ public sealed class OpenAiStreamingToolTests
         {
             Requests.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
             var body = Calls++ == 0
-                ? "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"gpt-5.6-luna\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"echo\",\"arguments\":\"{}\"}]}}\n\ndata: [DONE]\n\n"
-                : "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Feito\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r2\",\"model\":\"gpt-5.6-luna\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Feito\"}]}]}}\n\ndata: [DONE]\n\n";
+                ? "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"gpt-6-luna\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"echo\",\"arguments\":\"{}\"}]}}\n\ndata: [DONE]\n\n"
+                : "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Feito\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r2\",\"model\":\"gpt-6-luna\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Feito\"}]}]}}\n\ndata: [DONE]\n\n";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "text/event-stream")

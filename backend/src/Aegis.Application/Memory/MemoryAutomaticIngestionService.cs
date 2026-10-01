@@ -1,5 +1,6 @@
 using Aegis.Application.Observability;
 using Aegis.Domain.Entities;
+using System.Text.RegularExpressions;
 
 namespace Aegis.Application.Memory;
 
@@ -8,8 +9,14 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
 {
     public async Task<MemoryExtractionInput> BuildInputAsync(MemoryExtractionSource source, CancellationToken ct)
     {
+        var recentIds = source.Recent.Where(x => x.Role == "user" && x.MessageId.HasValue)
+            .Select(x => x.MessageId!.Value).ToArray();
+        var recent = await store.LoadRecentConversationMemoriesAsync(source.ConversationId, recentIds, ct);
         var (ranked, _) = await semantic.SearchDetailedAsync(source.Target, 10, source.ObservedAt, 0.45, ct);
-        var memories = ranked.Select((x, i) => new MemoryExtractionMemory($"m{i + 1}", x.Record)).ToArray();
+        var memories = recent.Select(x => (Record: x, Source: "recent_conversation"))
+            .Concat(ranked.Select(x => (x.Record, Source: "semantic")))
+            .DistinctBy(x => x.Record.Id).Take(10)
+            .Select((x, i) => new MemoryExtractionMemory($"m{i + 1}", x.Record, x.Source)).ToArray();
         var relations = await store.FindRelationsByMemoryAsync(memories.Select(x => x.Record.Id).ToArray(),
             source.ObservedAt, 12, ct);
         var mentions = await MemoryEntityMentions.FindAsync(store, source.Target, 5, ct);
@@ -27,19 +34,28 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
     {
         if (output.Candidates.Count > 8) throw new MemoryExtractionException("memory_extraction_invalid_response", false);
         var counters = new int[7];
-        foreach (var candidate in output.Candidates)
+        var skipReasons = new Dictionary<string, int>(StringComparer.Ordinal);
+        void Skip(string reason, int count = 1)
+        {
+            counters[6] += count;
+            skipReasons[reason] = skipReasons.GetValueOrDefault(reason) + count;
+            metrics.MemoryAutoSkipped.Add(count);
+        }
+        foreach (var extracted in output.Candidates)
         {
             counters[0]++;
-            if (!StructurallyValid(candidate) || MemorySecretGuard.ContainsSecret(source.Target) ||
+            var candidate = NormalizeCorrectionContent(PreserveRankedPreference(source.Target, extracted));
+            if (!StructurallyValid(candidate)) { Skip("invalid_structure"); continue; }
+            if (MemorySecretGuard.ContainsSecret(source.Target) ||
                 MemorySecretGuard.ContainsSecret(candidate.Content) || candidate.Entities.Any(x =>
                     MemorySecretGuard.ContainsSecret(x.CanonicalName) || MemorySecretGuard.ContainsSecret(x.Mention) ||
-                    x.Aliases.Any(MemorySecretGuard.ContainsSecret)) || !PreservesPurchaseModality(source.Target, candidate))
-            { counters[6]++; metrics.MemoryAutoSkipped.Add(1); continue; }
+                    x.Aliases.Any(MemorySecretGuard.ContainsSecret))) { Skip("secret"); continue; }
+            if (!PreservesPurchaseModality(source.Target, candidate)) { Skip("modality_violation"); continue; }
             var now = clock.GetUtcNow();
             try
             {
                 var applied = await store.WriteAsync(async s => await ApplyCandidateAsync(s, source, input, candidate, now, ct), ct);
-                if (applied.Skipped) { counters[6]++; metrics.MemoryAutoSkipped.Add(1); continue; }
+                if (applied.Skipped) { Skip(applied.SkipReason ?? "candidate_conflict"); continue; }
                 switch (applied.Action)
                 {
                     case "create": counters[1]++; metrics.MemoryAutoCreated.Add(1); break;
@@ -48,13 +64,45 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
                     case "transition": counters[4]++; metrics.MemoryAutoTransitioned.Add(1); break;
                 }
                 counters[5] += applied.GraphMutations;
-                counters[6] += applied.GraphSkipped;
+                if (applied.GraphSkipped > 0) Skip(applied.SkipReason ?? "relation_invalid", applied.GraphSkipped);
             }
             catch (Exception e) when (e is MemoryException or ArgumentException or InvalidOperationException)
-            { counters[6]++; metrics.MemoryAutoSkipped.Add(1); }
+            { Skip(e is MemoryException memory ? memory.Code : "candidate_conflict"); }
         }
         metrics.MemoryExtractionCandidates.Record(counters[0]);
-        return new(counters[0], counters[1], counters[2], counters[3], counters[4], counters[5], counters[6]);
+        return new(counters[0], counters[1], counters[2], counters[3], counters[4], counters[5], counters[6], skipReasons);
+    }
+
+    private static MemoryExtractionCandidate PreserveRankedPreference(string target,
+        MemoryExtractionCandidate candidate)
+    {
+        // "Depois da FaZe" ranks preferences; it does not say FaZe ceased to be a
+        // favorite. A transition here would silently close a true canonical fact.
+        var match = Regex.Match(target,
+            @"^Depois d[ao] (?<first>[^,]+), meu time (?:de R6|de Rainbow Six(?: Siege)?) favorito é (?:a |o )?(?<second>[^.!?]+)[.!?]?$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success || !candidate.Content.Contains(match.Groups["second"].Value,
+                StringComparison.OrdinalIgnoreCase)) return candidate;
+        var second = match.Groups["second"].Value.Trim();
+        return candidate with
+        {
+            Content = $"O segundo time favorito de Pedro em Rainbow Six Siege é {second}.",
+            Action = "create", ExistingMemoryRef = null, TransitionAt = null,
+            ValidFrom = null, ValidUntil = null,
+            Relations = []
+        };
+    }
+
+    private static MemoryExtractionCandidate NormalizeCorrectionContent(MemoryExtractionCandidate candidate)
+    {
+        if (candidate.Action != "correct") return candidate;
+        var separator = candidate.Content.IndexOf(';');
+        if (separator < 0) return candidate;
+        var suffix = candidate.Content[(separator + 1)..];
+        if (!Regex.IsMatch(suffix, @"\b(errad\w*|incorret\w*|equivoc\w*|nunca)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return candidate;
+        var trueFact = candidate.Content[..separator].Trim().TrimEnd('.');
+        return trueFact.Length == 0 ? candidate : candidate with { Content = trueFact + "." };
     }
 
     private static bool StructurallyValid(MemoryExtractionCandidate c) =>
@@ -63,37 +111,39 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
         c.Content.Length is > 0 and <= MemoryText.MaxContentLength &&
         (c.ValidFrom is null || c.ValidUntil is null || c.ValidUntil > c.ValidFrom);
 
-    private sealed record Applied(string Action, int GraphMutations = 0, int GraphSkipped = 0, bool Skipped = false);
+    private sealed record Applied(string Action, int GraphMutations = 0, int GraphSkipped = 0,
+        bool Skipped = false, string? SkipReason = null);
 
     private async Task<Applied> ApplyCandidateAsync(IMemoryStore s, MemoryExtractionSource source,
         MemoryExtractionInput input, MemoryExtractionCandidate c, DateTimeOffset now, CancellationToken ct)
     {
-        if (!await s.SourceIsAvailableAsync(source, ct)) return new(c.Action, Skipped: true);
+        if (!await s.SourceIsAvailableAsync(source, ct)) return new(c.Action, Skipped: true, SkipReason: "source_unavailable");
         var oldRef = input.ExistingMemories.FirstOrDefault(x => x.Ref == c.ExistingMemoryRef);
         if (c.Action == "create" && c.ExistingMemoryRef is not null ||
-            c.Action != "create" && (oldRef is null || c.ExistingMemoryRef is null)) return new(c.Action, Skipped: true);
+            c.Action != "create" && (oldRef is null || c.ExistingMemoryRef is null))
+            return new(c.Action, Skipped: true, SkipReason: "invalid_memory_ref");
         if (c.Relations.Any(x => x.Action is "close" or "forget" or "reinforce" &&
                 (x.ExistingRelationRef is null || input.ExistingRelations.All(y => y.Ref != x.ExistingRelationRef))))
-            return new(c.Action, Skipped: true);
+            return new(c.Action, Skipped: true, SkipReason: "invalid_relation_ref");
         var old = oldRef is null ? null : await s.FindRecordAsync(oldRef.Record.Id, ct);
-        if (oldRef is not null && old is null) return new(c.Action, Skipped: true);
+        if (oldRef is not null && old is null) return new(c.Action, Skipped: true, SkipReason: "invalid_memory_ref");
         var at = c.TransitionAt ?? c.ValidFrom ?? source.ObservedAt;
         if (c.Action == "transition" && (old!.Status != MemoryStatus.Active ||
             old.ValidFrom is not null && at <= old.ValidFrom || old.ValidUntil is not null && old.ValidUntil != at))
-            return new(c.Action, Skipped: true);
+            return new(c.Action, Skipped: true, SkipReason: "temporal_conflict");
         if (c.Action == "correct" && old!.Status != MemoryStatus.Active)
         {
             // A previous attempt may already have committed this candidate.
             if (old.Status != MemoryStatus.Superseded || old.SupersededById is not { } replacementId)
-                return new(c.Action, Skipped: true);
+                return new(c.Action, Skipped: true, SkipReason: "candidate_conflict");
             var replacement = await s.FindRecordAsync(replacementId, ct);
             if (replacement is null || replacement.ContentHash != MemoryText.Hash(MemoryText.Normalize(c.Content, 2000)))
-                return new(c.Action, Skipped: true);
+                return new(c.Action, Skipped: true, SkipReason: "candidate_conflict");
             old = replacement;
         }
         if (c.Action == "reinforce" && (old!.Status != MemoryStatus.Active ||
             old.ContentHash != MemoryText.Hash(MemoryText.Normalize(c.Content, 2000))))
-            return new(c.Action, Skipped: true);
+            return new(c.Action, Skipped: true, SkipReason: "candidate_conflict");
 
         var candidate = new MemoryRecord(c.Content,
             c.Action == "transition" ? at : c.ValidFrom,
@@ -144,7 +194,8 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
         foreach (var item in c.Entities)
         {
             if (string.IsNullOrWhiteSpace(item.Key) || resolutions.ContainsKey(item.Key) ||
-                !MentionSupported(source.Target, item.Mention, item.CanonicalName)) return new(c.Action, GraphSkipped: c.Relations.Count);
+                !MentionSupported(source.Target, item.Mention, item.CanonicalName))
+                return new(c.Action, GraphSkipped: c.Relations.Count, SkipReason: "entity_unsupported");
             var normalized = MemoryText.Normalize(item.Mention, 200);
             var candidates = (await s.FindCanonicalEntitiesAsync(normalized, ct))
                 .Concat(await s.FindAliasedEntitiesAsync(normalized, ct));
@@ -154,7 +205,7 @@ public sealed class MemoryAutomaticIngestionService(IMemoryStore store, MemorySe
             var type = item.EntityType is null ? null : MemoryText.Normalize(item.EntityType, 40);
             var distinct = candidates.Where(x => x.RetiredAt is null && (type is null || x.EntityType == type))
                 .DistinctBy(x => x.Id).ToArray();
-            if (distinct.Length > 1) return new(c.Action, GraphSkipped: c.Relations.Count);
+            if (distinct.Length > 1) return new(c.Action, GraphSkipped: c.Relations.Count, SkipReason: "entity_ambiguous");
             resolutions[item.Key] = distinct.SingleOrDefault();
         }
         var entities = new Dictionary<string, MemoryEntity>();

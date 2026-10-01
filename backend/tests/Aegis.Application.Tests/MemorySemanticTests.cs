@@ -67,7 +67,7 @@ public sealed class MemorySemanticTests
             Assert.Equal("test-only-key", request.Headers.Authorization.Parameter);
             using var payload = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
             Assert.Equal("Pedro prefere backend.", payload.RootElement.GetProperty("input").GetString());
-            Assert.Equal("text-embedding-3-small", payload.RootElement.GetProperty("model").GetString());
+            Assert.Equal("text-embedding-3-large", payload.RootElement.GetProperty("model").GetString());
             Assert.Equal(3, payload.RootElement.GetProperty("dimensions").GetInt32());
             Assert.Equal(3, payload.RootElement.EnumerateObject().Count());
             return new HttpResponseMessage(HttpStatusCode.OK)

@@ -177,4 +177,98 @@ public sealed class IntelligentMemoryPhysicalTests
             await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE");
         }
     }
+
+    [PhysicalFact]
+    public async Task CorrectionAndTransitionCommitBeforePhysicalQdrantProjection()
+    {
+        var schema = "lag_" + Guid.NewGuid().ToString("N");
+        var collection = "aegis_lag_" + Guid.NewGuid().ToString("N");
+        var connection = Environment.GetEnvironmentVariable("AEGIS_MEMORY_TEST_DATABASE")!;
+        var dbOptions = new DbContextOptionsBuilder<AegisDbContext>().UseNpgsql(connection + ";Search Path=" + schema,
+            x => x.MigrationsHistoryTable("__EFMigrationsHistory", schema)).Options;
+        await using var db = new AegisDbContext(dbOptions);
+        await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\"");
+        var options = new MemorySemanticOptions { EmbeddingDimensions = 3, EmbeddingModel = "fake",
+            CollectionName = collection };
+        using var http = new HttpClient { BaseAddress = new Uri(
+            Environment.GetEnvironmentVariable("AEGIS_MEMORY_TEST_QDRANT_URL")!.TrimEnd('/') + "/") };
+        var vectors = new QdrantMemoryVectorStore(http, options);
+        using var metrics = new AegisMetrics();
+        var clock = new Clock(); var embedding = new Embedding();
+        try
+        {
+            await db.Database.MigrateAsync();
+            await vectors.EnsureCollectionAsync(default);
+            var store = new MemoryStore(db);
+            var semantic = new MemorySemanticSearch(store, embedding, vectors, options, clock, metrics);
+            var ingestion = new MemoryAutomaticIngestionService(store, semantic, clock, metrics);
+
+            async Task<(MemoryExtractionSource First, MemoryExtractionSource Second)> Sources(string first, string second)
+            {
+                var conversation = new Conversation();
+                var firstMessage = conversation.AddMessage("user", first);
+                var secondMessage = conversation.AddMessage("user", second);
+                db.Conversations.Add(conversation); await db.SaveChangesAsync();
+                return (new(conversation.Id, firstMessage.Id, first, firstMessage.CreatedAt, []),
+                    new(conversation.Id, secondMessage.Id, second, secondMessage.CreatedAt,
+                        [new("user", first, firstMessage.Id)]));
+            }
+            static MemoryExtractionCandidate Candidate(string content, string action = "create", string? old = null) =>
+                new(content, action, old, null, null, null, [], []);
+
+            var monitor = await Sources("Meu monitor é 4K 144 Hz.",
+                "Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz.");
+            await ingestion.ApplyAsync(monitor.First, new(monitor.First.Target, [], [], [], []),
+                new([Candidate("O monitor de Pedro é 4K 144 Hz.")]), default);
+            var falseMonitor = await db.MemoryRecords.AsNoTracking().SingleAsync();
+            Assert.Null(await vectors.GetPointAsync(falseMonitor.Id, default));
+            var monitorInput = await ingestion.BuildInputAsync(monitor.Second, default);
+            Assert.Equal(falseMonitor.Id, Assert.Single(monitorInput.ExistingMemories).Record.Id);
+            Assert.Equal("recent_conversation", monitorInput.ExistingMemories[0].Source);
+            await ingestion.ApplyAsync(monitor.Second, monitorInput,
+                new([Candidate("O monitor de Pedro é QHD 180 Hz.", "correct", "m1")]), default);
+
+            var ram = await Sources("Meu PC tinha 16 GB de RAM.",
+                "Troquei a memória do PC e agora ele tem 32 GB de RAM.");
+            await ingestion.ApplyAsync(ram.First, new(ram.First.Target, [], [], [], []),
+                new([Candidate("O PC de Pedro tinha 16 GB de RAM.")]), default);
+            var priorRam = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("16 GB"));
+            Assert.Null(await vectors.GetPointAsync(priorRam.Id, default));
+            var ramInput = await ingestion.BuildInputAsync(ram.Second, default);
+            Assert.Equal(priorRam.Id, Assert.Single(ramInput.ExistingMemories).Record.Id);
+            Assert.Equal("recent_conversation", ramInput.ExistingMemories[0].Source);
+            await ingestion.ApplyAsync(ram.Second, ramInput,
+                new([Candidate("O PC de Pedro tem 32 GB de RAM.", "transition", "m1")]), default);
+
+            var oldMonitor = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == falseMonitor.Id);
+            var newMonitor = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("QHD"));
+            var oldRam = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == priorRam.Id);
+            var newRam = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("32 GB"));
+            Assert.Equal(MemoryStatus.Superseded, oldMonitor.Status);
+            Assert.Equal(newMonitor.Id, oldMonitor.SupersededById);
+            Assert.Equal(MemoryStatus.Active, newMonitor.Status);
+            Assert.Equal(MemoryStatus.Active, oldRam.Status);
+            Assert.Equal(oldRam.ValidUntil, newRam.ValidFrom);
+            Assert.NotNull(oldRam.ValidUntil);
+            Assert.Equal(MemoryStatus.Active, newRam.Status);
+            Assert.Null(await vectors.GetPointAsync(newMonitor.Id, default));
+            Assert.Null(await vectors.GetPointAsync(newRam.Id, default));
+
+            var processor = new MemorySemanticProjectionProcessor(new MemorySemanticProjectionStore(db, clock),
+                embedding, vectors, options, clock, metrics);
+            while (await processor.ProcessNextAsync(default)) { }
+            Assert.All(await db.MemoryProjectionJobs.AsNoTracking().Where(x =>
+                x.ProjectionTarget == MemoryProjectionTarget.Semantic).ToListAsync(),
+                x => Assert.Equal(MemoryProjectionStatus.Completed, x.Status));
+            Assert.Null(await vectors.GetPointAsync(falseMonitor.Id, default));
+            Assert.NotNull(await vectors.GetPointAsync(newMonitor.Id, default));
+            Assert.NotNull(await vectors.GetPointAsync(priorRam.Id, default));
+            Assert.NotNull(await vectors.GetPointAsync(newRam.Id, default));
+        }
+        finally
+        {
+            await http.DeleteAsync("collections/" + collection);
+            await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE");
+        }
+    }
 }

@@ -5,7 +5,7 @@ namespace Aegis.Application.Memory;
 public sealed class MemoryAutomaticOptions
 {
     public bool Enabled { get; set; } = true;
-    public string Model { get; set; } = "gpt-5.6-luna";
+    public string Model { get; set; } = "gpt-6-luna";
     public string ReasoningEffort { get; set; } = "low";
     public string BaseUrl { get; set; } = "https://api.openai.com";
     public string ApiKey { get; set; } = "";
@@ -14,11 +14,11 @@ public sealed class MemoryAutomaticOptions
     public int PollSeconds { get; set; } = 5;
 }
 
-public sealed record MemoryRecentMessage(string Role, string Content);
+public sealed record MemoryRecentMessage(string Role, string Content, Guid? MessageId = null);
 public sealed record MemoryExtractionSource(Guid ConversationId, Guid UserMessageId, string Target,
     DateTimeOffset ObservedAt, IReadOnlyList<MemoryRecentMessage> Recent,
     Guid? JobId = null, Guid? LeaseId = null);
-public sealed record MemoryExtractionMemory(string Ref, MemoryRecord Record);
+public sealed record MemoryExtractionMemory(string Ref, MemoryRecord Record, string Source = "semantic");
 public sealed record MemoryExtractionRelation(string Ref, MemoryRelation Relation, string SubjectName, string ObjectName);
 public sealed record MemoryExtractionInput(string Target, IReadOnlyList<MemoryRecentMessage> Recent,
     IReadOnlyList<MemoryExtractionMemory> ExistingMemories,
@@ -34,7 +34,8 @@ public sealed record MemoryExtractionRelationAction(string Action, string? Exist
     string? SubjectKey, string? Predicate, string? ObjectKey,
     DateTimeOffset? ValidFrom, DateTimeOffset? ValidUntil, DateTimeOffset? CloseAt);
 public sealed record MemoryExtractionSummary(int Candidates, int Created, int Reinforced, int Corrected,
-    int Transitioned, int GraphMutations, int Skipped);
+    int Transitioned, int GraphMutations, int Skipped,
+    IReadOnlyDictionary<string, int>? SkipReasons = null);
 
 public interface IMemoryExtractionClient
 {

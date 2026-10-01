@@ -1,12 +1,15 @@
 using Aegis.Application.Memory;
 using Aegis.Application.Observability;
 using Aegis.Application.Tools;
+using Aegis.Api.Controllers;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Memory;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
 namespace Aegis.Application.Tests;
@@ -73,11 +76,15 @@ public sealed class IntelligentMemoryTests
     private sealed class FakeVectors : IMemoryVectorStore
     {
         public List<MemoryVectorCandidate> Candidates { get; } = [];
+        public Dictionary<Guid, MemoryVectorPoint> Projected { get; } = [];
         public bool Offline { get; set; }
         public Task<bool> EnsureCollectionAsync(CancellationToken ct) => Task.FromResult(false);
-        public Task<MemoryVectorPoint?> GetPointAsync(Guid id, CancellationToken ct) => Task.FromResult<MemoryVectorPoint?>(null);
-        public Task UpsertAsync(MemoryVectorPoint point, float[] vector, CancellationToken ct) => Task.CompletedTask;
-        public Task DeleteAsync(Guid id, CancellationToken ct) => Task.CompletedTask;
+        public Task<MemoryVectorPoint?> GetPointAsync(Guid id, CancellationToken ct) =>
+            Task.FromResult(Projected.GetValueOrDefault(id));
+        public Task UpsertAsync(MemoryVectorPoint point, float[] vector, CancellationToken ct)
+        { Projected[point.MemoryId] = point; return Task.CompletedTask; }
+        public Task DeleteAsync(Guid id, CancellationToken ct)
+        { Projected.Remove(id); return Task.CompletedTask; }
         public Task<IReadOnlyList<MemoryVectorCandidate>> SearchAsync(float[] vector, int limit, double threshold, CancellationToken ct) =>
             Offline ? throw new MemorySemanticException("qdrant_unavailable") :
                 Task.FromResult<IReadOnlyList<MemoryVectorCandidate>>(Candidates.Take(limit).ToArray());
@@ -494,6 +501,318 @@ public sealed class IntelligentMemoryTests
             new(Guid.NewGuid(), Guid.NewGuid(), secret), default));
         Assert.Equal("memory_secret_not_allowed", error.Code);
         Assert.DoesNotContain("sk-", error.Message);
+    }
+
+    [PostgresFact]
+    public async Task DiagnosticsAreOptInAndExplainCanonicalIngestionAndRetrieval()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var source = await SourceAsync(db, "Meu PC tinha 16 GB de RAM.");
+            db.MemoryExtractionJobs.Add(new MemoryExtractionJob(source.ConversationId, source.UserMessageId, clock.Now));
+            await db.SaveChangesAsync();
+            var store = new MemoryStore(db);
+            var semanticOptions = new MemorySemanticOptions { EmbeddingDimensions = 3 };
+            var semantic = new MemorySemanticSearch(store, new FakeEmbedding(), new FakeVectors { Offline = true },
+                semanticOptions, clock, metrics);
+            var summary = await new MemoryAutomaticIngestionService(store, semantic, clock, metrics)
+                .ApplyAsync(source, new(source.Target, [], [], [], []),
+                    new([Candidate("O PC de Pedro tinha 16 GB de RAM."),
+                        Candidate("O PC de Pedro tem 32 GB de RAM.", "correct", "m9")]), default);
+            var jobs = new MemoryExtractionJobStore(db);
+            var claim = await jobs.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default);
+            Assert.True(await jobs.CompleteAsync(claim!, summary, clock.Now, default));
+            var hybrid = new MemoryHybridRetriever(store, semantic, null!,
+                new MemoryGraphOptions { Enabled = false }, semanticOptions,
+                new MemoryAutoContextOptions(), clock, metrics);
+            var disabled = new MemoryDiagnosticsController(db, hybrid, new ConfigurationBuilder().Build());
+            Assert.IsType<NotFoundResult>(await disabled.Message(source.UserMessageId, default));
+            Assert.IsType<NotFoundResult>(await disabled.Retrieval(
+                new("Quanto de RAM meu PC tem hoje?"), default));
+            var enabled = new MemoryDiagnosticsController(db, hybrid, new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                    { ["AEGIS_MEMORY_DIAGNOSTICS_ENABLED"] = "true" }).Build());
+            var messageResult = Assert.IsType<OkObjectResult>(await enabled.Message(source.UserMessageId, default));
+            var messageJson = System.Text.Json.JsonSerializer.Serialize(messageResult.Value);
+            Assert.Contains("outcome", messageJson);
+            Assert.Contains("invalid_memory_ref", messageJson);
+            Assert.Contains("16 GB", messageJson);
+            Assert.Contains("Completed", messageJson);
+            var retrievalResult = Assert.IsType<OkObjectResult>(await enabled.Retrieval(
+                new("Quanto de RAM meu PC tem hoje?"), default));
+            var retrievalJson = System.Text.Json.JsonSerializer.Serialize(retrievalResult.Value);
+            Assert.Contains("canonical_text_fallback", retrievalJson);
+            Assert.Contains("qdrant_unavailable", retrievalJson);
+            Assert.Contains("16 GB", retrievalJson);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task CanonicalLexicalFallbackKeepsTopicPrecisionWhenEmbeddingsFail()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            async Task<MemoryRecord> Remember(string content)
+            {
+                var source = await SourceAsync(db, content);
+                return (await service.RememberAsync(content, null, null,
+                    new(source.ConversationId, source.UserMessageId, source.Target), default)).Record;
+            }
+            var faze = await Remember("O time favorito de Rainbow Six do Pedro é a FaZe Clan.");
+            var monitor = await Remember("O monitor de Pedro é QHD a 180 Hz.");
+            var project = await Remember("Pedro desenvolve a Aegis.");
+            var postgres = await Remember("A Aegis usa PostgreSQL como fonte canônica do sistema de memória.");
+            var ram = await Remember("O PC de Pedro tem 32 GB de RAM.");
+            var historical = await store.SearchAsync("Historicamente, qual time eu dizia gostar mais depois da FaZe?",
+                10, clock.Now, default);
+            Assert.Equal(faze.Id, Assert.Single(historical).Id);
+            var database = await store.SearchAsync(
+                "Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo?",
+                10, clock.Now, default);
+            Assert.Contains(database, x => x.Id == postgres.Id);
+            Assert.Contains(database, x => x.Id == project.Id);
+            Assert.DoesNotContain(database, x => x.Id == monitor.Id || x.Id == ram.Id || x.Id == faze.Id);
+            var currentRam = await store.SearchAsync("Quanto de RAM meu PC tem hoje?", 10, clock.Now, default);
+            Assert.Equal(ram.Id, Assert.Single(currentRam).Id);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentWorkersRespectConversationOrderAndTerminalFailureReleasesSuccessor()
+    {
+        var (db, schema) = await NewDbAsync();
+        await using var secondDb = Db(schema);
+        try
+        {
+            var clock = new Clock();
+            var same = new Conversation();
+            var first = same.AddMessage("user", "Meu monitor é 4K 144 Hz.");
+            var next = same.AddMessage("user", "Não, falei errado.");
+            var other = new Conversation();
+            var independent = other.AddMessage("user", "Meu PC tem 32 GB de RAM.");
+            db.Conversations.AddRange(same, other);
+            db.MemoryExtractionJobs.AddRange(new MemoryExtractionJob(same.Id, first.Id, clock.Now),
+                new MemoryExtractionJob(same.Id, next.Id, clock.Now),
+                new MemoryExtractionJob(other.Id, independent.Id, clock.Now));
+            await db.SaveChangesAsync();
+            var worker1 = new MemoryExtractionJobStore(db);
+            var worker2 = new MemoryExtractionJobStore(secondDb);
+            var claims = await Task.WhenAll(worker1.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default),
+                worker2.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default));
+            Assert.Equal(2, claims.Count(x => x is not null));
+            Assert.Contains(claims, x => x!.UserMessageId == first.Id);
+            Assert.Contains(claims, x => x!.UserMessageId == independent.Id);
+            Assert.DoesNotContain(claims, x => x!.UserMessageId == next.Id);
+            Assert.Null(await worker1.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default));
+            var firstClaim = claims.Single(x => x!.UserMessageId == first.Id)!;
+            Assert.True(await worker1.FailAsync(firstClaim, "test_terminal_failure", clock.Now, null, default));
+            var successor = await worker2.ClaimAsync(clock.Now, TimeSpan.FromMinutes(2), default);
+            Assert.Equal(next.Id, successor?.UserMessageId);
+            Assert.Equal(MemoryExtractionStatus.Failed,
+                (await db.MemoryExtractionJobs.AsNoTracking().SingleAsync(x => x.UserMessageId == first.Id)).Status);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task RecentCanonicalContextCorrectsAndTransitionsWhileQdrantIsOffline()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db);
+            var vectors = new FakeVectors { Offline = true };
+            var semantic = new MemorySemanticSearch(store, new FakeEmbedding(), vectors,
+                new MemorySemanticOptions { EmbeddingDimensions = 3 }, clock, metrics);
+            var ingestion = new MemoryAutomaticIngestionService(store, semantic, clock, metrics);
+            async Task<(MemoryExtractionSource, MemoryExtractionSource)> Sources(string first, string second)
+            {
+                var conversation = new Conversation();
+                var firstMessage = conversation.AddMessage("user", first);
+                var secondMessage = conversation.AddMessage("user", second);
+                db.Conversations.Add(conversation); await db.SaveChangesAsync();
+                var firstSource = new MemoryExtractionSource(conversation.Id, firstMessage.Id, first,
+                    firstMessage.CreatedAt, []);
+                var secondSource = new MemoryExtractionSource(conversation.Id, secondMessage.Id, second,
+                    secondMessage.CreatedAt, [new("user", first, firstMessage.Id)]);
+                return (firstSource, secondSource);
+            }
+            var (monitorFirst, monitorSecond) = await Sources("Meu monitor é 4K 144 Hz.",
+                "Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz.");
+            await ingestion.ApplyAsync(monitorFirst, new(monitorFirst.Target, [], [], [], []),
+                new([Candidate("O monitor de Pedro é 4K 144 Hz.")]), default);
+            var monitorOld = await db.MemoryRecords.AsNoTracking().SingleAsync();
+            var monitorInput = await ingestion.BuildInputAsync(monitorSecond, default);
+            Assert.Equal("recent_conversation", Assert.Single(monitorInput.ExistingMemories).Source);
+            Assert.Equal(monitorOld.Id, monitorInput.ExistingMemories[0].Record.Id);
+            var monitorSummary = await ingestion.ApplyAsync(monitorSecond, monitorInput,
+                new([Candidate("O monitor de Pedro é QHD 180 Hz; a informação de que era 4K 144 Hz estava errada.",
+                    "correct", "m1")]), default);
+            Assert.Equal(1, monitorSummary.Corrected);
+            Assert.Equal(MemoryStatus.Superseded,
+                (await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == monitorOld.Id)).Status);
+            var correctedMonitor = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("QHD"));
+            Assert.Equal(MemoryStatus.Active, correctedMonitor.Status);
+            Assert.DoesNotContain("4K", correctedMonitor.Content);
+
+            var (ramFirst, ramSecond) = await Sources("Meu PC tinha 16 GB de RAM.",
+                "Troquei a memória do PC e agora ele tem 32 GB de RAM.");
+            await ingestion.ApplyAsync(ramFirst, new(ramFirst.Target, [], [], [], []),
+                new([Candidate("O PC de Pedro tinha 16 GB de RAM.")]), default);
+            var ramOld = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("16 GB"));
+            clock.Now = clock.Now.AddMinutes(1);
+            var ramInput = await ingestion.BuildInputAsync(ramSecond, default);
+            Assert.Equal(ramOld.Id, ramInput.ExistingMemories[0].Record.Id);
+            Assert.Equal("recent_conversation", ramInput.ExistingMemories[0].Source);
+            var ramSummary = await ingestion.ApplyAsync(ramSecond, ramInput,
+                new([Candidate("O PC de Pedro tem 32 GB de RAM.", "transition", "m1")]), default);
+            Assert.Equal(1, ramSummary.Transitioned);
+            var ramOldFinal = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == ramOld.Id);
+            var ramNewFinal = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Content.Contains("32 GB"));
+            Assert.Equal(MemoryStatus.Active, ramOldFinal.Status);
+            Assert.Equal(ramSecond.ObservedAt.ToUnixTimeMilliseconds(), ramOldFinal.ValidUntil!.Value.ToUnixTimeMilliseconds());
+            Assert.Equal(ramSecond.ObservedAt.ToUnixTimeMilliseconds(), ramNewFinal.ValidFrom!.Value.ToUnixTimeMilliseconds());
+            Assert.Equal(MemoryStatus.Active, ramNewFinal.Status);
+            var current = await store.SearchAsync("Quanto de RAM meu PC tem hoje?", 10, clock.Now, default);
+            Assert.Equal(ramNewFinal.Id, Assert.Single(current).Id);
+            var history = await store.SearchHistoricalAsync("Quanto de RAM meu PC tem hoje? e quanto tinha no passado?",
+                10, default);
+            Assert.Contains(history, x => x.Id == ramOldFinal.Id);
+            Assert.Contains(history, x => x.Id == ramNewFinal.Id);
+            var monitorCurrent = await store.SearchAsync("Qual é a resolução e a frequência do meu monitor?",
+                10, clock.Now, default);
+            Assert.Contains(monitorCurrent, x => x.Content.Contains("QHD"));
+            Assert.DoesNotContain(monitorCurrent, x => x.Content.Contains("4K"));
+            var graphOptions = new MemoryGraphOptions { Enabled = false };
+            var hybrid = new MemoryHybridRetriever(store, semantic,
+                new MemoryGraphQuery(new FakeGraph(), new MemoryGraphProjectionStore(db, clock),
+                    graphOptions, clock, metrics, store), graphOptions,
+                new MemorySemanticOptions { EmbeddingDimensions = 3 },
+                new MemoryAutoContextOptions(), clock, metrics);
+            var correctedHistory = await hybrid.SearchTracedAsync("Meu monitor já foi 4K 144 Hz?",
+                10, null, false, default);
+            Assert.DoesNotContain(correctedHistory.Memories, x => x.Content.Contains("4K"));
+            Assert.Contains(correctedHistory.Corrections!, x => x.IncorrectContent.Contains("4K") &&
+                x.ReplacementContent.Contains("QHD"));
+            var automaticHistory = await hybrid.BuildAutomaticContextResultAsync(
+                "Meu monitor já foi 4K 144 Hz?", default);
+            Assert.Contains("estava errada", automaticHistory.Text);
+            Assert.Empty(vectors.Candidates); // no semantic projection was ever processed
+            vectors.Offline = false;
+            var projector = new MemorySemanticProjectionProcessor(new MemorySemanticProjectionStore(db, clock),
+                new FakeEmbedding(), vectors, new MemorySemanticOptions { EmbeddingDimensions = 3 }, clock, metrics);
+            while (await projector.ProcessNextAsync(default)) { }
+            Assert.All(await db.MemoryProjectionJobs.AsNoTracking()
+                .Where(x => x.ProjectionTarget == MemoryProjectionTarget.Semantic).ToListAsync(),
+                x => Assert.Equal(MemoryProjectionStatus.Completed, x.Status));
+            Assert.DoesNotContain(monitorOld.Id, vectors.Projected.Keys);
+            Assert.Contains(ramOld.Id, vectors.Projected.Keys);
+            Assert.Contains(ramNewFinal.Id, vectors.Projected.Keys);
+            Assert.Contains((await db.MemoryRecords.AsNoTracking()
+                .SingleAsync(x => x.Content.Contains("QHD"))).Id, vectors.Projected.Keys);
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task RankedPreferenceDoesNotClosePrimaryFavoriteEvenWhenExtractorRequestsTransition()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db);
+            var semantic = new MemorySemanticSearch(store, new FakeEmbedding(),
+                new FakeVectors { Offline = true },
+                new MemorySemanticOptions { EmbeddingDimensions = 3 }, clock, metrics);
+            var ingestion = new MemoryAutomaticIngestionService(store, semantic, clock, metrics);
+            var conversation = new Conversation();
+            var first = conversation.AddMessage("user", "Meu time favorito de R6 é a FaZe Clan.");
+            var second = conversation.AddMessage("user", "Depois da FaZe, meu time de R6 favorito é a DarkZero.");
+            db.Conversations.Add(conversation); await db.SaveChangesAsync();
+            var firstSource = new MemoryExtractionSource(conversation.Id, first.Id, first.Content,
+                first.CreatedAt, []);
+            await ingestion.ApplyAsync(firstSource, new(first.Content, [], [], [], []),
+                new([Candidate("O time favorito de Pedro em Rainbow Six Siege é a FaZe Clan.")]), default);
+            var primary = await db.MemoryRecords.AsNoTracking().SingleAsync();
+            var secondSource = new MemoryExtractionSource(conversation.Id, second.Id, second.Content,
+                second.CreatedAt, [new("user", first.Content, first.Id)]);
+            var input = await ingestion.BuildInputAsync(secondSource, default);
+            var summary = await ingestion.ApplyAsync(secondSource, input,
+                new([Candidate("O time favorito de Pedro em R6 é a DarkZero.", "transition", "m1")]), default);
+            Assert.Equal(1, summary.Created);
+            Assert.Equal(0, summary.Transitioned);
+            var retained = await db.MemoryRecords.AsNoTracking().SingleAsync(x => x.Id == primary.Id);
+            Assert.Equal(MemoryStatus.Active, retained.Status);
+            Assert.Null(retained.ValidUntil);
+            Assert.Contains(await db.MemoryRecords.AsNoTracking().ToListAsync(), x =>
+                x.Status == MemoryStatus.Active && x.Content.Contains("segundo time favorito") &&
+                x.Content.Contains("DarkZero"));
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task HubFanoutDoesNotRetrieveUnrelatedSupportingMemories()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var store = new MemoryStore(db); var service = new MemoryService(store, clock, metrics);
+            async Task<MemoryRecord> Remember(string content)
+            {
+                var source = await SourceAsync(db, content);
+                return (await service.RememberAsync(content, null, null,
+                    new(source.ConversationId, source.UserMessageId, source.Target), default)).Record;
+            }
+            var fazeMemory = await Remember("Pedro prefere FaZe Clan no Rainbow Six Siege.");
+            var monitorMemory = await Remember("O monitor de Pedro é 4K 144 Hz.");
+            var aegisMemory = await Remember("Pedro desenvolve a Aegis.");
+            var pedro = await service.CreateEntityAsync("Pedro", "PERSON", default);
+            var faze = await service.CreateEntityAsync("FaZe Clan", "TEAM", default);
+            var monitor = await service.CreateEntityAsync("Monitor", "DEVICE", default);
+            var aegis = await service.CreateEntityAsync("Aegis", "PROJECT", default);
+            var prefers = await service.CreateRelationAsync(pedro.Id, "PREFERS", faze.Id, null, null, default);
+            var uses = await service.CreateRelationAsync(pedro.Id, "USES", monitor.Id, null, null, default);
+            var develops = await service.CreateRelationAsync(pedro.Id, "DEVELOPS", aegis.Id, null, null, default);
+            await service.SupportRelationAsync(prefers.Id, fazeMemory.Id, default);
+            await service.SupportRelationAsync(uses.Id, monitorMemory.Id, default);
+            await service.SupportRelationAsync(develops.Id, aegisMemory.Id, default);
+            var vectors = new FakeVectors(); vectors.Candidates.Add(new(fazeMemory.Id, 0.9));
+            var graph = new FakeGraph();
+            graph.Paths.Add(new([pedro.Id, monitor.Id], [uses.Id]));
+            graph.Paths.Add(new([pedro.Id, aegis.Id], [develops.Id]));
+            var options = new MemorySemanticOptions { EmbeddingDimensions = 3 };
+            var graphOptions = new MemoryGraphOptions();
+            var hybrid = new MemoryHybridRetriever(store,
+                new MemorySemanticSearch(store, new FakeEmbedding(), vectors, options, clock, metrics),
+                new MemoryGraphQuery(graph, new MemoryGraphProjectionStore(db, clock), graphOptions, clock, metrics, store),
+                graphOptions, options, new MemoryAutoContextOptions(), clock, metrics);
+            var result = await hybrid.SearchTracedAsync("Historicamente, qual time eu dizia gostar mais depois da FaZe?",
+                10, null, false, default);
+            Assert.DoesNotContain(pedro.Id, result.Trace!.TraversalSeeds);
+            Assert.Contains(fazeMemory.Id, result.Memories.Select(x => x.Id));
+            Assert.DoesNotContain(monitorMemory.Id, result.Memories.Select(x => x.Id));
+            Assert.DoesNotContain(aegisMemory.Id, result.Memories.Select(x => x.Id));
+            Assert.DoesNotContain(uses.Id, result.Paths.SelectMany(x => x.Relations).Select(x => x.Id));
+            Assert.DoesNotContain(develops.Id, result.Paths.SelectMany(x => x.Relations).Select(x => x.Id));
+            var named = await hybrid.SearchTracedAsync(
+                "Historicamente, qual time Pedro dizia gostar mais depois da FaZe?",
+                10, null, false, default);
+            Assert.DoesNotContain(pedro.Id, named.Trace!.TraversalSeeds);
+            Assert.DoesNotContain(monitorMemory.Id, named.Memories.Select(x => x.Id));
+            Assert.DoesNotContain(aegisMemory.Id, named.Memories.Select(x => x.Id));
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
     }
 
     [PostgresFact]

@@ -34,17 +34,80 @@ public sealed class MemoryStore(AegisDbContext db) : IMemoryStore
     public Task<MemoryRecord?> FindRecordAsync(Guid id, CancellationToken ct) => db.MemoryRecords.FirstOrDefaultAsync(x => x.Id == id, ct);
     public Task<bool> HasEvidenceAsync(Guid memoryId, MemorySourceKind kind, Guid? messageId, CancellationToken ct) =>
         db.MemoryEvidences.AnyAsync(x => x.MemoryId == memoryId && x.SourceKind == kind && x.SourceMessageId == messageId, ct);
-    public async Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, DateTimeOffset now, CancellationToken ct)
+    public Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, DateTimeOffset now,
+        CancellationToken ct) => SearchCoreAsync(query, limit, now, false, ct);
+
+    public Task<IReadOnlyList<MemoryRecord>> SearchHistoricalAsync(string query, int limit,
+        CancellationToken ct) => SearchCoreAsync(query, limit, DateTimeOffset.UtcNow, true, ct);
+
+    private async Task<IReadOnlyList<MemoryRecord>> SearchCoreAsync(string query, int limit,
+        DateTimeOffset now, bool historical, CancellationToken ct)
     {
-        var normalized = query.ToUpperInvariant();
-        return await db.MemoryRecords.AsNoTracking()
-            .Where(x => x.Status == MemoryStatus.Active && (x.ValidFrom == null || x.ValidFrom <= now) &&
-                (x.ValidUntil == null || x.ValidUntil > now) && x.Content.ToUpper().Contains(normalized))
-            .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Take(limit).ToListAsync(ct);
+        var tokens = MemoryQueryTerms.SqlTokens(query);
+        if (tokens.Count == 0) return [];
+        List<MemoryRecord> candidates;
+        if (db.Database.IsNpgsql())
+        {
+            var tsQuery = string.Join(" | ", tokens);
+            candidates = await db.MemoryRecords.FromSqlInterpolated($"""
+                SELECT * FROM memory_records
+                WHERE "Status" = 'Active'
+                  AND ("ValidFrom" IS NULL OR "ValidFrom" <= {now})
+                  AND ({historical} OR "ValidUntil" IS NULL OR "ValidUntil" > {now})
+                  AND to_tsvector('portuguese', "Content") @@ to_tsquery('portuguese', {tsQuery})
+                ORDER BY "CreatedAt" DESC LIMIT 500
+                """).AsNoTracking().ToListAsync(ct);
+        }
+        else
+        {
+            candidates = await db.MemoryRecords.AsNoTracking()
+                .Where(x => x.Status == MemoryStatus.Active &&
+                    (x.ValidFrom == null || x.ValidFrom <= now) &&
+                    (historical || x.ValidUntil == null || x.ValidUntil > now))
+                .OrderByDescending(x => x.CreatedAt).Take(500).ToListAsync(ct);
+        }
+        var terms = MemoryQueryTerms.Stems(query);
+        var documentTerms = candidates.ToDictionary(x => x.Id, x => MemoryQueryTerms.Stems(x.Content));
+        var frequency = terms.ToDictionary(x => x, x => candidates.Count(c => documentTerms[c.Id].Contains(x)));
+        return candidates.Select(x => new
+            {
+                Record = x,
+                Matches = terms.Where(t => documentTerms[x.Id].Contains(t)).ToArray()
+            })
+            .Where(x => x.Matches.Length >= 2 || x.Matches.Length == 1 &&
+                (terms.Count == 1 || x.Matches[0].Length >= 7 && frequency[x.Matches[0]] == 1))
+            .OrderByDescending(x => x.Matches.Sum(t => 1.0 / frequency[t]))
+            .ThenByDescending(x => x.Matches.Length)
+            .ThenByDescending(x => x.Record.CreatedAt)
+            .Take(limit).Select(x => x.Record).ToArray();
     }
     public async Task<IReadOnlyList<MemoryRecord>> LoadActiveByIdsAsync(IReadOnlyList<Guid> ids, DateTimeOffset now, CancellationToken ct) =>
         await db.MemoryRecords.AsNoTracking().Where(x => ids.Contains(x.Id) && x.Status == MemoryStatus.Active &&
             (x.ValidFrom == null || x.ValidFrom <= now) && (x.ValidUntil == null || x.ValidUntil > now)).ToListAsync(ct);
+    public async Task<IReadOnlyList<MemoryRecord>> LoadHistoricalByIdsAsync(IReadOnlyList<Guid> ids,
+        DateTimeOffset now, CancellationToken ct) =>
+        await db.MemoryRecords.AsNoTracking().Where(x => ids.Contains(x.Id) &&
+            x.Status == MemoryStatus.Active && (x.ValidFrom == null || x.ValidFrom <= now)).ToListAsync(ct);
+    public async Task<IReadOnlyList<MemoryRecord>> LoadRecentConversationMemoriesAsync(Guid conversationId,
+        IReadOnlyList<Guid> messageIds, CancellationToken ct)
+    {
+        if (messageIds.Count == 0) return [];
+        var evidence = await db.MemoryEvidences.AsNoTracking()
+            .Where(x => x.SourceConversationId == conversationId && x.SourceMessageId != null &&
+                messageIds.Contains(x.SourceMessageId.Value) && x.SourceKind == MemorySourceKind.UserStatement)
+            .Select(x => new { x.SourceMessageId, x.MemoryId }).ToListAsync(ct);
+        var ids = evidence.Select(x => x.MemoryId).Distinct().ToArray();
+        var records = await db.MemoryRecords.AsNoTracking()
+            .Where(x => ids.Contains(x.Id) && x.Status == MemoryStatus.Active).ToListAsync(ct);
+        var order = messageIds.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        return records.OrderByDescending(x => evidence.Where(e => e.MemoryId == x.Id)
+            .Max(e => order.GetValueOrDefault(e.SourceMessageId!.Value))).ToArray();
+    }
+    public async Task<IReadOnlyList<MemoryRecord>> FindSupersededByReplacementIdsAsync(
+        IReadOnlyList<Guid> ids, int limit, CancellationToken ct) =>
+        await db.MemoryRecords.AsNoTracking().Where(x => x.Status == MemoryStatus.Superseded &&
+            x.SupersededById != null && ids.Contains(x.SupersededById.Value))
+            .OrderByDescending(x => x.SupersededAt).Take(limit).ToListAsync(ct);
     public void Add(MemoryRecord record) => db.MemoryRecords.Add(record);
     public void Add(MemoryEvidence evidence) => db.MemoryEvidences.Add(evidence);
     public void Add(MemoryEntity entity) => db.MemoryEntities.Add(entity);

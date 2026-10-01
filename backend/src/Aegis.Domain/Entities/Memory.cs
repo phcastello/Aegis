@@ -276,16 +276,18 @@ public sealed class MemoryExtractionJob : AuditableEntity
     public int TransitionedCount { get; private set; }
     public int GraphMutationsCount { get; private set; }
     public int SkippedCount { get; private set; }
+    public string? OutcomeJson { get; private set; }
     public DateTimeOffset? CompletedAt { get; private set; }
 
     public bool Complete(Guid leaseId, DateTimeOffset now, int candidates, int created, int reinforced,
-        int corrected, int transitioned, int graphMutations, int skipped)
+        int corrected, int transitioned, int graphMutations, int skipped, string? outcomeJson = null)
     {
         if (Status != MemoryExtractionStatus.Processing || LeaseId != leaseId) return false;
         Status = MemoryExtractionStatus.Completed;
         CandidatesCount = candidates; CreatedCount = created; ReinforcedCount = reinforced;
         CorrectedCount = corrected; TransitionedCount = transitioned;
         GraphMutationsCount = graphMutations; SkippedCount = skipped;
+        OutcomeJson = outcomeJson;
         CompletedAt = now; LeaseId = null; LeaseExpiresAt = null; NextAttemptAt = null; LastError = null;
         Touch(now); return true;
     }

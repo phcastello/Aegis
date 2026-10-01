@@ -64,7 +64,17 @@ public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(ser
     protected override async Task<AegisToolResult> RunAsync(JsonElement args, ToolExecutionContext context, CancellationToken ct)
     {
         var a = args.Deserialize<Arguments>(JsonOptions)!;
-        var result = await Service.SearchHybridAsync(a.Query, a.Limit, Instant(a.AsOf), context.ConversationId, ct);
+        var asOf = Instant(a.AsOf);
+        var userQuestion = context.UserContent.Trim();
+        var useOriginalQuestion = userQuestion.Length is > 0 and <= 200 && userQuestion.EndsWith('?');
+        var result = await Service.SearchHybridAsync(useOriginalQuestion ? userQuestion : a.Query,
+            a.Limit, asOf, context.ConversationId, ct);
+        // A model-formulated query can be broader than the user's actual question. For a
+        // concrete question, keep the original wording as the relevance anchor. Anaphoric
+        // questions can still fall back to the model's resolved query when it found nothing.
+        if (useOriginalQuestion && result.Memories.Count == 0 && result.Paths.Count == 0 &&
+            !string.Equals(userQuestion, a.Query, StringComparison.OrdinalIgnoreCase))
+            result = await Service.SearchHybridAsync(a.Query, a.Limit, asOf, context.ConversationId, ct);
         var relationItems = result.Paths.SelectMany(x => x.Relations.Select(r => new
         {
             id = r.Id,
@@ -76,6 +86,9 @@ public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(ser
             .Take(a.Limit).ToArray();
         var response = Ok(new { memories = result.Memories.Select((record, i) => new { position = i + 1, memory = View(record) }),
             relations = relationItems.Select(x => new { x.subject, x.predicate, x.@object, x.ValidFrom, x.ValidUntil }),
+            corrections = (result.Corrections ?? []).Select(x => new
+                { incorrectStatement = x.IncorrectContent, correctedStatement = x.ReplacementContent,
+                    meaning = "A declaração antiga era incorreta; não foi um fato histórico verdadeiro." }),
             searchMode = result.Mode });
         await Service.RecordConsultedAsync(context, result.Memories.Select(x => x.Id).ToArray(),
             relationItems.Select(x => x.id).ToArray(), ct);

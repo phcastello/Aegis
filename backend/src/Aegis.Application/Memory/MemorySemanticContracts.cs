@@ -5,12 +5,12 @@ namespace Aegis.Application.Memory;
 public sealed class MemorySemanticOptions
 {
     public bool Enabled { get; set; } = true;
-    public string EmbeddingModel { get; set; } = "text-embedding-3-small";
+    public string EmbeddingModel { get; set; } = "text-embedding-3-large";
     public int EmbeddingDimensions { get; set; } = 1536;
     public string EmbeddingBaseUrl { get; set; } = "https://api.openai.com";
     public string EmbeddingApiKey { get; set; } = "";
     public string QdrantBaseUrl { get; set; } = "http://qdrant:6333";
-    public string CollectionName { get; set; } = "aegis_memory_semantic_v1";
+    public string CollectionName { get; set; } = "aegis_memory_semantic_large_v1";
     public double SearchScoreThreshold { get; set; } = 0.45;
     public int WorkerPollSeconds { get; set; } = 5;
 }

@@ -10,7 +10,14 @@ public interface IMemoryStore
     Task<MemoryRecord?> FindRecordAsync(Guid id, CancellationToken ct);
     Task<bool> HasEvidenceAsync(Guid memoryId, MemorySourceKind kind, Guid? messageId, CancellationToken ct);
     Task<IReadOnlyList<MemoryRecord>> SearchAsync(string query, int limit, DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> SearchHistoricalAsync(string query, int limit, CancellationToken ct);
     Task<IReadOnlyList<MemoryRecord>> LoadActiveByIdsAsync(IReadOnlyList<Guid> ids, DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> LoadHistoricalByIdsAsync(IReadOnlyList<Guid> ids,
+        DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> LoadRecentConversationMemoriesAsync(Guid conversationId,
+        IReadOnlyList<Guid> messageIds, CancellationToken ct);
+    Task<IReadOnlyList<MemoryRecord>> FindSupersededByReplacementIdsAsync(IReadOnlyList<Guid> ids,
+        int limit, CancellationToken ct);
     void Add(MemoryRecord record);
     void Add(MemoryEvidence evidence);
     void Add(MemoryEntity entity);

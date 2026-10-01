@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = (ROOT / "backend/src/Aegis.Api/Prompts/aegis_identity.md").read_text()
-MODEL = "gpt-5.6-luna"
+MODEL = "gpt-6-luna"
 EXISTING_NOTE = "Preciso levar os exames."
 PROACTIVITY_EMAILS = {
     "proactive_webinar": {

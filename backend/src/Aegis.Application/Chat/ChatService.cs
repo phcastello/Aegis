@@ -75,7 +75,8 @@ public sealed class ChatService(
             var modelRequest = CreateModelRequest(promptResult, userContent);
             var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
             EnsureCurrent(turn);
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
+            var finalContent = DeclarativeResponseGuard.Normalize(userContent, completion.Content);
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);
@@ -167,6 +168,7 @@ public sealed class ChatService(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
 
         var content = new StringBuilder();
+        var reviewDeclaration = DeclarativeResponseGuard.ShouldReview(userContent);
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
             EnsureCurrent(turn);
@@ -177,7 +179,7 @@ public sealed class ChatService(
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 content.Append(chunk.Content);
-                yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
+                if (!reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
 
             if (!chunk.IsDone)
@@ -191,7 +193,11 @@ public sealed class ChatService(
             }
 
             EnsureCurrent(turn);
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+            var finalContent = reviewDeclaration
+                ? DeclarativeResponseGuard.Normalize(userContent, content.ToString())
+                : content.ToString();
+            if (reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, finalContent);
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);

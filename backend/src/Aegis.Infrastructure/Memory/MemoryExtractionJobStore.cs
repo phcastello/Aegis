@@ -22,10 +22,19 @@ public sealed class MemoryExtractionJobStore(AegisDbContext db) : IMemoryExtract
         command.Transaction = tx.GetDbTransaction();
         command.CommandText = """
             WITH candidate AS (
-              SELECT "Id" FROM memory_extraction_jobs
-              WHERE ("Status" = 'Pending' AND "Attempt" < 6 AND ("NextAttemptAt" IS NULL OR "NextAttemptAt" <= @now))
-                 OR ("Status" = 'Processing' AND "Attempt" < 6 AND "LeaseExpiresAt" <= @now)
-              ORDER BY "CreatedAt", "Id" FOR UPDATE SKIP LOCKED LIMIT 1
+              SELECT job."Id" FROM memory_extraction_jobs AS job
+              JOIN chat_messages AS message ON message."Id" = job."UserMessageId"
+              WHERE ((job."Status" = 'Pending' AND job."Attempt" < 6 AND
+                         (job."NextAttemptAt" IS NULL OR job."NextAttemptAt" <= @now))
+                  OR (job."Status" = 'Processing' AND job."Attempt" < 6 AND job."LeaseExpiresAt" <= @now))
+                AND NOT EXISTS (
+                  SELECT 1 FROM memory_extraction_jobs AS prior
+                  JOIN chat_messages AS earlier ON earlier."Id" = prior."UserMessageId"
+                  WHERE prior."ConversationId" = job."ConversationId"
+                    AND prior."Status" IN ('Pending', 'Processing')
+                    AND (earlier."CreatedAt", earlier."Id") < (message."CreatedAt", message."Id")
+                )
+              ORDER BY message."CreatedAt", message."Id" FOR UPDATE OF job SKIP LOCKED LIMIT 1
             )
             UPDATE memory_extraction_jobs AS job SET
               "Status" = 'Processing', "Attempt" = job."Attempt" + 1,
@@ -50,19 +59,22 @@ public sealed class MemoryExtractionJobStore(AegisDbContext db) : IMemoryExtract
         var target = await db.ChatMessages.AsNoTracking().SingleOrDefaultAsync(x => x.Id == messageId &&
             x.ConversationId == conversationId && x.Role == "user", ct);
         if (target is null) return null;
-        var recent = await db.ChatMessages.AsNoTracking().Where(x => x.ConversationId == conversationId &&
-                x.CreatedAt < target.CreatedAt &&
-                (x.Role == "user" || x.Role == "assistant"))
-            .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id).Take(6)
-            .Select(x => new { x.Role, x.Content }).ToListAsync(ct);
+        var recent = await db.ChatMessages.FromSqlInterpolated($"""
+            SELECT * FROM chat_messages WHERE "ConversationId" = {conversationId}
+              AND ("CreatedAt", "Id") < ({target.CreatedAt}, {target.Id})
+              AND "Role" IN ('user', 'assistant')
+            ORDER BY "CreatedAt" DESC, "Id" DESC LIMIT 6
+            """).AsNoTracking().ToListAsync(ct);
         return new(conversationId, messageId, target.Content[..Math.Min(target.Content.Length, 12000)], target.CreatedAt,
             recent.AsEnumerable().Reverse().Select(x => new MemoryRecentMessage(x.Role,
-                x.Content[..Math.Min(x.Content.Length, 800)])).ToArray(), job.Id, job.LeaseId);
+                x.Content[..Math.Min(x.Content.Length, 800)], x.Id)).ToArray(), job.Id, job.LeaseId);
     }
 
     public Task<bool> CompleteAsync(MemoryExtractionJob job, MemoryExtractionSummary summary, DateTimeOffset now, CancellationToken ct) =>
         UpdateAsync(job, x => x.Complete(job.LeaseId!.Value, now, summary.Candidates, summary.Created,
-            summary.Reinforced, summary.Corrected, summary.Transitioned, summary.GraphMutations, summary.Skipped), ct);
+            summary.Reinforced, summary.Corrected, summary.Transitioned, summary.GraphMutations, summary.Skipped,
+            System.Text.Json.JsonSerializer.Serialize(new { skipReasons = summary.SkipReasons ??
+                new Dictionary<string, int>() })), ct);
 
     public Task<bool> FailAsync(MemoryExtractionJob job, string code, DateTimeOffset now, TimeSpan? delay, CancellationToken ct) =>
         UpdateAsync(job, x => x.Fail(job.LeaseId!.Value, code, now, delay), ct);
