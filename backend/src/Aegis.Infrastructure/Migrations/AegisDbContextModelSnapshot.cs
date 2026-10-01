@@ -323,6 +323,523 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("llm_request_audits", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryActivityEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DedupeKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid?>("UserMessageId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
+
+                    b.HasIndex("DedupeKey")
+                        .IsUnique();
+
+                    b.HasIndex("UserMessageId");
+
+                    b.ToTable("memory_activity_events", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_activity_kind", "\"Kind\" IN ('Used','Consulted','Created','Updated','Deleted')");
+
+                            t.HasCheckConstraint("CK_memory_activity_source", "\"Source\" IN ('AutomaticContext','ObservedContext','AutomaticExtraction','ExplicitTool')");
+
+                            t.HasCheckConstraint("CK_memory_activity_target", "\"TargetType\" IN ('MemoryRecord','MemoryRelation')");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CanonicalName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EntityType")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("RetiredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName", "EntityType");
+
+                    b.ToTable("memory_entities", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_entity_name", "length(btrim(\"CanonicalName\")) > 0 AND length(btrim(\"NormalizedName\")) > 0");
+
+                            t.HasCheckConstraint("CK_memory_entity_revision", "\"Revision\" >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryEntityAlias", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Alias")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NormalizedAlias")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedAlias");
+
+                    b.HasIndex("EntityId", "NormalizedAlias")
+                        .IsUnique();
+
+                    b.ToTable("memory_entity_aliases", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_alias_name", "length(btrim(\"Alias\")) > 0 AND length(btrim(\"NormalizedAlias\")) > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryEvidence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("MemoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("ObservedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SourceConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<Guid?>("SourceMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MemoryId");
+
+                    b.HasIndex("SourceConversationId");
+
+                    b.HasIndex("SourceMessageId");
+
+                    b.HasIndex("MemoryId", "SourceKind", "SourceMessageId")
+                        .IsUnique()
+                        .HasFilter("\"SourceMessageId\" IS NOT NULL");
+
+                    b.ToTable("memory_evidence", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_source_kind", "\"SourceKind\" IN ('ExplicitMemoryRequest','UserStatement','ToolObservation','Inference')");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryExtractionJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("CandidatesCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("CorrectedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CreatedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("GraphMutationsCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OutcomeJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTimeOffset?>("ProcessingStartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ReinforcedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SkippedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int>("TransitionedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UserMessageId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
+
+                    b.HasIndex("UserMessageId")
+                        .IsUnique()
+                        .HasFilter("\"UserMessageId\" IS NOT NULL");
+
+                    b.HasIndex("Status", "NextAttemptAt", "CreatedAt");
+
+                    b.ToTable("memory_extraction_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_extraction_attempt", "\"Attempt\" >= 0");
+
+                            t.HasCheckConstraint("CK_memory_extraction_counts", "\"CandidatesCount\" >= 0 AND \"CreatedCount\" >= 0 AND \"ReinforcedCount\" >= 0 AND \"CorrectedCount\" >= 0 AND \"TransitionedCount\" >= 0 AND \"GraphMutationsCount\" >= 0 AND \"SkippedCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_memory_extraction_status", "\"Status\" IN ('Pending','Processing','Completed','Failed','Suppressed')");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryProjectionJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AggregateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AggregateRevision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AggregateType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Operation")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("ProcessingStartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ProjectionTarget")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status", "NextAttemptAt", "CreatedAt");
+
+                    b.HasIndex("ProjectionTarget", "AggregateType", "AggregateId", "AggregateRevision", "Operation")
+                        .IsUnique();
+
+                    b.ToTable("memory_projection_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_job_aggregate", "\"AggregateType\" IN ('MemoryRecord','MemoryEntity','MemoryRelation')");
+
+                            t.HasCheckConstraint("CK_memory_job_attempt", "\"Attempt\" >= 0");
+
+                            t.HasCheckConstraint("CK_memory_job_operation", "\"Operation\" IN ('Upsert','Delete')");
+
+                            t.HasCheckConstraint("CK_memory_job_revision", "\"AggregateRevision\" >= 1");
+
+                            t.HasCheckConstraint("CK_memory_job_status", "\"Status\" IN ('Pending','Processing','Completed','Failed')");
+
+                            t.HasCheckConstraint("CK_memory_job_target", "\"ProjectionTarget\" IN ('Semantic','Graph')");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ForgottenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SupersededById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ValidFrom")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ValidUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ContentHash")
+                        .HasFilter("\"Status\" = 'Active'");
+
+                    b.HasIndex("SupersededById");
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.ToTable("memory_records", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_content", "length(btrim(\"Content\")) > 0");
+
+                            t.HasCheckConstraint("CK_memory_lifecycle", "(\"Status\" = 'Active' AND \"SupersededAt\" IS NULL AND \"SupersededById\" IS NULL AND \"ForgottenAt\" IS NULL) OR (\"Status\" = 'Superseded' AND \"SupersededAt\" IS NOT NULL AND \"SupersededById\" IS NOT NULL AND \"ForgottenAt\" IS NULL) OR (\"Status\" = 'Forgotten' AND \"ForgottenAt\" IS NOT NULL AND \"SupersededAt\" IS NULL AND \"SupersededById\" IS NULL)");
+
+                            t.HasCheckConstraint("CK_memory_revision", "\"Revision\" >= 1");
+
+                            t.HasCheckConstraint("CK_memory_status", "\"Status\" IN ('Active','Superseded','Forgotten')");
+
+                            t.HasCheckConstraint("CK_memory_supersession", "\"SupersededById\" IS NULL OR \"SupersededById\" <> \"Id\"");
+
+                            t.HasCheckConstraint("CK_memory_validity", "\"ValidFrom\" IS NULL OR \"ValidUntil\" IS NULL OR \"ValidUntil\" > \"ValidFrom\"");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRelation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ForgottenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ObjectEntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Predicate")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("SubjectEntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SupersededById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ValidFrom")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ValidUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ObjectEntityId");
+
+                    b.HasIndex("SupersededById");
+
+                    b.HasIndex("SubjectEntityId", "Predicate", "ObjectEntityId")
+                        .HasFilter("\"Status\" = 'Active'");
+
+                    b.ToTable("memory_relations", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_memory_relation_lifecycle", "(\"Status\" = 'Active' AND \"SupersededAt\" IS NULL AND \"SupersededById\" IS NULL AND \"ForgottenAt\" IS NULL) OR (\"Status\" = 'Superseded' AND \"SupersededAt\" IS NOT NULL AND \"SupersededById\" IS NOT NULL AND \"ForgottenAt\" IS NULL) OR (\"Status\" = 'Forgotten' AND \"ForgottenAt\" IS NOT NULL AND \"SupersededAt\" IS NULL AND \"SupersededById\" IS NULL)");
+
+                            t.HasCheckConstraint("CK_memory_relation_predicate", "\"Predicate\" ~ '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$'");
+
+                            t.HasCheckConstraint("CK_memory_relation_revision", "\"Revision\" >= 1");
+
+                            t.HasCheckConstraint("CK_memory_relation_status", "\"Status\" IN ('Active','Superseded','Forgotten')");
+
+                            t.HasCheckConstraint("CK_memory_relation_supersession", "\"SupersededById\" IS NULL OR \"SupersededById\" <> \"Id\"");
+
+                            t.HasCheckConstraint("CK_memory_relation_validity", "\"ValidFrom\" IS NULL OR \"ValidUntil\" IS NULL OR \"ValidUntil\" > \"ValidFrom\"");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRelationEvidence", b =>
+                {
+                    b.Property<Guid>("RelationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MemoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("RelationId", "MemoryId");
+
+                    b.HasIndex("MemoryId");
+
+                    b.ToTable("memory_relation_evidence", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.MessageFeedback", b =>
                 {
                     b.Property<Guid>("Id")
@@ -800,6 +1317,103 @@ namespace Aegis.Infrastructure.Migrations
                     b.Navigation("Conversation");
 
                     b.Navigation("UserMessage");
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryActivityEvent", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("UserMessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryEntityAlias", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.MemoryEntity", null)
+                        .WithMany()
+                        .HasForeignKey("EntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryEvidence", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.MemoryRecord", null)
+                        .WithMany()
+                        .HasForeignKey("MemoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("SourceConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("SourceMessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryExtractionJob", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("UserMessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRecord", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.MemoryRecord", null)
+                        .WithMany()
+                        .HasForeignKey("SupersededById")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRelation", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.MemoryEntity", null)
+                        .WithMany()
+                        .HasForeignKey("ObjectEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.MemoryEntity", null)
+                        .WithMany()
+                        .HasForeignKey("SubjectEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.MemoryRelation", null)
+                        .WithMany()
+                        .HasForeignKey("SupersededById")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.MemoryRelationEvidence", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.MemoryRecord", null)
+                        .WithMany()
+                        .HasForeignKey("MemoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.MemoryRelation", null)
+                        .WithMany()
+                        .HasForeignKey("RelationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.MessageFeedback", b =>

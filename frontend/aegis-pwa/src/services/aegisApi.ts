@@ -4,6 +4,7 @@ import type {
   ConversationPage,
   ConversationSummary,
   MessageFeedbackResponse,
+  MemoryActivitySnapshot,
   SendMessageRequest,
   SendMessageResponse,
   StartSpeechRequest,
@@ -107,6 +108,7 @@ export async function sendMessageStream(
       state?: string;
       conversationTitle?: string | null;
       titleSource?: string | null;
+      memoryActivity?: MemoryActivitySnapshot | null;
     };
 
     switch (event.type) {
@@ -139,7 +141,8 @@ export async function sendMessageStream(
             conversationId: event.conversationId,
             messageId: event.assistantMessageId || event.messageId!,
             conversationTitle: event.conversationTitle,
-            titleSource: event.titleSource
+            titleSource: event.titleSource,
+            memoryActivity: event.memoryActivity
           });
         }
         break;
@@ -278,6 +281,12 @@ export async function transcribeAudio(
 
 export async function getConversation(conversationId: string): Promise<Conversation> {
   return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`);
+}
+
+export function getMemoryActivity(assistantMessageId: string, signal?: AbortSignal): Promise<MemoryActivitySnapshot> {
+  return requestJson<MemoryActivitySnapshot>(`/api/chat/messages/${encodeURIComponent(assistantMessageId)}/memory-activity`, {
+    cache: 'no-store', signal
+  });
 }
 
 export async function getConversations(limit = 30, cursor?: string | null): Promise<ConversationPage> {

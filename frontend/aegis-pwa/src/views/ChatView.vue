@@ -14,6 +14,7 @@ import {
   getConversations,
   getEmailStatus,
   getHealth,
+  getMemoryActivity,
   renameConversation,
   sendMessageStream,
   submitMessageFeedback
@@ -22,6 +23,7 @@ import { useAegisVoice } from '../composables/useAegisVoice';
 import { useAegisTranscription } from '../composables/useAegisTranscription';
 import { useSidebarGesture } from '../composables/useSidebarGesture';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
+import { pollMemoryActivity } from '../services/memoryActivityPolling';
 import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
   ConversationSummary,
@@ -76,6 +78,8 @@ const voice = useAegisVoice();
 const transcription = useAegisTranscription(insertTranscriptIntoDraft);
 let streamScrollFrame: number | null = null;
 let historyRefreshTimer: number | null = null;
+let memoryActivityAbort: AbortController | null = null;
+let memoryActivityGeneration = 0;
 let viewportCleanup: (() => void) | null = null;
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
@@ -289,6 +293,37 @@ function getCompletedWordPrefix(content: string): string {
   return content.slice(0, completedLength);
 }
 
+function cancelMemoryActivityPolling(): void {
+  memoryActivityGeneration++;
+  memoryActivityAbort?.abort();
+  memoryActivityAbort = null;
+}
+
+function startMemoryActivityPolling(message: LocalChatMessage): void {
+  cancelMemoryActivityPolling();
+  if (!message.memoryActivity?.pending || !message.serverId) return;
+  const generation = memoryActivityGeneration;
+  const messageId = message.serverId;
+  const initialConversationId = message.conversationId;
+  const controller = new AbortController();
+  memoryActivityAbort = controller;
+  const active = (): boolean => generation === memoryActivityGeneration &&
+    conversationId.value === initialConversationId &&
+    messages.value.includes(message) && message.serverId === messageId &&
+    !controller.signal.aborted;
+  void pollMemoryActivity(
+    (signal) => getMemoryActivity(messageId, signal),
+    (snapshot) => { message.memoryActivity = snapshot; },
+    controller.signal,
+    active
+  );
+}
+
+function resumeMemoryActivityPolling(): void {
+  const latest = [...messages.value].reverse().find((message) => message.role === 'assistant');
+  if (latest) startMemoryActivityPolling(latest);
+}
+
 async function restoreConversation(): Promise<void> {
   if (!conversationId.value) {
     return;
@@ -306,6 +341,7 @@ async function restoreConversation(): Promise<void> {
       ...message,
       serverId: message.id
     }));
+    resumeMemoryActivityPolling();
     scrollToLatest();
     focusComposer();
   } catch {
@@ -400,6 +436,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
   }
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
   historyRefreshTimer = null;
+  cancelMemoryActivityPolling();
 
   transcription.discard();
   await stopActiveTurn('conversation_changed');
@@ -420,6 +457,7 @@ async function openConversation(targetConversationId: string): Promise<void> {
       ...message,
       serverId: message.id
     }));
+    resumeMemoryActivityPolling();
     closeSidebarDrawer();
     scrollToLatest(false);
     focusComposer();
@@ -437,6 +475,7 @@ async function handleSubmit(): Promise<void> {
   }
 
   const content = draft.value.trim();
+  cancelMemoryActivityPolling();
   transcription.discard();
   const turnId = crypto.randomUUID();
   const localMessage = createLocalUserMessage(content);
@@ -488,7 +527,7 @@ async function handleSubmit(): Promise<void> {
           showToolStatus(status.message, status.state);
           if (status.category === 'reminder' && status.state === 'failed') notificationControl.value?.offerSetup();
         },
-        onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle }) => {
+        onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle, memoryActivity }) => {
           if (completedTurnId !== activeTurnId.value) return;
           if (!conversationId.value) activeConversationCreatedAt.value = localMessage.createdAt;
           conversationId.value = completedConversationId;
@@ -498,6 +537,7 @@ async function handleSubmit(): Promise<void> {
           localMessage.pending = false;
           assistantMessage.conversationId = completedConversationId;
           assistantMessage.serverId = messageId;
+          assistantMessage.memoryActivity = memoryActivity;
           assistantMessage.content = streamedContent;
           assistantMessage.pending = false;
           isLoading.value = false;
@@ -513,6 +553,7 @@ async function handleSubmit(): Promise<void> {
           }, 600);
 
           refreshHistoryAfterResponse();
+          startMemoryActivityPolling(assistantMessage);
           if (voice.autoSpeak.value) {
             activeTurnId.value = null;
             void playSpeech(completedTurnId, messageId);
@@ -643,6 +684,7 @@ async function toggleRecording(): Promise<void> {
 }
 
 function startNewConversation(): void {
+  cancelMemoryActivityPolling();
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
   historyRefreshTimer = null;
   transcription.discard();
@@ -799,6 +841,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  cancelMemoryActivityPolling();
   clearToolStatus();
   emailConnectionAbortController?.abort();
   emailConnectionChannel?.close();

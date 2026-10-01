@@ -1,5 +1,6 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
+using Aegis.Application.Memory;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Microsoft.AspNetCore.Mvc;
@@ -128,6 +129,14 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         }
 
         return Ok(conversation);
+    }
+
+    [HttpGet("messages/{assistantMessageId:guid}/memory-activity")]
+    public async Task<ActionResult<MemoryActivitySnapshot>> GetMemoryActivity(
+        Guid assistantMessageId, CancellationToken cancellationToken)
+    {
+        var snapshot = await chatService.GetMemoryActivityAsync(assistantMessageId, cancellationToken);
+        return snapshot is null ? NotFound() : Ok(snapshot);
     }
 
     [HttpGet("conversations")]

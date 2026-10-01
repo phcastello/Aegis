@@ -15,6 +15,8 @@ using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
 using Aegis.Infrastructure.Voice;
 using Aegis.Infrastructure.Voice.Transcription;
+using Aegis.Application.Memory;
+using Aegis.Infrastructure.Memory;
 using Aegis.Application.Voice;
 using Aegis.Application.Voice.Transcription;
 using Microsoft.AspNetCore.DataProtection;
@@ -22,6 +24,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Neo4j.Driver;
 
 namespace Aegis.Infrastructure;
 
@@ -235,6 +238,102 @@ public static class DependencyInjection
           .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
               "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
           .ValidateOnStart();
+        var semantic = new MemorySemanticOptions();
+        configuration.GetSection("MemorySemantic").Bind(semantic);
+        semantic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_SEMANTIC_ENABLED", semantic.Enabled);
+        semantic.EmbeddingModel = Read(configuration, "AEGIS_MEMORY_EMBEDDING_MODEL", semantic.EmbeddingModel);
+        semantic.EmbeddingDimensions = ReadInt(configuration, "AEGIS_MEMORY_EMBEDDING_DIMENSIONS", semantic.EmbeddingDimensions);
+        semantic.EmbeddingBaseUrl = Read(configuration, "AEGIS_MEMORY_EMBEDDING_BASE_URL", semantic.EmbeddingBaseUrl);
+        semantic.EmbeddingApiKey = ReadAny(configuration, semantic.EmbeddingApiKey, "AEGIS_MEMORY_EMBEDDING_API_KEY", "OPENAI_API_KEY");
+        semantic.QdrantBaseUrl = Read(configuration, "AEGIS_MEMORY_QDRANT_URL", semantic.QdrantBaseUrl);
+        semantic.CollectionName = Read(configuration, "AEGIS_MEMORY_QDRANT_COLLECTION", semantic.CollectionName);
+        semantic.WorkerPollSeconds = ReadInt(configuration, "AEGIS_MEMORY_PROJECTION_POLL_SECONDS", semantic.WorkerPollSeconds);
+        if (double.TryParse(configuration["AEGIS_MEMORY_SEMANTIC_SCORE_THRESHOLD"], System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var threshold)) semantic.SearchScoreThreshold = threshold;
+        if (semantic.EmbeddingDimensions is < 1 or > 3072 || semantic.WorkerPollSeconds is < 1 or > 60 ||
+            semantic.SearchScoreThreshold is < 0 or > 1 || !double.IsFinite(semantic.SearchScoreThreshold) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(semantic.CollectionName, "^[A-Za-z0-9_-]{1,100}$"))
+            throw new InvalidOperationException("Invalid MemorySemantic configuration.");
+        services.AddSingleton(semantic);
+        services.AddHttpClient<IMemoryEmbeddingClient, OpenAiMemoryEmbeddingClient>(client =>
+        {
+            client.BaseAddress = new Uri(semantic.EmbeddingBaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(30);
+        }).RemoveAllLoggers();
+        services.AddHttpClient<IMemoryVectorStore, QdrantMemoryVectorStore>(client =>
+        {
+            client.BaseAddress = new Uri(semantic.QdrantBaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(20);
+        }).RemoveAllLoggers();
+        services.AddScoped<IMemoryStore, MemoryStore>();
+        services.AddScoped<IMemoryActivityStore, MemoryActivityStore>();
+        var automatic = new MemoryAutomaticOptions();
+        configuration.GetSection("MemoryAutomatic").Bind(automatic);
+        automatic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED", automatic.Enabled);
+        automatic.Model = Read(configuration, "AEGIS_MEMORY_EXTRACTION_MODEL", automatic.Model);
+        automatic.ReasoningEffort = Read(configuration, "AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT", automatic.ReasoningEffort);
+        automatic.BaseUrl = Read(configuration, "AEGIS_MEMORY_EXTRACTION_BASE_URL", automatic.BaseUrl);
+        automatic.ApiKey = ReadAny(configuration, automatic.ApiKey, "AEGIS_MEMORY_EXTRACTION_API_KEY", "OPENAI_API_KEY");
+        automatic.TimeoutSeconds = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_TIMEOUT_SECONDS", automatic.TimeoutSeconds);
+        automatic.MaxOutputTokens = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_MAX_OUTPUT_TOKENS", automatic.MaxOutputTokens);
+        automatic.PollSeconds = ReadInt(configuration, "AEGIS_MEMORY_EXTRACTION_POLL_SECONDS", automatic.PollSeconds);
+        if (automatic.TimeoutSeconds is < 1 or > 90 || automatic.MaxOutputTokens is < 100 or > 8000 ||
+            automatic.PollSeconds is < 1 or > 60 || automatic.ReasoningEffort is not ("none" or "low" or "medium" or "high"))
+            throw new InvalidOperationException("Invalid MemoryAutomatic configuration.");
+        services.AddSingleton(automatic);
+        services.AddHttpClient<IMemoryExtractionClient, OpenAiMemoryExtractionClient>(client =>
+        {
+            client.BaseAddress = new Uri(automatic.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(automatic.TimeoutSeconds + 5);
+        }).RemoveAllLoggers();
+        services.AddScoped<IMemoryExtractionJobStore, MemoryExtractionJobStore>();
+        services.AddHostedService<MemoryExtractionWorker>();
+        var autoContext = new MemoryAutoContextOptions();
+        configuration.GetSection("MemoryAutoContext").Bind(autoContext);
+        autoContext.Enabled = ReadBool(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_ENABLED", autoContext.Enabled);
+        if (double.TryParse(configuration["AEGIS_MEMORY_AUTO_CONTEXT_SCORE_THRESHOLD"], System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var autoThreshold)) autoContext.ScoreThreshold = autoThreshold;
+        autoContext.MemoryLimit = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_MEMORY_LIMIT", autoContext.MemoryLimit);
+        autoContext.GraphPathLimit = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_PATH_LIMIT", autoContext.GraphPathLimit);
+        autoContext.GraphDepth = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_GRAPH_DEPTH", autoContext.GraphDepth);
+        autoContext.MaxChars = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_MAX_CHARS", autoContext.MaxChars);
+        autoContext.TimeoutMs = ReadInt(configuration, "AEGIS_MEMORY_AUTO_CONTEXT_TIMEOUT_MS", autoContext.TimeoutMs);
+        if (!double.IsFinite(autoContext.ScoreThreshold) || autoContext.ScoreThreshold is < 0 or > 1 ||
+            autoContext.MemoryLimit is < 1 or > 30 || autoContext.GraphPathLimit is < 1 or > 50 ||
+            autoContext.GraphDepth is < 1 or > 3 || autoContext.MaxChars is < 200 or > 10000 ||
+            autoContext.TimeoutMs is < 100 or > 10000)
+            throw new InvalidOperationException("Invalid MemoryAutoContext configuration.");
+        services.AddSingleton(autoContext);
+        var reconcile = new MemoryReconcileOptions();
+        reconcile.IntervalMinutes = ReadInt(configuration, "AEGIS_MEMORY_RECONCILE_INTERVAL_MINUTES", reconcile.IntervalMinutes);
+        if (reconcile.IntervalMinutes is < 0 or > 1440) throw new InvalidOperationException("Invalid Memory reconcile interval.");
+        services.AddSingleton(reconcile);
+        services.AddScoped<IMemorySemanticProjectionStore, MemorySemanticProjectionStore>();
+        services.AddScoped<MemorySemanticProjectionProcessor>();
+        services.AddHostedService<MemorySemanticProjectionWorker>();
+        var graph = new MemoryGraphOptions();
+        configuration.GetSection("MemoryGraph").Bind(graph);
+        graph.Enabled = ReadBool(configuration, "AEGIS_MEMORY_GRAPH_ENABLED", graph.Enabled);
+        graph.Neo4jUri = Read(configuration, "AEGIS_MEMORY_NEO4J_URI", graph.Neo4jUri);
+        graph.Neo4jUsername = Read(configuration, "AEGIS_MEMORY_NEO4J_USERNAME", graph.Neo4jUsername);
+        graph.Neo4jPassword = ReadAny(configuration, graph.Neo4jPassword, "AEGIS_MEMORY_NEO4J_PASSWORD", "NEO4J_PASSWORD");
+        graph.Neo4jDatabase = Read(configuration, "AEGIS_MEMORY_NEO4J_DATABASE", graph.Neo4jDatabase);
+        graph.WorkerPollSeconds = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_PROJECTION_POLL_SECONDS", graph.WorkerPollSeconds);
+        graph.MaxTraversalDepth = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_MAX_DEPTH", graph.MaxTraversalDepth);
+        graph.MaxTraversalResults = ReadInt(configuration, "AEGIS_MEMORY_GRAPH_MAX_RESULTS", graph.MaxTraversalResults);
+        if (graph.WorkerPollSeconds is < 1 or > 60 || graph.MaxTraversalDepth is < 1 or > 3 ||
+            graph.MaxTraversalResults is < 1 or > 50 || !Uri.TryCreate(graph.Neo4jUri, UriKind.Absolute, out var neo4jUri) ||
+            neo4jUri.Scheme is not ("bolt" or "neo4j" or "bolt+s" or "neo4j+s") ||
+            string.IsNullOrWhiteSpace(graph.Neo4jDatabase) || string.IsNullOrWhiteSpace(graph.Neo4jUsername))
+            throw new InvalidOperationException("Invalid MemoryGraph configuration.");
+        services.AddSingleton(graph);
+        services.AddSingleton<IDriver>(_ => GraphDatabase.Driver(graph.Neo4jUri,
+            AuthTokens.Basic(graph.Neo4jUsername, graph.Neo4jPassword)));
+        services.AddSingleton<IMemoryGraphStore, Neo4jMemoryGraphStore>();
+        services.AddScoped<IMemoryGraphProjectionStore, MemoryGraphProjectionStore>();
+        services.AddScoped<MemoryGraphProjectionProcessor>();
+        services.AddScoped<MemoryGraphRebuild>();
+        services.AddHostedService<MemoryGraphProjectionWorker>();
         services.AddScoped<ReminderStore>();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();

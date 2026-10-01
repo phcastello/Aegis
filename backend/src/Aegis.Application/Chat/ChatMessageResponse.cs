@@ -1,3 +1,5 @@
+using Aegis.Application.Memory;
+
 namespace Aegis.Application.Chat;
 
 public sealed record ChatMessageResponse(
@@ -6,4 +8,5 @@ public sealed record ChatMessageResponse(
     string Role,
     string Content,
     DateTimeOffset CreatedAt,
-    string? Model);
+    string? Model,
+    MemoryActivitySnapshot? MemoryActivity = null);

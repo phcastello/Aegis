@@ -1,6 +1,8 @@
 using Aegis.Application.Reminders;
 using Aegis.Application.Common;
 using Aegis.Application.Llm;
+using Aegis.Application.Memory;
+using Aegis.Application.Observability;
 using Aegis.Application.Models;
 using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
@@ -20,7 +22,13 @@ public sealed class ChatService(
     IConversationTitleJobQueue titleJobQueue,
     IActiveTurnRegistry turnRegistry,
     IVoiceService voiceService,
-    ReminderService? reminders = null) : IChatService
+    ReminderService? reminders = null,
+    MemoryService? memory = null,
+    MemoryAutomaticOptions? automaticMemory = null,
+    TimeProvider? clock = null,
+    AegisMetrics? metrics = null,
+    MemoryHybridRetriever? hybrid = null,
+    IMemoryActivityStore? activity = null) : IChatService
 {
     private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
@@ -44,8 +52,14 @@ public sealed class ChatService(
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
+        if (automaticMemory?.Enabled == true)
+        {
+            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
+                (clock ?? TimeProvider.System).GetUtcNow()));
+        }
 
         await dbContext.SaveChangesAsync(turnToken);
+        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(
             conversation.Id,
@@ -61,7 +75,8 @@ public sealed class ChatService(
             var modelRequest = CreateModelRequest(promptResult, userContent);
             var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
             EnsureCurrent(turn);
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, completion.Content);
+            var finalContent = DeclarativeResponseGuard.Normalize(userContent, completion.Content);
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);
@@ -70,7 +85,7 @@ public sealed class ChatService(
             assistantMessage.AttachAuditData(
                 completion.Model,
                 promptResult.Prompt,
-                promptResult.RuntimeContext,
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 completion.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
                 conversation.Id,
@@ -78,7 +93,8 @@ public sealed class ChatService(
                 assistantMessage.Id,
                 completion.AuditData));
 
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
+                userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
                 await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
@@ -88,7 +104,7 @@ public sealed class ChatService(
                 conversation.Id,
                 conversation.Title,
                 conversation.TitleSource,
-                MapMessage(assistantMessage));
+                MapMessage(assistantMessage, memoryActivity));
         }
         catch (OperationCanceledException) when (turnToken.IsCancellationRequested)
         {
@@ -134,7 +150,13 @@ public sealed class ChatService(
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
+        if (automaticMemory?.Enabled == true)
+        {
+            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
+                (clock ?? TimeProvider.System).GetUtcNow()));
+        }
         await dbContext.SaveChangesAsync(turnToken);
+        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
         var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
@@ -146,6 +168,7 @@ public sealed class ChatService(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
 
         var content = new StringBuilder();
+        var reviewDeclaration = DeclarativeResponseGuard.ShouldReview(userContent);
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
             EnsureCurrent(turn);
@@ -156,7 +179,7 @@ public sealed class ChatService(
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 content.Append(chunk.Content);
-                yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
+                if (!reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
 
             if (!chunk.IsDone)
@@ -170,20 +193,27 @@ public sealed class ChatService(
             }
 
             EnsureCurrent(turn);
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+            var finalContent = reviewDeclaration
+                ? DeclarativeResponseGuard.Normalize(userContent, content.ToString())
+                : content.ToString();
+            if (reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, finalContent);
+            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);
             }
 
             dbContext.AddChatMessage(assistantMessage);
-            assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt, promptResult.RuntimeContext, chunk.MetadataJson);
+            assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext, chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
+                userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
                 await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
-                yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id, conversation.Title, conversation.TitleSource);
+                yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
+                    conversation.Title, conversation.TitleSource, memoryActivity);
             }
             yield break;
         }
@@ -201,6 +231,10 @@ public sealed class ChatService(
             return null;
         }
 
+        var assistantIds = conversation.Messages.Where(x => x.Role == ChatRoles.Assistant).Select(x => x.Id).ToArray();
+        var activities = activity is null
+            ? new Dictionary<Guid, MemoryActivitySnapshot>()
+            : await activity.LoadForAssistantMessagesAsync(assistantIds, cancellationToken);
         return new ConversationResponse(
             conversation.Id,
             conversation.Title,
@@ -210,8 +244,18 @@ public sealed class ChatService(
             conversation.Messages
                 .OrderBy(message => message.CreatedAt)
                 .ThenBy(message => message.Id)
-                .Select(MapMessage)
+                .Select(message => MapMessage(message, activities.GetValueOrDefault(message.Id)))
                 .ToList());
+    }
+
+    public async Task<MemoryActivitySnapshot?> GetMemoryActivityAsync(Guid assistantMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        var message = await dbContext.GetChatMessageAsync(assistantMessageId, cancellationToken);
+        if (message is null || message.Role != ChatRoles.Assistant) return null;
+        if (activity is null) return new MemoryActivitySnapshot(false, []);
+        var snapshots = await activity.LoadForAssistantMessagesAsync([assistantMessageId], cancellationToken);
+        return snapshots.GetValueOrDefault(assistantMessageId) ?? new MemoryActivitySnapshot(false, []);
     }
 
     public async Task<ConversationPageResponse> GetRecentConversationsAsync(
@@ -318,10 +362,46 @@ public sealed class ChatService(
         if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
             states.Add(reminderContext);
         var pendingState = string.Join("\n", states);
-        return await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken);
+        var automaticContext = hybrid is null ? MemoryAutomaticContextResult.Empty :
+            await hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken);
+        var observedContext = memory is null ? MemoryObservedContextResult.Empty :
+            await memory.GetContextResultAsync(conversationId, cancellationToken);
+        var memoryContext = string.Join("\n", new[] { observedContext.Text, automaticContext.Text }
+            .Where(x => !string.IsNullOrWhiteSpace(x)));
+        var prompt = await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext);
+        return prompt with
+        {
+            UsedMemoryIds = automaticContext.MemoryIds.Distinct().ToArray(),
+            UsedObservedMemoryIds = observedContext.MemoryIds.Distinct().ToArray(),
+            UsedRelationIds = automaticContext.RelationIds.Distinct().ToArray()
+        };
     }
 
-    private static ChatMessageResponse MapMessage(ChatMessage message)
+    private async Task<MemoryActivitySnapshot?> CompleteMemoryActivityAsync(PromptBuildResult prompt,
+        Guid conversationId, Guid userMessageId, Guid assistantMessageId, CancellationToken ct)
+    {
+        if (activity is null)
+        {
+            await dbContext.SaveChangesAsync(ct);
+            return null;
+        }
+        var now = (clock ?? TimeProvider.System).GetUtcNow();
+        var used = new List<MemoryActivityEvent>();
+        foreach (var id in prompt.UsedMemoryIds)
+            used.Add(new(conversationId, userMessageId, MemoryActivityKind.Used,
+                MemoryActivitySource.AutomaticContext, MemoryActivityTargetType.MemoryRecord, id, now));
+        foreach (var id in prompt.UsedObservedMemoryIds)
+            used.Add(new(conversationId, userMessageId, MemoryActivityKind.Used,
+                MemoryActivitySource.ObservedContext, MemoryActivityTargetType.MemoryRecord, id, now));
+        foreach (var id in prompt.UsedRelationIds)
+            used.Add(new(conversationId, userMessageId, MemoryActivityKind.Used,
+                MemoryActivitySource.AutomaticContext, MemoryActivityTargetType.MemoryRelation, id, now));
+        await activity.SaveResponseWithUsedAsync(used, ct);
+        var snapshots = await activity.LoadForAssistantMessagesAsync([assistantMessageId], ct);
+        return snapshots.GetValueOrDefault(assistantMessageId);
+    }
+
+    private static ChatMessageResponse MapMessage(ChatMessage message, MemoryActivitySnapshot? memoryActivity = null)
     {
         return new ChatMessageResponse(
             message.Id,
@@ -329,7 +409,8 @@ public sealed class ChatService(
             message.Role,
             message.Content,
             message.CreatedAt,
-            message.Model);
+            message.Model,
+            memoryActivity);
     }
 
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(
@@ -450,10 +531,11 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.5.1",
+                ["aegis_version"] = "0.6.0",
                 ["purpose"] = "Chat"
             },
-            promptResult.InputItems);
+            promptResult.InputItems,
+            promptResult.AuditInputItems);
     }
 
     private static string? CreatePreview(string? content)

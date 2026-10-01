@@ -103,6 +103,76 @@ public sealed class ToolLoopTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MemoryToolContinuationSeparatesRealOutputFromAuditOutput(bool streaming)
+    {
+        const string marker = "ULTRA_PRIVATE_MEMORY_MARKER_123";
+        var model = new FakeModelClient([Call("memory_search"), Reply("Pronto")]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new MemoryFakeTool(marker)]),
+            NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
+        var request = new ModelRequest("identity", "O que você lembra?");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        if (streaming) await foreach (var _ in loop.StreamAsync(request, context)) { }
+        else await loop.RunAsync(request, context);
+        Assert.Contains(marker, JsonSerializer.Serialize(model.Requests[1].InputItems));
+        Assert.DoesNotContain(marker, JsonSerializer.Serialize(model.Requests[1].AuditInputItems));
+        Assert.Contains("[memory_tool_output_redacted]", JsonSerializer.Serialize(model.Requests[1].AuditInputItems));
+    }
+
+    [Theory]
+    [InlineData(false, "memory_remember")]
+    [InlineData(true, "memory_remember")]
+    [InlineData(false, "memory_search")]
+    [InlineData(true, "memory_search")]
+    public async Task FirstMemoryToolCallArgumentsAreAbsentFromCombinedAudit(bool streaming, string toolName)
+    {
+        const string marker = "ULTRA_PRIVATE_MEMORY_MARKER_123";
+        var model = new FakeModelClient([SensitiveCall(toolName, marker), Reply("Pronto")]);
+        var tool = new MemoryArgumentTool(toolName);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([tool]),
+            NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
+        var request = new ModelRequest("identity", "pedido sem marcador");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        LlmRequestAuditData audit;
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            audit = chunks[^1].AuditData!;
+        }
+        else audit = (await loop.RunAsync(request, context)).AuditData;
+
+        Assert.Contains(marker, tool.Arguments);
+        Assert.Contains(marker, JsonSerializer.Serialize(model.Requests[1].InputItems));
+        Assert.DoesNotContain(marker, JsonSerializer.Serialize(model.Requests[1].AuditInputItems));
+        Assert.DoesNotContain(marker, audit.RequestPayloadJson);
+        Assert.DoesNotContain(marker, audit.ResponseBody);
+        Assert.Contains("[memory_response_redacted]", audit.ResponseBody);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonMemoryToolResponseKeepsExistingAuditDetail(bool streaming)
+    {
+        const string marker = "NORMAL_TOOL_AUDIT_MARKER";
+        var model = new FakeModelClient([SensitiveCall("fake_tool", marker), Reply("Pronto")]);
+        var loop = CreateLoop(model, new FakeTool());
+        var request = new ModelRequest("identity", "pedido");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        LlmRequestAuditData audit;
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            audit = chunks[^1].AuditData!;
+        }
+        else audit = (await loop.RunAsync(request, context)).AuditData;
+        Assert.Contains(marker, audit.ResponseBody);
+    }
+
     private static AegisToolLoop CreateLoop(FakeModelClient model, FakeTool tool) =>
         new(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
 
@@ -122,6 +192,20 @@ public sealed class ToolLoopTests
     private static ModelToolStreamChunk Call(string name) => Done([
         new ModelToolCall("call_1", name, JsonSerializer.SerializeToElement(new { }))
     ]) with { OutputItems = [JsonSerializer.SerializeToElement(new { type = "function_call", call_id = "call_1", name, arguments = "{}" })] };
+
+    private static ModelToolStreamChunk SensitiveCall(string name, string marker)
+    {
+        var arguments = name == "memory_search"
+            ? JsonSerializer.SerializeToElement(new { query = marker })
+            : JsonSerializer.SerializeToElement(new { content = marker });
+        return Done([new ModelToolCall("call_1", name, arguments)]) with
+        {
+            OutputItems = [JsonSerializer.SerializeToElement(new { type = "function_call", call_id = "call_1",
+                name, arguments = arguments.GetRawText() })],
+            AuditData = new LlmRequestAuditData("fake", "fake", true, 1, "{}", 200,
+                JsonSerializer.Serialize(new { output = new { name, arguments = arguments.GetRawText() } }), null, null)
+        };
+    }
 
     private static ModelToolStreamChunk Done(IReadOnlyList<ModelToolCall> calls) =>
         new(null, true, calls, [], Provider: "fake", Model: "fake", Purpose: ModelPurpose.Chat,
@@ -168,6 +252,29 @@ public sealed class ToolLoopTests
             Calls++;
             if (throwError) throw new InvalidOperationException("secret internal error");
             return Task.FromResult(new AegisToolResult(true, "{\"ok\":true}"));
+        }
+    }
+
+    private sealed class MemoryFakeTool(string marker) : IAegisTool
+    {
+        public string Name => "memory_search";
+        public string Description => "fake";
+        public JsonElement ParametersSchema => JsonSerializer.SerializeToElement(new { type = "object" });
+        public Task<AegisToolResult> ExecuteAsync(JsonElement arguments, ToolExecutionContext context,
+            CancellationToken cancellationToken = default) => Task.FromResult(new AegisToolResult(true, marker));
+    }
+
+    private sealed class MemoryArgumentTool(string name) : IAegisTool
+    {
+        public string Name => name;
+        public string Description => "fake";
+        public JsonElement ParametersSchema => JsonSerializer.SerializeToElement(new { type = "object" });
+        public string? Arguments { get; private set; }
+        public Task<AegisToolResult> ExecuteAsync(JsonElement arguments, ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Arguments = arguments.GetRawText();
+            return Task.FromResult(new AegisToolResult(true, Arguments));
         }
     }
 }

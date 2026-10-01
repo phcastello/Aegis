@@ -1,0 +1,27 @@
+{
+  "seed": "O time favorito de Rainbow Six do Pedro é a FaZe Clan.",
+  "conversations": [
+    {"id": "001", "messages": ["qual é meu time favorito?"]},
+    {"id": "002", "messages": ["Qual time eu mais torço no competitivo de Siege?"]},
+    {"id": "003", "messages": ["esqueça que O time favorito de Rainbow Six do Pedro é a FaZe Clan."]},
+    {"id": "004", "messages": ["qual é meu time favorito?", "Meu time favorito de R6 é a FaZe Clan."]},
+    {"id": "005", "messages": ["Qual é meu time favorito de R6?"]},
+    {"id": "006", "messages": ["Qual time eu mais torço no competitivo de Siege?"]},
+    {"id": "007", "messages": ["Eu desenvolvo você, a Aegis.", "A Aegis usa PostgreSQL como fonte canônica do sistema de memória."]},
+    {"id": "008", "messages": ["Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo?"]},
+    {"id": "009", "messages": ["Meu PC tinha 16 GB de RAM.", "Troquei a memória do PC e agora ele tem 32 GB de RAM."]},
+    {"id": "010", "messages": ["Quanto de RAM meu PC tem hoje?"]},
+    {"id": "011", "messages": ["Quanto de RAM meu PC tem hoje? e quanto tinha no passado?"]},
+    {"id": "012", "messages": ["Meu monitor é 4K 144 Hz.", "Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz."]},
+    {"id": "013", "messages": ["Qual é a resolução e a frequência do meu monitor?"]},
+    {"id": "014", "messages": ["Meu monitor já foi 4K 144 Hz?", "O que você sabe sobre meu monitor?"]},
+    {"id": "015", "messages": ["Depois da FaZe, meu time de R6 favorito é a DarkZero."]},
+    {"id": "016", "messages": ["Depois da FaZe, qual time de R6 eu mais gosto?", "Esquece essa informação sobre a DarkZero."]},
+    {"id": "017", "messages": ["Depois da FaZe, qual time de R6 eu mais gosto?"]},
+    {"id": "018", "messages": ["Qual time eu mais gosto no competitivo de Siege tirando a FaZe?"]},
+    {"id": "019", "messages": ["Historicamente, qual time eu dizia gostar mais depois da FaZe?"]},
+    {"id": "020", "messages": ["Meu segundo time favorito de R6 é a DarkZero."]},
+    {"id": "021", "messages": ["Na faculdade me chamam de Vecna."]},
+    {"id": "022", "messages": ["Qual é meu apelido na faculdade?"]}
+  ]
+}

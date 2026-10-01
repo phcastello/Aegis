@@ -8,4 +8,5 @@ public sealed record ModelToolRequest(
     int MaxIterations = 4,
     string? PreviousResponseId = null,
     IReadOnlyList<ModelToolOutput>? ToolOutputs = null,
-    IReadOnlyList<JsonElement>? InputItems = null);
+    IReadOnlyList<JsonElement>? InputItems = null,
+    IReadOnlyList<JsonElement>? AuditInputItems = null);

@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aegis_memory_v060_${AEGIS_MEMORY_EVAL_RUN_ID:?}
+      POSTGRES_USER: aegis_eval
+      POSTGRES_PASSWORD: ${AEGIS_MEMORY_EVAL_DB_PASSWORD:?}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:5.26.30-community
+    environment:
+      NEO4J_AUTH: neo4j/${AEGIS_MEMORY_EVAL_NEO4J_PASSWORD:?}
+    volumes:
+      - neo4j_data:/data
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      - postgres
+      - qdrant
+      - neo4j
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8090
+      ConnectionStrings__AegisDatabase: Host=postgres;Port=5432;Database=aegis_memory_v060_${AEGIS_MEMORY_EVAL_RUN_ID:?};Username=aegis_eval;Password=${AEGIS_MEMORY_EVAL_DB_PASSWORD:?}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?}
+      AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-6-luna}
+      AEGIS_MEMORY_EXTRACTION_MODEL: ${AEGIS_MEMORY_EXTRACTION_MODEL:-gpt-6-luna}
+      AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT: ${AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT:-low}
+      AEGIS_MEMORY_EMBEDDING_MODEL: text-embedding-3-large
+      AEGIS_MEMORY_EMBEDDING_DIMENSIONS: 1536
+      AEGIS_MEMORY_QDRANT_URL: http://qdrant:6333
+      AEGIS_MEMORY_QDRANT_COLLECTION: aegis_memory_v060_${AEGIS_MEMORY_EVAL_RUN_ID:?}
+      AEGIS_MEMORY_NEO4J_URI: bolt://neo4j:7687
+      AEGIS_MEMORY_NEO4J_USERNAME: neo4j
+      AEGIS_MEMORY_NEO4J_PASSWORD: ${AEGIS_MEMORY_EVAL_NEO4J_PASSWORD:?}
+      AEGIS_MEMORY_DIAGNOSTICS_ENABLED: "true"
+      AEGIS_MEMORY_EVAL_ISOLATED: "true"
+      AEGIS_TTS_ENABLED: "false"
+      AEGIS_STT_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${AEGIS_MEMORY_EVAL_API_PORT:?}:8090"
+
+  seed:
+    build:
+      context: .
+      dockerfile: scripts/Aegis.MemoryAcceptanceSeed/Dockerfile
+    profiles:
+      - seed
+    environment:
+      AEGIS_MEMORY_ACCEPTANCE_DATABASE: Host=postgres;Port=5432;Database=aegis_memory_v060_${AEGIS_MEMORY_EVAL_RUN_ID:?};Username=aegis_eval;Password=${AEGIS_MEMORY_EVAL_DB_PASSWORD:?}
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  neo4j_data:

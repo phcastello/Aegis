@@ -33,7 +33,9 @@ public sealed class OpenAIResponsesClient(
     {
         var model = ChooseModel();
         var payload = CreateRequestPayload(request, model, stream: false, tools: null);
-        var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var realPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
+            request with { InputItems = request.AuditInputItems ?? request.InputItems }, model, stream: false, tools: null), JsonOptions);
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -41,7 +43,7 @@ public sealed class OpenAIResponsesClient(
 
         try
         {
-            using var requestMessage = CreateHttpRequest(requestPayloadJson);
+            using var requestMessage = CreateHttpRequest(realPayloadJson);
             using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             httpStatusCode = (int)response.StatusCode;
             responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -79,7 +81,7 @@ public sealed class OpenAIResponsesClient(
                     stopwatch.ElapsedMilliseconds,
                     requestPayloadJson,
                     httpStatusCode,
-                    responseBody,
+                    SafeAuditResponse(requestPayloadJson, responseBody),
                     FailureReason: null,
                     ErrorType: null));
         }
@@ -107,7 +109,9 @@ public sealed class OpenAIResponsesClient(
     {
         var model = ChooseModel();
         var payload = CreateRequestPayload(request, model, stream: true, tools: null);
-        var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var realPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
+            request with { InputItems = request.AuditInputItems ?? request.InputItems }, model, stream: true, tools: null), JsonOptions);
         metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
@@ -121,7 +125,7 @@ public sealed class OpenAIResponsesClient(
 
         try
         {
-            using var requestMessage = CreateHttpRequest(requestPayloadJson);
+            using var requestMessage = CreateHttpRequest(realPayloadJson);
             response = await httpClient.SendAsync(
                 requestMessage,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -320,7 +324,7 @@ public sealed class OpenAIResponsesClient(
                 stopwatch.ElapsedMilliseconds,
                 requestPayloadJson,
                 httpStatusCode,
-                finalResponseBody,
+                SafeAuditResponse(requestPayloadJson, finalResponseBody),
                 FailureReason: null,
                 ErrorType: null));
     }
@@ -339,6 +343,12 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs,
             request.InputItems);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var realPayloadJson = requestPayloadJson;
+        requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
+            request.Request with { Purpose = ModelPurpose.Chat,
+                InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
+            model, stream: false, request.Tools, request.PreviousResponseId,
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -346,7 +356,7 @@ public sealed class OpenAIResponsesClient(
 
         try
         {
-            using var requestMessage = CreateHttpRequest(requestPayloadJson);
+            using var requestMessage = CreateHttpRequest(realPayloadJson);
             using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             httpStatusCode = (int)response.StatusCode;
             responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -379,7 +389,7 @@ public sealed class OpenAIResponsesClient(
                     stopwatch.ElapsedMilliseconds,
                     requestPayloadJson,
                     httpStatusCode,
-                    responseBody,
+                    SafeAuditResponse(requestPayloadJson, responseBody),
                     FailureReason: null,
                     ErrorType: null));
         }
@@ -415,6 +425,12 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs,
             request.InputItems);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+        var realPayloadJson = requestPayloadJson;
+        requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
+            request.Request with { Purpose = ModelPurpose.Chat,
+                InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
+            model, stream: true, request.Tools, request.PreviousResponseId,
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
         metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
@@ -429,7 +445,7 @@ public sealed class OpenAIResponsesClient(
 
         try
         {
-            using var requestMessage = CreateHttpRequest(requestPayloadJson);
+            using var requestMessage = CreateHttpRequest(realPayloadJson);
             response = await httpClient.SendAsync(
                 requestMessage,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -645,7 +661,7 @@ public sealed class OpenAIResponsesClient(
                 stopwatch.ElapsedMilliseconds,
                 requestPayloadJson,
                 httpStatusCode,
-                finalResponseBody,
+                SafeAuditResponse(requestPayloadJson, finalResponseBody),
                 FailureReason: null,
                 ErrorType: null));
     }
@@ -703,7 +719,7 @@ public sealed class OpenAIResponsesClient(
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aegis_version"] = "0.5.1",
+            ["aegis_version"] = "0.6.0",
             ["purpose"] = request.Purpose.ToString()
         };
 
@@ -1001,10 +1017,18 @@ public sealed class OpenAIResponsesClient(
             durationMilliseconds,
             requestPayloadJson,
             httpStatusCode,
-            responseBody,
-            exception.Message,
+            SafeAuditResponse(requestPayloadJson, responseBody),
+            IsMemoryAudit(requestPayloadJson) ? "model_request_failed" : exception.Message,
             exception.GetType().FullName);
 
         return new LlmRequestException(FriendlyFailureMessage, auditData, exception);
     }
+
+    private static bool IsMemoryAudit(string payload) =>
+        payload.Contains("[automatic_memory_context_redacted]", StringComparison.Ordinal) ||
+        payload.Contains("[memory_tool_output_redacted]", StringComparison.Ordinal) ||
+        payload.Contains("[memory_tool_arguments_redacted]", StringComparison.Ordinal);
+
+    private static string? SafeAuditResponse(string payload, string? response) =>
+        IsMemoryAudit(payload) && response is not null ? "[memory_response_redacted]" : response;
 }

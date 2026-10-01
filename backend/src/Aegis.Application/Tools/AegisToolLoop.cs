@@ -32,6 +32,7 @@ public sealed class AegisToolLoop(
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
         List<JsonElement>? inputItems = null;
+        List<JsonElement>? auditInputItems = null;
         var responses = new List<ModelToolResponse>();
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
@@ -42,7 +43,8 @@ public sealed class AegisToolLoop(
             cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
                 new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
-                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1)), cancellationToken);
+                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
+                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken);
             responses.Add(response);
 
             if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
@@ -59,7 +61,9 @@ public sealed class AegisToolLoop(
             }
 
             inputItems ??= request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
+            auditInputItems ??= request.AuditInputItems?.ToList() ?? request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
             inputItems.AddRange(response.OutputItems);
+            auditInputItems.AddRange(response.OutputItems.Select(RedactMemoryCall));
             foreach (var call in response.ToolCalls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -72,13 +76,15 @@ public sealed class AegisToolLoop(
                     iteration,
                     callId = call.Id,
                     tool = call.Name,
-                    arguments = call.Arguments,
+                    arguments = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? (object)"[redacted]" : call.Arguments,
                     result.Success,
                     result.ErrorCode,
-                    result.Content,
+                    Content = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[redacted]" : result.Content,
                     result.AuditMetadataJson
                 });
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
+                    call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[memory_tool_output_redacted]" : result.Content));
                 if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
                 {
                     tools.Clear();
@@ -99,6 +105,7 @@ public sealed class AegisToolLoop(
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
         var inputItems = request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
+        var auditInputItems = request.AuditInputItems?.ToList() ?? request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
         var responses = new List<ModelToolStreamChunk>();
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
@@ -110,7 +117,8 @@ public sealed class AegisToolLoop(
             ModelToolStreamChunk? completed = null;
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
                 new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
-                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1)), cancellationToken))
+                    DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
+                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken))
             {
                 if (chunk.IsDone)
                 {
@@ -129,6 +137,7 @@ public sealed class AegisToolLoop(
             }
             responses.Add(completed);
             inputItems.AddRange(completed.OutputItems);
+            auditInputItems.AddRange(completed.OutputItems.Select(RedactMemoryCall));
 
             if (completed.ToolCalls.Count == 0)
             {
@@ -162,6 +171,8 @@ public sealed class AegisToolLoop(
                     : await ExecuteToolSafelyAsync(tool, call, context, cancellationToken);
                 executions.Add(new { iteration, tool = call.Name, result.Success, result.ErrorCode, result.AuditMetadataJson });
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
+                    call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[memory_tool_output_redacted]" : result.Content));
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(
                     category, result.Success ? "completed" : "failed",
                     result.Success ? completedLabel : "Não foi possível concluir a operação"));
@@ -176,6 +187,10 @@ public sealed class AegisToolLoop(
 
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
+        "memory_remember" => ("memory", "Guardando memória…", "Memória guardada"),
+        "memory_search" => ("memory", "Consultando memória…", "Memória consultada"),
+        "memory_update" => ("memory", "Corrigindo memória…", "Memória corrigida"),
+        "memory_forget" => ("memory", "Apagando memória…", "Memória apagada"),
         "reminder_create" => ("reminder", "Criando lembrete…", "Lembrete criado"),
         "reminder_list" => ("reminder", "Consultando lembretes…", "Lembretes consultados"),
         "reminder_update" => ("reminder", "Alterando lembrete…", "Lembrete alterado"),
@@ -228,7 +243,7 @@ public sealed class AegisToolLoop(
             ResponseBody = JsonSerializer.Serialize(new
             {
                 type = "tool_loop",
-                responses = responses.Select(response => response.AuditData?.ResponseBody)
+                responses = responses.Select(response => SafeResponseBody(response.ToolCalls, response.AuditData?.ResponseBody))
             }, JsonOptions)
         };
     }
@@ -285,7 +300,7 @@ public sealed class AegisToolLoop(
             {
                 iteration = index + 1,
                 response.AuditData.HttpStatusCode,
-                response.AuditData.ResponseBody
+                ResponseBody = SafeResponseBody(response.ToolCalls, response.AuditData.ResponseBody)
             })
             .ToList();
 
@@ -315,6 +330,11 @@ public sealed class AegisToolLoop(
         return [.. inputItems, ToJsonElement(new { role = "developer", content = identity })];
     }
 
+    private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
+        calls.Any(call => call.Name.StartsWith("memory_", StringComparison.Ordinal))
+            ? "[memory_response_redacted]"
+            : body;
+
     private static JsonElement CreateUserInputItem(string content)
     {
         return ToJsonElement(new
@@ -332,6 +352,17 @@ public sealed class AegisToolLoop(
             call_id = callId,
             output
         });
+    }
+
+    private static JsonElement RedactMemoryCall(JsonElement item)
+    {
+        if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("type", out var type) &&
+            type.GetString() == "function_call" && item.TryGetProperty("name", out var name) &&
+            name.GetString()?.StartsWith("memory_", StringComparison.Ordinal) == true)
+            return ToJsonElement(new { type = "function_call", name = name.GetString(),
+                call_id = item.TryGetProperty("call_id", out var id) ? id.GetString() : null,
+                arguments = "[memory_tool_arguments_redacted]" });
+        return item;
     }
 
     private static JsonElement ToJsonElement(object value)

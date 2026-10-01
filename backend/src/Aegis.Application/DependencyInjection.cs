@@ -1,4 +1,5 @@
 using Aegis.Application.Reminders;
+using Aegis.Application.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Aegis.Application.Chat;
 using Aegis.Application.Calendar;
@@ -24,6 +25,16 @@ public static class DependencyInjection
     {
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<ReminderService>();
+        services.AddScoped<MemoryService>();
+        services.AddScoped<MemorySemanticSearch>();
+        services.AddScoped<MemoryEntityResolver>();
+        services.AddScoped<MemoryGraphQuery>();
+        services.AddScoped<MemoryHybridRetriever>();
+        services.AddScoped<MemoryAutomaticIngestionService>();
+        services.AddScoped<IAegisTool, MemoryRememberTool>();
+        services.AddScoped<IAegisTool, MemorySearchTool>();
+        services.AddScoped<IAegisTool, MemoryUpdateTool>();
+        services.AddScoped<IAegisTool, MemoryForgetTool>();
         services.AddScoped<IAegisTool, ReminderCreateTool>();
         services.AddScoped<IAegisTool, ReminderListTool>();
         services.AddScoped<IAegisTool, ReminderUpdateTool>();

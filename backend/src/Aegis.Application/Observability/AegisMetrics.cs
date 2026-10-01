@@ -4,9 +4,58 @@ namespace Aegis.Application.Observability;
 
 public sealed class AegisMetrics : IDisposable
 {
-    private readonly Meter meter = new("Aegis", "0.5.1");
+    private readonly Meter meter = new("Aegis", "0.6.0");
     private int activeTurns;
     public Counter<long> RemindersCreated { get; }
+    public Counter<long> MemoryCreated { get; }
+    public Counter<long> MemoryDeduplicated { get; }
+    public Counter<long> MemorySuperseded { get; }
+    public Counter<long> MemoryForgotten { get; }
+    public Counter<long> MemorySearches { get; }
+    public Histogram<long> MemorySearchResults { get; }
+    public Counter<long> MemoryProjectionJobsCreated { get; }
+    public Counter<long> MemoryEmbeddingRequests { get; }
+    public Counter<long> MemoryEmbeddingFailures { get; }
+    public Counter<long> MemoryEmbeddingInputTokens { get; }
+    public Counter<long> MemorySemanticProjectionCompleted { get; }
+    public Counter<long> MemorySemanticProjectionFailed { get; }
+    public Counter<long> MemorySemanticProjectionRetries { get; }
+    public Histogram<double> MemorySemanticProjectionLag { get; }
+    public Counter<long> MemorySemanticSearches { get; }
+    public Counter<long> MemorySemanticSearchFallbacks { get; }
+    public Histogram<long> MemorySemanticSearchCandidates { get; }
+    public Histogram<long> MemorySemanticSearchResults { get; }
+    public Histogram<double> MemorySemanticSearchDuration { get; }
+    public Counter<long> MemoryGraphProjectionCompleted { get; }
+    public Counter<long> MemoryGraphProjectionFailed { get; }
+    public Counter<long> MemoryGraphProjectionRetries { get; }
+    public Histogram<double> MemoryGraphProjectionLag { get; }
+    public Counter<long> MemoryGraphEntityResolutions { get; }
+    public Counter<long> MemoryGraphEntityResolutionAmbiguous { get; }
+    public Counter<long> MemoryGraphEntityResolutionMiss { get; }
+    public Counter<long> MemoryGraphTraversals { get; }
+    public Histogram<long> MemoryGraphTraversalResults { get; }
+    public Histogram<double> MemoryGraphTraversalDuration { get; }
+    public Counter<long> MemoryExtractionJobsCreated { get; }
+    public Counter<long> MemoryExtractionJobsCompleted { get; }
+    public Counter<long> MemoryExtractionJobsFailed { get; }
+    public Counter<long> MemoryExtractionRetries { get; }
+    public Histogram<long> MemoryExtractionCandidates { get; }
+    public Counter<long> MemoryAutoCreated { get; }
+    public Counter<long> MemoryAutoReinforced { get; }
+    public Counter<long> MemoryAutoCorrected { get; }
+    public Counter<long> MemoryAutoTransitioned { get; }
+    public Counter<long> MemoryAutoSkipped { get; }
+    public Counter<long> MemoryExtractionInputTokens { get; }
+    public Counter<long> MemoryExtractionCachedInputTokens { get; }
+    public Counter<long> MemoryExtractionCacheWriteTokens { get; }
+    public Counter<long> MemoryExtractionOutputTokens { get; }
+    public Counter<long> MemoryAutoContextRequests { get; }
+    public Counter<long> MemoryAutoContextHits { get; }
+    public Counter<long> MemoryAutoContextTimeouts { get; }
+    public Histogram<long> MemoryAutoContextMemories { get; }
+    public Histogram<long> MemoryAutoContextGraphPaths { get; }
+    public Histogram<long> MemoryAutoContextChars { get; }
     public Counter<long> RemindersUpdated { get; }
     public Counter<long> RemindersCancelled { get; }
     public Counter<long> RemindersTriggered { get; }
@@ -44,6 +93,55 @@ public sealed class AegisMetrics : IDisposable
     // Meter instruments are deliberately label-free: never attach turn/message UUIDs.
     public AegisMetrics()
     {
+        MemoryCreated = meter.CreateCounter<long>("aegis_memory_created_total");
+        MemoryDeduplicated = meter.CreateCounter<long>("aegis_memory_deduplicated_total");
+        MemorySuperseded = meter.CreateCounter<long>("aegis_memory_superseded_total");
+        MemoryForgotten = meter.CreateCounter<long>("aegis_memory_forgotten_total");
+        MemorySearches = meter.CreateCounter<long>("aegis_memory_search_total");
+        MemorySearchResults = meter.CreateHistogram<long>("aegis_memory_search_results");
+        MemoryProjectionJobsCreated = meter.CreateCounter<long>("aegis_memory_projection_jobs_created_total");
+        MemoryEmbeddingRequests = meter.CreateCounter<long>("aegis_memory_embedding_requests_total");
+        MemoryEmbeddingFailures = meter.CreateCounter<long>("aegis_memory_embedding_failures_total");
+        MemoryEmbeddingInputTokens = meter.CreateCounter<long>("aegis_memory_embedding_input_tokens_total");
+        MemorySemanticProjectionCompleted = meter.CreateCounter<long>("aegis_memory_semantic_projection_completed_total");
+        MemorySemanticProjectionFailed = meter.CreateCounter<long>("aegis_memory_semantic_projection_failed_total");
+        MemorySemanticProjectionRetries = meter.CreateCounter<long>("aegis_memory_semantic_projection_retries_total");
+        MemorySemanticProjectionLag = meter.CreateHistogram<double>("aegis_memory_semantic_projection_lag_ms", "ms");
+        MemorySemanticSearches = meter.CreateCounter<long>("aegis_memory_semantic_search_total");
+        MemorySemanticSearchFallbacks = meter.CreateCounter<long>("aegis_memory_semantic_search_fallback_total");
+        MemorySemanticSearchCandidates = meter.CreateHistogram<long>("aegis_memory_semantic_search_candidates");
+        MemorySemanticSearchResults = meter.CreateHistogram<long>("aegis_memory_semantic_search_results");
+        MemorySemanticSearchDuration = meter.CreateHistogram<double>("aegis_memory_semantic_search_duration_ms", "ms");
+        MemoryGraphProjectionCompleted = meter.CreateCounter<long>("aegis_memory_graph_projection_completed_total");
+        MemoryGraphProjectionFailed = meter.CreateCounter<long>("aegis_memory_graph_projection_failed_total");
+        MemoryGraphProjectionRetries = meter.CreateCounter<long>("aegis_memory_graph_projection_retries_total");
+        MemoryGraphProjectionLag = meter.CreateHistogram<double>("aegis_memory_graph_projection_lag_ms", "ms");
+        MemoryGraphEntityResolutions = meter.CreateCounter<long>("aegis_memory_graph_entity_resolution_total");
+        MemoryGraphEntityResolutionAmbiguous = meter.CreateCounter<long>("aegis_memory_graph_entity_resolution_ambiguous_total");
+        MemoryGraphEntityResolutionMiss = meter.CreateCounter<long>("aegis_memory_graph_entity_resolution_miss_total");
+        MemoryGraphTraversals = meter.CreateCounter<long>("aegis_memory_graph_traversal_total");
+        MemoryGraphTraversalResults = meter.CreateHistogram<long>("aegis_memory_graph_traversal_results");
+        MemoryGraphTraversalDuration = meter.CreateHistogram<double>("aegis_memory_graph_traversal_duration_ms", "ms");
+        MemoryExtractionJobsCreated = meter.CreateCounter<long>("aegis_memory_extraction_jobs_created_total");
+        MemoryExtractionJobsCompleted = meter.CreateCounter<long>("aegis_memory_extraction_jobs_completed_total");
+        MemoryExtractionJobsFailed = meter.CreateCounter<long>("aegis_memory_extraction_jobs_failed_total");
+        MemoryExtractionRetries = meter.CreateCounter<long>("aegis_memory_extraction_retries_total");
+        MemoryExtractionCandidates = meter.CreateHistogram<long>("aegis_memory_extraction_candidates");
+        MemoryAutoCreated = meter.CreateCounter<long>("aegis_memory_auto_created_total");
+        MemoryAutoReinforced = meter.CreateCounter<long>("aegis_memory_auto_reinforced_total");
+        MemoryAutoCorrected = meter.CreateCounter<long>("aegis_memory_auto_corrected_total");
+        MemoryAutoTransitioned = meter.CreateCounter<long>("aegis_memory_auto_transitioned_total");
+        MemoryAutoSkipped = meter.CreateCounter<long>("aegis_memory_auto_skipped_total");
+        MemoryExtractionInputTokens = meter.CreateCounter<long>("aegis_memory_extraction_input_tokens_total");
+        MemoryExtractionCachedInputTokens = meter.CreateCounter<long>("aegis_memory_extraction_cached_input_tokens_total");
+        MemoryExtractionCacheWriteTokens = meter.CreateCounter<long>("aegis_memory_extraction_cache_write_tokens_total");
+        MemoryExtractionOutputTokens = meter.CreateCounter<long>("aegis_memory_extraction_output_tokens_total");
+        MemoryAutoContextRequests = meter.CreateCounter<long>("aegis_memory_auto_context_requests_total");
+        MemoryAutoContextHits = meter.CreateCounter<long>("aegis_memory_auto_context_hits_total");
+        MemoryAutoContextTimeouts = meter.CreateCounter<long>("aegis_memory_auto_context_timeout_total");
+        MemoryAutoContextMemories = meter.CreateHistogram<long>("aegis_memory_auto_context_memories");
+        MemoryAutoContextGraphPaths = meter.CreateHistogram<long>("aegis_memory_auto_context_graph_paths");
+        MemoryAutoContextChars = meter.CreateHistogram<long>("aegis_memory_auto_context_chars");
         RemindersCreated = meter.CreateCounter<long>("aegis_reminders_created_total");
         RemindersUpdated = meter.CreateCounter<long>("aegis_reminders_updated_total");
         RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");
