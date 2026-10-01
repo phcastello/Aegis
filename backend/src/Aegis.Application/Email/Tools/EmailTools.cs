@@ -36,7 +36,7 @@ public sealed class EmailCreateConnectLinkTool(IEmailConnectionService connectio
 {
     public override string Name => "email_create_connect_link";
 
-    public override string Description => "Cria um link para Pedro autorizar a conta Google compartilhada por Gmail e Calendar.";
+    public override string Description => "Cria um link para Pedro autorizar a conta Google compartilhada por Gmail e Calendar. Após pedido direto bloqueado por conexão ou scope, gere o link na mesma interação; não exige confirmação de mutação e não executa o pedido original.";
 
     public override JsonElement ParametersSchema { get; } = Schema("""
         {

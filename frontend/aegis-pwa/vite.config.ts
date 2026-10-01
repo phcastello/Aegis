@@ -14,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'Aegis v0.6.0 — Yeah, I know.',
+        description: 'Aegis v0.6.1 — Yeah, I know.',
         theme_color: '#101827',
         background_color: '#101827',
         display: 'standalone',

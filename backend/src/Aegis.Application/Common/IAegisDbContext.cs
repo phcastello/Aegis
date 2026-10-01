@@ -68,6 +68,10 @@ public interface IAegisDbContext
         Guid conversationId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<ChatMessage>> GetConversationMessagesAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ChatMessage>> GetRecentMessagesAsync(
         Guid conversationId,
         int limit,

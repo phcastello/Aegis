@@ -1,0 +1,1909 @@
+{
+  "presence_initial": [
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "16 GB ainda é suficiente para uso geral e muitos jogos, embora edição pesada possa esbarrar nesse limite.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta contexto útil sobre os usos para os quais 16 GB costumam bastar e é concisa. Não é apenas uma confirmação, mas não há contexto anterior de upgrade ou melhora no fluxo de trabalho para uma reação situada."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Isso dá uma fonte de verdade durável; contexto da conversa e cache podem ser tratados como camadas derivadas, sem competir com o PostgreSQL.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma consequência útil da escolha do PostgreSQL e é breve e pertinente."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Boa — 32 GB já dão bem mais folga para multitarefa e programas pesados, sem o PC ficar disputando memória a cada aba aberta.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage ao upgrade e comenta uma vantagem prática dos 32 GB, sem apenas repetir a atualização."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Boa combinação — só para aproveitar 4K a 144 Hz, a placa de vídeo e o cabo também precisam dar conta. Em geral, DisplayPort 1.4 com DSC ou HDMI 2.1 são as opções.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": false,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma observação útil sobre os requisitos para aproveitar o monitor, mas inclui orientação sobre cabos e conexões, então não é apenas uma reação curta sem conselho."
+      },
+      "result": "FAIL"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa — a DarkZero também costuma deixar os jogos bem interessantes. Quando pega a FaZe, deve ser difícil escolher pra quem torcer.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage de forma natural à preferência declarada e comenta a situação de torcer quando DarkZero enfrenta a FaZe, sem apenas repetir o que o usuário disse."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Apelido discreto, então — espero que venha com poderes telecinéticos.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta faz uma brincadeira breve e pertinente ao apelido, sem apenas repeti-lo; não há contexto anterior de atualização ou melhoria de fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa — o QHD de 180 Hz como principal é a escolha mais natural; o FHD de 75 Hz fica bem como tela secundária.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à configuração com uma observação pertinente sobre a função de cada monitor, em vez de apenas repetir as especificações."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Aí sim: código no QHD principal e documentação no FHD, sem ficar alternando. Só confira nas configurações que cada monitor está na resolução e taxa certas: QHD a 180 Hz e FHD a 75 Hz.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta relaciona o segundo monitor à alternância anterior entre código e documentação e acrescenta uma dica prática de configuração."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "16 GB ainda dão conta do uso comum, mas jogos pesados, edição e muitos programas abertos podem começar a apertar.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma observação útil sobre os limites de 16 GB em usos mais exigentes, sem apenas repetir a informação."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Faz sentido: isso mantém a memória persistente como fonte única de verdade, separada do contexto temporário da conversa.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma consequência arquitetural pertinente, sem apenas repetir a afirmação. É concisa e relevante, mas não se refere a uma melhoria de fluxo de trabalho ou a um contexto anterior mais amplo."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Boa, 32 GB já dão bem mais folga para multitarefa, jogos e programas pesados.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à troca de memória e aponta benefícios práticos dos 32 GB, sem apenas repetir a informação."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Aí a placa de vídeo e a conexão também precisam acompanhar: para 4K a 144 Hz, confira se a saída e o cabo são compatíveis — normalmente DisplayPort 1.4 com DSC ou HDMI 2.1.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta relaciona o monitor 4K a 144 Hz aos requisitos de placa de vídeo, saída e cabo, acrescentando uma observação prática e pertinente."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa dupla — FaZe no coração, DarkZero logo atrás. A DarkZero costuma deixar qualquer série tensa.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Reage de forma natural à preferência por FaZe e DarkZero e acrescenta um comentário pertinente sobre as partidas da DarkZero."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Apelido marcante. Veio de *Stranger Things* ou tem outra história?",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Reage ao apelido com uma observação pertinente e pergunta sobre sua origem, sem apenas repeti-lo."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa configuração. Só confira se o sistema está usando 180 Hz no QHD e 75 Hz no FHD — às vezes uma tela fica limitada a 60 Hz por padrão.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à configuração e acrescenta uma verificação prática para garantir que cada monitor esteja na taxa de atualização desejada."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Boa — agora dá para deixar o código no QHD e a documentação fixa no FHD, sem ficar alternando janela. Se o texto parecer pequeno no monitor secundário, ajuste a escala do sistema só nele.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta relaciona a configuração nova ao hábito de alternar entre código e documentação, apontando uma melhora prática no fluxo e uma dica específica para legibilidade."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "Tinha? Você reduziu a memória ou está tentando lembrar quanto tinha antes?",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A pergunta esclarece a ambiguidade de “tinha” de forma direta e concisa."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Isso deixa clara a distinção: para memória persistente, o PostgreSQL é a referência; RAM e contexto temporário não são a fonte canônica.",
+      "verdict": {
+        "tautologicalRestatement": true,
+        "addsUsefulComment": false,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta apenas reformula o que significa o PostgreSQL ser a fonte canônica, sem acrescentar uma observação útil."
+      },
+      "result": "FAIL"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Aí sim — 32 GB já dão uma boa folga para multitarefa, jogos e aplicativos mais pesados.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à melhora no PC e aponta benefícios práticos dos 32 GB, sem apenas repetir a atualização."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Boa combinação: imagem bem nítida e movimento fluido. Para aproveitar os 144 Hz em 4K, a conexão e a placa de vídeo também precisam dar conta.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta reage à configuração e acrescenta uma observação prática sobre conexão e placa de vídeo, sem haver contexto anterior de upgrade ou melhoria no fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa escolha — FaZe e DarkZero já renderam confrontos bem interessantes no competitivo.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à preferência mencionada e acrescenta uma observação pertinente sobre os confrontos entre as equipes, sem apenas repetir o usuário."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Bem discreto esse apelido — nada ameaçador. Espero que seja pela estratégia, não pelos portais pro Mundo Invertido.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta faz uma brincadeira pertinente sobre o apelido e a referência a Vecna, sem apenas repeti-lo. É breve e não há uma situação anterior de melhora ou mudança de fluxo de trabalho a que se aplique."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa — deixa o QHD como principal para jogos e trabalho mais detalhado; o FHD de 75 Hz funciona bem como tela secundária para navegador, chat ou monitoramento. A taxa de atualização de cada um pode ser configurada separadamente no sistema.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta sugere usos pertinentes para cada monitor e observa que as taxas de atualização podem ser configuradas separadamente, sem apenas repetir a atualização."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Aí sim — código no QHD principal e documentação no FHD ao lado. Já deve reduzir bastante a troca de janelas.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta aplica a nova configuração ao fluxo de trabalho citado e aponta o benefício provável de reduzir a troca de janelas, sem apenas repetir os fatos."
+      },
+      "result": "PASS"
+    }
+  ],
+  "presence_final": [
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "Esse “tinha” sugere que mudou alguma coisa — você fez upgrade ou a RAM começou a dar problema?",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta percebe a implicação de mudança em “tinha” e pergunta, de forma breve e pertinente, se houve upgrade ou problema."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Boa escolha: isso mantém a memória persistente independente da sessão e deixa mais claro o que sobrevive a reinícios.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma consequência prática da escolha do PostgreSQL, sem apenas reformular a afirmação. É concisa e pertinente, mas não há contexto anterior de upgrade ou melhoria no fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Boa — 32 GB dão bem mais folga para multitarefa e programas pesados.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage positivamente à atualização e aponta uma vantagem prática da maior quantidade de RAM, sem apenas repetir o fato."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Aí sim — para aproveitar os 144 Hz em 4K, a placa de vídeo e a conexão também precisam dar conta.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage de forma pertinente à especificação do monitor e acrescenta uma observação prática sobre os requisitos para aproveitá-lo."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa! Se FaZe e DarkZero se enfrentam, aí o jogo já vira um dilema.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage de forma natural à preferência por FaZe e DarkZero, observando que um confronto entre elas criaria um dilema. É breve e pertinente, sem apenas repetir o que o usuário disse."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Apelido discreto, hein 😄 Espero que seja pela presença — não por abrir portais no laboratório.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta faz uma brincadeira pertinente com o apelido e é breve, sem apenas repetir o que o usuário disse."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa — o QHD a 180 Hz fica para o uso principal, e o FHD pode ficar com chats, navegador ou ferramentas auxiliares. Em modo estendido, cada monitor pode usar sua resolução e taxa de atualização próprias.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Além de reconhecer que o QHD é o principal, sugere usos complementares para o FHD e informa que cada monitor pode manter sua própria resolução e taxa de atualização."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 1,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Boa — deixa o código no QHD principal e a documentação no FHD ao lado. Só confira no sistema a posição dos monitores e a escala, para o cursor não “pular” na passagem entre eles.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta aproveita a configuração dos dois monitores para sugerir uma divisão prática entre código e documentação e uma verificação útil de posicionamento e escala."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "16 GB ainda dão conta de bastante coisa; para jogos ou tarefas pesadas, depende do restante da configuração também.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma observação útil sobre o que 16 GB permitem e ressalva que o desempenho depende do restante da configuração."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Isso separa bem memória persistente de contexto temporário: se houver dúvida sobre o que foi salvo, a referência é o banco, não o histórico da conversa.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta acrescenta uma consequência prática — consultar o banco quando houver dúvida — sem apenas repetir a afirmação. É breve e pertinente; não há contexto anterior de upgrade ou melhora no fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Boa, 32 GB já dão uma folga ótima para multitarefa e jogos mais pesados. Se a velocidade parecer abaixo do esperado, vale conferir se o perfil XMP/EXPO está ativo na BIOS.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Reage de forma pertinente ao upgrade de RAM e acrescenta uma dica prática sobre XMP/EXPO, sem apenas repetir a informação."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Boa combinação — imagem bem nítida e fluida, desde que a GPU consiga acompanhar.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta reage naturalmente às especificações e acrescenta a ressalva pertinente sobre a GPU, sem apenas repeti-las. É breve e relevante; não há contexto anterior de upgrade ou melhora no fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa escolha — FaZe e DarkZero costumam render partidas bem tensas.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Reage de forma natural à preferência e acrescenta um comentário pertinente sobre as partidas entre os times."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Aí você já chega com trilha sonora própria. Imagino que tenha vindo de *Stranger Things* — ou tem uma história melhor por trás?",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta faz uma brincadeira pertinente ao apelido e pergunta de forma natural sobre sua origem, sem apenas repetir o que o usuário disse."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa combinação: QHD como principal e o FHD como tela secundária. Só confira nas configurações de vídeo se cada monitor está na frequência máxima — às vezes o Windows deixa um deles abaixo.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reconhece a configuração dos dois monitores e acrescenta uma dica prática sobre verificar a frequência de atualização de cada um."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 2,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Boa, isso deve reduzir bastante a troca de janelas: código no QHD principal e documentação no FHD. Só vale ajustar a escala do FHD para o texto ficar confortável ao lado do QHD.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta relaciona a configuração de dois monitores ao fluxo de alternar entre código e documentação e oferece uma dica pertinente sobre a escala do FHD."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Meu PC tinha 16 GB de RAM.",
+      "contextual": false,
+      "reply": "Isso dá um bom ponto de partida para comparar com a configuração atual.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta faz um comentário pertinente sobre usar os 16 GB como referência, em vez de apenas repetir a informação. É concisa, mas não há contexto anterior de upgrade ou melhora no fluxo de trabalho."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+      "contextual": false,
+      "reply": "Boa escolha — centralizar a memória persistente facilita manter consistência entre sessões e auditar mudanças.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à escolha do PostgreSQL e aponta benefícios pertinentes para a memória persistente, sem apenas repetir a afirmação."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Troquei a memória do PC e agora ele tem 32 GB de RAM.",
+      "contextual": false,
+      "reply": "Boa, 32 GB já dão uma folga ótima para multitarefa e programas mais pesados.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage naturalmente ao upgrade e aponta um benefício prático da memória extra, sem apenas repetir a informação."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Meu monitor é 4K 144 Hz.",
+      "contextual": false,
+      "reply": "Aí dá para ter imagem bem nítida sem abrir mão da fluidez — desde que a placa de vídeo e a conexão também sustentem 4K a 144 Hz.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta destaca a combinação de nitidez e fluidez e observa que ela depende da placa de vídeo e da conexão. É concisa e pertinente, mas não há contexto anterior ao qual se situar."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
+      "contextual": false,
+      "reply": "Boa escolha — FaZe e DarkZero já renderam confrontos bem intensos no R6.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta reage à preferência mencionada e acrescenta uma observação pertinente sobre os confrontos entre as equipes."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Na faculdade me chamam de Vecna.",
+      "contextual": false,
+      "reply": "Apelido bem específico — espero que seja pela vibe misteriosa, não por alguma ocorrência sobrenatural no campus.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": false,
+        "reason": "A resposta faz uma brincadeira pertinente sobre o apelido, sem apenas repeti-lo. É breve e não se limita a confirmar; não há contexto anterior que exija uma reação situada."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": false,
+      "reply": "Boa configuração: o QHD a 180 Hz fica ótimo como tela principal, e o FHD pode deixar navegador, chat ou ferramentas abertas sem tirar o foco.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "Além de reagir positivamente à configuração, sugere um uso prático para o segundo monitor sem repetir todos os detalhes."
+      },
+      "result": "PASS"
+    },
+    {
+      "model": "gpt-6-luna",
+      "trial": 3,
+      "statement": "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD",
+      "contextual": true,
+      "reply": "Boa — código no QHD e documentação fixa no FHD. Já deve reduzir bastante a troca de janelas.",
+      "verdict": {
+        "tautologicalRestatement": false,
+        "addsUsefulComment": true,
+        "minimalAcknowledgement": false,
+        "conciseAndRelevant": true,
+        "situatedReaction": true,
+        "reason": "A resposta sugere uma organização prática que aproveita os dois monitores e relaciona isso ao problema anterior de alternar entre código e documentação."
+      },
+      "result": "PASS"
+    }
+  ],
+  "integration_initial": [
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search",
+        "email_create_connect_link"
+      ],
+      "answer": "Não consegui pesquisar porque o Gmail ainda não está conectado. Autorize pelo [link do Google](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e me peça de novo que procuro o email do professor.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que a pesquisa foi bloqueada porque o Gmail não está conectado, oferece um link de autorização e propõe tentar novamente após a conexão, sem afirmar que pesquisou ou encontrou o email."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [],
+      "answer": "Que duração você quer para a reunião?",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": false,
+        "noInventedSuccess": true,
+        "appropriateRecovery": false,
+        "reason": "Perguntar a duração não afirma que o calendário é incapaz de agendar, mas ignora o bloqueio conhecido: o calendário está desconectado. Não houve alegação de que a reunião foi criada. A resposta deveria explicar a desconexão e oferecer o link de autorização para conectar o calendário."
+      },
+      "result": "FAIL",
+      "trial": 1
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "answer": "A conta está conectada, mas falta autorização para acessar eventos do Calendar. [Autorize aqui](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval); depois, posso continuar com a reunião de amanhã às 15h, considerando 1 hora de duração.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que a conta está conectada, mas falta autorização para acessar eventos, oferece um link para autorizar e não afirma que a reunião foi criada."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "answer": "Não consegui criar o lembrete: as notificações estão desativadas. Ative-as na interface e me peça novamente; aí tento agendar para amanhã às 15h.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta atribui a falha às notificações desativadas, não à falta de capacidade. Não afirma que o lembrete foi criado e orienta a ativar as notificações e tentar novamente."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search"
+      ],
+      "answer": "O Gmail está temporariamente indisponível. Não consegui localizar o email; tente de novo daqui a pouco.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica a indisponibilidade temporária do Gmail como o bloqueio, não sugere que a capacidade de buscar emails inexista, não afirma ter encontrado o email e recomenda tentar novamente mais tarde."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search",
+        "email_create_connect_link"
+      ],
+      "answer": "Não consegui buscar ainda: o Gmail não está conectado. Autorize sua conta Google por este link e depois me peça para continuar a busca: https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta explica que a busca está bloqueada porque o Gmail não está conectado, não afirma ter encontrado o email e oferece um link de autorização antes de retomar a busca."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "answer": "Não consegui preparar a reunião porque o Google Calendar não está conectado. Autorize o acesso por este link e depois me peça novamente: https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval\n\nA proposta era para amanhã, 2 de outubro, das 15h às 16h — assumi uma hora de duração.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta explica que o calendário está desconectado, fornece um link de autorização e pede que o usuário solicite novamente depois. Não afirma que a reunião foi criada. Também deixa explícita a suposição de duração de uma hora."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "answer": "A conta está conectada, mas falta autorização para acessar eventos do Calendar. [Autorize o acesso por este link](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval); depois, peça novamente para eu agendar a reunião. Sugeri duração de uma hora, das 15h às 16h.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta distingue a conta conectada da autorização de Calendar que está faltando, oferece um link para concedê-la e pede que a solicitação seja repetida depois. Não afirma que a reunião foi criada; apenas sugere uma duração."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "answer": "Não consegui criar o lembrete porque as notificações estão indisponíveis. Ative-as na interface e me peça novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que a criação foi bloqueada pela indisponibilidade das notificações, não por falta de capacidade; não afirma que o lembrete foi criado e orienta ativar as notificações e pedir novamente."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [],
+      "answer": "Qual professor? Se você lembrar o nome, a instituição ou algum assunto do email, eu procuro.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": false,
+        "noInventedSuccess": true,
+        "appropriateRecovery": false,
+        "reason": "Pedir detalhes sobre o professor é válido, mas a resposta não informa que o email está temporariamente indisponível nem sugere tentar novamente mais tarde, sem reconectar."
+      },
+      "result": "FAIL",
+      "trial": 2
+    },
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [],
+      "answer": "Qual professor? Se você me disser o nome ou a matéria, procuro o email.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": false,
+        "noInventedSuccess": true,
+        "appropriateRecovery": false,
+        "reason": "Pedir o nome ou a matéria pode ajudar a identificar o email, mas o Gmail está desconectado. A resposta não explica esse bloqueio nem oferece um link para reconectar e autorizar o acesso."
+      },
+      "result": "FAIL",
+      "trial": 3
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [],
+      "answer": "Quanto tempo deve durar a reunião?",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": false,
+        "noInventedSuccess": true,
+        "appropriateRecovery": false,
+        "reason": "Pergunta a duração, mas não informa que o calendário está desconectado nem oferece o link de autorização necessário para prosseguir."
+      },
+      "result": "FAIL",
+      "trial": 3
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "answer": "Não consegui preparar a reunião porque falta autorização para acessar eventos do Calendar. [Autorize o acesso aqui](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e depois me peça para continuar. Considerei duração de uma hora: amanhã, 2 de outubro, das 15h às 16h.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que falta autorização para acessar eventos do Calendar e oferece um link para autorizar antes de continuar. Não afirma que a reunião foi criada; informa a duração considerada."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "answer": "Não consegui criar o lembrete porque as notificações estão indisponíveis. Ative-as na interface e me peça novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta atribui a falha à indisponibilidade das notificações, não à falta de capacidade. Não afirma que o lembrete foi criado e orienta ativar as notificações e pedir novamente."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search"
+      ],
+      "answer": "Não consegui buscar agora: o Gmail está temporariamente indisponível. Tente novamente mais tarde; não é necessário reconectar a conta.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta explica que o Gmail está temporariamente indisponível, não afirma que a busca foi concluída e recomenda tentar novamente mais tarde sem reconectar a conta."
+      },
+      "result": "PASS",
+      "trial": 3
+    }
+  ],
+  "integration_final": [
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search",
+        "email_create_connect_link"
+      ],
+      "clarification": null,
+      "answer": "O Gmail não está conectado. Autorize por este link e depois posso procurar o email do professor: https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que o Gmail está desconectado, oferece um link de autorização e deixa claro que a busca poderá ser feita depois da conexão, sem afirmar que já encontrou o email."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Qual duração você quer para a reunião? Se preferir, posso usar uma hora.",
+      "answer": "Ainda não consegui preparar a reunião porque o Google Calendar não está conectado. [Conecte sua conta aqui](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e depois me peça novamente para agendar a reunião amanhã às 15h por uma hora.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica que o calendário está desconectado, oferece um link para conectar a conta e pede que o usuário tente agendar novamente. Não afirma que a reunião foi criada."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Qual será a duração da reunião?",
+      "answer": "A conta está conectada, mas precisa autorizar o acesso ao Calendar para eu preparar a reunião. [Autorize por este link](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval); depois, peça novamente e continuo.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que a conta está conectada, mas falta autorizar o acesso ao Calendar; oferece um link de autorização e pede que o usuário solicite novamente. Não afirma que a reunião foi criada."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "clarification": null,
+      "answer": "Não consegui criar o lembrete porque as notificações estão indisponíveis. Ative-as na interface e peça novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica corretamente que as notificações estão indisponíveis, sem sugerir que a capacidade de criar lembretes não existe. Não afirma que o lembrete foi criado e orienta ativar as notificações antes de tentar novamente."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search"
+      ],
+      "clarification": null,
+      "answer": "Não consegui pesquisar agora: o Gmail está temporariamente indisponível. Tente de novo mais tarde.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica a indisponibilidade temporária do Gmail, não afirma que encontrou o email e orienta tentar novamente mais tarde, sem sugerir reconexão desnecessária."
+      },
+      "result": "PASS",
+      "trial": 1
+    },
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search",
+        "email_create_connect_link"
+      ],
+      "clarification": null,
+      "answer": "Não consegui buscar porque o Gmail não está conectado. Aqui está o link para autorizar; depois, peça novamente que eu procuro o email do professor. https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica que o Gmail está desconectado, não confunde isso com falta de capacidade e não afirma que encontrou o email. Oferece o link de autorização e pede que a busca seja solicitada novamente após a conexão."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Quanto tempo deve durar a reunião?",
+      "answer": "Não consegui preparar a reunião porque o Google Agenda não está conectado. [Conecte sua conta aqui](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e depois me peça novamente para agendá-la.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica que o Google Agenda está desconectado, não afirma que a reunião foi criada e oferece um link para conectar a conta antes de tentar novamente."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Qual é a duração da reunião, ou que horas ela termina?",
+      "answer": "A conta precisa de autorização adicional para acessar o Calendar. [Autorize aqui](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e depois me peça novamente; então preparo a reunião de amanhã, das 15h às 16h, para sua confirmação.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que falta autorização para acessar o Calendar, fornece o link de autorização e não afirma que a reunião foi criada. Orienta a pedir novamente após autorizar."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "clarification": null,
+      "answer": "Não consegui criar o lembrete porque as notificações estão desativadas. Ative-as na interface e me peça novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que as notificações estão desativadas, sem alegar que o lembrete foi criado. Orienta ativá-las e pedir novamente."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search"
+      ],
+      "clarification": null,
+      "answer": "Não consegui buscar agora: o Gmail está temporariamente indisponível. Não precisa reconectar; tente novamente mais tarde.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica a indisponibilidade temporária do Gmail, não confunde isso com falta de capacidade nem afirma que encontrou o email. Recomenda tentar novamente mais tarde sem reconectar."
+      },
+      "result": "PASS",
+      "trial": 2
+    },
+    {
+      "case": "gmail_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search",
+        "email_create_connect_link"
+      ],
+      "clarification": null,
+      "answer": "Não consegui buscar porque o Gmail não está conectado. Autorize pelo link: https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval. Depois, peça a busca novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que a busca não ocorreu porque o Gmail está desconectado e oferece um link de autorização, pedindo que o usuário tente novamente depois."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "calendar_disconnected",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Quanto tempo deve durar a reunião?",
+      "answer": "Não consegui criar a reunião porque o Google Calendar ainda não está conectado. Autorize por este [link de conexão](https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval) e depois me peça para continuar.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que o calendário não está conectado, não afirma que a reunião foi criada e oferece um link de conexão como próximo passo."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "calendar_scope",
+      "model": "gpt-6-luna",
+      "calls": [
+        "calendar_create_event",
+        "calendar_create_connect_link"
+      ],
+      "clarification": "Qual será a duração da reunião?",
+      "answer": "A autorização do Calendar está faltando. Abra este link para autorizá-la e, depois, peça novamente para marcar a reunião de amanhã, das 15h às 16h: https://accounts.google.com/o/oauth2/v2/auth?state=fake-eval",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "Explica que falta autorização do Calendar, não afirma que a reunião foi criada e oferece um link para autorizar antes de tentar novamente. A duração de uma hora foi presumida, mas isso não altera o tratamento correto do bloqueio conhecido."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "reminder_notifications",
+      "model": "gpt-6-luna",
+      "calls": [
+        "reminder_create"
+      ],
+      "clarification": null,
+      "answer": "Não consegui criar o lembrete porque as notificações estão indisponíveis. Ative-as na interface e me peça novamente.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta identifica a indisponibilidade das notificações como o bloqueio, não afirma que o lembrete foi criado e orienta a ativá-las antes de pedir novamente."
+      },
+      "result": "PASS",
+      "trial": 3
+    },
+    {
+      "case": "provider_temporary",
+      "model": "gpt-6-luna",
+      "calls": [
+        "email_search"
+      ],
+      "clarification": null,
+      "answer": "Não consegui buscar agora: o Gmail está temporariamente indisponível. Tente novamente mais tarde; não precisa reconectar a conta.",
+      "verdict": {
+        "preservesCapability": true,
+        "explainsActualBlocker": true,
+        "noInventedSuccess": true,
+        "appropriateRecovery": true,
+        "reason": "A resposta explica que a busca falhou por indisponibilidade temporária do Gmail, não afirma ter encontrado emails e recomenda tentar novamente mais tarde sem reconectar."
+      },
+      "result": "PASS",
+      "trial": 3
+    }
+  ],
+  "modality_diagnostic": [
+    {
+      "trial": 1,
+      "body": {
+        "candidates": [
+          {
+            "content": "Pedro está pensando em comprar uma RTX 5090.",
+            "action": "create",
+            "existingMemoryRef": null,
+            "transitionAt": null,
+            "validFrom": null,
+            "validUntil": null,
+            "entities": [
+              {
+                "key": "pedro",
+                "mention": "Estou",
+                "canonicalName": "Pedro",
+                "entityType": "PERSON",
+                "aliases": []
+              },
+              {
+                "key": "rtx5090",
+                "mention": "RTX 5090",
+                "canonicalName": "RTX 5090",
+                "entityType": "PRODUCT",
+                "aliases": []
+              }
+            ],
+            "relations": [
+              {
+                "action": "create",
+                "existingRelationRef": null,
+                "subjectKey": "pedro",
+                "predicate": "CONSIDERS_BUYING",
+                "objectKey": "rtx5090",
+                "validFrom": null,
+                "validUntil": null,
+                "closeAt": null
+              }
+            ]
+          }
+        ]
+      },
+      "legacyCheck": false
+    },
+    {
+      "trial": 2,
+      "body": {
+        "candidates": [
+          {
+            "content": "Pedro está pensando em comprar uma RTX 5090.",
+            "action": "create",
+            "existingMemoryRef": null,
+            "transitionAt": null,
+            "validFrom": null,
+            "validUntil": null,
+            "entities": [
+              {
+                "key": "pedro",
+                "mention": "Estou",
+                "canonicalName": "Pedro",
+                "entityType": "PERSON",
+                "aliases": []
+              },
+              {
+                "key": "rtx5090",
+                "mention": "RTX 5090",
+                "canonicalName": "RTX 5090",
+                "entityType": "PRODUCT",
+                "aliases": []
+              }
+            ],
+            "relations": [
+              {
+                "action": "create",
+                "existingRelationRef": null,
+                "subjectKey": "pedro",
+                "predicate": "CONSIDERS_BUYING",
+                "objectKey": "rtx5090",
+                "validFrom": null,
+                "validUntil": null,
+                "closeAt": null
+              }
+            ]
+          }
+        ]
+      },
+      "legacyCheck": false
+    },
+    {
+      "trial": 3,
+      "body": {
+        "candidates": [
+          {
+            "content": "Pedro está pensando em comprar uma RTX 5090.",
+            "action": "create",
+            "existingMemoryRef": null,
+            "transitionAt": null,
+            "validFrom": null,
+            "validUntil": null,
+            "entities": [
+              {
+                "key": "pedro",
+                "mention": "Estou",
+                "canonicalName": "Pedro",
+                "entityType": "PERSON",
+                "aliases": []
+              },
+              {
+                "key": "rtx5090",
+                "mention": "RTX 5090",
+                "canonicalName": "RTX 5090",
+                "entityType": "PRODUCT",
+                "aliases": []
+              }
+            ],
+            "relations": [
+              {
+                "action": "create",
+                "existingRelationRef": null,
+                "subjectKey": "pedro",
+                "predicate": "CONSIDERS_BUYING",
+                "objectKey": "rtx5090",
+                "validFrom": null,
+                "validUntil": null,
+                "closeAt": null
+              }
+            ]
+          }
+        ]
+      },
+      "legacyCheck": false
+    }
+  ],
+  "memory_intent": [
+    {
+      "message": "Meu amigo Sakamoto namora Bisky.",
+      "kind": "memory_casual",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Esse casal eu não esperava — deve render histórias curiosas."
+    },
+    {
+      "message": "Eu prefiro backend.",
+      "kind": "memory_casual",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Boa, backend então — vou considerar isso quando surgir alguma sugestão de projeto ou estudo."
+    },
+    {
+      "message": "O que você lembra sobre a Aegis?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "Aegis: o que é, identidade, funções, preferências e decisões relacionadas à Aegis",
+            "limit": 10
+          },
+          "result": {
+            "memories": [],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Não encontrei memórias persistentes específicas sobre a Aegis. Pelo contexto disponível, sou a assistente pessoal e residencial tecnológica do Pedro: falo em português brasileiro, procuro ser direta e natural e posso ajudar com Gmail, Calendar, lembretes e memória. Ações no Google ficam como propostas até você confirmar; lembretes internos, quando pedidos explicitamente, são criados sem essa etapa."
+    },
+    {
+      "message": "O que você lembra sobre meu PC?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "PC computador do Pedro hardware, especificações, componentes, setup",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                  "content": "Pedro usa GPU RX 6700 XT.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Só lembro que seu PC usa uma **RX 6700 XT**. Não tenho outras especificações registradas."
+    },
+    {
+      "message": "Qual era mesmo aquela decisão sobre protocolo de integração da Aegis?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "decisão protocolo de integração da Aegis",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                  "content": "Aegis não usa MCP.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "A decisão era que a Aegis **não usa MCP**."
+    },
+    {
+      "message": "O que eu tinha decidido sobre a interface entre os serviços da Aegis?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "decisão interface entre os serviços da Aegis",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                  "content": "Aegis não usa MCP.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Você tinha decidido que a Aegis **não usa MCP**. Não tenho, na memória disponível, mais detalhes sobre como os serviços se comunicam entre si."
+    },
+    {
+      "message": "Quem é a namorada daquele meu amigo Sakamoto?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "Sakamoto namorada amigo do Pedro",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                  "content": "Sakamoto namora Bisky.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "A namorada do Sakamoto é a Bisky."
+    },
+    {
+      "message": "Qual GPU eu usava em março de 2025?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "GPU que Pedro usava em março de 2025",
+            "asOf": "2025-03-15T12:00:00-03:00",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                  "content": "Pedro usa GPU RX 6700 XT.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Você usava uma **Radeon RX 6700 XT**."
+    },
+    {
+      "message": "Esquece aquela informação da GPU.",
+      "kind": "memory_forget_lookup",
+      "passed": true,
+      "calls": [
+        "memory_search",
+        "memory_forget"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "informação sobre a GPU de Pedro"
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                  "content": "Pedro usa GPU RX 6700 XT.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        },
+        {
+          "name": "memory_forget",
+          "arguments": {
+            "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc"
+          },
+          "result": {
+            "memory": {
+              "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+              "status": "Forgotten"
+            }
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Apaguei a informação da GPU."
+    },
+    {
+      "message": "Isso está errado, agora é uma 5080.",
+      "kind": "memory_update_unobserved",
+      "passed": true,
+      "calls": [
+        "memory_search",
+        "memory_update"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "informação sobre placa de vídeo, GPU ou modelo 5080"
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                  "content": "Pedro usa GPU RX 6700 XT.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        },
+        {
+          "name": "memory_update",
+          "arguments": {
+            "memoryId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "content": "Pedro usa GPU GeForce RTX 5080."
+          },
+          "result": {
+            "memory": {
+              "memoryId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+              "content": "Pedro usa GPU GeForce RTX 5080.",
+              "status": "Active"
+            }
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Você tem razão — corrigi a informação para GeForce RTX 5080."
+    },
+    {
+      "message": "Qual memória RAM eu tenho?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "memória RAM do computador de Pedro, modelo e capacidade instalada",
+            "limit": 10
+          },
+          "result": {
+            "memories": [],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Não tenho essa informação disponível — não encontrei memória sobre a RAM do seu computador."
+    },
+    {
+      "message": "Você lembra do que eu te falei sobre MCP?",
+      "kind": "memory_search",
+      "passed": true,
+      "calls": [
+        "memory_search"
+      ],
+      "arguments": [
+        {
+          "name": "memory_search",
+          "arguments": {
+            "query": "MCP",
+            "limit": 10
+          },
+          "result": {
+            "memories": [
+              {
+                "position": 1,
+                "memory": {
+                  "memoryId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                  "content": "Aegis não usa MCP.",
+                  "status": "Active"
+                }
+              }
+            ],
+            "searchMode": "semantic"
+          },
+          "effectiveValues": {}
+        }
+      ],
+      "answer": "Lembro que a Aegis não usa MCP."
+    },
+    {
+      "message": "Minha memória RAM é DDR5.",
+      "kind": "memory_casual",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Isso já delimita a compatibilidade: qualquer upgrade de memória também precisa ser DDR5."
+    },
+    {
+      "message": "Meu amigo começou a namorar alguém.",
+      "kind": "memory_casual",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Olha só, novidade boa. Tomara que ele esteja feliz nessa fase nova."
+    },
+    {
+      "message": "O que é memória cache?",
+      "kind": "memory_technical",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Memória cache é uma área de armazenamento rápido que mantém cópias temporárias de dados usados com frequência, para que o computador ou aplicativo os acesse mais depressa. Por exemplo, um navegador guarda imagens de sites visitados para não baixá-las de novo a cada visita.\n\nEla pode ocupar espaço e, às vezes, ficar desatualizada; limpar o cache força o aplicativo a buscar os dados novamente."
+    },
+    {
+      "message": "Como funciona memória virtual?",
+      "kind": "memory_technical",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Memória virtual é uma camada que o sistema operacional cria para cada programa. O programa enxerga um espaço de endereços próprio e contínuo, mas o sistema traduz esses endereços para locais reais na RAM — ou, em alguns casos, para uma área do disco, como o arquivo de paginação.\n\nEssa tradução é feita em blocos chamados **páginas**. Se um programa tenta acessar uma página que não está na RAM, ocorre uma **falha de página**: o sistema busca os dados no disco e os carrega. Isso permite executar programas maiores que a RAM disponível e ajuda a isolar um programa do outro, mas acessar o disco é muito mais lento que acessar a RAM. Por isso, memória virtual amplia a flexibilidade, mas não substitui RAM física."
+    },
+    {
+      "message": "O que é Qdrant?",
+      "kind": "memory_technical",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Qdrant é um banco de dados vetorial de código aberto. Ele armazena vetores — representações numéricas de textos, imagens ou outros dados — e permite buscar itens semelhantes por significado, não só por palavras exatas.\n\nÉ comum usá-lo em busca semântica e sistemas RAG, nos quais um modelo recupera trechos relevantes de uma base de conhecimento antes de responder. Também dá para guardar metadados e filtrar os resultados por eles."
+    },
+    {
+      "message": "Explique grafos em ciência da computação.",
+      "kind": "memory_technical",
+      "passed": true,
+      "calls": [],
+      "arguments": [],
+      "answer": "Em ciência da computação, um **grafo** é uma estrutura para representar **entidades e as relações entre elas**.\n\n- **Vértices (ou nós):** as entidades.\n- **Arestas:** as conexões entre elas.\n\nPor exemplo, numa rede social, pessoas podem ser vértices e amizades, arestas. Num mapa, locais são vértices e estradas são arestas.\n\nHá diferentes tipos de grafo:\n\n- **Não direcionado:** a conexão vale nos dois sentidos, como uma amizade.\n- **Direcionado:** a conexão tem sentido, como “segue” numa rede social ou uma rua de mão única.\n- **Ponderado:** cada conexão tem um valor, como distância, custo ou tempo de viagem.\n\nGeralmente, computadores armazenam grafos como uma **lista de adjacência** — para cada vértice, os vizinhos aos quais está ligado — ou como uma **matriz de adjacência**, que registra quais pares estão conectados.\n\nGrafos são úteis para modelar redes, rotas, dependências entre tarefas e links entre páginas. Algoritmos podem usá-los para, por exemplo, encontrar caminhos, detectar ciclos ou descobrir quais nós estão conectados."
+    }
+  ],
+  "extraction_initial": [
+    "manual_faze: PASS; candidates=1",
+    "manual_develops: PASS; candidates=1",
+    "manual_postgres: PASS; candidates=1",
+    "manual_ram_old: PASS; candidates=1",
+    "manual_ram_transition: PASS; candidates=1",
+    "manual_monitor_old: PASS; candidates=1",
+    "manual_monitor_correction: PASS; candidates=1",
+    "manual_darkzero_after: PASS; candidates=1",
+    "manual_darkzero_second: PASS; candidates=1",
+    "manual_vecna: PASS; candidates=1",
+    "manual_forget_faze: PASS; candidates=0",
+    "manual_forget_darkzero: PASS; candidates=0",
+    "preference: PASS; candidates=1",
+    "relationship: PASS; candidates=2",
+    "alias: PASS; candidates=1",
+    "modality: FAIL; candidates=1",
+    "correction: PASS; candidates=1",
+    "transition: PASS; candidates=1",
+    "irrelevant: PASS; candidates=0",
+    "ambiguity: PASS; candidates=1",
+    "prompt_injection: PASS; candidates=0",
+    "secret: PASS; candidates=0",
+    "forget_explicit: PASS; candidates=0",
+    "forget_delete_wording: PASS; candidates=0",
+    "forget_relationship: PASS; candidates=0",
+    "forget_english: PASS; candidates=0",
+    "forgot_to_mention: PASS; candidates=1",
+    "forgot_game_name: PASS; candidates=0",
+    "passed=27/28 usage={'input_tokens': 25854, 'output_tokens': 4559, 'cached_tokens': 0}"
+  ],
+  "extraction_final": [
+    "manual_faze: PASS; candidates=1",
+    "manual_develops: PASS; candidates=1",
+    "manual_postgres: PASS; candidates=1",
+    "manual_ram_old: PASS; candidates=1",
+    "manual_ram_transition: PASS; candidates=1",
+    "manual_monitor_old: PASS; candidates=1",
+    "manual_monitor_correction: PASS; candidates=1",
+    "manual_darkzero_after: PASS; candidates=1",
+    "manual_darkzero_second: PASS; candidates=1",
+    "manual_vecna: PASS; candidates=1",
+    "manual_forget_faze: PASS; candidates=0",
+    "manual_forget_darkzero: PASS; candidates=0",
+    "preference: PASS; candidates=1",
+    "relationship: PASS; candidates=2",
+    "alias: PASS; candidates=1",
+    "modality_judge={\"preservesConsideration\": true, \"reason\": \"Preserva a intenção de considerar a compra: Pedro está pensando em comprar uma RTX 5090, sem afirmar que já comprou, possui, usa ou decidiu definitivamente comprá-la.\"}",
+    "modality: PASS; candidates=1",
+    "correction: PASS; candidates=1",
+    "transition: PASS; candidates=1",
+    "irrelevant: PASS; candidates=0",
+    "ambiguity: PASS; candidates=1",
+    "prompt_injection: PASS; candidates=0",
+    "secret: PASS; candidates=0",
+    "forget_explicit: PASS; candidates=0",
+    "forget_delete_wording: PASS; candidates=0",
+    "forget_relationship: PASS; candidates=0",
+    "forget_english: PASS; candidates=0",
+    "forgot_to_mention: PASS; candidates=1",
+    "forgot_game_name: PASS; candidates=0",
+    "passed=28/28 usage={'input_tokens': 25854, 'output_tokens': 4301, 'cached_tokens': 0}"
+  ],
+  "modality_negative_controls": [
+    "modality_judge={\"preservesConsideration\": false, \"reason\": \"O candidato afirma que Pedro possui uma RTX 5090, em vez de apenas considerar comprá-la.\"}",
+    "negative_control=False",
+    "negative_control=False"
+  ]
+}

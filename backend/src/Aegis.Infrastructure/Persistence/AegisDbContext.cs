@@ -174,6 +174,15 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
                 cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ChatMessage>> GetConversationMessagesAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default) =>
+        await ChatMessages
+            .Where(message => message.ConversationId == conversationId && message.Conversation!.DeletedAt == null)
+            .OrderBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyList<ChatMessage>> GetRecentMessagesAsync(
         Guid conversationId,
         int limit,
