@@ -8,5 +8,5 @@
     "android",
     "windows"
   ],
-  "permissions": []
+  "permissions": ["allow-runtime-info", "allow-check-backend"]
 }

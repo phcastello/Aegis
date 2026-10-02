@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
+</script>
+
 <template>
-  <main><h1>Aegis</h1><p>Stage 01 — Tauri Foundation</p></main>
+  <DiagnosticsPanel />
 </template>
