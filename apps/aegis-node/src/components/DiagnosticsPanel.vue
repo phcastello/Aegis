@@ -9,7 +9,7 @@ onMounted(() => { void retry(); });
 <template>
   <main class="diagnostics" :aria-busy="checking">
     <h1>Aegis</h1>
-    <p class="subtitle">Stage 01 · Tauri Foundation</p>
+    <p class="subtitle">Diagnóstico do cliente</p>
     <dl aria-live="polite">
       <div><dt>Platform:</dt><dd>{{ platformLabel }}</dd></div>
       <div><dt>Backend:</dt><dd>{{ backendLabel }}</dd></div>

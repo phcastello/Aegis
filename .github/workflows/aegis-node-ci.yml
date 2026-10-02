@@ -79,6 +79,9 @@ jobs:
           projectPath: apps/aegis-node
           args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - if: matrix.android == 'false'
+        name: Run real Windows WebView2 smoke test
+        run: node ../../packages/aegis-client/tests/windows-runtime.mjs src-tauri/target/x86_64-pc-windows-msvc/release/aegis-node.exe
+      - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
       - if: matrix.android == 'true'
         run: npm run build:android
