@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aegis",
-  "version": "0.7.0-stage01",
+  "version": "../package.json",
   "identifier": "com.aegis.node",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -39,6 +39,22 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "android": {
+      "versionCode": 7000002
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQ0MxMEE4QTg1RDg5MjIKUldRaWlWMm9xQkRNcTl4UWxQU1ZTQlhCNlZDVXNOMUt2ZGtVU0FDY2tYcXJ3cHZxc1dacWZhZGUK",
+      "endpoints": [
+        "https://github.com/phcastello/Aegis/releases/download/node-preview/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -14,7 +14,7 @@ fn main() {
             .map(|entry| entry.expect("invalid apps/aegis-node/.env.local"))
             .find_map(|(key, value)| (key == KEY).then_some(value))
     });
-    let value = value.unwrap_or_default();
+    let value = value.unwrap_or_else(|| "https://aegis.phcastello.com".to_owned());
     assert!(
         !value.contains(['\r', '\n']),
         "API base URL must be a single line"
