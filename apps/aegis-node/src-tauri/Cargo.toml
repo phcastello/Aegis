@@ -1,0 +1,32 @@
+[package]
+name = "aegis-node"
+version = "0.7.0-stage01"
+description = "Aegis Android and Windows foundation"
+authors = ["Aegis contributors"]
+edition = "2021"
+rust-version = "1.94"
+
+[lib]
+# Different names for the library and binary avoid Windows linker conflicts.
+name = "aegis_node_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["native-runtime"]
+# Allows portable unit tests without linking a desktop WebView runtime.
+native-runtime = ["dep:tauri", "dep:tauri-build"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[dependencies]
+tauri = { version = "2", features = [], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,0 +1,12 @@
+{
+  "identifier": "diagnostics",
+  "description": "Local diagnostic screen only.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android",
+    "windows"
+  ],
+  "permissions": []
+}
