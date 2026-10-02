@@ -25,7 +25,15 @@ try {
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   browser = await chromium.connectOverCDP('http://127.0.0.1:9460');
-  const page = browser.contexts()[0].pages()[0];
+  // CDP can become available before WebView2 publishes its first page target.
+  const pageDeadline = Date.now() + 30000;
+  let page;
+  while (!page) {
+    if (exitCode !== undefined) throw new Error('Aegis exited before creating its WebView page: ' + exitCode);
+    page = browser.contexts().flatMap(context => context.pages())[0];
+    if (!page && Date.now() >= pageDeadline) throw new Error('WebView2 did not create a page target.');
+    if (!page) await new Promise(resolve => setTimeout(resolve, 100));
+  }
   await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   const runtime = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('runtime_info'));
   assert.equal(runtime.platform, 'windows'); assert.equal(runtime.version, version);
