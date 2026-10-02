@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { validateWindowsUpdate } from '../.test-build/services/updateMetadata.js';
 import { useUpdates } from '../.test-build/composables/useUpdates.js';
 
 test('update checks run once per session and remain invisible on no update/network failure', async () => {
@@ -32,4 +33,12 @@ test('declining a version never installs it or checks again', async () => {
   const state = useUpdates(async () => ({ version: '0.7.0-stage.3', kind: 'apk', install: async () => assert.fail('unexpected install') }));
   await state.start(); state.dismiss(); await state.start();
   assert.equal(state.visible.value, false);
+});
+
+test('Windows updates accept only the exact HTTPS versioned installer from this repository', () => {
+  const url = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-stage.3/Aegis-Windows-x86_64-Setup.exe';
+  validateWindowsUpdate({ platforms: { 'windows-x86_64': { url } } }, '0.7.0-stage.3');
+  for (const bad of [url.replace('https:', 'http:'), url.replace('phcastello', 'other'), url.replace('stage.3', 'stage.2'), 'file:///tmp/app.exe'])
+    assert.throws(() => validateWindowsUpdate({ platforms: { 'windows-x86_64': { url: bad } } }, '0.7.0-stage.3'));
+  assert.throws(() => validateWindowsUpdate({}, '0.7.0-stage.3'));
 });
