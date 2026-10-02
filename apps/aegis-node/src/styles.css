@@ -1,36 +1,5 @@
-:root {
-  font-family: system-ui, sans-serif;
-  color: #e5eaf2;
-  background: #101827;
-  color-scheme: dark;
-  font-synthesis: none;
-  -webkit-text-size-adjust: 100%;
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; }
-.diagnostics {
-  max-width: 440px;
-  margin: 0 auto;
-  padding: calc(40px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
-}
-h1 { font-size: 2rem; margin: 0 0 8px; }
-.subtitle { color: #a9b5c9; font-size: .85rem; margin-bottom: 32px; }
-dl > div { display: flex; gap: 12px; margin: 16px 0; }
-dt { color: #a9b5c9; }
-dd { margin: 0; }
-.backend-url, .message { overflow-wrap: anywhere; font-size: .85rem; line-height: 1.5; }
-.backend-url { color: #a9b5c9; }
-button {
-  margin-top: 16px;
-  min-height: 48px;
-  padding: 10px 24px;
-  border: 1px solid #6b83a8;
-  border-radius: 6px;
-  background: #1f3049;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-button:focus-visible { outline: 2px solid #adcaff; outline-offset: 4px; }
-button:disabled { cursor: wait; opacity: .6; }
+.native-about-button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 8px; }
+.native-about { position: fixed; inset: 10% max(16px, calc((100vw - 460px) / 2)) auto; z-index: 100; max-height: 80dvh; overflow: auto; padding: 24px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 12px 48px #0008; }
+.native-about button, .update-notice button { border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 10px; color: var(--text); background: var(--surface-raised); cursor: pointer; }
+.update-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.update-notice span { flex: 1; }
