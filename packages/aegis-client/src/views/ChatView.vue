@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { clientEnvironment } from '../services/clientEnvironment';
 import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
@@ -209,9 +208,7 @@ async function confirmEmailConnection(): Promise<void> {
       connectedEmail = status.emailAddress;
       return status.isConnected === true;
     },
-    controller.signal,
-    750,
-    clientEnvironment().externalLinks === 'system' ? 180000 : 12000
+    controller.signal
   );
   if (controller.signal.aborted) return;
 
@@ -774,6 +771,10 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 onMounted(() => {
   syncViewportHeight();
   stopObservingGoogle = observeGoogleConnection({
+    started: () => {
+      emailConnectionState.value = 'pending';
+      emailConnectionMessage.value = 'Conectando conta Google…';
+    },
     connected: () => void confirmEmailConnection(),
     failed: (code) => {
       const message = emailConnectionFailureMessage(code);

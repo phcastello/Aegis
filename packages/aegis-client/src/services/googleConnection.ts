@@ -1,9 +1,9 @@
 import { clientEnvironment, onAuthorizationOpened } from './clientEnvironment';
 
-export function observeGoogleConnection(callbacks: { connected(): void; failed(code: string | null): void }): () => void {
+export function observeGoogleConnection(callbacks: { started?(): void; connected(): void; failed(code: string | null): void }): () => void {
   if (clientEnvironment().externalLinks === 'system') {
     let awaitingReturn = false;
-    const stop = onAuthorizationOpened(() => { awaitingReturn = true; callbacks.connected(); });
+    const stop = onAuthorizationOpened(() => { awaitingReturn = true; callbacks.started?.(); });
     const returned = () => {
       if (awaitingReturn && document.visibilityState === 'visible') {
         awaitingReturn = false;
@@ -11,7 +11,10 @@ export function observeGoogleConnection(callbacks: { connected(): void; failed(c
       }
     };
     document.addEventListener('visibilitychange', returned);
-    return () => { stop(); document.removeEventListener('visibilitychange', returned); };
+    window.addEventListener('focus', returned);
+    return () => {
+      stop(); document.removeEventListener('visibilitychange', returned); window.removeEventListener('focus', returned);
+    };
   }
   const channel = 'BroadcastChannel' in window ? new BroadcastChannel('aegis.email.connection') : null;
   if (channel) channel.onmessage = (event: MessageEvent) => {

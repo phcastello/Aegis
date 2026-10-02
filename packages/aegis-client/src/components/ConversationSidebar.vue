@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { ComponentPublicInstance } from 'vue';
 import type { ConversationSummary } from '../types/chat';
 import AegisIdentityCard from './AegisIdentityCard.vue';
 
@@ -46,6 +47,11 @@ function getTitle(conversation: ConversationSummary): string {
 function toggleMenu(conversationId: string): void {
   menuConversationId.value = menuConversationId.value === conversationId ? null : conversationId;
   editError.value = null;
+}
+
+function setRenameInput(element: Element | ComponentPublicInstance | null): void {
+  // A string ref inside v-for becomes an array in Vue, even for the one visible editor.
+  renameInput.value = element instanceof HTMLInputElement ? element : null;
 }
 
 function startRename(conversation: ConversationSummary): void {
@@ -162,7 +168,7 @@ onBeforeUnmount(() => {
         >
           <template v-if="editingConversationId === conversation.id">
             <input
-              ref="renameInput"
+              :ref="setRenameInput"
               v-model="editTitle"
               class="history-rename-input"
               maxlength="80"
