@@ -173,6 +173,40 @@ public sealed class ToolLoopTests
         Assert.Contains(marker, audit.ResponseBody);
     }
 
+    [Theory]
+    [InlineData("disconnected", "email_not_connected")]
+    [InlineData("scope", "email_scope_missing")]
+    [InlineData("timeout", "email_temporarily_unavailable")]
+    [InlineData("network", "email_temporarily_unavailable")]
+    [InlineData("provider", "email_access_denied")]
+    public async Task GmailRecoverableFailuresReachModelWithoutPruning(string failure, string expected)
+    {
+        var tool = new RecoveryTool(failure);
+        var model = new FakeModelClient([Call("email_search"), Reply("Bloqueio recuperável")]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, metrics);
+        await CollectAsync(loop);
+        Assert.All(model.Requests, request => Assert.Contains(request.Tools, x => x.Name == "email_search"));
+        var output = Assert.Single(model.Requests[1].InputItems!, x => x.TryGetProperty("type", out var type) && type.GetString() == "function_call_output");
+        Assert.Equal(expected, JsonDocument.Parse(output.GetProperty("output").GetString()!).RootElement.GetProperty("error").GetString());
+    }
+
+    private sealed class RecoveryTool(string failure) : IAegisTool
+    {
+        public string Name => "email_search";
+        public string Description => "Busca Gmail";
+        public JsonElement ParametersSchema => JsonSerializer.SerializeToElement(new { type = "object" });
+        public Task<AegisToolResult> ExecuteAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken = default) =>
+            throw failure switch
+            {
+                "disconnected" => new Aegis.Application.Email.EmailNotConnectedException(),
+                "scope" => new Aegis.Application.Google.GoogleScopeMissingException("gmail"),
+                "timeout" => new OperationCanceledException(),
+                "network" => new HttpRequestException(),
+                _ => new Aegis.Application.Email.EmailProviderException("email_access_denied", "Verifique as permissões.")
+            };
+    }
+
     private static AegisToolLoop CreateLoop(FakeModelClient model, FakeTool tool) =>
         new(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, new AegisMetrics());
 

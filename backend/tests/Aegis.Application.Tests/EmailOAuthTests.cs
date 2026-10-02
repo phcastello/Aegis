@@ -68,6 +68,34 @@ public sealed class EmailOAuthTests
         await Assert.ThrowsAsync<EmailConnectionException>(() => service.HandleOAuthCallbackAsync("fake-code", "bad-state"));
     }
 
+    [Theory]
+    [InlineData(403, "accessNotConfigured", "email_api_disabled")]
+    [InlineData(401, "authError", "email_authentication_failed")]
+    [InlineData(403, "insufficientPermissions", "email_scope_missing")]
+    [InlineData(403, "forbidden", "email_access_denied")]
+    [InlineData(403, "rateLimitExceeded", "email_temporarily_unavailable")]
+    [InlineData(429, "rateLimitExceeded", "email_temporarily_unavailable")]
+    [InlineData(503, "backendError", "email_temporarily_unavailable")]
+    [InlineData(400, "invalidArgument", "invalid_tool_arguments")]
+    [InlineData(404, "notFound", "email_not_found")]
+    public async Task GmailProviderErrorsPreserveOperationalMeaningWithoutLeakingBody(int status, string reason, string expected)
+    {
+        var tokens = System.Reflection.DispatchProxy.Create<Aegis.Application.Google.IGoogleAccessTokenProvider, AssistantRefinementTests.StubProxy>();
+        ((AssistantRefinementTests.StubProxy)(object)tokens).InvokeMethod = (_, _) => Task.FromResult("fake-token");
+        using var http = new HttpClient(new ProviderErrorHandler(status, reason));
+        var service = new GmailService(http, Options.Create(new GmailOptions()), tokens);
+        var error = await Assert.ThrowsAsync<EmailProviderException>(() => service.SearchEmailsAsync("professor"));
+        Assert.Equal(expected, error.Code);
+        Assert.DoesNotContain("secret-provider-body", error.Message);
+    }
+
+    private sealed class ProviderErrorHandler(int status, string reason) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage((HttpStatusCode)status)
+            { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { error = new { message = "secret-provider-body", errors = new[] { new { reason } } } })) });
+    }
+
     [Fact]
     public async Task TemporaryGoogleRefreshFailureDoesNotDisconnectAccount()
     {

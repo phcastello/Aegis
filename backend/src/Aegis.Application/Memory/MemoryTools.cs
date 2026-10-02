@@ -66,7 +66,7 @@ public sealed class MemorySearchTool(MemoryService service) : MemoryToolBase(ser
         var a = args.Deserialize<Arguments>(JsonOptions)!;
         var asOf = Instant(a.AsOf);
         var userQuestion = context.UserContent.Trim();
-        var useOriginalQuestion = userQuestion.Length is > 0 and <= 200 && userQuestion.EndsWith('?');
+        var useOriginalQuestion = userQuestion.Length is > 0 and <= 200;
         var result = await Service.SearchHybridAsync(useOriginalQuestion ? userQuestion : a.Query,
             a.Limit, asOf, context.ConversationId, ct);
         // A model-formulated query can be broader than the user's actual question. For a

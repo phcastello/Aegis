@@ -4,7 +4,7 @@ namespace Aegis.Application.Observability;
 
 public sealed class AegisMetrics : IDisposable
 {
-    private readonly Meter meter = new("Aegis", "0.6.0");
+    private readonly Meter meter = new("Aegis", "0.6.1");
     private int activeTurns;
     public Counter<long> RemindersCreated { get; }
     public Counter<long> MemoryCreated { get; }

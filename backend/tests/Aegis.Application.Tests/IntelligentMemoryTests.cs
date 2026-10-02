@@ -569,9 +569,21 @@ public sealed class IntelligentMemoryTests
             var project = await Remember("Pedro desenvolve a Aegis.");
             var postgres = await Remember("A Aegis usa PostgreSQL como fonte canônica do sistema de memória.");
             var ram = await Remember("O PC de Pedro tem 32 GB de RAM.");
+            var alias = await Remember("Pedro é chamado de Vecna na faculdade.");
+            var secondary = await Remember("Depois da FaZe, o time favorito de R6 de Pedro é a DarkZero.");
+            var question = await SourceAsync(db, "Historicamente, qual time eu dizia gostar mais depois da FaZe?");
+            var searched = await new MemorySearchTool(service).ExecuteAsync(
+                System.Text.Json.JsonSerializer.SerializeToElement(new { query = "Pedro" }),
+                new(question.ConversationId, question.UserMessageId, question.Target));
+            Assert.True(searched.Success);
+            Assert.Contains(secondary.Id.ToString(), searched.Content);
+            foreach (var unrelated in new[] { monitor, project, postgres, ram, alias })
+                Assert.DoesNotContain(unrelated.Id.ToString(), searched.Content);
             var historical = await store.SearchAsync("Historicamente, qual time eu dizia gostar mais depois da FaZe?",
                 10, clock.Now, default);
-            Assert.Equal(faze.Id, Assert.Single(historical).Id);
+            Assert.Contains(historical, x => x.Id == faze.Id);
+            Assert.Contains(historical, x => x.Id == secondary.Id);
+            Assert.Equal(2, historical.Count);
             var database = await store.SearchAsync(
                 "Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo?",
                 10, clock.Now, default);
@@ -805,12 +817,52 @@ public sealed class IntelligentMemoryTests
             Assert.DoesNotContain(aegisMemory.Id, result.Memories.Select(x => x.Id));
             Assert.DoesNotContain(uses.Id, result.Paths.SelectMany(x => x.Relations).Select(x => x.Id));
             Assert.DoesNotContain(develops.Id, result.Paths.SelectMany(x => x.Relations).Select(x => x.Id));
+            var search = new MemorySearchTool(new MemoryService(store, clock, metrics, hybrid: hybrid));
+            var source = await SourceAsync(db, "Historicamente, qual time eu dizia gostar mais depois da FaZe?");
+            var toolResult = await search.ExecuteAsync(System.Text.Json.JsonSerializer.SerializeToElement(new { query = "Pedro" }),
+                new(source.ConversationId, source.UserMessageId, source.Target));
+            Assert.True(toolResult.Success);
+            Assert.Contains(fazeMemory.Id.ToString(), toolResult.Content);
+            Assert.DoesNotContain(monitorMemory.Id.ToString(), toolResult.Content);
+            Assert.DoesNotContain(aegisMemory.Id.ToString(), toolResult.Content);
             var named = await hybrid.SearchTracedAsync(
                 "Historicamente, qual time Pedro dizia gostar mais depois da FaZe?",
                 10, null, false, default);
             Assert.DoesNotContain(pedro.Id, named.Trace!.TraversalSeeds);
             Assert.DoesNotContain(monitorMemory.Id, named.Memories.Select(x => x.Id));
             Assert.DoesNotContain(aegisMemory.Id, named.Memories.Select(x => x.Id));
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task CasualMemorySearchUsesSameCanonicalFactWithOrWithoutPunctuation()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var clock = new Clock(); using var metrics = new AegisMetrics();
+            var service = new MemoryService(new MemoryStore(db), clock, metrics);
+            var source = await SourceAsync(db, "Meu time favorito de R6 é a FaZe Clan.");
+            var (fact, _) = await service.RememberAsync("O time favorito de Pedro é a FaZe Clan.", null, null,
+                new(source.ConversationId, source.UserMessageId, source.Target), default);
+            var other = await SourceAsync(db, "Meu monitor principal é QHD.");
+            var (monitor, _) = await service.RememberAsync("O monitor principal de Pedro é QHD.", null, null,
+                new(other.ConversationId, other.UserMessageId, other.Target), default);
+            foreach (var question in new[] { "qual meu time favorito?", "qual meu time favorito", "me diz qual meu time favorito" })
+            {
+                var result = await new MemorySearchTool(service).ExecuteAsync(
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { query = "monitor principal" }),
+                    new(source.ConversationId, source.UserMessageId, question));
+                Assert.True(result.Success);
+                Assert.Contains(fact.Id.ToString(), result.Content);
+                Assert.DoesNotContain(monitor.Id.ToString(), result.Content);
+            }
+            var fallback = await new MemorySearchTool(service).ExecuteAsync(
+                System.Text.Json.JsonSerializer.SerializeToElement(new { query = "time favorito" }),
+                new(source.ConversationId, source.UserMessageId, "e ele?"));
+            Assert.True(fallback.Success);
+            Assert.Contains(fact.Id.ToString(), fallback.Content);
         }
         finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
     }

@@ -72,7 +72,7 @@ public sealed class CalendarGetStatusTool(ICalendarService calendar) : CalendarT
 public sealed class CalendarCreateConnectLinkTool(IEmailConnectionService connection) : CalendarToolBase
 {
     public override string Name => "calendar_create_connect_link";
-    public override string Description => "Gera autorização Google combinada Gmail + Calendar Events + Calendar List readonly na mesma conexão. Use para conectar ou acrescentar scopes Calendar à mesma conta.";
+    public override string Description => "Gera autorização Google combinada Gmail + Calendar Events + Calendar List readonly na mesma conexão. Use para conectar ou acrescentar scopes Calendar à mesma conta após pedido direto bloqueado. Gere na mesma interação sem confirmação de mutação; não cria o evento. Não use para falha temporária.";
     public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{},"additionalProperties":false}""");
     protected override async Task<AegisToolResult> RunAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     { RequireEmpty(arguments); return Ok(new { authorizationUrl = (await connection.CreateConnectLinkAsync(cancellationToken)).AuthorizationUrl }); }

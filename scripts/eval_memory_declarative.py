@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in PASS/FAIL evaluation of non-tautological replies to exact manual statements."""
+"""Live behavioral evaluation of concise, non-tautological conversational presence."""
 
 import argparse
 import json
@@ -20,20 +20,25 @@ STATEMENTS = [
     "Depois da FaZe, meu time de R6 favorito é a DarkZero.",
     "Na faculdade me chamam de Vecna.",
 ]
+RICH_STATEMENT = "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD"
 JUDGE_SCHEMA = {
     "type": "object", "properties": {
         "tautologicalRestatement": {"type": "boolean"},
         "addsUsefulComment": {"type": "boolean"},
+        "minimalAcknowledgement": {"type": "boolean"},
+        "conciseAndRelevant": {"type": "boolean"},
+        "situatedReaction": {"type": "boolean"},
         "reason": {"type": "string"}},
-    "required": ["tautologicalRestatement", "addsUsefulComment", "reason"],
+    "required": ["tautologicalRestatement", "addsUsefulComment", "minimalAcknowledgement", "conciseAndRelevant", "situatedReaction", "reason"],
     "additionalProperties": False,
 }
 
 
-def response(model, prompt, statement, schema=None):
+def response(model, prompt, statement, schema=None, history=()):
     payload = {"model": model, "input": [
-        {"role": "developer", "content": prompt}, {"role": "user", "content": statement}],
-        "store": False, "max_output_tokens": 400}
+        {"role": "developer", "content": prompt}, *history, {"role": "user", "content": statement}],
+        "store": False, "max_output_tokens": 1600,
+        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "medium")}}
     if schema:
         payload["text"] = {"format": {"type": "json_schema", "name": "reply_quality",
                                       "strict": True, "schema": schema}}
@@ -51,7 +56,7 @@ def response(model, prompt, statement, schema=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument("--trials", type=int, default=3)
     args = parser.parse_args()
     if os.getenv("AEGIS_MEMORY_DECLARATIVE_LIVE") != "YES":
         print("Skipped: set AEGIS_MEMORY_DECLARATIVE_LIVE=YES.")
@@ -61,28 +66,38 @@ def main():
         return 2
     model = setting("AEGIS_CHAT_MODEL", "gpt-6-luna")
     judged = 0
-    total = len(STATEMENTS) * args.trials
+    cases = [(statement, False, []) for statement in STATEMENTS]
+    cases += [(RICH_STATEMENT, True, []), (RICH_STATEMENT, True, [
+        {"role": "user", "content": "Só tenho um monitor FHD 75Hz e fico alternando entre código e documentação."},
+        {"role": "assistant", "content": "Alternar essas janelas acaba quebrando o ritmo."}])]
+    total = len(cases) * args.trials
     for trial in range(args.trials):
-        for statement in STATEMENTS:
+        for statement, rich, history in cases:
             try:
-                reply = response(model, IDENTITY, statement)
-                if len(reply.strip().split()) <= 2 and not any(x in reply.lower() for x in ("16", "32", "4k", "144", "qhd")):
-                    verdict = {"tautologicalRestatement": False, "addsUsefulComment": False,
-                               "reason": "minimal acknowledgement"}
-                else:
-                    instruction = ("Avalie se a resposta da assistente apenas repete ou parafraseia a declaração "
-                        "factual do usuário, sem acrescentar comentário pertinente e não óbvio. "
-                        "Sarcasmo ou observação natural com informação nova é aceitável. "
-                        "Marque tautologicalRestatement=true se a resposta só reformula o fato, mesmo com 'Entendi'.")
-                    verdict = json.loads(response(model, instruction,
-                        json.dumps({"user": statement, "assistant": reply}, ensure_ascii=False), JUDGE_SCHEMA))
-                ok = not verdict["tautologicalRestatement"]
+                reply = response(model, IDENTITY, statement, history=history)
+                instruction = ("Avalie comportamento, sem exigir palavras exatas. tautologicalRestatement=true se "
+                    "a resposta só repete/parafraseia os fatos ou explica a frase do usuário. "
+                    "Uma reação natural ou consequência óbvia útil conta como addsUsefulComment. "
+                    "minimalAcknowledgement=true para mera confirmação como Certo/Entendi/Ok ou equivalente. "
+                    "conciseAndRelevant=true para uma ou duas frases curtas pertinentes, sem conselho genérico ou oferta genérica. "
+                    "situatedReaction=true quando a reação usa pertinentemente a situação anterior (upgrade ou melhora "
+                    "no fluxo de trabalho), sem precisar anunciar memória nem repetir o passado. Não exija pergunta, "
+                    "sarcasmo ou oferta de ajuda. Declarações simples podem aceitar confirmação mínima; atualização "
+                    "rica exige reação/observação pertinente além da confirmação e sem repetir todos os fatos.")
+                verdict = json.loads(response(model, instruction,
+                    json.dumps({"history": history, "user": statement, "assistant": reply}, ensure_ascii=False), JUDGE_SCHEMA))
+                ok = not verdict["tautologicalRestatement"] and verdict["conciseAndRelevant"]
+                if rich:
+                    ok = ok and not verdict["minimalAcknowledgement"] and verdict["addsUsefulComment"]
+                if history:
+                    ok = ok and verdict["situatedReaction"]
                 judged += ok
-                print(json.dumps({"trial": trial + 1, "statement": statement, "reply": reply,
-                    "verdict": verdict, "result": "PASS" if ok else "FAIL"}, ensure_ascii=False))
+                print(json.dumps({"model": model, "trial": trial + 1, "statement": statement,
+                    "contextual": bool(history), "reply": reply, "verdict": verdict,
+                    "result": "PASS" if ok else "FAIL"}, ensure_ascii=False), flush=True)
             except Exception as error:
                 print(json.dumps({"trial": trial + 1, "statement": statement,
-                    "error": type(error).__name__, "result": "FAIL"}, ensure_ascii=False))
+                    "error": type(error).__name__, "result": "FAIL"}, ensure_ascii=False), flush=True)
     print(f"passed={judged}/{total}")
     return 0 if judged == total else 1
 
