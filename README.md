@@ -2,7 +2,30 @@
 
 Aegis v0.6.1 refines conversational presence, contextual memory, casual memory search, integration recovery and full conversation history. It preserves the accepted v0.6.0 memory architecture and existing integrations. See the [v0.6.1 validation report](scripts/eval-results-v0.6.1.md).
 
-v0.7.0 is in development. Stage 01 adds a Tauri 2 + Vue foundation for Android and Windows under `apps/aegis-node/`, alongside the current backend and functional PWA. Stage 01 was accepted through external validation by the project owner; see the [Stage 01 report](docs/v0.7.0-stage01-tauri-foundation.md).
+v0.6.1 is the current stable line. v0.7.0 is in development: the new Tauri native client prioritizes Android and Windows, while the Web Client/PWA remains available. Stage 01 was accepted by the owner on both physical targets; [Stage 02 progress and validation](docs/v0.7.0-stage02-client-parity.md).
+
+## Download Aegis
+
+Open **[GitHub Releases](https://github.com/phcastello/Aegis/releases)** and choose an Aegis native preview (`node-v…`). Native releases are prereleases during v0.7.0 development. If a preview has no installers yet, its signing/publishing setup is still pending; see the Stage 02 report.
+
+### Windows
+
+1. Download **`Aegis-Windows-x86_64-Setup.exe`**.
+2. Run the installer.
+3. Open Aegis. Official builds use `https://aegis.phcastello.com` automatically.
+
+The development installer does not yet have commercial Windows code signing, so SmartScreen may warn about an unknown publisher. Verify that the download came from this repository's release; do not disable Windows protections. Tauri update signatures protect updates but are separate from Windows publisher certificates.
+
+### Android
+
+1. Open [Releases](https://github.com/phcastello/Aegis/releases) on your phone.
+2. Download **`Aegis-Android-arm64.apk`**.
+3. When Android asks, authorize APK installation for the browser used to download it.
+4. Install and open Aegis.
+
+During v0.7.0 development, distribution is directly by APK, outside the Play Store. If you installed the Stage 01 debug APK, uninstall it once before installing the first release APK because they use different signing certificates. Later release APKs retain the same signing identity.
+
+Windows signed updates and Android's exact-APK download prompt are implemented but still require a published release and real update/install validation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Native notifications and native reminder delivery belong to later stages. The Web Client keeps its PWA/Web Push features.
 
 Version history:
 
@@ -27,7 +50,7 @@ Version history:
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
-The repository is organized as a monorepo. Backend code lives under `backend/`, and the Vue PWA lives under `frontend/aegis-pwa/`.
+The repository is organized as a monorepo. Backend code lives under `backend/`, the Web Client/PWA under `frontend/aegis-pwa/`, the native client under `apps/aegis-node/`, and their shared Vue implementation under `packages/aegis-client/`.
 
 ## Stack
 
@@ -276,9 +299,10 @@ curl http://localhost:8090/api/health
 Run the frontend PWA in local development mode:
 
 ```bash
+npm ci --prefix packages/aegis-client
 cd frontend/aegis-pwa
 cp .env.example .env.local
-npm install
+npm ci
 npm run dev
 ```
 
