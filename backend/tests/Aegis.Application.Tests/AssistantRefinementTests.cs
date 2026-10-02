@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Aegis.Application.Chat;
+using Aegis.Application.Common;
 using Aegis.Application.Llm;
 using Aegis.Application.Memory;
 using Aegis.Application.Models;
@@ -21,31 +22,45 @@ namespace Aegis.Application.Tests;
 public sealed class AssistantRefinementTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task MainChatIncludesAllHistoryOnceAndPreservesModelText(bool streaming)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task MainChatLoadsHistoryOnceAndPreservesModelText(bool streaming, bool newConversation)
     {
         using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
-        var conversation = new Conversation("Histórico");
-        db.AddConversation(conversation);
-        for (var i = 0; i < 30; i++)
+        var conversation = new Conversation(Conversation.DefaultTitle);
+        if (!newConversation) db.AddConversation(conversation);
+        for (var i = 0; i < (newConversation ? 0 : 30); i++)
             db.AddChatMessage(conversation.AddMessage(i % 2 == 0 ? "user" : "assistant", $"turno {i}"));
         await db.SaveChangesAsync();
-        var history = await db.GetConversationMessagesAsync(conversation.Id);
-        Assert.Equal(30, history.Count);
-        Assert.Equal(history.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).Select(x => x.Id), history.Select(x => x.Id));
+        var history = conversation.Messages.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToArray();
+        var loads = 0;
+        var chatDb = DispatchProxy.Create<IAegisDbContext, StubProxy>();
+        ((StubProxy)(object)chatDb).InvokeMethod = (method, args) =>
+        {
+            if (method.Name == nameof(IAegisDbContext.GetConversationWithMessagesAsync)) loads++;
+            if (method.Name == nameof(IAegisDbContext.GetRecentMessagesAsync))
+                throw new InvalidOperationException("Chat must reuse the complete loaded history.");
+            return method.Invoke(db, args);
+        };
         using var metrics = new AegisMetrics();
         using var registry = new ActiveTurnRegistry(metrics);
         var voice = DispatchProxy.Create<IVoiceService, StubProxy>();
         ((StubProxy)(object)voice).InvokeMethod = (method, args) => method.Name == "RegisterTurnAsync"
             ? Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!)) : throw new NotSupportedException();
         var queue = DispatchProxy.Create<IConversationTitleJobQueue, StubProxy>();
-        ((StubProxy)(object)queue).InvokeMethod = (_, _) => ValueTask.CompletedTask;
+        ConversationTitleJob? titleJob = null;
+        ((StubProxy)(object)queue).InvokeMethod = (_, args) =>
+        {
+            titleJob = (ConversationTitleJob)args![0]!;
+            return ValueTask.CompletedTask;
+        };
         var loop = new CaptureLoop();
-        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, queue, registry, voice);
+        var chat = new ChatService(chatDb, new PromptBuilder(new Runtime()), loop, queue, registry, voice);
         const string current = "Agora tenho dois monitores. Um QHD 180Hz e um FHD 75Hz. O principal é o QHD";
-        var request = new SendMessageRequest { ConversationId = conversation.Id, Content = current, TurnId = Guid.NewGuid() };
+        var request = new SendMessageRequest { ConversationId = newConversation ? null : conversation.Id, Content = current, TurnId = Guid.NewGuid() };
         if (streaming)
         {
             await using var iterator = chat.StreamMessageAsync(request).GetAsyncEnumerator();
@@ -59,14 +74,28 @@ public sealed class AssistantRefinementTests
         }
         else await chat.SendMessageAsync(request);
         var messages = loop.Request!.InputItems!.Where(x => x.GetProperty("role").GetString() is "user" or "assistant").ToArray();
-        Assert.Equal(31, messages.Length);
+        Assert.Equal(history.Length + 1, messages.Length);
         Assert.Equal(history.Select(x => x.Content).Append(current), messages.Select(x => x.GetProperty("content").GetString()));
         Assert.Single(messages, x => x.GetProperty("content").GetString() == current);
+        Assert.Equal(newConversation ? 0 : 1, loads);
+        conversation = await db.Conversations.SingleAsync();
         Assert.Equal("Aí sim. O secundário serve bem de apoio.", conversation.Messages.Last().Content);
+        Assert.NotNull(titleJob);
+        Assert.Equal(conversation.Id, titleJob.ConversationId);
+        Assert.Equal(newConversation ? current : "turno 0", titleJob.UserContent);
+        var restored = await chat.GetConversationAsync(conversation.Id);
+        Assert.NotNull(restored);
+        Assert.Equal(history.Length + 2, restored.Messages.Count);
         conversation.Delete();
         await db.SaveChangesAsync();
-        Assert.Empty(await db.GetConversationMessagesAsync(conversation.Id));
-        await Assert.ThrowsAsync<ConversationNotFoundException>(() => chat.SendMessageAsync(request));
+        Assert.Null(await chat.GetConversationAsync(conversation.Id));
+        var deletedRequest = new SendMessageRequest { ConversationId = conversation.Id, Content = current, TurnId = Guid.NewGuid() };
+        if (streaming)
+        {
+            await using var deleted = chat.StreamMessageAsync(deletedRequest).GetAsyncEnumerator();
+            await Assert.ThrowsAsync<ConversationNotFoundException>(async () => { await deleted.MoveNextAsync(); });
+        }
+        else await Assert.ThrowsAsync<ConversationNotFoundException>(() => chat.SendMessageAsync(deletedRequest));
     }
 
     [Theory]

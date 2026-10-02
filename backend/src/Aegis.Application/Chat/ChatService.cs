@@ -60,12 +60,9 @@ public sealed class ChatService(
         await dbContext.SaveChangesAsync(turnToken);
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
 
-        var history = await dbContext.GetConversationMessagesAsync(
-            conversation.Id,
-            turnToken);
-
         var promptResult = await BuildPromptForTurnAsync(
-            history.Where(message => message.Id != userMessage.Id).ToList(),
+            conversation.Messages.Where(message => message.Id != userMessage.Id)
+                .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
 
         try
@@ -157,9 +154,9 @@ public sealed class ChatService(
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
-        var history = await dbContext.GetConversationMessagesAsync(conversation.Id, turnToken);
         var promptResult = await BuildPromptForTurnAsync(
-            history.Where(message => message.Id != userMessage.Id).ToList(),
+            conversation.Messages.Where(message => message.Id != userMessage.Id)
+                .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
         var modelRequest = CreateModelRequest(promptResult, userContent);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(

@@ -1905,5 +1905,322 @@
     "modality_judge={\"preservesConsideration\": false, \"reason\": \"O candidato afirma que Pedro possui uma RTX 5090, em vez de apenas considerar comprá-la.\"}",
     "negative_control=False",
     "negative_control=False"
-  ]
+  ],
+  "hardening_2026_10_02": {
+    "project": "aegis_memory_v060_2067fa6284",
+    "manual_001_022": {
+      "passed": 28,
+      "total": 28,
+      "rows": [
+        "| Conversation | Message | Expected | Response | Canonical | Retrieval | Activity | Result |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 001 | qual é meu time favorito? | FaZe | Seu time favorito de Rainbow Six é a FaZe Clan. | — | PASS | PASS | PASS |",
+        "| 002 | Qual time eu mais torço no competitivo de Siege? | FaZe | Você torce mais pela FaZe Clan no competitivo de Rainbow Six Siege. | — | PASS | PASS | PASS |",
+        "| 003 | esqueça que O time favorito de Rainbow Six do Pedro é a FaZe Clan. | seed Forgotten; job Suppressed | Apaguei essa informação da memória. | PASS | — | PASS | PASS |",
+        "| 004 | qual é meu time favorito? | sem FaZe persistida | Ainda não sei — não encontrei essa informação. Qual é o seu time? | — | PASS | PASS | PASS |",
+        "| 004 | Meu time favorito de R6 é a FaZe Clan. | FaZe Active; sem papagaio | Boa escolha — a FaZe tem uma história forte no competitivo de R6. | PASS | — | PASS | PASS |",
+        "| 005 | Qual é meu time favorito de R6? | FaZe | Seu time favorito de R6 é a FaZe Clan. | — | PASS | PASS | PASS |",
+        "| 006 | Qual time eu mais torço no competitivo de Siege? | FaZe | Você torce mais pela FaZe Clan no competitivo de Siege. | — | PASS | PASS | PASS |",
+        "| 007 | Eu desenvolvo você, a Aegis. | Pedro desenvolve Aegis; Active | Então você conhece bem os bastidores — vou tentar fazer jus ao projeto. | PASS | — | PASS | PASS |",
+        "| 007 | A Aegis usa PostgreSQL como fonte canônica do sistema de memória. | Aegis usa PostgreSQL; Active | Faz sentido: assim, o contexto transitório do chat não vira fonte de verdade para a memória persistente. | PASS | — | PASS | PASS |",
+        "| 008 | Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo? | PostgreSQL; vínculo Pedro–Aegis | PostgreSQL. | — | PASS | PASS | PASS |",
+        "| 009 | Meu PC tinha 16 GB de RAM. | 16 GB Active; sem papagaio | E agora você colocou mais RAM ou descobriu que a configuração era diferente? | PASS | — | PASS | PASS |",
+        "| 009 | Troquei a memória do PC e agora ele tem 32 GB de RAM. | transition; 16 GB Active fechado; 32 GB Active | Boa — isso deve dar bem mais folga para multitarefa e aplicativos pesados. | PASS | — | PASS | PASS |",
+        "| 010 | Quanto de RAM meu PC tem hoje? | 32 GB atual; sem fatos alheios | Seu PC tem 32 GB de RAM. | — | PASS | PASS | PASS |",
+        "| 011 | Quanto de RAM meu PC tem hoje? e quanto tinha no passado? | 32 GB atual; 16 GB passado | Hoje seu PC tem **32 GB de RAM**; antes tinha **16 GB**. Parece que você dobrou a memória. | — | PASS | PASS | PASS |",
+        "| 012 | Meu monitor é 4K 144 Hz. | 4K/144 inicial Active | Boa — 4K a 144 Hz exige bastante da placa de vídeo e do cabo. DisplayPort 1.4 com DSC ou HDMI 2.1 costuma ser necessário para aproveitar tudo. | PASS | — | PASS | PASS |",
+        "| 012 | Não, eu falei errado. Meu monitor é QHD 180 Hz. Ele nunca foi 4K 144 Hz. | correct; 4K Superseded; QHD/180 Active | Ah, entendi — retiro a referência a 4K. QHD a 180 Hz ainda depende de uma conexão adequada, mas exige bem menos largura de banda que 4K a 144 Hz. | PASS | — | PASS | PASS |",
+        "| 013 | Qual é a resolução e a frequência do meu monitor? | QHD/180; sem 4K/144 verdadeiro | Seu monitor tem resolução QHD e taxa de atualização de 180 Hz. | — | PASS | PASS | PASS |",
+        "| 014 | Meu monitor já foi 4K 144 Hz? | nega história 4K/144 falsa | Não — essa informação de 4K a 144 Hz estava errada. O que tenho como correto é que seu monitor é QHD a 180 Hz. | — | PASS | PASS | PASS |",
+        "| 014 | O que você sabe sobre meu monitor? | QHD/180; não afirma 4K/144 verdadeiro | Sei que seu monitor é QHD e roda a 180 Hz. Não tenho registrado a marca ou o modelo. | — | PASS | PASS | PASS |",
+        "| 015 | Depois da FaZe, meu time de R6 favorito é a DarkZero. | DarkZero segundo favorito Active; FaZe permanece Active | Boa — FaZe e DarkZero no topo rendem bastante jogo bom nos torneios internacionais. | PASS | — | PASS | PASS |",
+        "| 016 | Depois da FaZe, qual time de R6 eu mais gosto? | DarkZero | Depois da FaZe, você mais gosta da **DarkZero**. | — | PASS | PASS | PASS |",
+        "| 016 | Esquece essa informação sobre a DarkZero. | DarkZero Forgotten; job Suppressed | Apaguei essa informação sobre a DarkZero. | PASS | — | PASS | PASS |",
+        "| 017 | Depois da FaZe, qual time de R6 eu mais gosto? | sem DarkZero | Não sei qual vem em segundo — só sei que sua favorita é a FaZe Clan. | — | PASS | PASS | PASS |",
+        "| 018 | Qual time eu mais gosto no competitivo de Siege tirando a FaZe? | sem DarkZero | Não sei — só tenho registrado que você gosta da FaZe. | — | PASS | PASS | PASS |",
+        "| 019 | Historicamente, qual time eu dizia gostar mais depois da FaZe? | sem DarkZero, monitor, Aegis, RAM ou Vecna | Não encontrei esse histórico. O que tenho registrado é que a FaZe Clan era seu time favorito de R6, mas não qual vinha depois dela. | — | PASS | PASS | PASS |",
+        "| 020 | Meu segundo time favorito de R6 é a DarkZero. | DarkZero Active novamente | Boa — FaZe e DarkZero dão uma rivalidade bem interessante pra acompanhar no R6. | PASS | — | PASS | PASS |",
+        "| 021 | Na faculdade me chamam de Vecna. | Vecna alias único de Pedro; Active | Apelido forte — espero que seja pela presença, não por abrir portais no campus. | PASS | — | PASS | PASS |",
+        "| 022 | Qual é meu apelido na faculdade? | Vecna | Seu apelido na faculdade é Vecna. | — | PASS | PASS | PASS |"
+      ]
+    },
+    "retrieval_relevance": [
+      {
+        "query": "Qual é meu time favorito de R6?",
+        "expectedRelevant": [
+          "FaZe"
+        ],
+        "expectedIrrelevant": [
+          "monitor",
+          "Aegis",
+          "RAM",
+          "Vecna"
+        ],
+        "scores": [
+          {
+            "content": "O time favorito de R6 de Pedro é a FaZe Clan.",
+            "score": 0.722035,
+            "kept": true,
+            "dropReason": null
+          },
+          {
+            "content": "O segundo time favorito de R6 de Pedro é a DarkZero.",
+            "score": 0.6956567,
+            "kept": true,
+            "dropReason": null
+          },
+          {
+            "content": "O monitor de Pedro tem resolução QHD e taxa de atualização de 180 Hz.",
+            "score": 0.3029006,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Pedro desenvolve a Aegis.",
+            "score": 0.2853354,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O PC de Pedro tem 32 GB de RAM.",
+            "score": 0.27991903,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": null,
+            "score": 0.26287404,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+            "score": 0.22308701,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Na faculdade, chamam Pedro de Vecna.",
+            "score": 0.16510333,
+            "kept": false,
+            "dropReason": "below_threshold"
+          }
+        ],
+        "finalResults": [
+          "O time favorito de R6 de Pedro é a FaZe Clan.",
+          "O segundo time favorito de R6 de Pedro é a DarkZero."
+        ],
+        "result": "PASS"
+      },
+      {
+        "query": "Qual é a resolução e a frequência do meu monitor?",
+        "expectedRelevant": [
+          "QHD",
+          "180"
+        ],
+        "expectedIrrelevant": [
+          "FaZe",
+          "Aegis",
+          "RAM",
+          "Vecna",
+          "4K",
+          "144"
+        ],
+        "scores": [
+          {
+            "content": "O monitor de Pedro tem resolução QHD e taxa de atualização de 180 Hz.",
+            "score": 0.5824807,
+            "kept": true,
+            "dropReason": null
+          },
+          {
+            "content": "O PC de Pedro tem 32 GB de RAM.",
+            "score": 0.29562986,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": null,
+            "score": 0.2691312,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O segundo time favorito de R6 de Pedro é a DarkZero.",
+            "score": 0.18302685,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O time favorito de R6 de Pedro é a FaZe Clan.",
+            "score": 0.17763875,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Pedro desenvolve a Aegis.",
+            "score": 0.15908566,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+            "score": 0.15743196,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Na faculdade, chamam Pedro de Vecna.",
+            "score": 0.09696977,
+            "kept": false,
+            "dropReason": "below_threshold"
+          }
+        ],
+        "finalResults": [
+          "O monitor de Pedro tem resolução QHD e taxa de atualização de 180 Hz."
+        ],
+        "result": "PASS"
+      },
+      {
+        "query": "Quanto de RAM meu PC tem hoje?",
+        "expectedRelevant": [
+          "32",
+          "RAM"
+        ],
+        "expectedIrrelevant": [
+          "monitor",
+          "FaZe",
+          "Aegis",
+          "Vecna",
+          "16"
+        ],
+        "scores": [
+          {
+            "content": null,
+            "score": 0.60065025,
+            "kept": false,
+            "dropReason": "canonical_invalid"
+          },
+          {
+            "content": "O PC de Pedro tem 32 GB de RAM.",
+            "score": 0.59840584,
+            "kept": true,
+            "dropReason": null
+          },
+          {
+            "content": "O monitor de Pedro tem resolução QHD e taxa de atualização de 180 Hz.",
+            "score": 0.32078445,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+            "score": 0.25274837,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Pedro desenvolve a Aegis.",
+            "score": 0.21779023,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Na faculdade, chamam Pedro de Vecna.",
+            "score": 0.19168921,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O segundo time favorito de R6 de Pedro é a DarkZero.",
+            "score": 0.18688548,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O time favorito de R6 de Pedro é a FaZe Clan.",
+            "score": 0.1758365,
+            "kept": false,
+            "dropReason": "below_threshold"
+          }
+        ],
+        "finalResults": [
+          "O PC de Pedro tem 32 GB de RAM."
+        ],
+        "result": "PASS"
+      },
+      {
+        "query": "Qual banco é usado como fonte canônica de memória pelo projeto que eu desenvolvo?",
+        "expectedRelevant": [
+          "PostgreSQL",
+          "Aegis"
+        ],
+        "expectedIrrelevant": [
+          "monitor",
+          "RAM",
+          "FaZe",
+          "Vecna"
+        ],
+        "scores": [
+          {
+            "content": "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+            "score": 0.6466124,
+            "kept": true,
+            "dropReason": null
+          },
+          {
+            "content": "O PC de Pedro tem 32 GB de RAM.",
+            "score": 0.29267943,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": null,
+            "score": 0.2800746,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Pedro desenvolve a Aegis.",
+            "score": 0.27750015,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "Na faculdade, chamam Pedro de Vecna.",
+            "score": 0.19251789,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O monitor de Pedro tem resolução QHD e taxa de atualização de 180 Hz.",
+            "score": 0.18390056,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O segundo time favorito de R6 de Pedro é a DarkZero.",
+            "score": 0.17612419,
+            "kept": false,
+            "dropReason": "below_threshold"
+          },
+          {
+            "content": "O time favorito de R6 de Pedro é a FaZe Clan.",
+            "score": 0.15716273,
+            "kept": false,
+            "dropReason": "below_threshold"
+          }
+        ],
+        "finalResults": [
+          "A Aegis usa PostgreSQL como fonte canônica do sistema de memória.",
+          "Pedro desenvolve a Aegis."
+        ],
+        "result": "PASS"
+      }
+    ],
+    "exitCodes": {
+      "manual_001_022": 0,
+      "retrieval_relevance": 0
+    }
+  }
 }
