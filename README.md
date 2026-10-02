@@ -1,10 +1,8 @@
-# Aegis v0.6.0 — "Yeah, I know."
+# Aegis v0.6.1 — "Yeah, I know."
 
-v0.7.0 is in development. Stage 01 adds a minimal Tauri 2 + Vue diagnostic client for Android and Windows under `apps/aegis-node/`, alongside the current backend and functional PWA. Native platform acceptance is still pending; see the [Stage 01 setup and validation report](docs/v0.7.0-stage01-tauri-foundation.md).
+Aegis v0.6.1 refines conversational presence, contextual memory, casual memory search, integration recovery and full conversation history. It preserves the accepted v0.6.0 memory architecture and existing integrations. See the [v0.6.1 validation report](scripts/eval-results-v0.6.1.md).
 
-Aegis v0.6.0 now includes Intelligent Memory: durable automatic extraction, canonical and temporal knowledge in PostgreSQL, rebuildable Qdrant and Neo4j projections, hybrid retrieval and bounded automatic context. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
-
-**Memory acceptance status: READY FOR RE-ACCEPTANCE.** The original manual acceptance failed; the exact 001–022 replay now passes 28/28 in isolated live infrastructure, and all five critical groups pass 3/3 clean trials. This is a request for a new human acceptance decision, not a merge. See the [v0.6.0 memory report](scripts/eval-results-v0.6.0-memory.md).
+v0.7.0 is in development. Stage 01 adds a Tauri 2 + Vue foundation for Android and Windows under `apps/aegis-node/`, alongside the current backend and functional PWA. Stage 01 was accepted through external validation by the project owner; see the [Stage 01 report](docs/v0.7.0-stage01-tauri-foundation.md).
 
 Version history:
 
@@ -25,6 +23,7 @@ Version history:
 - v0.5.0 — "Knock Knock" — lembretes internos únicos, worker temporal persistente, Web Push e acknowledgement explícito.
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
 - v0.6.0 — "Yeah, I know." — memória canônica, extração automática, histórico temporal, projeções semântica/relacional e recuperação híbrida.
+- v0.6.1 — "Yeah, I know." — presença conversacional, busca casual, recuperação de integrações e histórico completo no chat.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 

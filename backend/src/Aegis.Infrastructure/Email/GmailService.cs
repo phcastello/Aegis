@@ -302,10 +302,32 @@ public sealed partial class GmailService(
         using var response = await httpClient.SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            throw new InvalidOperationException("Gmail item was not found.");
+            throw new EmailProviderException("email_not_found", "Esse email não está mais disponível. Consulte novamente.");
         }
 
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            // Inspect provider reason codes only; never expose the raw provider response.
+            var apiDisabled = errorBody.Contains("SERVICE_DISABLED", StringComparison.Ordinal) ||
+                errorBody.Contains("accessNotConfigured", StringComparison.Ordinal);
+            var scopeMissing = errorBody.Contains("insufficientPermissions", StringComparison.Ordinal) ||
+                errorBody.Contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT", StringComparison.Ordinal);
+            var transient = (int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.TooManyRequests ||
+                errorBody.Contains("rateLimitExceeded", StringComparison.Ordinal) ||
+                errorBody.Contains("userRateLimitExceeded", StringComparison.Ordinal) ||
+                errorBody.Contains("quotaExceeded", StringComparison.Ordinal);
+            throw response.StatusCode switch
+            {
+                _ when apiDisabled => new EmailProviderException("email_api_disabled", "A Gmail API está desativada no projeto Google Cloud. Ative a API no projeto da conexão e tente novamente."),
+                _ when transient => new EmailProviderException("email_temporarily_unavailable", "Gmail está temporariamente indisponível ou limitou as requisições. Tente mais tarde."),
+                _ when scopeMissing => new EmailProviderException("email_scope_missing", "Falta autorização Gmail. Use email_create_connect_link para reautorizar."),
+                HttpStatusCode.Unauthorized => new EmailProviderException("email_authentication_failed", "A autorização Google foi recusada. Use email_create_connect_link."),
+                HttpStatusCode.Forbidden => new EmailProviderException("email_access_denied", "Google recusou acesso ao recurso. Verifique as permissões."),
+                HttpStatusCode.BadRequest => new EmailProviderException("invalid_tool_arguments", "Google recusou os parâmetros. Corrija a consulta."),
+                _ => new EmailProviderException("email_temporarily_unavailable", "Gmail está temporariamente indisponível. Tente mais tarde.")
+            };
+        }
         return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken);
     }
 

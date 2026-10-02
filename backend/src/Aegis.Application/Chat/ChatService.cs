@@ -30,7 +30,6 @@ public sealed class ChatService(
     MemoryHybridRetriever? hybrid = null,
     IMemoryActivityStore? activity = null) : IChatService
 {
-    private const int RecentHistoryLimit = 20;
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
 
@@ -61,13 +60,9 @@ public sealed class ChatService(
         await dbContext.SaveChangesAsync(turnToken);
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
 
-        var recentHistory = await dbContext.GetRecentMessagesAsync(
-            conversation.Id,
-            RecentHistoryLimit + 1,
-            turnToken);
-
         var promptResult = await BuildPromptForTurnAsync(
-            recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
+            conversation.Messages.Where(message => message.Id != userMessage.Id)
+                .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
 
         try
@@ -75,7 +70,7 @@ public sealed class ChatService(
             var modelRequest = CreateModelRequest(promptResult, userContent);
             var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
             EnsureCurrent(turn);
-            var finalContent = DeclarativeResponseGuard.Normalize(userContent, completion.Content);
+            var finalContent = completion.Content;
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
@@ -159,16 +154,15 @@ public sealed class ChatService(
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
-        var recentHistory = await dbContext.GetRecentMessagesAsync(conversation.Id, RecentHistoryLimit + 1, turnToken);
         var promptResult = await BuildPromptForTurnAsync(
-            recentHistory.Where(message => message.Id != userMessage.Id).ToList(),
+            conversation.Messages.Where(message => message.Id != userMessage.Id)
+                .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
         var modelRequest = CreateModelRequest(promptResult, userContent);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
 
         var content = new StringBuilder();
-        var reviewDeclaration = DeclarativeResponseGuard.ShouldReview(userContent);
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
             EnsureCurrent(turn);
@@ -179,7 +173,7 @@ public sealed class ChatService(
             if (!string.IsNullOrEmpty(chunk.Content))
             {
                 content.Append(chunk.Content);
-                if (!reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
+                yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
 
             if (!chunk.IsDone)
@@ -193,10 +187,7 @@ public sealed class ChatService(
             }
 
             EnsureCurrent(turn);
-            var finalContent = reviewDeclaration
-                ? DeclarativeResponseGuard.Normalize(userContent, content.ToString())
-                : content.ToString();
-            if (reviewDeclaration) yield return ChatStreamEvent.Token(turn.TurnId, finalContent);
+            var finalContent = content.ToString();
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
@@ -531,7 +522,7 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             new Dictionary<string, string>
             {
-                ["aegis_version"] = "0.6.0",
+                ["aegis_version"] = "0.6.1",
                 ["purpose"] = "Chat"
             },
             promptResult.InputItems,

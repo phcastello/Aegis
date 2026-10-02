@@ -13,10 +13,12 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from eval_memory_extraction import setting
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = (ROOT / "backend/src/Aegis.Api/Prompts/aegis_identity.md").read_text()
-MODEL = "gpt-6-luna"
+
+MODEL = setting("AEGIS_CHAT_MODEL", "gpt-6-luna")
 EXISTING_NOTE = "Preciso levar os exames."
 PROACTIVITY_EMAILS = {
     "proactive_webinar": {
@@ -256,7 +258,7 @@ def load_tools(path: Path | None) -> list[dict]:
 def request_response(key: str, tools: list[dict], input_items: list[dict]) -> dict:
     payload = {
         "model": MODEL,
-        "reasoning": {"effort": "medium"},
+        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "medium")},
         "input": input_items,
         "prompt_cache_options": {"mode": "implicit"},
         "tools": tools,
@@ -266,7 +268,7 @@ def request_response(key: str, tools: list[dict], input_items: list[dict]) -> di
         "store": False,
     }
     request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        setting("AEGIS_OPENAI_BASE_URL", "https://api.openai.com").rstrip("/") + "/v1/responses",
         data=json.dumps(payload, ensure_ascii=False).encode(),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )

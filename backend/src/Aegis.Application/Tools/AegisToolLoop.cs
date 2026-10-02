@@ -1,4 +1,6 @@
 using Aegis.Application.Models;
+using Aegis.Application.Email;
+using Aegis.Application.Google;
 using Aegis.Application.Llm;
 using Aegis.Application.Observability;
 using System.Diagnostics;
@@ -268,6 +270,16 @@ public sealed class AegisToolLoop(
         {
             throw;
         }
+        catch (EmailNotConnectedException) when (tool.Name.StartsWith("email_", StringComparison.Ordinal))
+        { return IntegrationError("email_not_connected", "Gmail existe, mas a conta está desconectada. Use email_create_connect_link."); }
+        catch (GoogleScopeMissingException) when (tool.Name.StartsWith("email_", StringComparison.Ordinal))
+        { return IntegrationError("email_scope_missing", "Falta autorização Gmail. Use email_create_connect_link para reautorizar."); }
+        catch (EmailProviderException e)
+        { return IntegrationError(e.Code, e.Message); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && tool.Name.StartsWith("email_", StringComparison.Ordinal))
+        { return IntegrationError("email_temporarily_unavailable", "Gmail demorou a responder. Tente mais tarde; não reconecte por timeout."); }
+        catch (HttpRequestException) when (tool.Name.StartsWith("email_", StringComparison.Ordinal))
+        { return IntegrationError("email_temporarily_unavailable", "Google está temporariamente indisponível. Tente mais tarde."); }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Tool {ToolName} failed.", toolCall.Name);
@@ -281,6 +293,9 @@ public sealed class AegisToolLoop(
                 "tool_execution_failed");
         }
     }
+
+    private static AegisToolResult IntegrationError(string code, string message) =>
+        new(false, JsonSerializer.Serialize(new { error = code, message }, JsonOptions), code);
 
     private static LlmRequestAuditData CombineAuditData(
         ModelToolResponse finalResponse,

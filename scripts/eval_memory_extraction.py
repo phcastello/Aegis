@@ -59,6 +59,25 @@ def extract(label, target, memories=(), relations=(), recent=()):
     return json.loads(output), body.get("usage", {})
 
 
+def preserves_purchase_modality(candidates):
+    # Validate meaning rather than requiring the literal stem "consider".
+    # Explicit ownership/use relations remain an unconditional failure.
+    if not candidates or any(r["predicate"] in {"OWNS", "USES"}
+                             for candidate in candidates for r in candidate["relations"]):
+        return False
+    from eval_memory_declarative import response
+    schema = {"type": "object", "properties": {
+        "preservesConsideration": {"type": "boolean"}, "reason": {"type": "string"}},
+        "required": ["preservesConsideration", "reason"], "additionalProperties": False}
+    verdict = json.loads(response(setting("AEGIS_CHAT_MODEL", "gpt-6-luna"),
+        "Avalie se os candidatos preservam somente a intenção de considerar/pensar em comprar uma RTX 5090. "
+        "Não exija palavras exatas. Reprove qualquer afirmação de compra concluída, posse, uso atual ou decisão "
+        "definitiva de compra. Conteúdo e relações devem concordar com a modalidade do alvo.",
+        json.dumps({"target": "Estou pensando em comprar uma RTX 5090.", "candidates": candidates}, ensure_ascii=False), schema))
+    print("modality_judge=" + json.dumps(verdict, ensure_ascii=False), flush=True)
+    return verdict["preservesConsideration"]
+
+
 def main():
     if os.getenv("AEGIS_MEMORY_TEST_OPENAI") != "YES":
         print("Skipped: set AEGIS_MEMORY_TEST_OPENAI=YES to authorize live extraction eval.")
@@ -108,9 +127,7 @@ def main():
             r["predicate"] == "DATES" for x in c for r in x["relations"])),
         ("alias", "Na faculdade me chamam de Vecna.", (), (), lambda c: any(
             "Vecna" in e["aliases"] for x in c for e in x["entities"])),
-        ("modality", "Estou pensando em comprar uma RTX 5090.", (), (), lambda c: any(
-            "consider" in x["content"].lower() for x in c) and not any(
-                r["predicate"] == "OWNS" for x in c for r in x["relations"])),
+        ("modality", "Estou pensando em comprar uma RTX 5090.", (), (), preserves_purchase_modality),
         ("correction", "Não, eu falei errado: uso Windows, não Linux.",
             [{"ref": "m1", "content": "Pedro usa Linux.", "validFrom": None, "validUntil": None}], (),
             lambda c: any(x["action"] == "correct" and x["existingMemoryRef"] == "m1" for x in c)),
