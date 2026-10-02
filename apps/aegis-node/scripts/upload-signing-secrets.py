@@ -13,7 +13,6 @@ values = {
     "ANDROID_KEY_ALIAS": credentials["ANDROID_KEY_ALIAS"],
     "ANDROID_KEY_PASSWORD": credentials["ANDROID_KEY_PASSWORD"],
     "TAURI_SIGNING_PRIVATE_KEY": (key_dir / "updater.key").read_text(),
-    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "",
 }
 for name, value in values.items():
     subprocess.run(["gh", "secret", "set", name, "--repo", "phcastello/Aegis"],

@@ -129,6 +129,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          export RELEASE_COMMIT="$(git rev-parse HEAD)"
           export RELEASE_DATE="$(git show -s --format=%cI HEAD)"
           node scripts/release-metadata.mjs release-assets "$RELEASE_TAG"
           node scripts/publish-release.mjs

@@ -6,6 +6,12 @@ import { androidVersionCode, synchronize } from './version.mjs';
 export function metadata(version, signature, date) {
   const versionCode = androidVersionCode(version);
   if (!signature.trim()) throw new Error('Missing Windows updater signature.');
+  const decoded = Buffer.from(signature.trim(), 'base64').toString('utf8');
+  const trusted = decoded.split('\n').find(line => line.startsWith('trusted comment: '));
+  const signedVersion = trusted?.split('\t').find(field => field.startsWith('version:'))?.slice(8);
+  if (signedVersion !== version) throw new Error('Updater signature must bind this exact version; use the current Tauri CLI.');
+  // The official updater performs cryptographic verification against the committed public key.
+
   if (Number.isNaN(Date.parse(date))) throw new Error('Invalid release date.');
   const base = `https://github.com/phcastello/Aegis/releases/download/node-v${version}/`;
   return {

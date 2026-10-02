@@ -28,3 +28,9 @@ src-tauri/target/
 src-tauri/gen/schemas/
 .test-build/
 release-assets/
+
+# Release signing identities belong outside the repository.
+*.key
+*.p12
+*.jks
+*.keystore

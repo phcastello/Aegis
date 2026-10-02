@@ -30,7 +30,7 @@ gh(['release', 'create', tag, '--verify-tag', '--prerelease', '--title', `Aegis 
   'release-assets/Aegis-Windows-x86_64-Setup.exe', 'release-assets/Aegis-Windows-x86_64-Setup.exe.sig',
   'release-assets/Aegis-Android-arm64.apk', 'release-assets/latest.json']);
 if (!feedExists) {
-  gh(['release', 'create', 'node-preview', '--target', process.env.GITHUB_SHA, '--prerelease',
+  gh(['release', 'create', 'node-preview', '--target', process.env.RELEASE_COMMIT, '--prerelease',
     '--title', 'Aegis native preview update feed', '--notes', 'Update metadata only. Download installers from the versioned node-v releases.',
     'release-assets/latest.json']);
 } else {
