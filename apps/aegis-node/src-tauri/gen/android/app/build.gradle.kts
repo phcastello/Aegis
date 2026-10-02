@@ -25,6 +25,23 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // Release credentials are provided only by the release job (or a local private environment).
+    // Debug builds deliberately keep Android's development key.
+    val releaseRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+    val signingValues = listOf("ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+        .associateWith { System.getenv(it) }
+    if (releaseRequested) {
+        val missing = signingValues.filterValues { it.isNullOrBlank() }.keys
+        require(missing.isEmpty()) { "Missing Android release signing environment: ${missing.joinToString()}" }
+    }
+    signingConfigs {
+        create("aegisRelease") {
+            signingValues["ANDROID_KEYSTORE_PATH"]?.let { storeFile = file(it) }
+            storePassword = signingValues["ANDROID_KEYSTORE_PASSWORD"]
+            keyAlias = signingValues["ANDROID_KEY_ALIAS"]
+            keyPassword = signingValues["ANDROID_KEY_PASSWORD"]
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -39,6 +56,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("aegisRelease")
             optimization {
                enable = true
             }

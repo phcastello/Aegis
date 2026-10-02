@@ -1,0 +1,77 @@
+name: Aegis Node CI
+on:
+  push:
+    branches: [main, 'feat/v0.7.0-*']
+    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', '.github/**']
+  pull_request:
+    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', '.github/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: node-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build backend/Aegis.sln
+      - run: dotnet test backend/Aegis.sln --no-build
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/aegis-pwa/package-lock.json
+      - working-directory: frontend/aegis-pwa
+        run: npm ci
+      - working-directory: frontend/aegis-pwa
+        run: npm run build
+      - working-directory: frontend/aegis-pwa
+        run: npm test
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            android: 'false'
+            platform: Windows-x86_64
+          - os: ubuntu-24.04
+            android: 'true'
+            platform: Android-arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/aegis-node
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-aegis-node
+        with:
+          android: ${{ matrix.android }}
+      - run: npm run check
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:release
+      - run: npm run test:rust
+      - if: matrix.android == 'false'
+        run: npm run check:rust
+      - if: matrix.android == 'false'
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        with:
+          projectPath: apps/aegis-node
+          args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - if: matrix.android == 'true'
+        run: npm run build:android
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Aegis-CI-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            apps/aegis-node/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            apps/aegis-node/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
