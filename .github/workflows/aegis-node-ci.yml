@@ -34,6 +34,15 @@ jobs:
         run: npm run build
       - working-directory: frontend/aegis-pwa
         run: npm test
+      - working-directory: apps/aegis-node
+        run: npm ci
+      - working-directory: packages/aegis-client
+        run: npx playwright-core install --with-deps chromium
+      - name: Browser regression of shared web and native UI (native IPC mocked)
+        run: |
+          npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
+          npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
+          npm run test:browser --prefix packages/aegis-client
   native:
     strategy:
       fail-fast: false
@@ -63,17 +72,21 @@ jobs:
       - if: matrix.android == 'false'
         run: npm run check:rust
       - if: matrix.android == 'false'
+        run: npm run test:rust:desktop
+      - if: matrix.android == 'false'
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         with:
           projectPath: apps/aegis-node
           args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - if: matrix.android == 'false'
+        run: node scripts/package-artifacts.mjs windows
       - if: matrix.android == 'true'
         run: npm run build:android
+      - if: matrix.android == 'true'
+        run: node scripts/package-artifacts.mjs android --debug
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Aegis-CI-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
-          path: |
-            apps/aegis-node/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            apps/aegis-node/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          path: apps/aegis-node/release-assets/*

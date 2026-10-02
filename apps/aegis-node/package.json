@@ -20,7 +20,8 @@
     "version:sync": "node scripts/version.mjs --write",
     "version:check": "node scripts/version.mjs",
     "test:release": "node --test scripts/*.test.mjs",
-    "build:android:release": "tauri android build --apk --target aarch64"
+    "build:android:release": "tauri android build --apk --target aarch64",
+    "test:rust:desktop": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib"
   },
   "dependencies": {
     "@aegis/client": "file:../../packages/aegis-client",

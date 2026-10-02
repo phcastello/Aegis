@@ -154,3 +154,28 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, windows, feature = "native-runtime"))]
+mod desktop_tests {
+    #[test]
+    fn official_updater_accepts_manifest_with_separate_android_extension() {
+        let manifest = serde_json::json!({
+            "version": "0.7.0-stage.3", "pub_date": "2026-10-02T00:00:00Z",
+            "platforms": { "windows-x86_64": {
+                "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-stage.3/Aegis-Windows-x86_64-Setup.exe",
+                "signature": "fixture-signature-not-an-installation-test"
+            } },
+            "android": { "aarch64": {
+                "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-stage.3/Aegis-Android-arm64.apk",
+                "versionCode": 7000003
+            } }
+        });
+        let release: tauri_plugin_updater::RemoteRelease =
+            serde_json::from_value(manifest).unwrap();
+        assert_eq!(release.version.to_string(), "0.7.0-stage.3");
+        assert_eq!(
+            release.signature("windows-x86_64").unwrap(),
+            "fixture-signature-not-an-installation-test"
+        );
+    }
+}
