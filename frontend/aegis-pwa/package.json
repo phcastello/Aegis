@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && tsc -p tsconfig.sw.json --noEmit && vite build",
     "test:email": "node --test tests/emailConnection*.test.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.8",
@@ -17,7 +17,8 @@
     "workbox-background-sync": "^7.4.1",
     "workbox-core": "^7.4.1",
     "workbox-precaching": "^7.4.1",
-    "workbox-routing": "^7.4.1"
+    "workbox-routing": "^7.4.1",
+    "@aegis/client": "file:../../packages/aegis-client"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

@@ -14,13 +14,13 @@ import type {
   TranscriptionStatus
 } from '../types/chat';
 
-const configuredBaseUrl = import.meta.env.VITE_AEGIS_API_BASE_URL ?? '';
+import { clientEnvironment } from './clientEnvironment';
 
 function getApiBaseUrl(): string {
-  return configuredBaseUrl.trim().replace(/\/+$/, '');
+  return clientEnvironment().apiBaseUrl;
 }
 
-async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+export async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...options,
     headers: {
@@ -324,15 +324,3 @@ export async function submitMessageFeedback(
   });
 }
 
-export function getPushConfiguration(): Promise<import('./pushNotifications').PushConfiguration> {
-  return requestJson('/api/notifications/configuration', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
-}
-export function registerPushSubscription(request: { deviceId: string; endpoint: string; p256dh: string; auth: string; userAgent: string }): Promise<import('./pushNotifications').PushRegistration> {
-  return requestJson('/api/notifications/subscriptions', { method: 'POST', signal: AbortSignal.timeout(10000), body: JSON.stringify(request) });
-}
-export function disablePushSubscription(id: string, token: string): Promise<void> {
-  return requestJson(`/api/notifications/subscriptions/${encodeURIComponent(id)}/disable`, { method: 'POST', signal: AbortSignal.timeout(10000), body: JSON.stringify({ token }) });
-}
-export function getPushSubscriptionStatus(id: string, token: string, endpoint: string): Promise<{ active: boolean }> {
-  return requestJson(`/api/notifications/subscriptions/${encodeURIComponent(id)}/status`, { method: 'POST', signal: AbortSignal.timeout(10000), cache: 'no-store', body: JSON.stringify({ token, endpoint }) });
-}

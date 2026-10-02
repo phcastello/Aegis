@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Aegis">
+  <defs>
+    <linearGradient id="background" x1="12" x2="84" y1="8" y2="88">
+      <stop offset="0" stop-color="#26344f"/>
+      <stop offset="1" stop-color="#111a2a"/>
+    </linearGradient>
+    <linearGradient id="aegis" x1="26" x2="70" y1="18" y2="78">
+      <stop offset="0" stop-color="#dbe5ff"/>
+      <stop offset="0.55" stop-color="#9bb1ee"/>
+      <stop offset="1" stop-color="#7187c7"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="96" height="96" rx="22" fill="url(#background)"/>
+  <rect x="8.5" y="8.5" width="79" height="79" rx="17.5" fill="none" stroke="#b9caf7" stroke-opacity=".16"/>
+
+  <path
+    d="M48 16 72 26v18c0 17-9.6 29.4-24 37-14.4-7.6-24-20-24-37V26l24-10Z"
+    fill="url(#aegis)"
+  />
+  <path
+    d="M48 25.5 63 32v12.2c0 11.2-5.8 19.7-15 25.4-9.2-5.7-15-14.2-15-25.4V32l15-6.5Z"
+    fill="#172238"
+  />
+  <path
+    d="m48 31 12 31h-8l-4-12.2L44 62h-8l12-31Z"
+    fill="#dce6ff"
+  />
+  <path d="M43.5 48h9L48 36.5 43.5 48Z" fill="#7187c7"/>
+  <path d="M48 19.5 68 28v4.5L48 24 28 32.5V28l20-8.5Z" fill="#fff" fill-opacity=".2"/>
+</svg>

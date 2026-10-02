@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import NotificationControl from '../components/NotificationControl.vue';
+import { clientEnvironment } from '../services/clientEnvironment';
+import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
@@ -32,6 +33,8 @@ import type {
   SubmitMessageFeedbackRequest
 } from '../types/chat';
 
+const emit = defineEmits<{ notificationRequired: [] }>();
+
 const STORAGE_KEY = 'aegis.currentConversationId';
 
 const messages = ref<LocalChatMessage[]>([]);
@@ -46,10 +49,9 @@ const toolStatusState = ref<'started' | 'completed' | 'failed' | null>(null);
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
-let emailConnectionChannel: BroadcastChannel | null = null;
+let stopObservingGoogle: (() => void) | null = null;
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
-const notificationControl = ref<InstanceType<typeof NotificationControl> | null>(null);
 const isComposerScrollable = ref(false);
 const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
@@ -207,7 +209,9 @@ async function confirmEmailConnection(): Promise<void> {
       connectedEmail = status.emailAddress;
       return status.isConnected === true;
     },
-    controller.signal
+    controller.signal,
+    750,
+    clientEnvironment().externalLinks === 'system' ? 180000 : 12000
   );
   if (controller.signal.aborted) return;
 
@@ -216,33 +220,6 @@ async function confirmEmailConnection(): Promise<void> {
   emailConnectionMessage.value = result === 'connected'
     ? emailConnectionSuccessMessage(connectedEmail)
     : 'Não foi possível confirmar a conexão com a conta Google. Tente conectar novamente.';
-}
-
-function consumeEmailConnectStatusFromUrl(): void {
-  const url = new URL(window.location.href);
-  const emailStatus = url.searchParams.get('email');
-  const errorCode = url.searchParams.get('email_error_code');
-
-  if (emailStatus === 'connected') {
-    emailConnectionChannel?.postMessage({ status: 'connected' });
-    void confirmEmailConnection();
-  } else {
-    const normalizedError = emailConnectionFailureMessage(errorCode);
-    if (normalizedError) {
-      emailConnectionState.value = 'failed';
-      emailConnectionMessage.value = normalizedError;
-      emailConnectionChannel?.postMessage({ status: 'failed', code: errorCode });
-    }
-  }
-
-  if (!emailStatus && !errorCode) {
-    return;
-  }
-
-  url.searchParams.delete('email');
-  url.searchParams.delete('email_error_code');
-  url.searchParams.delete('email_error_message');
-  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
 }
 
 function createLocalMessageId(): string {
@@ -525,7 +502,7 @@ async function handleSubmit(): Promise<void> {
           if (eventTurnId !== activeTurnId.value) return;
           turnStatus.value = 'thinking';
           showToolStatus(status.message, status.state);
-          if (status.category === 'reminder' && status.state === 'failed') notificationControl.value?.offerSetup();
+          if (status.category === 'reminder' && status.state === 'failed') emit('notificationRequired');
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle, memoryActivity }) => {
           if (completedTurnId !== activeTurnId.value) return;
@@ -796,22 +773,17 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
 
 onMounted(() => {
   syncViewportHeight();
-  if ('BroadcastChannel' in window) {
-    emailConnectionChannel = new BroadcastChannel('aegis.email.connection');
-    emailConnectionChannel.onmessage = (event: MessageEvent) => {
-      if (event.data?.status === 'connected') {
-        void confirmEmailConnection();
-      } else if (event.data?.status === 'failed') {
-        const message = emailConnectionFailureMessage(event.data.code);
-        if (message) {
-          emailConnectionAbortController?.abort();
-          emailConnectionState.value = 'failed';
-          emailConnectionMessage.value = message;
-        }
+  stopObservingGoogle = observeGoogleConnection({
+    connected: () => void confirmEmailConnection(),
+    failed: (code) => {
+      const message = emailConnectionFailureMessage(code);
+      if (message) {
+        emailConnectionAbortController?.abort();
+        emailConnectionState.value = 'failed';
+        emailConnectionMessage.value = message;
       }
-    };
-  }
-  consumeEmailConnectStatusFromUrl();
+    }
+  });
   const handleViewportChange = (): void => {
     syncViewportHeight();
   };
@@ -844,8 +816,7 @@ onBeforeUnmount(() => {
   cancelMemoryActivityPolling();
   clearToolStatus();
   emailConnectionAbortController?.abort();
-  emailConnectionChannel?.close();
-  emailConnectionChannel = null;
+  stopObservingGoogle?.();
   transcription.dispose();
   void stopActiveTurn('view_unmounted');
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
@@ -898,6 +869,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="chat-voice-controls">
+          <slot name="client-info" />
           <ConversationInfo v-if="conversationId && !isRestoring" :conversation-id="conversationId" />
           <button
             type="button"
@@ -912,6 +884,7 @@ onBeforeUnmount(() => {
         <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>
       </header>
 
+      <slot name="notice" />
       <div class="messages" aria-live="polite">
         <div v-if="isRestoring" class="empty-state">
           <AegisMark />
@@ -946,7 +919,7 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
-        <NotificationControl ref="notificationControl" />
+        <slot name="notifications" />
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
         <div class="composer-field">

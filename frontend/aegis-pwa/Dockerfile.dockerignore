@@ -1,0 +1,12 @@
+**
+!frontend/
+!frontend/aegis-pwa/
+!frontend/aegis-pwa/**
+!packages/
+!packages/aegis-client/
+!packages/aegis-client/**
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/*.local

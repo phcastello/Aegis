@@ -2,6 +2,7 @@
 import DOMPurify from 'dompurify';
 import MarkdownIt from 'markdown-it';
 import { computed, ref, watch } from 'vue';
+import { clientEnvironment, externalUrl, openClientLink } from '../services/clientEnvironment';
 import { isGoogleAuthorizationLink } from '../services/emailConnectionLinks';
 
 const props = defineProps<{
@@ -28,6 +29,20 @@ markdown.renderer.rules.link_open = (tokens, index, options, environment, render
   tokens[index].attrSet('rel', 'noopener noreferrer');
   return defaultLinkOpen(tokens, index, options, environment, renderer);
 };
+
+async function followLink(event: MouseEvent): Promise<void> {
+  if (clientEnvironment().externalLinks !== 'system' || (event.type === 'auxclick' && event.button !== 1)) return;
+  const anchor = (event.target as Element).closest<HTMLAnchorElement>('a[href]');
+  if (!anchor) return;
+  event.preventDefault();
+  const href = externalUrl(anchor.href);
+  if (!href) return;
+  try {
+    await openClientLink(href, isGoogleAuthorizationLink(href));
+    linkError.value = null;
+  } catch { linkError.value = 'Não foi possível abrir o navegador. Tente novamente.'; }
+}
+const linkError = ref<string | null>(null);
 
 const renderedContent = computed(() => DOMPurify.sanitize(markdown.render(props.content)));
 
@@ -181,5 +196,6 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
 </script>
 
 <template>
-  <div ref="messageElement" class="markdown-message" v-html="renderedContent"></div>
+  <div ref="messageElement" class="markdown-message" @click="followLink" @auxclick="followLink" v-html="renderedContent"></div>
+  <p v-if="linkError" role="status">{{ linkError }}</p>
 </template>

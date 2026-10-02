@@ -194,7 +194,13 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     }
   }
 
+  const onVisibilityChange = (): void => {
+    if (document.visibilityState === 'hidden' && (state.value === 'recording' || state.value === 'requesting_permission')) discard();
+  };
+  document.addEventListener('visibilitychange', onVisibilityChange);
+
   function dispose(): void {
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     disposed = true;
     discard();
     transcriptionController?.abort();

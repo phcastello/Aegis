@@ -35,5 +35,8 @@ runs:
         sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
         echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
     - shell: bash
+      working-directory: packages/aegis-client
+      run: npm ci
+    - shell: bash
       working-directory: apps/aegis-node
       run: npm ci

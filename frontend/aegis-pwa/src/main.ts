@@ -1,7 +1,10 @@
 import { createApp } from 'vue';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.vue';
-import './styles.css';
+import '@aegis/client/styles.css';
+import { configureClient } from '@aegis/client/services/clientEnvironment';
+
+configureClient({ apiBaseUrl: import.meta.env.VITE_AEGIS_API_BASE_URL ?? '', externalLinks: 'browser' });
 
 registerSW({
   immediate: true,

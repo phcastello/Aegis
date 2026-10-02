@@ -1,8 +1,8 @@
 services:
   aegis-pwa:
     build:
-      context: ./frontend/aegis-pwa
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/aegis-pwa/Dockerfile
       args:
         # Leave empty in Docker/PWA mode so the frontend calls /api/... through nginx.
         VITE_AEGIS_API_BASE_URL: ${VITE_AEGIS_API_BASE_URL:-}
@@ -26,6 +26,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8090
+      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:-}
       ConnectionStrings__AegisDatabase: ${AEGIS_DB_CONNECTION_STRING}
       AEGIS_WEB_PUSH_SUBJECT: ${AEGIS_WEB_PUSH_SUBJECT:-}
       AEGIS_WEB_PUSH_PUBLIC_KEY: ${AEGIS_WEB_PUSH_PUBLIC_KEY:-}

@@ -38,6 +38,10 @@ pnpm-debug.log*
 *.nupkg
 *.snupkg
 packages/
+# Shared Vue source; keep other package restore directories ignored.
+!/packages/
+/packages/*
+!/packages/aegis-client/
 artifacts/
 *.trx
 *.coverage

@@ -26,6 +26,8 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/aegis-pwa/package-lock.json
+      - working-directory: packages/aegis-client
+        run: npm ci
       - working-directory: frontend/aegis-pwa
         run: npm ci
       - working-directory: frontend/aegis-pwa
