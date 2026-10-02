@@ -1,3 +1,4 @@
+using Aegis.Api;
 using Aegis.Application;
 using Aegis.Infrastructure;
 using Aegis.Infrastructure.Persistence;
@@ -22,7 +23,12 @@ builder.Services.AddCors(options =>
                 "http://localhost:5173",
                 "https://localhost:5173",
                 "http://localhost:3000",
-                "https://localhost:3000");
+                "https://localhost:3000",
+                "http://localhost:1420",
+                "https://localhost:1420",
+                "https://tauri.localhost")
+            .WithOrigins(ClientCors.AdditionalOrigins(builder.Configuration["AEGIS_CORS_ORIGINS"]))
+            .WithExposedHeaders("X-Aegis-Audio-Format", "X-Aegis-Sample-Rate", "X-Aegis-Channels");
     });
 });
 
