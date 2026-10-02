@@ -1,5 +1,7 @@
 # Aegis v0.6.0 — "Yeah, I know."
 
+v0.7.0 is in development. Stage 01 adds a minimal Tauri 2 + Vue diagnostic client for Android and Windows under `apps/aegis-node/`, alongside the current backend and functional PWA. Native platform acceptance is still pending; see the [Stage 01 setup and validation report](docs/v0.7.0-stage01-tauri-foundation.md).
+
 Aegis v0.6.0 now includes Intelligent Memory: durable automatic extraction, canonical and temporal knowledge in PostgreSQL, rebuildable Qdrant and Neo4j projections, hybrid retrieval and bounded automatic context. Recurring Google Calendar events from v0.5.1 and one-shot reminders from v0.5.0 remain available.
 
 **Memory acceptance status: READY FOR RE-ACCEPTANCE.** The original manual acceptance failed; the exact 001–022 replay now passes 28/28 in isolated live infrastructure, and all five critical groups pass 3/3 clean trials. This is a request for a new human acceptance decision, not a merge. See the [v0.6.0 memory report](scripts/eval-results-v0.6.0-memory.md).
@@ -175,6 +177,11 @@ frontend/
   aegis-pwa/
     src/
     public/
+    package.json
+apps/
+  aegis-node/
+    src/
+    src-tauri/
     package.json
 ```
 
