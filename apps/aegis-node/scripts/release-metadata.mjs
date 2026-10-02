@@ -11,9 +11,12 @@ export function metadata(version, signature, date) {
   return {
     version, notes: `Aegis ${version}`, pub_date: new Date(date).toISOString(),
     platforms: {
-      'windows-x86_64': { url: base + 'Aegis-Windows-x86_64-Setup.exe', signature: signature.trim() },
-      // Additional platform consumed only by our Android notification/link adapter.
-      'android-aarch64': { url: base + 'Aegis-Android-arm64.apk', versionCode }
+      'windows-x86_64': { url: base + 'Aegis-Windows-x86_64-Setup.exe', signature: signature.trim() }
+    },
+    // Custom Android link metadata is outside platforms: desktop updater requires signatures
+    // on every platforms entry and does not support Android. Android verifies APK signing.
+    android: {
+      aarch64: { url: base + 'Aegis-Android-arm64.apk', versionCode }
     }
   };
 }

@@ -7,7 +7,7 @@
     "dev": "vite",
     "check": "npm run version:check && vue-tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
     "build": "npm run check && vite build",
-    "test": "tsc -p tsconfig.test.json && node --test tests/*.test.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:desktop": "tauri dev --target x86_64-pc-windows-msvc",
@@ -23,15 +23,22 @@
     "build:android:release": "tauri android build --apk --target aarch64"
   },
   "dependencies": {
-    "vue": "^3.5.22",
-    "@tauri-apps/api": "^2.11.1"
+    "@aegis/client": "file:../../packages/aegis-client",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.1",
+    "vue": "^3.5.22"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^22.19.0",
     "@vitejs/plugin-vue": "^6.0.7",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
     "typescript": "~5.9.3",
     "vite": "^7.3.6",
-    "vue-tsc": "^3.3.5",
-    "@tauri-apps/cli": "^2.12.1"
+    "vue-tsc": "^3.3.5"
   }
 }

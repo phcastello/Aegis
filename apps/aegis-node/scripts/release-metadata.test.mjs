@@ -5,7 +5,7 @@ import { metadata } from './release-metadata.mjs';
 test('metadata uses immutable versioned assets and contains Windows signature', () => {
   const result = metadata('0.7.0-stage.2', ' signed ', '2026-10-02T00:00:00Z');
   assert.equal(result.platforms['windows-x86_64'].signature, 'signed');
-  assert.equal(result.platforms['android-aarch64'].versionCode, 7000002);
+  assert.equal(result.android.aarch64.versionCode, 7000002);
   for (const platform of Object.values(result.platforms)) {
     assert.ok(platform.url.startsWith('https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-stage.2/'));
   }

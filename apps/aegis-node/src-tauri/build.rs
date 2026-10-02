@@ -23,7 +23,11 @@ fn main() {
 
     #[cfg(feature = "native-runtime")]
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["runtime_info", "check_backend"]),
+        tauri_build::AppManifest::new().commands(&[
+            "runtime_info",
+            "check_backend",
+            "check_android_update",
+        ]),
     ))
     .expect("failed to build Tauri application manifest");
 }

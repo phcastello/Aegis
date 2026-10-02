@@ -14,19 +14,24 @@
       {
         "label": "main",
         "title": "Aegis",
-        "width": 440,
-        "height": 540,
+        "width": 1100,
+        "height": 800,
         "minWidth": 320,
         "minHeight": 400,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "create": false,
+        "useHttpsScheme": true
       }
     ],
     "security": {
       "capabilities": [
-        "diagnostics"
+        "diagnostics",
+        "external-links",
+        "windows-updater",
+        "android-updates"
       ],
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost ws:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+      "csp": "default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src http: https: ws: wss: ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {

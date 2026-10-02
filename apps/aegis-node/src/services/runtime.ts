@@ -6,6 +6,7 @@ export type BackendStatus = 'connected' | 'unavailable';
 export interface RuntimeInfo {
   platform: Platform;
   backendUrl: string | null;
+  version: string;
 }
 
 export interface HealthResult {
