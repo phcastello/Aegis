@@ -16,7 +16,7 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.AddControllers().AddApplicationPart(typeof(NodesController).Assembly)
     .ConfigureApplicationPartManager(manager => { manager.FeatureProviders.Clear(); manager.FeatureProviders.Add(new NodeControllersOnly()); });
 builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> {
-    ["NodeTransport:HeartbeatSeconds"] = "1", ["NodeTransport:TimeoutSeconds"] = "3",
+    ["NodeTransport:HeartbeatSeconds"] = "2", ["NodeTransport:TimeoutSeconds"] = "6",
     ["NodeTransport:MinimumHeartbeatSeconds"] = "1", ["NodeTransport:WatchdogSeconds"] = "1", ["NodeTransport:PersistSeconds"] = "2" });
 builder.Services.AddNodeApi(builder.Configuration);
 builder.Services.AddScoped<INodeTransportHistory, NodeTransportHistory>(); builder.Services.AddSingleton(TimeProvider.System);
