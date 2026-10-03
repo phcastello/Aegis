@@ -1,7 +1,7 @@
 {
   "name": "aegis-node",
   "private": true,
-  "version": "0.7.0-stage.3",
+  "version": "0.7.0-stage.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
