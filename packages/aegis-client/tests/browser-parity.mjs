@@ -67,6 +67,7 @@ try {
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
        if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-stage.2' };
        if (command === 'check_backend') return { status: 'connected', message: null };
+       if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
        if (command === 'check_android_update') return null;
        if (command === 'plugin:opener|open_url') { window.openedUrls.push(args.url); return; }
        throw new Error('Unexpected IPC: ' + command);
