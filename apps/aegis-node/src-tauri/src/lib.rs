@@ -105,3 +105,8 @@ pub fn run() {
         .run(context)
         .expect("error while running Aegis");
 }
+
+// Exercise the exact dependency error check without requiring an Android JNI runtime.
+#[cfg(test)]
+#[path = "../vendor/android-native-keyring-store/src/commit_result.rs"]
+mod android_commit_result;

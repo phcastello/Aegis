@@ -53,3 +53,7 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Pinned upstream OS backend with a documented commit-result durability correction.
+[patch.crates-io]
+android-native-keyring-store = { path = "vendor/android-native-keyring-store" }

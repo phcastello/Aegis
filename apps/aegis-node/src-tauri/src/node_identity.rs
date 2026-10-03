@@ -147,14 +147,18 @@ impl<V: Vault, A: Api> Identity<V, A> {
     async fn resume(&self, mut record: Record) -> Result<IdentityStatus, String> {
         if let Some(pending) = record.pending.clone() {
             if record.credential.is_none() {
+                // This also protects retries after a failed write became visible in OS memory.
+                self.vault.save(&record)?;
                 match self.api.pair(&pending).await {
                     Ok(receipt) => {
                         record.credential = Some(receipt.credential);
-                        self.vault.save(&record)?;
                     }
                     Err(error) => return self.failure(&mut record, error),
                 }
             }
+            // Android preferences may be readable in memory after a failed disk commit.
+            // Require a fresh successful durable write even when resume already sees the credential.
+            self.vault.save(&record)?;
             match self
                 .api
                 .finalize(&pending.attempt_id, record.credential.as_deref().unwrap())
@@ -217,8 +221,7 @@ impl<V: Vault, A: Api> Identity<V, A> {
             }),
             ..Record::default()
         };
-        self.vault.save(&record)?; // Must succeed before the first network operation.
-        self.resume(record).await
+        self.resume(record).await // Resume durably saves the checkpoint before any network operation.
     }
     async fn credential(&self) -> Result<String, String> {
         let status = self.status().await?;
@@ -403,6 +406,8 @@ mod tests {
         record: Option<Record>,
         writes: u32,
         fail_at: Option<u32>,
+        fail_from: Option<u32>,
+        memory_on_failure: bool,
     }
     #[derive(Clone, Default)]
     struct MemoryVault(Arc<Mutex<Storage>>);
@@ -413,7 +418,14 @@ mod tests {
         fn save(&self, record: &Record) -> Result<(), String> {
             let mut storage = self.0.lock().unwrap();
             storage.writes += 1;
-            if storage.fail_at == Some(storage.writes) {
+            if storage.fail_at == Some(storage.writes)
+                || storage
+                    .fail_from
+                    .is_some_and(|start| storage.writes >= start)
+            {
+                if storage.memory_on_failure {
+                    storage.record = Some(record.clone());
+                }
                 return Err("secure storage unavailable".into());
             }
             storage.record = Some(record.clone());
@@ -562,6 +574,24 @@ mod tests {
         assert_eq!(api.0.lock().unwrap().pairs, 0);
     }
     #[tokio::test]
+    async fn failed_initial_checkpoint_visible_in_memory_cannot_start_pairing_on_retry() {
+        let vault = MemoryVault::default();
+        {
+            let mut storage = vault.0.lock().unwrap();
+            storage.fail_from = Some(1);
+            storage.memory_on_failure = true;
+        }
+        let api = FakeApi::default();
+        let identity = client(vault.clone(), api.clone());
+        assert!(identity.pair("PC".into(), "code".into()).await.is_err());
+        assert!(vault.load().unwrap().unwrap().pending.is_some());
+        assert!(identity.status().await.is_err());
+        assert_eq!(api.0.lock().unwrap().pairs, 0);
+        vault.0.lock().unwrap().fail_from = None;
+        assert_eq!(identity.status().await.unwrap().state, "paired");
+        assert_eq!(api.0.lock().unwrap().pairs, 1);
+    }
+    #[tokio::test]
     async fn credential_storage_failure_resumes_same_attempt_after_restart() {
         let vault = MemoryVault::default();
         vault.0.lock().unwrap().fail_at = Some(2);
@@ -598,6 +628,24 @@ mod tests {
             .pending
             .is_none());
         assert!(!attempt.is_empty());
+    }
+    #[tokio::test]
+    async fn readable_memory_after_failed_commit_never_confirms_durable_storage() {
+        let vault = MemoryVault::default();
+        {
+            let mut storage = vault.0.lock().unwrap();
+            storage.fail_from = Some(2);
+            storage.memory_on_failure = true;
+        }
+        let api = FakeApi::default();
+        let identity = client(vault.clone(), api.clone());
+        assert!(identity.pair("PC".into(), "code".into()).await.is_err());
+        assert!(vault.load().unwrap().unwrap().credential.is_some()); // In-memory readback is not durability.
+        assert!(identity.status().await.is_err());
+        assert_eq!(api.0.lock().unwrap().finalize, 0);
+        vault.0.lock().unwrap().fail_from = None;
+        assert_eq!(identity.status().await.unwrap().state, "paired");
+        assert_eq!(api.0.lock().unwrap().pairs, 1);
     }
     #[tokio::test]
     async fn lost_finalize_response_recovers_without_second_pair_request() {
