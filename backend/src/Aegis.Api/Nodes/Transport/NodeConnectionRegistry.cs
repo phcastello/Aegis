@@ -32,6 +32,8 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
         internal SemaphoreSlim Writer { get; } = new(1);
         internal ConcurrentDictionary<Guid, TaskCompletionSource<string>> Pending { get; } = new();
         internal DateTimeOffset ConnectedAt { get; } = now;
+        internal DateTimeOffset UnknownResultWindow { get; set; } = now;
+        internal int UnknownResults { get; set; }
         public bool Ready { get; internal set; }
         public DateTimeOffset LastSeenAt { get; internal set; } = now;
         public DateTimeOffset? LastHeartbeatAt { get; internal set; }
@@ -89,9 +91,17 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
     }
     public void Result(Lease lease, Guid commandId, string status)
     {
-        lock (gate) { if (current.GetValueOrDefault(lease.NodeId) == lease && IsFresh(lease) && lease.Pending.TryGetValue(commandId, out var pending)) {
-            lease.LastSeenAt = clock.GetUtcNow(); pending.TrySetResult(status);
-            logger.LogInformation("Node command result NodeId={NodeId} ConnectionId={ConnectionId} CommandId={CommandId} Status={Status}", lease.NodeId, lease.ConnectionId, commandId, status); } }
+        lock (gate) {
+            if (current.GetValueOrDefault(lease.NodeId) != lease || !IsFresh(lease)) return;
+            if (lease.Pending.TryGetValue(commandId, out var pending) && pending.TrySetResult(status)) {
+                lease.LastSeenAt = clock.GetUtcNow();
+                logger.LogInformation("Node command result NodeId={NodeId} ConnectionId={ConnectionId} CommandId={CommandId} Status={Status}", lease.NodeId, lease.ConnectionId, commandId, status);
+                return;
+            }
+            // Late results are harmless; an unbounded stream of unsolicited/duplicate results is not.
+            if (clock.GetUtcNow() - lease.UnknownResultWindow >= TimeSpan.FromMinutes(1)) { lease.UnknownResultWindow = clock.GetUtcNow(); lease.UnknownResults = 0; }
+            if (++lease.UnknownResults > 16) { current.Remove(lease.NodeId); End(lease, "command_result_abuse"); }
+        }
     }
     public bool Activate(Lease lease)
     {

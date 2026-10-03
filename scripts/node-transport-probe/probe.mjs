@@ -11,7 +11,8 @@ const cycles = Number(process.env.AEGIS_PROBE_CYCLES ?? 6);
 if (!Number.isInteger(cycles) || cycles < 4 || cycles > 12) throw Error('Require 4–12 heartbeat cycles');
 const nodes = [], sockets = [];
 // Opt-in for isolated Stage 05 fixtures; production probe remains backward compatible.
-const capabilities = process.env.AEGIS_PROBE_CAPABILITIES === 'true';
+const notifications = process.env.AEGIS_PROBE_NOTIFICATIONS === 'true';
+const capabilities = process.env.AEGIS_PROBE_CAPABILITIES === 'true' || notifications;
 checkOrigin(origin);
 function checkOrigin(value) { const url = new URL(value); if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw Error('Require HTTPS or explicit loopback fixture'); }
 const safeCodes = new Set(['websocket_required', 'node_disabled', 'node_revoked', 'protocol_mismatch', 'node_authentication_required']);
@@ -26,6 +27,7 @@ async function pair(code, platform) {
   const receipt = await http('/pair', null, { attemptId, code, recoveryKey: randomBytes(32).toString('base64url'), name: 'Disposable public WSS probe ' + platform, platform, appVersion: version, protocolVersion: 1 });
   // Track before finalize so cleanup still revokes a partially established diagnostic identity.
   const node = { secret: receipt.credential, id: receipt.nodeId, attemptId, confirmed: false, capabilities: platform === 'windows' ? [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }] : [{ name: 'audio.input', version: 1 }] }; nodes.push(node);
+  if (notifications) node.capabilities.push({name:"notification.show",version:1});
   const confirmed = await http('/pair/finalize', null, { attemptId, credential: node.secret }); node.id = confirmed.id; node.confirmed = true;
   console.log(`Paired disposable NodeId=${node.id} Platform=${platform}`); return node;
 }
@@ -61,6 +63,11 @@ async function connect(node, socketOrigin = origin) {
             ws.send(JSON.stringify({ protocolVersion: 1, type: 'heartbeat', messageId: pending, sentAt: new Date().toISOString() }));
           }, heartbeatSeconds * 1000);
           deadline = setTimeout(() => reject(Error('session_timeout')), heartbeatSeconds * (cycles + 1) * 1000 + 10000);
+        } else if (notifications && message.type === 'command') {
+          check(message.payload.capability === 'notification.show' && message.payload.capabilityVersion === 1, 'unsupported_command');
+          check(Date.parse(message.payload.expiresAt)>Date.now(), 'expired_command');
+          ws.send(JSON.stringify({protocolVersion:1,type:'command_result',messageId:randomUUID(),sentAt:new Date().toISOString(),payload:{commandId:message.payload.commandId,status:'success'}}));
+          console.log(`CommandResult NodeId=${node.id} Status=success Executor=fixture`);
         } else {
           check(message.type === 'heartbeat_ack' && message.messageId === pending, 'heartbeat_rejected'); pending = undefined; socket.ackCount++;
           console.log(`HeartbeatAck NodeId=${node.id} Cycle=${socket.ackCount}`);
@@ -97,6 +104,11 @@ try {
   }
   const s1 = await connect(first); await s1.ready;
   const next = await http('/pairing-codes', first.secret, {}); const second = await pair(next.code, 'android'); const s2 = await connect(second); await s2.ready;
+  if (notifications) {
+    const result = await http('/notifications/test',second.secret,{preferredNodeId:first.id,title:'Aegis probe',body:'Isolated command fixture'});
+    check(result.node?.id===first.id && result.transport==='live_websocket' && result.status==='success','notification_dispatch_failed');
+    console.log('PASS public/fixture authenticated notification command/result; executor mocked, no physical display assertion');
+  }
   await Promise.all([s1.done, s2.done]);
   for (const node of nodes) { const me = await http('/me', node.secret); const list = await http('', node.secret);
     check(me.id === node.id && list.filter(n => n.id === me.id).length === 1, 'current_node_not_unique');
