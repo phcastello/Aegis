@@ -137,6 +137,9 @@ jobs:
       - if: matrix.android == 'true'
         run: npm run build:android
       - if: matrix.android == 'true'
+        name: Android native payload validation unit tests
+        run: src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
+      - if: matrix.android == 'true'
         run: node scripts/package-artifacts.mjs android --debug
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

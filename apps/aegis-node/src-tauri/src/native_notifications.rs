@@ -16,41 +16,47 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 }
 struct NativeSink(AppHandle);
 impl NotificationSink for NativeSink {
-    fn show(&self, command: &NotificationCommand) -> &'static str {
-        #[cfg(windows)]
-        {
-            use tauri_plugin_notification::NotificationExt;
-            if self
-                .0
-                .notification()
-                .builder()
-                .title(&command.input.title)
-                .body(&command.input.body)
-                .show()
-                .is_ok()
+    fn show<'a>(
+        &'a self,
+        command: &'a NotificationCommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = &'static str> + Send + 'a>> {
+        Box::pin(async move {
+            #[cfg(windows)]
             {
-                "success"
-            } else {
-                "failed"
+                use tauri_plugin_notification::NotificationExt;
+                if self
+                    .0
+                    .notification()
+                    .builder()
+                    .title(&command.input.title)
+                    .body(&command.input.body)
+                    .show()
+                    .is_ok()
+                {
+                    "success"
+                } else {
+                    "failed"
+                }
             }
-        }
-        #[cfg(target_os = "android")]
-        {
-            let bridge = self.0.state::<AndroidBridge>();
-            let result: Result<NativeResult, _> = bridge.0.run_mobile_plugin("show", command);
-            match result.map(|r| r.status).as_deref() {
-                Ok("success") => "success",
-                Ok("permission_denied") => "permission_denied",
-                Ok("duplicate") => "duplicate",
-                Ok("expired") => "expired",
-                _ => "failed",
+            #[cfg(target_os = "android")]
+            {
+                let bridge = self.0.state::<AndroidBridge>();
+                let result: Result<NativeResult, _> =
+                    bridge.0.run_mobile_plugin_async("show", command).await;
+                match result.map(|r| r.status).as_deref() {
+                    Ok("success") => "success",
+                    Ok("permission_denied") => "permission_denied",
+                    Ok("duplicate") => "duplicate",
+                    Ok("expired") => "expired",
+                    _ => "failed",
+                }
             }
-        }
-        #[cfg(not(any(windows, target_os = "android")))]
-        {
-            let _ = command;
-            "unsupported"
-        }
+            #[cfg(not(any(windows, target_os = "android")))]
+            {
+                let _ = command;
+                "unsupported"
+            }
+        })
     }
 }
 pub fn executor(app: &AppHandle) -> std::sync::Arc<NotificationExecutor> {

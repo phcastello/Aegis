@@ -73,6 +73,8 @@ try {
        if (command === 'check_backend') return { status: 'connected', message: null };
        if (command === 'node_transport_status') return { transportState: 'online', lastError: null };
        if (command === 'node_transport_reconnect') return;
+       if (command === 'node_notification_settings') return {granted:false,pushConfigured:false,autostart:false};
+       if (command === 'node_request_notification_permission') return;
        if (command === 'node_status') return identity;
        if (command === 'node_pair') { current.name = args.name; return identity = { state: 'paired', node: current, error: null }; }
        if (command === 'node_list') return [current, other];

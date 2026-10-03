@@ -525,7 +525,7 @@ async fn session(
                                 let now = server_now + clock_started.elapsed().as_secs() as i64;
                                 commands.spawn(async move {
                                     let id = input.command_id;
-                                    let status = if let Some(executor) = executor { tokio::task::spawn_blocking(move || executor.execute(&input, now)).await.unwrap_or("failed") } else { "unsupported" };
+                                    let status = if let Some(executor) = executor { executor.execute(&input, now).await } else { "unsupported" };
                                     (id,status)
                                 });
                                 continue;
@@ -983,9 +983,15 @@ mod tests {
         };
         struct Mock(Arc<AtomicUsize>);
         impl NotificationSink for Mock {
-            fn show(&self, _: &NotificationCommand) -> &'static str {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                "success"
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = &'static str> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    "success"
+                })
             }
         }
         let calls = Arc::new(AtomicUsize::new(0));

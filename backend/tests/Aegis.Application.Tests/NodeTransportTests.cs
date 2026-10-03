@@ -309,4 +309,18 @@ public sealed class NodeTransportTests
         var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);f.Connections.Disconnect(node.Id,"node_disabled");Assert.Equal("unavailable",await pending);
     }
 
+    [Fact] public async Task CommandHasBoundedTimeoutWithoutAffectingHealthyLease()
+    {
+        await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);await Advertise(socket,new NodeCapability("notification.show",1));
+        var c=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","fixture"));
+        var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);
+        Assert.Equal("timeout",await pending.WaitAsync(TimeSpan.FromSeconds(10)));Assert.True(f.Connections.IsOnline(node.Id));
+    }
+    [Fact] public async Task UnsolicitedResultsAreBoundedAndCannotCreateHeartbeatPresence()
+    {
+        await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);await Advertise(socket,new NodeCapability("notification.show",1));
+        for(var i=0;i<17;i++) await Send(socket,new {protocolVersion=1,type="command_result",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow,payload=new {commandId=Guid.NewGuid(),status="success"}});
+        var close=await Read(socket);Assert.Equal(WebSocketMessageType.Close,close.Result.MessageType);Assert.False(f.Connections.IsOnline(node.Id));
+    }
+
 }
