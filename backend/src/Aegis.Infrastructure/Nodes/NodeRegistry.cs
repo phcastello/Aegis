@@ -108,7 +108,12 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
         var attempt = await db.NodePairingAttempts.SingleOrDefaultAsync(a => a.Id == request.AttemptId && a.NodeId == nodeId, ct);
         if (attempt is null || attempt.ExpiresAt <= Now || !NodeSecrets.Matches(attempt.CredentialHash, request.Credential)) throw NodeSecrets.PairingError();
         var code = await db.NodePairingCodes.SingleAsync(c => c.Id == attempt.PairingCodeId, ct);
-        if (code.IssuerNodeId is { } issuer) await Active(issuer, ct);
+        if (code.IssuerNodeId is { } issuer)
+        {
+            var source = await db.Nodes.SingleOrDefaultAsync(n => n.Id == issuer, ct);
+            // Failure of the issuing identity invalidates establishment, not the new device's identity.
+            if (source is null || !source.Enabled || source.RevokedAt is not null) throw NodeSecrets.PairingError();
+        }
         var node = new AegisNode(nodeId, attempt.Name, attempt.Platform, attempt.AppVersion, 1, Now);
         db.Nodes.Add(node); db.NodeCredentials.Add(new NodeCredential(node.Id, attempt.CredentialHash, Now));
         db.NodePairingAttempts.Remove(attempt); // Erase retry receipt/recovery hash on successful establishment.

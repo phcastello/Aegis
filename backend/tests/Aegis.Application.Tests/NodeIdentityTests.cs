@@ -140,7 +140,14 @@ public sealed class NodeIdentityTests
     {
         var pc = await Paired(); var request = Request((await Registry.CreateCodeAsync(pc.Node.Id)).Code);
         var receipt = await Registry.PairAsync(request); await Registry.RevokeAsync(pc.Node.Id, pc.Node.Id);
-        await Assert.ThrowsAsync<NodeException>(() => Registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)));
+        Assert.Equal("pairing_unavailable", (await Assert.ThrowsAsync<NodeException>(() => Registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)))).Code);
+        Assert.Single(db.Nodes);
+    }
+    [Fact] public async Task DisabledIssuerDoesNotMisclassifyAnUnconfirmedDeviceAsDisabled()
+    {
+        var pc = await Paired(); var request = Request((await Registry.CreateCodeAsync(pc.Node.Id)).Code);
+        var receipt = await Registry.PairAsync(request); await Registry.SetEnabledAsync(pc.Node.Id, pc.Node.Id, false);
+        Assert.Equal("pairing_unavailable", (await Assert.ThrowsAsync<NodeException>(() => Registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)))).Code);
         Assert.Single(db.Nodes);
     }
     [Fact] public async Task CodesAndPendingReceiptsDoNotContainPlaintextSecrets()
