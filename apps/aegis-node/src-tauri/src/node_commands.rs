@@ -109,9 +109,11 @@ impl NodeRuntime {
             .node
             .as_ref()
             .filter(|n| n.enabled && n.revoked_at.is_none() && status.state == "paired");
-        crate::native_notifications::bind(&self.app, node.map(|n| n.id.as_str()));
+        if !crate::native_notifications::bind(&self.app, node.map(|n| n.id.as_str())).await {
+            return;
+        }
         if node.is_some() {
-            if let Some(push) = crate::native_notifications::push_state(&self.app) {
+            if let Some(push) = crate::native_notifications::push_state(&self.app).await {
                 if push.configured {
                     if let Some(token) = push.token {
                         let _ = identity.register_push(&token).await;

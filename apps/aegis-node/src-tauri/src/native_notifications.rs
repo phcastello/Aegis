@@ -40,52 +40,17 @@ impl NotificationSink for NativeSink {
             }
             #[cfg(target_os = "android")]
             {
-                // The upstream mobile-plugin async callback unwraps send() after a dropped
-                // receiver. Use a cancellation-safe JNI adapter for bounded execution instead.
                 let payload = serde_json::to_string(command).unwrap_or_default();
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let Some(webview) = self.0.get_webview_window("main") else {
-                    return "failed";
-                };
-                if webview
-                    .with_webview(move |native| {
-                        native.jni_handle().exec(move |env, activity, _| {
-                            if tx.is_closed() {
-                                return;
-                            } // Canceled before UI execution: do not display.
-                            let result = (|| -> Result<String, jni::errors::Error> {
-                                let text = env.new_string(payload)?;
-                                let object = jni::objects::JObject::from(text);
-                                let value = env
-                                    .call_method(
-                                        activity,
-                                        "showNodeNotification",
-                                        "(Ljava/lang/String;)Ljava/lang/String;",
-                                        &[jni::objects::JValue::Object(&object)],
-                                    )?
-                                    .l()?;
-                                let string = jni::objects::JString::from(value);
-                                let output = env.get_string(&string)?.into();
-                                Ok(output)
-                            })();
-                            if result.is_err() {
-                                let _ = env.exception_clear();
-                            }
-                            let status = match result.as_deref() {
-                                Ok("success") => "success",
-                                Ok("permission_denied") => "permission_denied",
-                                Ok("duplicate") => "duplicate",
-                                Ok("expired") => "expired",
-                                _ => "failed",
-                            };
-                            let _ = tx.send(status); // Timeout/shutdown may have dropped the receiver.
-                        });
-                    })
-                    .is_err()
+                match android_call(&self.0, "showNodeNotification", payload)
+                    .await
+                    .as_deref()
                 {
-                    return "failed";
+                    Some("success") => "success",
+                    Some("permission_denied") => "permission_denied",
+                    Some("duplicate") => "duplicate",
+                    Some("expired") => "expired",
+                    _ => "failed",
                 }
-                rx.await.unwrap_or("failed")
             }
             #[cfg(not(any(windows, target_os = "android")))]
             {
@@ -112,30 +77,65 @@ pub struct NotificationSettings {
     pub push_configured: bool,
     pub autostart: bool,
 }
+// Private, fixed JNI calls only. The upstream plugin callback unwraps send() after a
+// dropped receiver, so bounded/cancelable operations use this safe oneshot adapter.
 #[cfg(target_os = "android")]
-pub fn push_state(app: &AppHandle) -> Option<PrivatePushState> {
-    app.state::<AndroidBridge>()
-        .0
-        .run_mobile_plugin("state", ())
-        .ok()
+async fn android_call(app: &AppHandle, method: &'static str, payload: String) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let webview = app.get_webview_window("main")?;
+    webview
+        .with_webview(move |native| {
+            native.jni_handle().exec(move |env, activity, _| {
+                if tx.is_closed() {
+                    return;
+                }
+                let result = (|| -> Result<String, jni::errors::Error> {
+                    let text = env.new_string(payload)?;
+                    let object = jni::objects::JObject::from(text);
+                    let value = env
+                        .call_method(
+                            activity,
+                            method,
+                            "(Ljava/lang/String;)Ljava/lang/String;",
+                            &[jni::objects::JValue::Object(&object)],
+                        )?
+                        .l()?;
+                    let string = jni::objects::JString::from(value);
+                    let output = env.get_string(&string)?.into();
+                    Ok(output)
+                })();
+                if result.is_err() {
+                    let _ = env.exception_clear();
+                }
+                let _ = tx.send(result.ok());
+            });
+        })
+        .ok()?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), rx)
+        .await
+        .ok()?
+        .ok()?
 }
 #[cfg(target_os = "android")]
-pub fn bind(app: &AppHandle, id: Option<&str>) {
-    let _: Result<serde_json::Value, _> = app
-        .state::<AndroidBridge>()
-        .0
-        .run_mobile_plugin("bind", serde_json::json!({"nodeId":id}));
+pub async fn push_state(app: &AppHandle) -> Option<PrivatePushState> {
+    serde_json::from_str(&android_call(app, "nodePushState", "{}".into()).await?).ok()
+}
+#[cfg(target_os = "android")]
+pub async fn bind(app: &AppHandle, id: Option<&str>) -> bool {
+    android_call(
+        app,
+        "bindNodePush",
+        serde_json::json!({"nodeId":id}).to_string(),
+    )
+    .await
+    .as_deref()
+        == Some("success")
 }
 #[tauri::command]
 pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings {
     #[cfg(target_os = "android")]
     {
-        let state: PrivatePushState = app
-            .state::<AndroidBridge>()
-            .0
-            .run_mobile_plugin_async("state", ())
-            .await
-            .unwrap_or_default();
+        let state = push_state(&app).await.unwrap_or_default();
         NotificationSettings {
             granted: state.granted,
             push_configured: state.configured,

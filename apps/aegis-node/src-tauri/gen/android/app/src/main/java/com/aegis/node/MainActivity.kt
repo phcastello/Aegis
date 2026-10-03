@@ -20,6 +20,22 @@ class MainActivity : TauriActivity() {
     else { val input=command.getJSONObject("input");NodeNativeNotifications.show(this,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body")) }
   } catch(_:Exception){"failed"}
 
+  // Sensitive state is returned only to native Rust; these are not WebView interfaces.
+  fun nodePushState(payload:String):String {
+    NodeNativeNotifications.initialize(this)
+    return org.json.JSONObject()
+      .put("configured",com.google.firebase.FirebaseApp.getApps(this).isNotEmpty())
+      .put("granted",NodeNativeNotifications.granted(this))
+      .put("token",NodeNativeNotifications.prefs(this).getString("token",null)).toString()
+  }
+
+  fun bindNodePush(payload:String):String = try {
+    val value=org.json.JSONObject(payload)
+    val id=if(value.isNull("nodeId")) null else value.getString("nodeId")
+    if(id!=null && java.util.UUID.fromString(id).toString()!=id) "failed"
+    else if(NodeNativeNotifications.prefs(this).edit().putString("nodeId",id).commit()) "success" else "failed"
+  } catch(_:Exception){"failed"}
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     // Respect Android edge-to-edge system bars/cutouts and the soft keyboard.
