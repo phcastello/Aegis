@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { nodeServices } from '../services/nodes';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { nodeServices, transportServices, type TransportStatus } from '../services/nodes';
 import { useNodes } from '../composables/useNodes';
 import type { Platform } from '../services/runtime';
 const props = defineProps<{ platform: Platform }>();
@@ -9,7 +9,19 @@ const { identity, nodes, pairingCode, busy, error, refresh, pair, rename, setEna
 const name = ref(props.platform === 'android' ? 'Meu celular' : 'Meu PC');
 const code = ref(''); const editingId = ref<string | null>(null); const editedName = ref('');
 const confirmation = ref<{ id: string; action: 'disable' | 'revoke'; name: string } | null>(null);
-onMounted(refresh);
+const transport = ref<TransportStatus>({ transportState: 'offline', lastError: null });
+const labels = { online: 'Online', offline: 'Offline', connecting: 'Conectando', reconnecting: 'Reconectando' };
+let timer: ReturnType<typeof setInterval>;
+async function updateTransport() { try { transport.value = await transportServices.status(); } catch { /* Last public state. */ } }
+onMounted(() => { void refresh(); void updateTransport(); timer = setInterval(() => { void updateTransport(); void refresh(); }, 10000); });
+onUnmounted(() => clearInterval(timer));
+function lastSeen(value?: string | null) {
+  if (!value) return 'Ainda não visto pelo transporte';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return 'Visto há menos de 1 min';
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `Visto há ${minutes} min` : `Visto em ${new Date(value).toLocaleString()}`;
+}
 async function submitPair() { await pair(name.value, code.value); code.value = ''; }
 async function confirmAction() {
   const pending = confirmation.value; confirmation.value = null;
@@ -32,13 +44,17 @@ async function confirmAction() {
         <button type="submit" :disabled="busy">{{ busy ? 'Pareando…' : 'Parear dispositivo' }}</button>
       </form>
       <div v-if="identity.node"><strong>{{ identity.node.name }}</strong> · Este dispositivo <small>{{ identity.node.id }}</small></div>
-      <button :disabled="busy" @click="refresh">{{ busy ? 'Aguarde…' : 'Atualizar / Tentar novamente' }}</button>
+      <p v-if="identity.node">Transporte deste Node: {{ labels[transport.transportState] }}</p>
+      <p v-if="transport.lastError" role="status">{{ transport.lastError }}</p>
+      <button :disabled="busy" @click="transportServices.reconnect(); refresh()">{{ busy ? 'Aguarde…' : 'Atualizar / Tentar novamente' }}</button>
       <button v-if="identity.state === 'paired'" :disabled="busy" @click="createCode">Adicionar dispositivo</button>
       <div v-if="pairingCode" class="pairing-code"><p>Digite este código no novo dispositivo:</p><code>{{ pairingCode.code }}</code><p>Expira em {{ new Date(pairingCode.expiresAt).toLocaleTimeString() }}. Uso único.</p></div>
       <ul>
         <li v-for="node in nodes" :key="node.id">
           <strong>{{ node.name }}</strong><span v-if="isCurrent(node)"> · Este dispositivo</span>
-          <p>{{ node.platform === 'android' ? 'Android' : 'Windows' }} · {{ node.revokedAt ? 'Revogado' : node.enabled ? 'Ativo' : 'Desativado' }}</p>
+          <p>{{ node.platform === 'android' ? 'Android' : 'Windows' }} · {{ node.revokedAt ? 'Revogado' : node.enabled ? 'Habilitado' : 'Desativado' }}</p>
+          <p>Disponibilidade: {{ node.availability === 'online' ? '● Online' : 'Offline' }}</p>
+          <small>{{ node.availability === 'online' ? 'Acessível agora' : lastSeen(node.lastSeenAt) }}</small>
           <small>App {{ node.appVersion }} · Protocolo {{ node.protocolVersion }} · Pareado {{ new Date(node.pairedAt).toLocaleDateString() }}</small>
           <form v-if="editingId === node.id" @submit.prevent="rename(node.id, editedName); editingId = null"><input v-model="editedName" aria-label="Novo nome" maxlength="100" required /><button :disabled="busy">Salvar</button></form>
           <div v-if="!node.revokedAt">

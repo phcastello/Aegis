@@ -71,6 +71,8 @@ try {
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
        if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-stage.2' };
        if (command === 'check_backend') return { status: 'connected', message: null };
+       if (command === 'node_transport_status') return { transportState: 'online', lastError: null };
+       if (command === 'node_transport_reconnect') return;
        if (command === 'node_status') return identity;
        if (command === 'node_pair') { current.name = args.name; return identity = { state: 'paired', node: current, error: null }; }
        if (command === 'node_list') return [current, other];

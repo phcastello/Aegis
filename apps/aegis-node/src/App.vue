@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import ChatView from '@aegis/client/views/ChatView.vue';
 import UpdateNotice from './components/UpdateNotice.vue';
-import { nodeServices, type IdentityStatus } from './services/nodes';
+import { nodeServices, transportServices, type IdentityStatus } from './services/nodes';
 import NodesPanel from './components/NodesPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import type { RuntimeInfo } from './services/runtime';
@@ -11,7 +11,9 @@ const aboutOpen = ref(false);
 const nodesOpen = ref(false);
 const identity = ref<IdentityStatus | null>(null);
 async function refreshIdentity() { try { identity.value = await nodeServices.status(); } catch { identity.value = { state: 'pairingError', node: null, error: 'Armazenamento seguro indisponível. Abra Dispositivos para verificar.' }; } }
-onMounted(refreshIdentity);
+function foreground() { if (document.visibilityState === 'visible') { void transportServices.reconnect().catch(() => {}); void refreshIdentity(); } }
+onMounted(() => { void refreshIdentity(); document.addEventListener('visibilitychange', foreground); });
+onUnmounted(() => document.removeEventListener('visibilitychange', foreground));
 function closeNodes() { nodesOpen.value = false; void refreshIdentity(); }
 </script>
 
