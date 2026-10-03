@@ -113,3 +113,6 @@ temp/
 **/.obsidian
 **/aegis-ui-concepts
 voice/
+# Stage06 operational Firebase configuration (never commit backend keys/tokens).
+**/google-services.json
+.runtime-secrets/

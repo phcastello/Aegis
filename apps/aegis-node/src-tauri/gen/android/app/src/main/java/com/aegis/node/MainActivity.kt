@@ -10,6 +10,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    NodeNativeNotifications.initialize(this)
   }
 
   override fun onWebViewCreate(webView: WebView) {
