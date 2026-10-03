@@ -38,6 +38,7 @@ public static class DependencyInjection
         services.AddDbContext<AegisDbContext>(options =>
             options.UseNpgsql(connectionString));
 
+        services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
         services.AddDataProtection()
             .SetApplicationName("Aegis");
