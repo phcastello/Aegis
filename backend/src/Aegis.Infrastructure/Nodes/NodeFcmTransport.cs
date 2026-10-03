@@ -104,6 +104,6 @@ public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations re
             if (invalid) await registrations.InvalidateAsync(id, registration.TokenHash, deadline.Token);
             Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} HttpStatus={HttpStatus} Reason={Reason}", id, command.CommandId, (int)response.StatusCode, invalid ? "unregistered" : "provider_rejected"); return invalid ? "unavailable" : "failed";
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { Failures.Add(1); return "timeout"; }
-        catch (Exception e) when (e is HttpRequestException or CryptographicException or InvalidOperationException) { Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} Reason=sender_failed", id, command.CommandId); return "failed"; }
+        catch (Exception e) when (e is HttpRequestException or CryptographicException or InvalidOperationException or Google.Apis.Auth.OAuth2.Responses.TokenResponseException) { Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} Reason=sender_failed", id, command.CommandId); return "failed"; }
     }
 }

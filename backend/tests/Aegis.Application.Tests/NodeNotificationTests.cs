@@ -82,6 +82,35 @@ public sealed class NodeNotificationTests
         }
     }
     private sealed class Clients(Handler handler):IHttpClientFactory {public HttpClient CreateClient(string name)=>new(handler,false);}
+    private sealed class RejectedCredentials : INodeFcmCredentials {
+        public bool Configured => true;
+        public Task<string> AccessTokenAsync(CancellationToken ct) => throw new global::Google.Apis.Auth.OAuth2.Responses.TokenResponseException(
+            new() { Error = "invalid_grant", ErrorDescription = "fixture-provider-detail-not-for-client" });
+    }
+    [Fact] public async Task OAuthRejectionReturnsKnownFailureWithoutSendingOrRemovingRegistration() {
+        using var f = new Fixture();
+        await f.Push.RegisterAsync(f.Phone, "fixture-token", default);
+        var handler = new Handler(HttpStatusCode.OK, false);
+        var sender = new NodeFcmTransport(f.Db, f.Push, new RejectedCredentials(), new Clients(handler),
+            Options.Create(new NodeFcmOptions { ProjectId = "fixture-project" }), TimeProvider.System, NullLogger<NodeFcmTransport>.Instance);
+        var command = new NodeNotificationCommand(Guid.NewGuid(), "notification.show", 1,
+            DateTimeOffset.UtcNow.AddSeconds(60), new("Aegis", "fixture"));
+        Assert.Equal("failed", await sender.SendAsync(f.Phone, command, default));
+        Assert.Equal(0, handler.Calls);
+        Assert.True(await f.Push.HasRouteAsync(f.Phone));
+    }
+    [Fact] public void PrivateCredentialConfigurationRejectsWrongProjectWithoutExposingFile() {
+        Assert.False(new NodeFcmCredentials(Options.Create(new NodeFcmOptions())).Configured);
+        var file = Path.GetTempFileName();
+        try {
+            File.WriteAllText(file, "{\"type\":\"service_account\",\"project_id\":\"different-project\",\"private_key\":\"fixture-private-material\"}");
+            var error = Assert.Throws<InvalidOperationException>(() => new NodeFcmCredentials(
+                Options.Create(new NodeFcmOptions { ProjectId = "fixture-project", ServiceAccountFile = file })));
+            Assert.DoesNotContain("fixture-private-material", error.Message);
+            Assert.DoesNotContain(file, error.Message);
+            Assert.Null(error.InnerException);
+        } finally { File.Delete(file); }
+    }
     [Theory][InlineData(200,false,"accepted")][InlineData(404,true,"unavailable")][InlineData(403,false,"failed")]
     public async Task HttpV1SenderAcceptedIsNotDisplayedAndInvalidTokensAreRemoved(int status,bool invalid,string expected) {
         using var f=new Fixture();await f.Push.RegisterAsync(f.Phone,"fixture-token",default);var handler=new Handler((HttpStatusCode)status,invalid);
