@@ -286,4 +286,27 @@ public sealed class NodeTransportTests
         Assert.False(f.Connections.IsOnline(node.Id));
     }
 
+    [Theory]
+    [InlineData("success")][InlineData("expired")][InlineData("unsupported")][InlineData("permission_denied")][InlineData("failed")][InlineData("duplicate")]
+    public async Task RealCommandAndHeartbeatShareWriterWithoutBlocking(string status)
+    {
+        await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);
+        await Advertise(socket,new NodeCapability("notification.show",1));
+        var command=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","Olá"));
+        var sending=f.Connections.SendAsync(node.Id,command,default);
+        var received=await Read(socket);Assert.Equal("command",received.Json.GetProperty("type").GetString());
+        var payload=received.Json.GetProperty("payload");Assert.Equal(command.CommandId,payload.GetProperty("commandId").GetGuid());Assert.Equal("Olá",payload.GetProperty("input").GetProperty("body").GetString());
+        await Send(socket,new {protocolVersion=1,type="heartbeat",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow});Assert.Equal("heartbeat_ack",(await Read(socket)).Json.GetProperty("type").GetString());
+        Assert.False(sending.IsCompleted);Assert.True(f.Connections.IsOnline(node.Id));
+        await Send(socket,new {protocolVersion=1,type="command_result",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow,payload=new {commandId=command.CommandId,status}});
+        Assert.Equal(status,await sending);Assert.True(f.Connections.IsOnline(node.Id));
+    }
+    [Fact] public async Task DisconnectCancelsCommandAndExpiredIsNotSent()
+    {
+        await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);await Advertise(socket,new NodeCapability("notification.show",1));
+        var c=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","fixture"));
+        Assert.Equal("expired",await f.Connections.SendAsync(node.Id,c with {ExpiresAt=DateTimeOffset.UtcNow.AddSeconds(-1)},default));
+        var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);f.Connections.Disconnect(node.Id,"node_disabled");Assert.Equal("unavailable",await pending);
+    }
+
 }

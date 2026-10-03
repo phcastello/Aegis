@@ -60,10 +60,13 @@ try {
   console.log(`Windows native runtime PASS: Vue renders; native platform Windows; version ${version}; health ${labels[1]}; Retry responds.`);
   const closed = spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${application.pid}).CloseMainWindow()`], { encoding: 'utf8' });
   if (closed.status !== 0 || closed.stdout.trim() !== 'True') throw new Error('Could not close the native main window normally.');
+  await new Promise(r=>setTimeout(r,1000));
+  assert.equal(exitCode,undefined,'Window X must hide while the resident runtime stays alive');
+  await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('node_exit')).catch(()=>{});
   const closeDeadline = Date.now() + 10000;
   while (exitCode === undefined && Date.now() < closeDeadline) await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(exitCode, 0, 'Normal window close must exit successfully.');
-  console.log('Windows normal close PASS. Audio, OAuth system browser and update install require separate device acceptance.');
+  assert.equal(exitCode, 0, 'Explicit Exit must terminate successfully.');
+  console.log('Windows close-to-tray and explicit exit PASS. Audio, OAuth system browser and update install require separate device acceptance.');
 } finally {
   await browser?.close().catch(() => {});
   if (exitCode === undefined) spawnSync('taskkill', ['/PID', String(application.pid), '/T', '/F'], { stdio: 'ignore' });

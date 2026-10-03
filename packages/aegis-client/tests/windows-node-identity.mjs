@@ -53,7 +53,8 @@ async function open() {
 }
 async function close() {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow()`], { encoding: 'utf8' });
-  assert.equal(result.status, 0); await waitUntil(() => exited !== undefined, 15000); assert.equal(exited, 0);
+  assert.equal(result.status, 0); await new Promise(r=>setTimeout(r,500));assert.equal(exited,undefined,'Close must hide');
+  await invoke('node_exit').catch(()=>{}); await waitUntil(() => exited !== undefined, 15000); assert.equal(exited, 0);
   await browser.close().catch(() => {}); browser = undefined;
 }
 try {
@@ -92,7 +93,7 @@ try {
   }
   assert.equal(await panel.locator(`[data-node-id="${pcId}"]`).count(), 1);
   assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
-  const nativeCapabilities = [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }];
+  const nativeCapabilities = [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }];
   assert.deepEqual((await invoke('node_list')).find(n => n.id === pcId).capabilities, nativeCapabilities);
   assert.deepEqual((await call('/me', undefined, peerCredential)).body.capabilities, [{ name: 'audio.input', version: 1 }]);
   await invoke('node_set_target_priority', { id: pcId, priority: 10 });
@@ -108,6 +109,11 @@ try {
   peerSocket = await connectPeer(peerCredential, identity.node.appVersion);
   assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
   console.log('Windows real native capability advertisement + two different peers + priority/preferred/version + live offline/reconnect resolution PASS.');
+  const notification = await call('/notifications/test', {preferredNodeId:pcId,title:'Aegis CI',body:'Native fixture'},peerCredential);
+  assert.equal(notification.status,200);assert.equal(notification.body.transport,'live_websocket');assert.equal(notification.body.status,'success');
+  const settings = await invoke('node_notification_settings');assert.equal(settings.granted,true);
+  await invoke('node_set_autostart',{enabled:true});assert.equal((await invoke('node_notification_settings')).autostart,true);
+  await invoke('node_set_autostart',{enabled:false});assert.equal((await invoke('node_notification_settings')).autostart,false);
   await close();
   await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'offline', 10000);
   await open();
@@ -135,6 +141,7 @@ try {
   console.log('Windows real native authenticated transport + heartbeat + independent server presence + close/offline + automatic re-enable + active revoke PASS.');
   console.log('Windows real native list/rename/disable/re-enable/revoke/re-pair, invalid-secret discard and chat independence PASS.');
 } finally {
+  if (page && exited===undefined) await invoke('node_set_autostart',{enabled:false}).catch(()=>{});
   for (const socket of peerSockets) socket.terminate();
   await browser?.close().catch(() => {});
   if (app && exited === undefined) spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' });

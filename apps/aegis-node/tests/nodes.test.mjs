@@ -26,7 +26,7 @@ test('Node IPC capability is enabled only for the local main Android/Windows Web
   assert.deepEqual(capability.platforms, ['android', 'windows']);
   assert.notEqual(capability.local, false);
   assert.equal(capability.remote, undefined);
-  assert.deepEqual(capability.permissions, ['allow-node-status', 'allow-node-transport-status', 'allow-node-transport-reconnect', 'allow-node-pair', 'allow-node-list', 'allow-node-rename', 'allow-node-set-enabled', 'allow-node-set-target-priority', 'allow-node-resolve-target', 'allow-node-revoke', 'allow-node-create-pairing-code']);
+  assert.deepEqual(capability.permissions, ['allow-node-status', 'allow-node-transport-status', 'allow-node-transport-reconnect', 'allow-node-pair', 'allow-node-list', 'allow-node-rename', 'allow-node-set-enabled', 'allow-node-set-target-priority', 'allow-node-resolve-target', 'allow-node-revoke', 'allow-node-create-pairing-code', 'allow-node-test-notification', 'allow-node-notification-settings', 'allow-node-request-notification-permission', 'allow-node-set-autostart', 'allow-node-exit']);
 });
 test('IPC offers typed management operations and never exports credentials', async () => {
   globalThis.window = {}; const calls = [];

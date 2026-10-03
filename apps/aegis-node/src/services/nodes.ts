@@ -3,7 +3,7 @@ export type NodeState = 'unpaired' | 'pairing' | 'paired' | 'disabled' | 'revoke
 export interface NodeView {
   id: string; name: string; platform: 'android' | 'windows'; enabled: boolean;
   appVersion: string; protocolVersion: number; pairedAt: string;
-  availability?: 'online' | 'offline'; lastSeenAt?: string | null; lastHeartbeatAt?: string | null;
+  availability?: 'online' | 'backgroundReachable' | 'offline'; lastSeenAt?: string | null; lastHeartbeatAt?: string | null;
   capabilities?: { name: string; version: number }[]; targetPriority?: number;
   createdAt: string; updatedAt: string | null; revokedAt: string | null;
 }
@@ -36,4 +36,13 @@ export interface TransportStatus { transportState: 'connecting' | 'online' | 're
 export const transportServices = {
   status: (): Promise<TransportStatus> => invoke('node_transport_status'),
   reconnect: (): Promise<void> => invoke('node_transport_reconnect')
+};
+
+export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean }
+export interface NotificationResult { node: {id:string;name:string}|null; reachability: string; transport: string|null; status:string; commandId:string|null }
+export const notificationServices = {
+ test: (id:string):Promise<NotificationResult> => invoke('node_test_notification',{id}),
+ settings: ():Promise<NotificationSettings> => invoke('node_notification_settings'),
+ permission: ():Promise<void> => invoke('node_request_notification_permission'),
+ autostart: (enabled:boolean):Promise<void> => invoke('node_set_autostart',{enabled})
 };

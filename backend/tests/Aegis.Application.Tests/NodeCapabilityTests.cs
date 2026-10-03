@@ -15,7 +15,7 @@ public sealed class NodeCapabilityTests
     {
         var accepted = NodeCapabilityCatalog.Validate([Output, new("future.feature", 3), Input], out var ignored);
         Assert.Equal(1, ignored); Assert.Equal(new[] { Input, Output }, accepted);
-        Assert.False(NodeCapabilityCatalog.IsKnown("notification.show"));
+        Assert.True(NodeCapabilityCatalog.IsKnown("notification.show"));
     }
     [Theory] [InlineData("audio.output", 0)] [InlineData("audio.output", -1)] [InlineData("Audio.Output", 1)]
     [InlineData("audio", 1)] [InlineData("audio..input", 1)] [InlineData("audio.output\n", 1)]
