@@ -27,6 +27,8 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
         Response.StatusCode = failure == "node_rate_limited" ? 429 : failure == "node_disabled" ? 403 : 401;
+        if (Request.Path.StartsWithSegments("/api/nodes/connect"))
+            Logger.LogWarning("Node transport rejected Phase=authentication HttpStatus={HttpStatus} Reason={Reason}", Response.StatusCode, failure);
         Response.Headers["X-Aegis-Node-Error"] = failure;
         Response.Headers.CacheControl = "no-store";
         Response.Headers.WWWAuthenticate = SchemeName;

@@ -123,6 +123,35 @@ public sealed class NodeTransportTests
         http.DefaultRequestHeaders.Add("Authorization", "AegisNode " + secret);
         Assert.Equal(HttpStatusCode.Unauthorized, (await http.GetAsync("/api/nodes/connect")).StatusCode);
     }
+    [Fact] public async Task TwoLiveNodesHaveFreshHttpAvailabilityAndExactlyOneCurrentId()
+    {
+        await using var f = await Host(); var (a, secretA) = await f.Pair(); var (b, secretB) = await f.Pair();
+        using var socketA = await f.Connect(secretA); using var socketB = await f.Connect(secretB);
+        await Hello(socketA); await Hello(socketB);
+        foreach (var secret in new[] { secretA, secretB })
+        {
+            using var http = f.Http; http.DefaultRequestHeaders.Add("Authorization", "AegisNode " + secret);
+            var me = await http.GetFromJsonAsync<NodeView>("/api/nodes/me");
+            var list = await http.GetFromJsonAsync<NodeView[]>("/api/nodes");
+            Assert.Equal(2, list!.Length); Assert.Single(list, n => n.Id == me!.Id);
+            Assert.All(list, n => Assert.Equal("online", n.Availability)); Assert.Equal("online", me!.Availability);
+        }
+        await socketA.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test", CancellationToken.None);
+        await Eventually(() => Task.FromResult(!f.Connections.IsOnline(a.Id)));
+        using var observer = f.Http; observer.DefaultRequestHeaders.Add("Authorization", "AegisNode " + secretB);
+        var after = await observer.GetFromJsonAsync<NodeView[]>("/api/nodes");
+        Assert.Equal("offline", after!.Single(n => n.Id == a.Id).Availability);
+        Assert.Equal("online", after.Single(n => n.Id == b.Id).Availability);
+    }
+    [Fact] public async Task AuthenticatedRequestWithoutUpgradeHasExplicitSafeDiagnostic()
+    {
+        await using var f = await Host(); var (_, secret) = await f.Pair(); using var http = f.Http;
+        http.DefaultRequestHeaders.Add("Authorization", "AegisNode " + secret);
+        http.DefaultRequestHeaders.Add("X-Aegis-Node-Protocol", "1");
+        var response = await http.GetAsync("/api/nodes/connect");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("websocket_required", Assert.Single(response.Headers.GetValues("X-Aegis-Node-Error")));
+    }
     [Theory]
     [InlineData("{", 1008)]
     [InlineData("oversized", 1009)]

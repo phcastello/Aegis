@@ -2,9 +2,9 @@ name: Aegis Node CI
 on:
   push:
     branches: [main, 'feat/v0.7.0-*']
-    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', '.github/**']
+    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
   pull_request:
-    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', '.github/**']
+    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -39,6 +39,10 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/aegis-pwa/package-lock.json
+      - name: Real authenticated transport through two Nginx proxy hops
+        run: |
+          npm ci --prefix scripts/node-transport-probe
+          node scripts/node-transport-probe/proxy-chain.mjs
       - working-directory: packages/aegis-client
         run: npm ci
       - working-directory: frontend/aegis-pwa
