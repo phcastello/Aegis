@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import { nodeServices, transportServices, type TransportStatus } from '../services/nodes';
+import { nodeServices, transportServices, type TransportStatus, type TargetResult } from '../services/nodes';
 import { useNodes } from '../composables/useNodes';
 import type { Platform } from '../services/runtime';
 const props = defineProps<{ platform: Platform }>();
 defineEmits<{ close: [] }>();
-const { identity, nodes, pairingCode, busy, error, refresh, pair, rename, setEnabled, revoke, createCode, isCurrent } = useNodes(nodeServices);
+const { identity, nodes, pairingCode, busy, error, refresh, pair, rename, setEnabled, setPriority, revoke, createCode, isCurrent } = useNodes(nodeServices);
 const name = ref(props.platform === 'android' ? 'Meu celular' : 'Meu PC');
+const target = ref<TargetResult | null>(null);
+async function resolveAudio() { try { target.value = await nodeServices.resolve({ requiredCapabilities: [{ name: "audio.output", minimumVersion: 1 }] }); } catch { target.value = null; error.value = "Não foi possível resolver o alvo."; } }
+const priorityId = ref<string | null>(null); const priorityValue = ref(0);
 const code = ref(''); const editingId = ref<string | null>(null); const editedName = ref('');
 const confirmation = ref<{ id: string; action: 'disable' | 'revoke'; name: string } | null>(null);
 const transport = ref<TransportStatus>({ transportState: 'offline', lastError: null });
@@ -49,15 +52,21 @@ async function confirmAction() {
       <button :disabled="busy" @click="transportServices.reconnect(); refresh()">{{ busy ? 'Aguarde…' : 'Atualizar / Tentar novamente' }}</button>
       <button v-if="identity.state === 'paired'" :disabled="busy" @click="createCode">Adicionar dispositivo</button>
       <div v-if="pairingCode" class="pairing-code"><p>Digite este código no novo dispositivo:</p><code>{{ pairingCode.code }}</code><p>Expira em {{ new Date(pairingCode.expiresAt).toLocaleTimeString() }}. Uso único.</p></div>
+      <button v-if="identity.state === 'paired'" :disabled="busy" @click="resolveAudio">Diagnóstico: resolver audio.output@1</button>
+      <p v-if="target" role="status">Alvo: {{ target.node?.name ?? 'Nenhum Node elegível (no_eligible_node)' }} · {{ target.onlineNodes }} Online / {{ target.capabilityCompatibleNodes }} compatíveis. Seleção neste momento; nenhuma ação executada.</p>
       <ul>
         <li v-for="node in nodes" :key="node.id" :data-node-id="node.id">
           <strong>{{ node.name }}</strong><span v-if="isCurrent(node)"> · Este dispositivo</span>
           <p>{{ node.platform === 'android' ? 'Android' : 'Windows' }} · {{ node.revokedAt ? 'Revogado' : node.enabled ? 'Habilitado' : 'Desativado' }}</p>
           <p>Disponibilidade: {{ node.availability === 'online' ? '● Online' : 'Offline' }}</p>
+          <p>Capabilities: {{ node.capabilities?.length ? node.capabilities.map(c => `${c.name}@${c.version}`).join(', ') : 'Nenhuma anunciada' }}</p>
+          <p>Prioridade: {{ node.targetPriority ?? 0 }}</p>
+          <form v-if="priorityId === node.id" @submit.prevent="setPriority(node.id, priorityValue); priorityId = null"><label>Prioridade do alvo<input v-model.number="priorityValue" type="number" min="-1000" max="1000" step="1" required /></label><button :disabled="busy">Salvar prioridade</button></form>
           <small>{{ node.availability === 'online' ? 'Acessível agora' : lastSeen(node.lastSeenAt) }}</small>
           <small>App {{ node.appVersion }} · Protocolo {{ node.protocolVersion }} · Pareado {{ new Date(node.pairedAt).toLocaleDateString() }}</small>
           <form v-if="editingId === node.id" @submit.prevent="rename(node.id, editedName); editingId = null"><input v-model="editedName" aria-label="Novo nome" maxlength="100" required /><button :disabled="busy">Salvar</button></form>
           <div v-if="!node.revokedAt">
+            <button :disabled="busy" @click="priorityId = node.id; priorityValue = node.targetPriority ?? 0">Alterar prioridade</button>
             <button :disabled="busy" @click="editingId = node.id; editedName = node.name">Renomear</button>
             <button v-if="node.enabled" :disabled="busy" @click="confirmation = { id: node.id, action: 'disable', name: node.name }">Desativar</button>
             <button v-else :disabled="busy" @click="setEnabled(node.id, true)">Reativar</button>

@@ -58,6 +58,7 @@ impl Default for TransportStatus {
 pub(crate) struct TransportConfig {
     pub url: String,
     pub version: String,
+    pub capabilities: Vec<crate::node_capabilities::NodeCapability>,
     pub connect_timeout: Duration,
     pub healthy_reset: Duration,
     pub disabled_retry: Duration,
@@ -72,6 +73,7 @@ impl TransportConfig {
         Ok(Self {
             url: url.into(),
             version: version.into(),
+            capabilities: crate::node_capabilities::CapabilityRegistry::current(),
             connect_timeout: Duration::from_secs(10),
             healthy_reset: Duration::from_secs(120),
             disabled_retry: Duration::from_secs(30),
@@ -446,7 +448,7 @@ async fn session(
     };
     let (id, hello) = envelope(
         "hello",
-        Some(serde_json::json!({"appVersion":config.version})),
+        Some(serde_json::json!({"appVersion":config.version,"capabilities":&config.capabilities})),
     );
     if !matches!(
         timeout(config.connect_timeout, socket.send(hello)).await,
@@ -561,6 +563,7 @@ mod tests {
         let mut config =
             TransportConfig::new(&format!("http://127.0.0.1:{port}"), "0.7.0-stage.5", true)
                 .unwrap();
+        config.capabilities = crate::node_capabilities::CapabilityRegistry::audio(true, true);
         config.connect_timeout = Duration::from_secs(2);
         config.disabled_retry = Duration::from_millis(50);
         config
@@ -596,6 +599,7 @@ mod tests {
                     let hello: serde_json::Value =
                         serde_json::from_str(message.to_text().unwrap()).unwrap();
                     assert_eq!(hello["type"], "hello");
+                    assert_eq!(hello["payload"]["capabilities"], serde_json::json!([{ "name":"audio.input", "version":1 }, { "name":"audio.output", "version":1 }]));
                     assert_eq!(hello["payload"]["appVersion"], "0.7.0-stage.5");
                     let response = serde_json::json!({"protocolVersion":1,"type":"hello_ack","messageId":hello["messageId"],"sentAt":chrono::Utc::now().to_rfc3339(),"payload":{"heartbeatSeconds":1,"timeoutSeconds":3}});
                     socket
@@ -683,6 +687,63 @@ mod tests {
         manager.stop().await;
         assert_eq!(manager.state().transport_state, "offline");
         server.abort();
+    }
+    #[tokio::test]
+    async fn changed_build_provider_reannounces_replacement_set_without_repairing() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let announced = Arc::new(Mutex::new(Vec::new()));
+        let captured = announced.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(stream, |request: &Request, response: Response| {
+                        assert_eq!(
+                            request.headers()["authorization"],
+                            "AegisNode test-secret-never-public"
+                        );
+                        Ok(response)
+                    })
+                    .await
+                    .unwrap();
+                let hello = socket.next().await.unwrap().unwrap();
+                assert!(!hello.to_text().unwrap().contains("test-secret"));
+                let parsed: serde_json::Value =
+                    serde_json::from_str(hello.to_text().unwrap()).unwrap();
+                assert_eq!(parsed["protocolVersion"], 1);
+                assert_eq!(parsed["type"], "hello");
+                let capabilities: Vec<crate::node_capabilities::NodeCapability> =
+                    serde_json::from_value(parsed["payload"]["capabilities"].clone()).unwrap();
+                captured.lock().unwrap().push(capabilities);
+                let ack = serde_json::json!({"protocolVersion":1,"type":"hello_ack","messageId":parsed["messageId"],"sentAt":chrono::Utc::now().to_rfc3339(),"payload":{"heartbeatSeconds":1,"timeoutSeconds":3}});
+                socket
+                    .send(Message::Text(ack.to_string().into()))
+                    .await
+                    .unwrap();
+                while let Some(Ok(message)) = socket.next().await {
+                    if message.is_close() {
+                        break;
+                    }
+                }
+            }
+        });
+        let source = Source::paired();
+        let manager = NodeTransportManager::default();
+        for (index, (input, output)) in [(true, false), (false, true)].into_iter().enumerate() {
+            let mut options = config(port);
+            options.capabilities =
+                crate::node_capabilities::CapabilityRegistry::audio(input, output);
+            manager.start(source.clone(), options);
+            until(|| manager.state().transport_state == "online").await;
+            assert_eq!(
+                announced.lock().unwrap()[index],
+                crate::node_capabilities::CapabilityRegistry::audio(input, output)
+            );
+            manager.stop().await;
+        }
+        assert_eq!(source.rejected.load(Ordering::SeqCst), 0);
+        server.await.unwrap();
     }
     #[tokio::test]
     async fn server_disconnect_reconnects_automatically() {

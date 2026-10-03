@@ -31,6 +31,7 @@ export function useNodes(services: NodeServices) {
     }),
     rename: (id: string, name: string) => operation(async () => { await services.rename(id, name); await sync(); }),
     setEnabled: (id: string, enabled: boolean) => operation(async () => { await services.setEnabled(id, enabled); await sync(); }),
+    setPriority: (id: string, priority: number) => operation(async () => { await services.setPriority(id, priority); await sync(); }),
     revoke: (id: string) => operation(async () => { await services.revoke(id); await sync(); }),
     createCode: () => operation(async () => { pairingCode.value = await services.createPairingCode(); }),
     isCurrent: (node: NodeView) => node.id === identity.value.node?.id

@@ -34,6 +34,8 @@ fn main() {
             "node_list",
             "node_rename",
             "node_set_enabled",
+            "node_set_target_priority",
+            "node_resolve_target",
             "node_revoke",
             "node_create_pairing_code",
         ]),

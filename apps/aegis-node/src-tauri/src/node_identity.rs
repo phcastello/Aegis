@@ -21,6 +21,10 @@ pub struct NodeView {
     pub last_seen_at: Option<String>,
     #[serde(default)]
     pub last_heartbeat_at: Option<String>,
+    #[serde(default)]
+    pub target_priority: i32,
+    #[serde(default)]
+    pub capabilities: Vec<crate::node_capabilities::NodeCapability>,
 }
 fn offline() -> String {
     "offline".into()
@@ -92,6 +96,22 @@ pub(crate) trait Api {
         action: &str,
         name: Option<&str>,
     ) -> Result<NodeView, ApiError>;
+    async fn resolve(
+        &self,
+        _: &str,
+        _: &crate::node_capabilities::TargetRequest,
+    ) -> Result<crate::node_capabilities::TargetResult, ApiError> {
+        Err(ApiError {
+            code: "node_request_failed".into(),
+            message: "Resolução indisponível.".into(),
+        })
+    }
+    async fn priority(&self, _: &str, _: &str, _: i32) -> Result<NodeView, ApiError> {
+        Err(ApiError {
+            code: "node_request_failed".into(),
+            message: "Prioridade indisponível.".into(),
+        })
+    }
     async fn create_code(&self, credential: &str) -> Result<PairingCode, ApiError>;
 }
 pub(crate) struct Identity<V: Vault, A: Api> {
@@ -298,6 +318,29 @@ impl<V: Vault, A: Api> Identity<V, A> {
         let _ = self.status().await?;
         Ok(node)
     }
+    pub async fn resolve(
+        &self,
+        request: crate::node_capabilities::TargetRequest,
+    ) -> Result<crate::node_capabilities::TargetResult, String> {
+        request.validate().map_err(str::to_string)?;
+        self.api
+            .resolve(&self.credential().await?, &request)
+            .await
+            .map_err(|e| self.operation_error(e))
+    }
+    pub async fn set_priority(&self, id: String, priority: i32) -> Result<NodeView, String> {
+        uuid::Uuid::parse_str(&id).map_err(|_| "Node inválido.")?;
+        if !(-1000..=1000).contains(&priority) {
+            return Err("Prioridade deve estar entre -1000 e 1000.".into());
+        }
+        let node = self
+            .api
+            .priority(&self.credential().await?, &id, priority)
+            .await
+            .map_err(|e| self.operation_error(e))?;
+        let _ = self.status().await?;
+        Ok(node)
+    }
     pub async fn create_code(&self) -> Result<PairingCode, String> {
         self.api
             .create_code(&self.credential().await?)
@@ -419,6 +462,33 @@ impl Api for HttpApi {
         )
         .await
     }
+    async fn resolve(
+        &self,
+        credential: &str,
+        request: &crate::node_capabilities::TargetRequest,
+    ) -> Result<crate::node_capabilities::TargetResult, ApiError> {
+        self.call(
+            reqwest::Method::POST,
+            "/resolve",
+            Some(credential),
+            Some(serde_json::to_value(request).unwrap()),
+        )
+        .await
+    }
+    async fn priority(
+        &self,
+        credential: &str,
+        id: &str,
+        priority: i32,
+    ) -> Result<NodeView, ApiError> {
+        self.call(
+            reqwest::Method::PATCH,
+            &format!("/{id}/priority"),
+            Some(credential),
+            Some(serde_json::json!({"targetPriority":priority})),
+        )
+        .await
+    }
     async fn create_code(&self, credential: &str) -> Result<PairingCode, ApiError> {
         self.call(
             reqwest::Method::POST,
@@ -490,6 +560,8 @@ mod tests {
             availability: "offline".into(),
             last_seen_at: None,
             last_heartbeat_at: None,
+            target_priority: 0,
+            capabilities: Vec::new(),
         }
     }
     impl Api for FakeApi {

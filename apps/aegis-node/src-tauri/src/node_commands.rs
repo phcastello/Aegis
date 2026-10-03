@@ -134,6 +134,27 @@ pub async fn node_set_enabled(
         .await
 }
 #[tauri::command]
+pub async fn node_resolve_target(
+    runtime: tauri::State<'_, NodeRuntime>,
+    request: crate::node_capabilities::TargetRequest,
+) -> Result<crate::node_capabilities::TargetResult, String> {
+    let guard = runtime.identity.lock().await;
+    guard.as_ref().map_err(Clone::clone)?.resolve(request).await
+}
+#[tauri::command]
+pub async fn node_set_target_priority(
+    runtime: tauri::State<'_, NodeRuntime>,
+    id: String,
+    priority: i32,
+) -> Result<NodeView, String> {
+    let guard = runtime.identity.lock().await;
+    guard
+        .as_ref()
+        .map_err(Clone::clone)?
+        .set_priority(id, priority)
+        .await
+}
+#[tauri::command]
 pub async fn node_revoke(
     runtime: tauri::State<'_, NodeRuntime>,
     id: String,

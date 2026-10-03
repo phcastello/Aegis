@@ -1,5 +1,6 @@
 mod config;
 mod health;
+mod node_capabilities;
 #[cfg(feature = "native-runtime")]
 mod node_commands;
 mod node_identity;
@@ -137,6 +138,8 @@ pub fn run() {
             node_commands::node_list,
             node_commands::node_rename,
             node_commands::node_set_enabled,
+            node_commands::node_set_target_priority,
+            node_commands::node_resolve_target,
             node_commands::node_revoke,
             node_commands::node_create_pairing_code
         ])

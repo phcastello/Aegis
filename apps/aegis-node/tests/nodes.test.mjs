@@ -12,6 +12,8 @@ function fixture() {
   return { status: async () => status, pair: async () => status = { state: 'paired', node: list[0], error: null }, list: async () => list,
     rename: async (id, name) => { const item = list.find(n => n.id === id); item.name = name; return item; },
     setEnabled: async (id, enabled) => { const item = list.find(n => n.id === id); item.enabled = enabled; return item; },
+    setPriority: async (id, priority) => { const item = list.find(n => n.id === id); item.targetPriority = priority; return item; },
+    resolve: async () => ({ node: null, code: "no_eligible_node", onlineNodes: 0, capabilityCompatibleNodes: 0 }),
     revoke: async () => status = { state: 'revoked', node: null, error: null },
     createPairingCode: async () => ({ code: 'temporary', expiresAt: '2026-10-02T00:10:00Z' }),
     setStatus: value => status = value };
@@ -24,14 +26,15 @@ test('Node IPC capability is enabled only for the local main Android/Windows Web
   assert.deepEqual(capability.platforms, ['android', 'windows']);
   assert.notEqual(capability.local, false);
   assert.equal(capability.remote, undefined);
-  assert.deepEqual(capability.permissions, ['allow-node-status', 'allow-node-transport-status', 'allow-node-transport-reconnect', 'allow-node-pair', 'allow-node-list', 'allow-node-rename', 'allow-node-set-enabled', 'allow-node-revoke', 'allow-node-create-pairing-code']);
+  assert.deepEqual(capability.permissions, ['allow-node-status', 'allow-node-transport-status', 'allow-node-transport-reconnect', 'allow-node-pair', 'allow-node-list', 'allow-node-rename', 'allow-node-set-enabled', 'allow-node-set-target-priority', 'allow-node-resolve-target', 'allow-node-revoke', 'allow-node-create-pairing-code']);
 });
 test('IPC offers typed management operations and never exports credentials', async () => {
   globalThis.window = {}; const calls = [];
   mockIPC((command, args) => { calls.push([command, args]); return command === 'node_list' ? [] : { state: 'unpaired', node: null, error: null }; });
   await nodeServices.status(); await nodeServices.pair('PC', 'code'); await nodeServices.list();
+  await nodeServices.setPriority('id', 10); await nodeServices.resolve({ requiredCapabilities: [{ name: 'audio.output', minimumVersion: 1 }] });
   await nodeServices.rename('id', 'Pixel'); await nodeServices.setEnabled('id', false); await nodeServices.revoke('id'); await nodeServices.createPairingCode();
-  assert.deepEqual(calls.map(c => c[0]), ['node_status', 'node_pair', 'node_list', 'node_rename', 'node_set_enabled', 'node_revoke', 'node_create_pairing_code']);
+  assert.deepEqual(calls.map(c => c[0]), ['node_status', 'node_pair', 'node_list', 'node_set_target_priority', 'node_resolve_target', 'node_rename', 'node_set_enabled', 'node_revoke', 'node_create_pairing_code']);
   assert.doesNotMatch(JSON.stringify(calls), /credential|recoveryKey|Authorization/);
 });
 test('unpaired chat-independent state becomes paired with current device marker and persistent rename', async () => {
