@@ -14,17 +14,17 @@ const exe = resolve(process.argv[2]);
 const api = spawn('dotnet', ['run', '--project', '../../backend/tests/Aegis.NodeRuntimeFixture', '--', bootstrap], { stdio: 'inherit' });
 let app, browser, page, exited;
 const peerSockets = [];
-async function connectPeer(credential) {
+async function connectPeer(credential, appVersion) {
   const ws = new WebSocket(origin.replace(/^http/, 'ws') + '/api/nodes/connect', { headers: { Authorization: 'AegisNode ' + credential, 'X-Aegis-Node-Protocol': '1' }, maxPayload: 4096, handshakeTimeout: 10000 });
   peerSockets.push(ws); let timer; const id = randomUUID();
   await new Promise((resolve, reject) => {
     const deadline = setTimeout(() => reject(Error('peer_hello_timeout')), 10000);
     ws.on('error', () => reject(Error('peer_network_failed')));
-    ws.on('open', () => ws.send(JSON.stringify({ protocolVersion: 1, type: 'hello', messageId: id, sentAt: new Date().toISOString(), payload: { appVersion: 'fixture-stage05', capabilities: [{ name: 'audio.input', version: 1 }] } })));
+    ws.on('open', () => ws.send(JSON.stringify({ protocolVersion: 1, type: 'hello', messageId: id, sentAt: new Date().toISOString(), payload: { appVersion, capabilities: [{ name: 'audio.input', version: 1 }] } })));
     ws.on('message', raw => { const message = JSON.parse(String(raw)); if (message.type === 'hello_ack') {
       assert.equal(message.messageId, id); clearTimeout(deadline);
       timer = setInterval(() => ws.send(JSON.stringify({ protocolVersion: 1, type: 'heartbeat', messageId: randomUUID(), sentAt: new Date().toISOString() })), message.payload.heartbeatSeconds * 1000); resolve(); } });
-    ws.once('close', () => { clearInterval(timer); clearTimeout(deadline); reject(Error('peer_closed')); });
+    ws.once('close', code => { clearInterval(timer); clearTimeout(deadline); reject(Error('peer_closed_code_' + code)); });
   });
   return ws;
 }
@@ -74,7 +74,7 @@ try {
   const attemptId = randomUUID(); const paired = await call('/pair', { attemptId, code: code.code, recoveryKey: randomBytes(32).toString('base64url'), name: 'Android peer CI', platform: 'android', appVersion: identity.node.appVersion, protocolVersion: 1 });
   assert.equal(paired.status, 200); const peerCredential = paired.body.credential;
   const peer = await call('/pair/finalize', { attemptId, credential: peerCredential }); assert.equal(peer.status, 200);
-  let peerSocket = await connectPeer(peerCredential);
+  let peerSocket = await connectPeer(peerCredential, identity.node.appVersion);
   const initialList = await invoke('node_list'); assert.equal(initialList.length, 2);
   assert.equal(initialList.filter(n => n.id === pcId).length, 1);
   await waitUntil(async () => (await call('/' + pcId + '/enable', {}, peerCredential)).status === 200, 15000);
@@ -105,7 +105,7 @@ try {
   assert.equal((await resolveTarget('audio.output', 2)).code, 'no_eligible_node');
   peerSocket.close(1000, 'fixture_offline');
   await waitUntil(async () => (await resolveTarget('audio.input')).node?.id === pcId, 10000);
-  peerSocket = await connectPeer(peerCredential);
+  peerSocket = await connectPeer(peerCredential, identity.node.appVersion);
   assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
   console.log('Windows real native capability advertisement + two different peers + priority/preferred/version + live offline/reconnect resolution PASS.');
   await close();
