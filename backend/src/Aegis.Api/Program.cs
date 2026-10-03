@@ -11,7 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "AegisCors";
 
 builder.Services.AddControllers();
-builder.Services.AddNodeApi();
+builder.Services.AddNodeApi(builder.Configuration);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
@@ -57,6 +57,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors(CorsPolicyName);
 
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.Zero });
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();

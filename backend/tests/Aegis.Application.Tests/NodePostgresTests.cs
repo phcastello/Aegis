@@ -12,7 +12,7 @@ public sealed class NodePostgresTests
     {
         public PostgresFactAttribute() { if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AEGIS_NODE_TEST_DATABASE"))) Skip = "Requires disposable AEGIS_NODE_TEST_DATABASE."; }
     }
-    private static async Task WithDatabase(Func<Func<AegisDbContext>, Task> test)
+    internal static async Task WithDatabase(Func<Func<AegisDbContext>, Task> test)
     {
         var connection = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("AEGIS_NODE_TEST_DATABASE"));
         if (connection.Database != "aegis_nodes_test") throw new InvalidOperationException("Only the disposable aegis_nodes_test database is accepted.");

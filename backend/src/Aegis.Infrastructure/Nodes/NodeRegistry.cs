@@ -4,7 +4,7 @@ using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 namespace Aegis.Infrastructure.Nodes;
 
-public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeRegistry
+public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeConnections? connections = null) : INodeRegistry
 {
     // The small administrative registry follows the existing PostgreSQL advisory-lock pattern.
     // No transport/presence/background workload shares this lock.
@@ -20,6 +20,8 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
     }
     // PostgreSQL timestamps have microsecond precision; keep replayed establishment DTOs stable.
     private DateTimeOffset Now { get { var now = clock.GetUtcNow(); return new(now.Ticks - now.Ticks % 10, now.Offset); } }
+    private NodeView View(AegisNode node) => NodeView.From(node) with {
+        Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) == true ? "online" : "offline" };
     private async Task<AegisNode> Active(Guid id, CancellationToken ct)
     {
         var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == id, ct);
@@ -102,7 +104,7 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
         if (existing is not null)
         {
             if (!NodeSecrets.Matches(existing.SecretHash, request.Credential)) throw NodeSecrets.PairingError();
-            return NodeView.From(await Active(nodeId, ct)); // Finalize response lost after commit: same identity, no new Node.
+            return View(await Active(nodeId, ct)); // Finalize response lost after commit: same identity, no new Node.
         }
         await Prune(ct);
         var attempt = await db.NodePairingAttempts.SingleOrDefaultAsync(a => a.Id == request.AttemptId && a.NodeId == nodeId, ct);
@@ -117,7 +119,7 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
         var node = new AegisNode(nodeId, attempt.Name, attempt.Platform, attempt.AppVersion, 1, Now);
         db.Nodes.Add(node); db.NodeCredentials.Add(new NodeCredential(node.Id, attempt.CredentialHash, Now));
         db.NodePairingAttempts.Remove(attempt); // Erase retry receipt/recovery hash on successful establishment.
-        return NodeView.From(node);
+        return View(node);
     }, ct);
     public async Task<NodeAuthentication> AuthenticateAsync(string credential, CancellationToken ct = default)
     {
@@ -128,27 +130,37 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
         var node = await db.Nodes.AsNoTracking().SingleOrDefaultAsync(n => n.Id == id, ct);
         if (node is null) return new(null, "node_authentication_required");
         var error = node.RevokedAt is not null || stored.RevokedAt is not null ? "node_revoked" : !node.Enabled ? "node_disabled" : null;
-        return new(NodeView.From(node), error);
+        return new(View(node), error);
     }
-    public Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default) => Locked(async () => NodeView.From(await Active(actor, ct)), ct);
+    public Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default) => Locked(async () => View(await Active(actor, ct)), ct);
     public Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default) => Locked<IReadOnlyList<NodeView>>(async () =>
     {
-        await Active(actor, ct); return (await db.Nodes.OrderBy(n => n.CreatedAt).ToListAsync(ct)).Select(NodeView.From).ToArray();
+        await Active(actor, ct); return (await db.Nodes.OrderBy(n => n.CreatedAt).ToListAsync(ct)).Select(View).ToArray();
     }, ct);
     public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct);
         try { node.Rename(name, Now); } catch (ArgumentException) { throw new NodeException("invalid_name", "Nome inválido."); }
-        return NodeView.From(node);
+        return View(node);
     }, ct);
-    public Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default) => Locked(async () =>
+    public async Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default)
+    {
+        var result = await Locked(async () =>
     {
         if (actor is { } id) await Active(id, ct);
-        var node = await Target(target, ct); node.SetEnabled(enabled, Now); return NodeView.From(node);
-    }, ct);
-    public Task<NodeView> RevokeAsync(Guid actor, Guid target, CancellationToken ct = default) => Locked(async () =>
+        var node = await Target(target, ct); node.SetEnabled(enabled, Now); return View(node);
+        }, ct);
+        if (!enabled) connections?.Disconnect(target, "node_disabled");
+        return result with { Availability = enabled && connections?.IsOnline(target) == true ? "online" : "offline" };
+    }
+    public async Task<NodeView> RevokeAsync(Guid actor, Guid target, CancellationToken ct = default)
+    {
+        var result = await Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct); node.Revoke(Now);
-        var credential = await db.NodeCredentials.SingleAsync(c => c.NodeId == target, ct); credential.Revoke(Now); return NodeView.From(node);
-    }, ct);
+        var credential = await db.NodeCredentials.SingleAsync(c => c.NodeId == target, ct); credential.Revoke(Now); return View(node);
+        }, ct);
+        connections?.Disconnect(target, "node_revoked");
+        return result with { Availability = "offline" };
+    }
 }

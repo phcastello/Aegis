@@ -12,6 +12,11 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     private string failure = "node_authentication_required";
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        if (Request.Path == "/api/nodes/connect")
+        {
+            using var admission = Context.RequestServices.GetRequiredService<Aegis.Api.Controllers.NodeHandshakeCapacity>().Attempts.AttemptAcquire();
+            if (!admission.IsAcquired) { failure = "node_rate_limited"; return AuthenticateResult.Fail("Node handshake rate limited."); }
+        }
         var header = Request.Headers.Authorization.ToString();
         if (header.Length > 180 || !header.StartsWith(SchemeName + " ", StringComparison.Ordinal)) return AuthenticateResult.NoResult();
         var authentication = await nodes.AuthenticateAsync(header[(SchemeName.Length + 1)..], Context.RequestAborted);
@@ -21,7 +26,8 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     }
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
-        Response.StatusCode = failure == "node_disabled" ? 403 : 401;
+        Response.StatusCode = failure == "node_rate_limited" ? 429 : failure == "node_disabled" ? 403 : 401;
+        Response.Headers["X-Aegis-Node-Error"] = failure;
         Response.Headers.CacheControl = "no-store";
         Response.Headers.WWWAuthenticate = SchemeName;
         return Response.WriteAsJsonAsync(new { code = failure, error = failure switch {

@@ -19,6 +19,14 @@ public sealed class AegisNode : AuditableEntity
     public int ProtocolVersion { get; private set; }
     public DateTimeOffset PairedAt { get; private set; }
     public DateTimeOffset? RevokedAt { get; private set; }
+    public DateTimeOffset? LastSeenAt { get; private set; }
+    public DateTimeOffset? LastHeartbeatAt { get; private set; }
+    public void TransportSeen(DateTimeOffset seenAt, DateTimeOffset? heartbeatAt = null, string? appVersion = null)
+    {
+        if (LastSeenAt is null || seenAt > LastSeenAt) LastSeenAt = seenAt;
+        if (heartbeatAt is { } heartbeat && (LastHeartbeatAt is null || heartbeat > LastHeartbeatAt)) LastHeartbeatAt = heartbeat;
+        if (appVersion is not null) { Validate(Name, Platform, appVersion, ProtocolVersion); AppVersion = appVersion; }
+    }
     public void Rename(string name, DateTimeOffset now) { RequireTrusted(); ValidateName(name); Name = name.Trim(); Touch(now); }
     public void SetEnabled(bool enabled, DateTimeOffset now) { RequireTrusted(); Enabled = enabled; Touch(now); }
     public void Revoke(DateTimeOffset now) { if (RevokedAt is null) { RevokedAt = now; Enabled = false; Touch(now); } }
