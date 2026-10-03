@@ -23,7 +23,11 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) trait CredentialSource: Send + Sync + 'static {
     fn credential(&self) -> impl Future<Output = Result<Option<String>, ()>> + Send;
-    fn rejected(&self, code: &'static str) -> impl Future<Output = Result<(), ()>> + Send;
+    fn rejected(
+        &self,
+        credential: &str,
+        code: &'static str,
+    ) -> impl Future<Output = Result<bool, ()>> + Send;
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -251,14 +255,21 @@ async fn run<S: CredentialSource>(
             _ = wake.notified() => continue,
             result = session(&config, &secret, &status, &cancel, &mut online_since) => result,
         };
-        drop(secret);
         if let Some(since) = online_since {
             backoff.reset_if_healthy(since.elapsed(), config.healthy_reset);
         }
         let delay = match result {
             Outcome::Revoked => {
                 // Stop retries even if durable tombstone storage fails. Never loop on an old 401.
-                let saved = source.rejected("node_revoked").await;
+                let saved = tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    value = source.rejected(&secret, "node_revoked") => value,
+                };
+                if saved == Ok(true) {
+                    backoff.0 = 0;
+                    attempted = false;
+                    continue; // A newer pairing owns the vault; keep this sole loop for it.
+                }
                 state(
                     &status,
                     "offline",
@@ -460,10 +471,10 @@ mod tests {
                     .then(|| "test-secret-never-public".into()),
             )
         }
-        async fn rejected(&self, _: &'static str) -> Result<(), ()> {
+        async fn rejected(&self, _: &str, _: &'static str) -> Result<bool, ()> {
             self.revoked.store(true, Ordering::SeqCst);
             self.rejected.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(false)
         }
     }
     async fn until(predicate: impl Fn() -> bool) {
@@ -709,5 +720,45 @@ mod tests {
         assert!(!source.revoked.load(Ordering::SeqCst));
         manager.stop().await;
         restarted.abort();
+    }
+    #[tokio::test]
+    async fn tombstone_storage_failure_stops_old_credential_retries() {
+        struct FailingSource;
+        impl CredentialSource for FailingSource {
+            async fn credential(&self) -> Result<Option<String>, ()> {
+                Ok(Some("test-secret-never-public".into()))
+            }
+            async fn rejected(&self, _: &str, _: &'static str) -> Result<bool, ()> {
+                Err(())
+            }
+        }
+        let connections = Arc::new(AtomicUsize::new(0));
+        let (port, server) = fixture_at(
+            0,
+            Some(4001),
+            connections.clone(),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await;
+        let manager = NodeTransportManager::default();
+        manager.start(Arc::new(FailingSource), config(port));
+        until(|| {
+            manager
+                .running
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .task
+                .is_finished()
+        })
+        .await;
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.state().transport_state, "offline");
+        assert!(!serde_json::to_string(&manager.state())
+            .unwrap()
+            .contains("test-secret"));
+        manager.stop().await;
+        server.abort();
     }
 }

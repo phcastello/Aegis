@@ -240,15 +240,21 @@ impl<V: Vault, A: Api> Identity<V, A> {
         }
         Ok(record.credential)
     }
-    pub(crate) fn transport_rejected(&self, code: &str) -> Result<(), String> {
+    // Return true if another pairing has replaced this session's identity. A late close
+    // must never tombstone a replacement credential, including a pending checkpoint.
+    pub(crate) fn transport_rejected(&self, expected: &str, code: &str) -> Result<bool, String> {
+        let mut record = self.load()?;
+        if record.credential.as_deref() != Some(expected) {
+            return Ok(!record.revoked && (record.credential.is_some() || record.pending.is_some()));
+        }
         self.failure(
-            &mut self.load()?,
+            &mut record,
             ApiError {
                 code: code.into(),
                 message: "Transporte de Node recusado.".into(),
             },
         )?;
-        Ok(())
+        Ok(false)
     }
     async fn credential(&self) -> Result<String, String> {
         let status = self.status().await?;
@@ -813,5 +819,24 @@ mod tests {
         );
         assert!(other.status().await.is_err());
         assert_eq!(api.0.lock().unwrap().pairs, 1);
+    }
+    #[tokio::test]
+    async fn old_transport_rejection_cannot_erase_a_replacement_identity() {
+        let vault = MemoryVault::default();
+        let api = FakeApi::default();
+        let identity = client(vault.clone(), api);
+        identity.pair("PC".into(), "code".into()).await.unwrap();
+        let old = identity.transport_credential().unwrap().unwrap();
+        vault.0.lock().unwrap().record.as_mut().unwrap().credential =
+            Some("replacement-secret".into());
+        assert!(identity.transport_rejected(&old, "node_revoked").unwrap());
+        assert_eq!(
+            identity.transport_credential().unwrap().as_deref(),
+            Some("replacement-secret")
+        );
+        assert!(!identity
+            .transport_rejected("replacement-secret", "node_revoked")
+            .unwrap());
+        assert!(identity.transport_credential().unwrap().is_none());
     }
 }

@@ -16,13 +16,13 @@ impl CredentialSource for NativeSource {
             .transport_credential()
             .map_err(|_| ())
     }
-    async fn rejected(&self, code: &'static str) -> Result<(), ()> {
+    async fn rejected(&self, credential: &str, code: &'static str) -> Result<bool, ()> {
         self.0
             .lock()
             .await
             .as_ref()
             .map_err(|_| ())?
-            .transport_rejected(code)
+            .transport_rejected(credential, code)
             .map_err(|_| ())
     }
 }
