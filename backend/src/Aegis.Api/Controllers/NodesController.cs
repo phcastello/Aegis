@@ -7,9 +7,12 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace Aegis.Api.Controllers;
 
 [ApiController, Route("api/nodes"), Authorize(Policy = "NodeManagement"), ServiceFilter(typeof(NodeApiFilter)), RequestSizeLimit(4096)]
-public sealed class NodesController(INodeRegistry registry) : ControllerBase
+public sealed class NodesController(INodeRegistry registry, INodeTargetResolver resolver) : ControllerBase
 {
     private Guid CurrentNode => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    public sealed record PriorityRequest(int TargetPriority);
+    [HttpPatch("{id:guid}/priority")] public async Task<IActionResult> Priority(Guid id, PriorityRequest request, CancellationToken ct) => Ok(await registry.SetTargetPriorityAsync(CurrentNode, id, request.TargetPriority, ct));
+    [HttpPost("resolve")] public async Task<IActionResult> Resolve(NodeTargetRequest request, CancellationToken ct) => Ok(await resolver.ResolveAsync(CurrentNode, request, ct));
     public sealed record RenameRequest(string Name);
     [HttpGet] public async Task<IActionResult> List(CancellationToken ct) => Ok(await registry.ListAsync(CurrentNode, ct));
     [HttpGet("me")] public async Task<IActionResult> Me(CancellationToken ct) => Ok(await registry.MeAsync(CurrentNode, ct));

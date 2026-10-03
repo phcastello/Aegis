@@ -96,6 +96,71 @@ public sealed class NodeTransportTests
     private static async Task Hello(WebSocket ws) { await Send(ws, Message()); var ack = await Read(ws); Assert.Equal("hello_ack", ack.Json.GetProperty("type").GetString()); }
     private static async Task Eventually(Func<Task<bool>> predicate)
     { using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5)); while (!await predicate()) await Task.Delay(10, limit.Token); }
+    private static async Task Advertise(WebSocket socket, params NodeCapability[] capabilities)
+    {
+        await Send(socket, new { protocolVersion = 1, type = "hello", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow,
+            payload = new { appVersion = "0.7.0-stage.7", capabilities = capabilities.Select(c => new { name = c.Name, version = c.Version }) } });
+        Assert.Equal("hello_ack", (await Read(socket)).Json.GetProperty("type").GetString());
+    }
+    [Fact] public async Task OldAndNewHelloReplacePersistedAndCurrentSessionCapabilities()
+    {
+        await using var f = await Host(); var (node, secret) = await f.Pair();
+        using (var old = await f.Connect(secret)) { await Hello(old); Assert.Empty(f.Connections.LiveCapabilities(node.Id)!); await old.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test", default); }
+        using var newer = await f.Connect(secret); await Advertise(newer, new NodeCapability("audio.input", 1), new NodeCapability("audio.output", 1), new NodeCapability("future.feature", 1));
+        Assert.Equal(2, f.Connections.LiveCapabilities(node.Id)!.Count); Assert.Equal(2, (await f.Nodes.MeAsync(node.Id)).Capabilities.Count);
+        using var replacement = await f.Connect(secret); await Advertise(replacement, new NodeCapability("audio.output", 2)); await Read(newer);
+        Assert.Single(f.Connections.LiveCapabilities(node.Id)!); Assert.Equal(2, (await f.Nodes.MeAsync(node.Id)).Capabilities.Single().Version);
+        await replacement.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test", default);
+        await Eventually(() => Task.FromResult(!f.Connections.IsOnline(node.Id)));
+        Assert.Null(f.Connections.LiveCapabilities(node.Id)); Assert.Single((await f.Nodes.MeAsync(node.Id)).Capabilities);
+        using var downgraded = await f.Connect(secret); await Hello(downgraded); Assert.Empty((await f.Nodes.MeAsync(node.Id)).Capabilities);
+    }
+    [Fact] public async Task RealHttpResolverUsesTwoDifferentAdvertisedSetsAndPriority()
+    {
+        await using var f = await Host(); var (a, secretA) = await f.Pair(); var (b, secretB) = await f.Pair();
+        using var sa = await f.Connect(secretA); using var sb = await f.Connect(secretB);
+        await Advertise(sa, new NodeCapability("audio.input", 1), new NodeCapability("audio.output", 1)); await Advertise(sb, new NodeCapability("audio.input", 1));
+        using var http = f.Http; http.DefaultRequestHeaders.Add("Authorization", "AegisNode " + secretB);
+        var priority = await http.PatchAsJsonAsync($"/api/nodes/{b.Id}/priority", new { targetPriority = 20 }); Assert.True(priority.IsSuccessStatusCode);
+        var chosen = await http.PostAsJsonAsync("/api/nodes/resolve", new NodeTargetRequest([new("audio.output", 1)]));
+        Assert.Equal(a.Id, (await chosen.Content.ReadFromJsonAsync<NodeTargetResult>())!.Node!.Id);
+        var shared = await http.PostAsJsonAsync("/api/nodes/resolve", new NodeTargetRequest([new("audio.input", 1)]));
+        Assert.Equal(b.Id, (await shared.Content.ReadFromJsonAsync<NodeTargetResult>())!.Node!.Id);
+        var preferred = await http.PostAsJsonAsync("/api/nodes/resolve", new NodeTargetRequest([new("audio.input", 1)], a.Id));
+        Assert.Equal(a.Id, (await preferred.Content.ReadFromJsonAsync<NodeTargetResult>())!.Node!.Id);
+        var none = await http.PostAsJsonAsync("/api/nodes/resolve", new NodeTargetRequest([new("audio.output", 2)]));
+        Assert.Equal("no_eligible_node", (await none.Content.ReadFromJsonAsync<NodeTargetResult>())!.Code);
+        using var anonymous = f.Http; Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsJsonAsync("/api/nodes/resolve", new NodeTargetRequest([new("audio.output", 1)]))).StatusCode);
+    }
+    [Theory] [InlineData("zero")] [InlineData("duplicate")] [InlineData("conflicting")] [InlineData("name")] [InlineData("too_many")]
+    [InlineData("giant")] [InlineData("null")] [InlineData("extra_field")]
+    public async Task InvalidCapabilityHelloClosesBoundedly(string scenario)
+    {
+        await using var f = await Host(); var (node, secret) = await f.Pair(); using var ws = await f.Connect(secret);
+        object? capabilities = scenario switch {
+            "null" => null,
+            "zero" => new[] { new { name = "audio.output", version = 0 } },
+            "name" => new[] { new { name = "Audio.Output", version = 1 } },
+            "giant" => new[] { new { name = new string('a', 65), version = 1 } },
+            "extra_field" => new[] { new { name = "audio.output", version = 1, arbitrary = true } },
+            "too_many" => Enumerable.Range(0, 33).Select(i => new { name = "future.x" + i, version = 1 }).ToArray(),
+            _ => new[] { new { name = "audio.output", version = 1 }, new { name = "audio.output", version = scenario == "conflicting" ? 2 : 1 } } };
+        await Send(ws, new { protocolVersion = 1, type = "hello", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow, payload = new { appVersion = "0.7.0-stage.7", capabilities } });
+        Assert.Equal(1008, (int)(await Read(ws)).Result.CloseStatus!); Assert.False(f.Connections.IsOnline(node.Id));
+    }
+    [Fact] public async Task OldHelloAdmissionCannotOverwriteReplacementSnapshot()
+    {
+        var clock = new Clock(); using var registry = Registry(clock); var id = Guid.NewGuid();
+        var mutable = new List<NodeCapability> { new("audio.input", 1) }; var a = registry.Register(id, capabilities: mutable); mutable.Clear();
+        Assert.Single(registry.LiveCapabilities(id)!);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string snapshot = "";
+        var old = registry.AnnounceAsync(a, async () => { started.SetResult(); await finish.Task; snapshot = "A"; }, default); await started.Task;
+        var b = registry.Register(id, capabilities: [new("audio.output", 1)]);
+        var current = registry.AnnounceAsync(b, () => { snapshot = "B"; return Task.CompletedTask; }, default);
+        Assert.False(current.IsCompleted); finish.SetResult(); await Task.WhenAll(old, current);
+        Assert.Equal("B", snapshot); Assert.False(registry.Unregister(a)); Assert.Equal("audio.output", registry.LiveCapabilities(id)!.Single().Name);
+    }
     [Fact] public async Task AuthHelloHeartbeatDisconnectReconnectAndMetadata()
     {
         await using var f = await Host(); var (node, secret) = await f.Pair();

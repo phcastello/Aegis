@@ -14,6 +14,7 @@ public static class NodeApiServices
         services.AddAuthorization(options => options.AddPolicy("NodeManagement", policy =>
             policy.AddAuthenticationSchemes(NodeAuthenticationHandler.SchemeName).RequireAuthenticatedUser()));
         services.AddScoped<NodeApiFilter>();
+        services.AddScoped<Aegis.Application.Nodes.INodeTargetResolver, Aegis.Application.Nodes.NodeTargetResolver>();
         services.AddOptions<Transport.NodeTransportOptions>().Configure(options => configuration?.GetSection("NodeTransport").Bind(options))
             .Validate(o => o.IsValid(), "Invalid NodeTransport limits.").ValidateOnStart();
         services.AddSingleton<Transport.NodeConnectionRegistry>();
