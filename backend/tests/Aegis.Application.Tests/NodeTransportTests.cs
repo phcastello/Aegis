@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -65,11 +66,14 @@ public sealed class NodeTransportTests
         }
         public async ValueTask DisposeAsync() { Connections.DisconnectAll(); await App.DisposeAsync(); }
     }
-    private static async Task<Fixture> Host(string? connection = null)
+    private static async Task<Fixture> Host(string? connection = null, bool fast = false)
     {
         var name = Guid.NewGuid().ToString(); var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(NodesController).Assembly);
-        builder.Services.AddNodeApi(); builder.Services.AddSingleton(TimeProvider.System);
+        if (fast) builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> {
+            ["NodeTransport:HeartbeatSeconds"] = "1", ["NodeTransport:TimeoutSeconds"] = "2",
+            ["NodeTransport:MinimumHeartbeatSeconds"] = "1", ["NodeTransport:WatchdogSeconds"] = "1", ["NodeTransport:PersistSeconds"] = "2" });
+        builder.Services.AddNodeApi(builder.Configuration); builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddDbContext<AegisDbContext>(o => { if (connection is null) o.UseInMemoryDatabase(name); else o.UseNpgsql(connection); });
         builder.Services.AddScoped<INodeRegistry, NodeRegistry>(); builder.Services.AddScoped<INodeTransportHistory, NodeTransportHistory>();
         var app = builder.Build(); app.UseWebSockets(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers(); await app.StartAsync();
@@ -177,6 +181,15 @@ public sealed class NodeTransportTests
         registry.Disconnect(id, "node_disabled"); Assert.False(registry.Activate(pending));
         var a = registry.Register(id, ready: false); var b = registry.Register(id, ready: false);
         Assert.False(registry.Activate(a)); Assert.True(registry.Activate(b)); Assert.True(registry.IsOnline(id));
+    }
+
+    [Fact] public async Task WatchdogClosesSilentSocketWithoutTcpDisconnect()
+    {
+        await using var f = await Host(fast: true); var (node, secret) = await f.Pair();
+        using var socket = await f.Connect(secret); await Hello(socket);
+        Assert.True(f.Connections.IsOnline(node.Id));
+        var closed = await Read(socket); Assert.Equal(4008, (int)closed.Result.CloseStatus!);
+        Assert.False(f.Connections.IsOnline(node.Id));
     }
 
 }

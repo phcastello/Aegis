@@ -99,6 +99,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - if: matrix.android == 'false'
+        name: Validate transport server contracts and lease races on Windows
+        run: dotnet test ../../backend/tests/Aegis.Application.Tests --filter 'FullyQualifiedName~NodeTransportTests'
+      - if: matrix.android == 'false'
         name: Build isolated debug runtime for real Node identity acceptance
         env:
           AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
