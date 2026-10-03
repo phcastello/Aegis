@@ -64,10 +64,20 @@ try {
    await context.addInitScript(() => localStorage.setItem('aegis.voice.autoSpeak', 'false')); // Audio/device acceptance is separate.
    if (host === 'native') await context.addInitScript(() => {
      window.openedUrls = [];
+     const now = new Date().toISOString();
+     const current = { id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
+     const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
+     let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
        if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-stage.2' };
        if (command === 'check_backend') return { status: 'connected', message: null };
-       if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
+       if (command === 'node_status') return identity;
+       if (command === 'node_pair') { current.name = args.name; return identity = { state: 'paired', node: current, error: null }; }
+       if (command === 'node_list') return [current, other];
+       if (command === 'node_create_pairing_code') return { code: 'ABCD-EFGH-JKMP-QRST-VWXY-1234', expiresAt: new Date(Date.now() + 600000).toISOString() };
+       if (command === 'node_rename') { other.name = args.name; return other; }
+       if (command === 'node_set_enabled') { other.enabled = args.enabled; return other; }
+       if (command === 'node_revoke') { other.revokedAt = now; other.enabled = false; return other; }
        if (command === 'check_android_update') return null;
        if (command === 'plugin:opener|open_url') { window.openedUrls.push(args.url); return; }
        throw new Error('Unexpected IPC: ' + command);
@@ -101,6 +111,23 @@ try {
      assert.equal(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length)), 0);
      await page.getByLabel('Sobre a Aegis').click(); await page.getByText('Android', { exact: true }).waitFor();
      await page.getByText('Connected', { exact: true }).waitFor(); await page.getByRole('button', { name: 'Fechar', exact: true }).click();
+     await page.getByLabel('Dispositivos / Nodes', { exact: true }).click();
+     const panel = page.getByRole('dialog', { name: 'Dispositivos / Nodes', exact: true });
+     await panel.getByLabel('Nome do dispositivo').fill('Celular Pedro');
+     await panel.getByLabel('Código de pareamento').fill('ABCD-EFGH-JKMP-QRST-VWXY-1234');
+     await panel.getByRole('button', { name: 'Parear dispositivo', exact: true }).click();
+     await panel.getByText('Celular Pedro', { exact: true }).first().waitFor();
+     await panel.getByRole('button', { name: 'Adicionar dispositivo', exact: true }).click();
+     await panel.getByText('ABCD-EFGH-JKMP-QRST-VWXY-1234', { exact: true }).waitFor();
+     const pc = panel.locator('li').filter({ hasText: 'PC' });
+     await pc.getByRole('button', { name: 'Renomear', exact: true }).click(); await pc.getByLabel('Novo nome').fill('PC Pedro'); await pc.getByRole('button', { name: 'Salvar', exact: true }).click();
+     await pc.getByText('PC Pedro', { exact: true }).waitFor();
+     await pc.getByRole('button', { name: 'Desativar', exact: true }).click(); await panel.getByRole('button', { name: 'Confirmar', exact: true }).click();
+     await pc.getByRole('button', { name: 'Reativar', exact: true }).click();
+     await pc.getByRole('button', { name: 'Revogar', exact: true }).click(); await panel.getByRole('button', { name: 'Confirmar', exact: true }).click();
+     await pc.getByText('Windows · Revogado', { exact: true }).waitFor();
+     await panel.getByRole('button', { name: 'Fechar', exact: true }).click();
+     console.log('native: pairing, current-device marker, code generation, rename, disable/enable and revoke UI PASS (native IPC mocked)');
    }
    await page.locator('textarea').fill('cancelar'); await page.getByLabel('Enviar mensagem').click();
    await page.getByLabel('Interromper geração').click(); await page.getByLabel('Enviar mensagem').waitFor();
