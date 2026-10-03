@@ -39,10 +39,11 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             var version = hello.Payload!.Value.GetProperty("appVersion").GetString()!;
             // Register before a fresh administrative check: disable/revoke either cancels this
             // lease after commit, or this recheck observes the committed change. No admission gap.
-            lease = connections.Register(nodeId);
+            lease = connections.Register(nodeId, ready: false);
             using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token);
             await WithHistory(h => h.ConnectedAsync(nodeId, version, lease.LastSeenAt, session.Token));
             using (var scope = scopes.CreateScope()) await scope.ServiceProvider.GetRequiredService<INodeRegistry>().MeAsync(nodeId, session.Token);
+            if (!connections.Activate(lease)) throw new OperationCanceledException();
             await NodeProtocol.SendAsync(socket, "hello_ack", hello.MessageId, clock.GetUtcNow(),
                 new { heartbeatSeconds = options.HeartbeatSeconds, timeoutSeconds = options.TimeoutSeconds }, session.Token);
             var lastPersisted = clock.GetUtcNow();

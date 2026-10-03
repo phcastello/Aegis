@@ -483,18 +483,20 @@ mod tests {
         config.disabled_retry = Duration::from_millis(50);
         config
     }
-    async fn fixture(
+    async fn fixture_at(
+        port: u16,
         close_after: Option<u16>,
         connections: Arc<AtomicUsize>,
         heartbeats: Arc<AtomicUsize>,
     ) -> (u16, JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
+            let mut peers = tokio::task::JoinSet::new();
             while let Ok((stream, _)) = listener.accept().await {
                 let connections = connections.clone();
                 let heartbeats = heartbeats.clone();
-                tokio::spawn(async move {
+                peers.spawn(async move {
                     let mut socket =
                         accept_hdr_async(stream, |request: &Request, response: Response| {
                             assert_eq!(
@@ -585,7 +587,7 @@ mod tests {
     async fn connect_authenticate_heartbeat_duplicate_start_and_shutdown() {
         let connections = Arc::new(AtomicUsize::new(0));
         let heartbeats = Arc::new(AtomicUsize::new(0));
-        let (port, server) = fixture(None, connections.clone(), heartbeats.clone()).await;
+        let (port, server) = fixture_at(0, None, connections.clone(), heartbeats.clone()).await;
         let manager = NodeTransportManager::default();
         let source = Source::paired();
         assert!(manager.start(source.clone(), config(port)));
@@ -603,7 +605,7 @@ mod tests {
     async fn server_disconnect_reconnects_automatically() {
         let connections = Arc::new(AtomicUsize::new(0));
         let heartbeats = Arc::new(AtomicUsize::new(0));
-        let (port, server) = fixture(Some(1000), connections.clone(), heartbeats).await;
+        let (port, server) = fixture_at(0, Some(1000), connections.clone(), heartbeats).await;
         let manager = NodeTransportManager::default();
         manager.start(Source::paired(), config(port));
         until(|| {
@@ -617,7 +619,8 @@ mod tests {
     async fn disabled_close_retries_but_revoked_and_protocol_mismatch_stop() {
         for code in [4003, 4001, 4006] {
             let connections = Arc::new(AtomicUsize::new(0));
-            let (port, server) = fixture(
+            let (port, server) = fixture_at(
+                0,
                 Some(code),
                 connections.clone(),
                 Arc::new(AtomicUsize::new(0)),
@@ -685,5 +688,26 @@ mod tests {
             ));
             assert_eq!(classify_http(&error), expected);
         }
+    }
+    #[tokio::test]
+    async fn network_loss_and_server_restart_recover_without_app_restart() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let heartbeats = Arc::new(AtomicUsize::new(0));
+        let (port, server) = fixture_at(0, None, connections.clone(), heartbeats.clone()).await;
+        let manager = NodeTransportManager::default();
+        let source = Source::paired();
+        manager.start(source.clone(), config(port));
+        until(|| manager.state().transport_state == "online").await;
+        server.abort();
+        let _ = server.await;
+        until(|| manager.state().transport_state == "reconnecting").await;
+        let (_, restarted) = fixture_at(port, None, connections.clone(), heartbeats).await;
+        until(|| {
+            connections.load(Ordering::SeqCst) >= 2 && manager.state().transport_state == "online"
+        })
+        .await;
+        assert!(!source.revoked.load(Ordering::SeqCst));
+        manager.stop().await;
+        restarted.abort();
     }
 }

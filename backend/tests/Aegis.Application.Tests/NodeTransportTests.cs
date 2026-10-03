@@ -170,4 +170,13 @@ public sealed class NodeTransportTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Connect(secret));
     });
 
+    [Fact] public void PendingHelloIsNeverOnlineAndCannotActivateAfterDisableOrReplacement()
+    {
+        var clock = new Clock(); using var registry = Registry(clock); var id = Guid.NewGuid();
+        var pending = registry.Register(id, ready: false); Assert.False(registry.IsOnline(id));
+        registry.Disconnect(id, "node_disabled"); Assert.False(registry.Activate(pending));
+        var a = registry.Register(id, ready: false); var b = registry.Register(id, ready: false);
+        Assert.False(registry.Activate(a)); Assert.True(registry.Activate(b)); Assert.True(registry.IsOnline(id));
+    }
+
 }
