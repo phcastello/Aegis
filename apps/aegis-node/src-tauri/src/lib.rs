@@ -1,5 +1,10 @@
 mod config;
 mod health;
+#[cfg(feature = "native-runtime")]
+mod node_commands;
+mod node_identity;
+#[cfg(feature = "native-runtime")]
+mod node_vault;
 mod platform;
 mod updates;
 
@@ -62,6 +67,8 @@ pub fn run() {
     }
     builder
         .setup(|app| {
+            use tauri::Manager;
+            app.manage(node_commands::NodeRuntime::initialize());
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
@@ -86,7 +93,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             runtime_info,
             check_backend,
-            check_android_update
+            check_android_update,
+            node_commands::node_status,
+            node_commands::node_pair,
+            node_commands::node_list,
+            node_commands::node_rename,
+            node_commands::node_set_enabled,
+            node_commands::node_revoke,
+            node_commands::node_create_pairing_code
         ])
         .run(context)
         .expect("error while running Aegis");

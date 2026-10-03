@@ -1,0 +1,7 @@
+{
+  "identifier": "node-identity",
+  "description": "Typed Node management only; no generic HTTP or secure-storage access from the WebView.",
+  "windows": ["main"],
+  "platforms": ["android", "windows"],
+  "permissions": ["allow-node-status", "allow-node-pair", "allow-node-list", "allow-node-rename", "allow-node-set-enabled", "allow-node-revoke", "allow-node-create-pairing-code"]
+}
