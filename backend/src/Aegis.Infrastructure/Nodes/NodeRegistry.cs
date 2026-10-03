@@ -18,7 +18,8 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock) : INodeR
         if (transaction is not null) await transaction.CommitAsync(ct);
         return result;
     }
-    private DateTimeOffset Now => clock.GetUtcNow();
+    // PostgreSQL timestamps have microsecond precision; keep replayed establishment DTOs stable.
+    private DateTimeOffset Now { get { var now = clock.GetUtcNow(); return new(now.Ticks - now.Ticks % 10, now.Offset); } }
     private async Task<AegisNode> Active(Guid id, CancellationToken ct)
     {
         var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == id, ct);
