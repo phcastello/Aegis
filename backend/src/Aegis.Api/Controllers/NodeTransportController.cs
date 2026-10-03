@@ -40,11 +40,13 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             if (hello?.Type != "hello") throw new NodeProtocolException("hello_required");
             logger.LogInformation("Node transport hello NodeId={NodeId} Phase=hello", nodeId);
             var version = hello.Payload!.Value.GetProperty("appVersion").GetString()!;
+            var capabilities = NodeProtocol.Capabilities(hello.Payload.Value, out var unknown);
+            if (unknown > 0) logger.LogInformation("Node capabilities ignored NodeId={NodeId} UnknownCount={UnknownCount}", nodeId, unknown);
             // Register before a fresh administrative check: disable/revoke either cancels this
             // lease after commit, or this recheck observes the committed change. No admission gap.
-            lease = connections.Register(nodeId, ready: false);
+            lease = connections.Register(nodeId, ready: false, capabilities: capabilities);
             using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token);
-            await WithHistory(h => h.ConnectedAsync(nodeId, version, lease.LastSeenAt, session.Token));
+            await connections.AnnounceAsync(lease, () => WithHistory(h => h.AnnouncedAsync(nodeId, version, lease.LastSeenAt, capabilities, session.Token)), session.Token);
             using (var scope = scopes.CreateScope()) await scope.ServiceProvider.GetRequiredService<INodeRegistry>().MeAsync(nodeId, session.Token);
             if (!connections.Activate(lease)) throw new OperationCanceledException();
             await NodeProtocol.SendAsync(socket, "hello_ack", hello.MessageId, clock.GetUtcNow(),

@@ -8,13 +8,19 @@ internal static class NodeModelConfiguration
     {
         model.Entity<AegisNode>(e =>
         {
-            e.ToTable("aegis_nodes", t => { t.HasCheckConstraint("ck_node_platform", "\"Platform\" IN ('Android', 'Windows')");
+            e.ToTable("aegis_nodes", t => { t.HasCheckConstraint("ck_node_target_priority", "\"TargetPriority\" BETWEEN -1000 AND 1000"); t.HasCheckConstraint("ck_node_platform", "\"Platform\" IN ('Android', 'Windows')");
                 t.HasCheckConstraint("ck_node_protocol", "\"ProtocolVersion\" = 1");
                 t.HasCheckConstraint("ck_node_name", "length(trim(\"Name\")) BETWEEN 1 AND 100");
                 t.HasCheckConstraint("ck_node_revoked_disabled", "\"RevokedAt\" IS NULL OR NOT \"Enabled\""); });
+            e.Property(n => n.TargetPriority).HasDefaultValue(0);
             e.HasKey(n => n.Id); e.Property(n => n.Name).HasMaxLength(100).IsRequired();
             e.Property(n => n.Platform).HasConversion<string>().HasMaxLength(16);
             e.Property(n => n.AppVersion).HasMaxLength(80).IsRequired(); e.HasIndex(n => new { n.Enabled, n.RevokedAt });
+        });
+        model.Entity<NodeCapabilitySnapshot>(e => {
+            e.ToTable("node_capabilities", t => { t.HasCheckConstraint("ck_node_capability_version", "\"Version\" >= 1"); });
+            e.HasKey(c => new { c.NodeId, c.Name }); e.Property(c => c.Name).HasMaxLength(64).IsRequired();
+            e.HasOne<AegisNode>().WithMany().HasForeignKey(c => c.NodeId).OnDelete(DeleteBehavior.Cascade);
         });
         model.Entity<NodeCredential>(e =>
         {

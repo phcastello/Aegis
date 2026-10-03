@@ -33,12 +33,32 @@ public static class NodeProtocol
             JsonElement? payload = json.TryGetProperty("payload", out var value) ? value.Clone() : null;
             if (type == "heartbeat" && payload is not null) throw new NodeProtocolException("unexpected_payload");
             if (type == "hello" && (payload is null || payload.Value.ValueKind != JsonValueKind.Object ||
-                payload.Value.EnumerateObject().Count() != 1 || !payload.Value.TryGetProperty("appVersion", out var version) ||
+                payload.Value.EnumerateObject().Any(p => p.Name is not ("appVersion" or "capabilities")) || payload.Value.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() > 1) || !payload.Value.TryGetProperty("appVersion", out var version) ||
                 version.ValueKind != JsonValueKind.String || version.GetString()!.Length > 80)) throw new NodeProtocolException("invalid_hello");
             return new(1, type, id, sentAt, payload);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         { throw new NodeProtocolException("invalid_json"); }
+    }
+    public static IReadOnlyList<Aegis.Application.Nodes.NodeCapability> Capabilities(JsonElement payload, out int unknown)
+    {
+        unknown = 0;
+        if (!payload.TryGetProperty("capabilities", out var array)) return Array.Empty<Aegis.Application.Nodes.NodeCapability>();
+        if (array.ValueKind != JsonValueKind.Array || array.GetArrayLength() > Aegis.Application.Nodes.NodeCapabilityCatalog.MaximumCount)
+            throw new NodeProtocolException("invalid_capabilities");
+        try
+        {
+            var items = new List<Aegis.Application.Nodes.NodeCapability>();
+            foreach (var item in array.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object || item.EnumerateObject().Count() != 2 ||
+                    item.EnumerateObject().Any(p => p.Name is not ("name" or "version"))) throw new NodeProtocolException("invalid_capabilities");
+                items.Add(new(item.GetProperty("name").GetString()!, item.GetProperty("version").GetInt32()));
+            }
+            return Aegis.Application.Nodes.NodeCapabilityCatalog.Validate(items, out unknown);
+        }
+        catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or FormatException)
+        { throw new NodeProtocolException("invalid_capabilities"); }
     }
     public static Task SendAsync(WebSocket socket, string type, Guid messageId, DateTimeOffset now, object? payload, CancellationToken ct)
     {

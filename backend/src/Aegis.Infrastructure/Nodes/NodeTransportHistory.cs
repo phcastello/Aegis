@@ -18,6 +18,20 @@ public sealed class NodeTransportHistory(AegisDbContext db) : INodeTransportHist
         else { var tracked = await db.Nodes.SingleAsync(n => n.Id == id, ct); tracked.TransportSeen(seenAt, appVersion: version); await db.SaveChangesAsync(ct); }
         await SeenAsync(id, seenAt, null, ct);
     }
+    public async Task AnnouncedAsync(Guid id, string version, DateTimeOffset seenAt, IReadOnlyList<NodeCapability> capabilities, CancellationToken ct)
+    {
+        var valid = NodeCapabilityCatalog.Validate(capabilities, out _);
+        await using var transaction = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
+        // Same brief administrative transaction lock closes the disable/re-enable race;
+        // active presence and heartbeats remain entirely outside this DB lock.
+        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(7070003)", ct);
+        await ConnectedAsync(id, version, seenAt, ct);
+        db.NodeCapabilities.RemoveRange(await db.NodeCapabilities.Where(c => c.NodeId == id).ToArrayAsync(ct));
+        await db.SaveChangesAsync(ct);
+        db.NodeCapabilities.AddRange(valid.Select(c => new NodeCapabilitySnapshot(id, c.Name, c.Version)));
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
+    }
     public async Task SeenAsync(Guid id, DateTimeOffset seenAt, DateTimeOffset? heartbeatAt, CancellationToken ct)
     {
         // Update only historical columns, with monotonic predicates. Old lease cleanup cannot

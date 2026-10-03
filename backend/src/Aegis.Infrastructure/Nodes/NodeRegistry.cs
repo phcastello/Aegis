@@ -7,7 +7,7 @@ namespace Aegis.Infrastructure.Nodes;
 public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeConnections? connections = null) : INodeRegistry
 {
     // The small administrative registry follows the existing PostgreSQL advisory-lock pattern.
-    // No transport/presence/background workload shares this lock.
+    // Hello snapshot replacement shares this short DB transaction lock; heartbeat/presence do not.
     private async Task<T> Locked<T>(Func<Task<T>> action, CancellationToken ct)
     {
         await using var transaction = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
@@ -22,6 +22,9 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
     private DateTimeOffset Now { get { var now = clock.GetUtcNow(); return new(now.Ticks - now.Ticks % 10, now.Offset); } }
     private NodeView View(AegisNode node) => NodeView.From(node) with {
         Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) == true ? "online" : "offline" };
+    private async Task<NodeView> SnapshotView(AegisNode node, CancellationToken ct) => View(node) with {
+        Capabilities = await db.NodeCapabilities.AsNoTracking().Where(c => c.NodeId == node.Id).OrderBy(c => c.Name)
+            .Select(c => new NodeCapability(c.Name, c.Version)).ToArrayAsync(ct) };
     private async Task<AegisNode> Active(Guid id, CancellationToken ct)
     {
         var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == id, ct);
@@ -132,16 +135,24 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
         var error = node.RevokedAt is not null || stored.RevokedAt is not null ? "node_revoked" : !node.Enabled ? "node_disabled" : null;
         return new(View(node), error);
     }
-    public Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default) => Locked(async () => View(await Active(actor, ct)), ct);
+    public Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default) => Locked(async () => await SnapshotView(await Active(actor, ct), ct), ct);
     public Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default) => Locked<IReadOnlyList<NodeView>>(async () =>
     {
-        await Active(actor, ct); return (await db.Nodes.OrderBy(n => n.CreatedAt).ToListAsync(ct)).Select(View).ToArray();
+        await Active(actor, ct);
+        var capabilities = await db.NodeCapabilities.AsNoTracking().ToArrayAsync(ct);
+        return (await db.Nodes.OrderBy(n => n.CreatedAt).ToListAsync(ct)).Select(n => View(n) with {
+            Capabilities = capabilities.Where(c => c.NodeId == n.Id).OrderBy(c => c.Name, StringComparer.Ordinal).Select(c => new NodeCapability(c.Name, c.Version)).ToArray() }).ToArray();
     }, ct);
     public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct);
         try { node.Rename(name, Now); } catch (ArgumentException) { throw new NodeException("invalid_name", "Nome inválido."); }
         return View(node);
+    }, ct);
+    public Task<NodeView> SetTargetPriorityAsync(Guid actor, Guid target, int priority, CancellationToken ct = default) => Locked(async () => {
+        await Active(actor, ct); var node = await Target(target, ct);
+        try { node.SetTargetPriority(priority, Now); } catch (ArgumentException) { throw new NodeException("invalid_target_priority", "Prioridade deve estar entre -1000 e 1000."); }
+        return await SnapshotView(node, ct);
     }, ct);
     public async Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default)
     {

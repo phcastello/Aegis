@@ -20,8 +20,10 @@ public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
         heartbeats = meter.CreateCounter<long>("node_transport_heartbeats_total");
         meter.CreateObservableGauge("node_transport_active_connections", () => { lock (gate) return current.Values.Count(IsFresh); });
     }
-    public sealed class Lease(Guid nodeId, DateTimeOffset now)
+    public sealed class Lease(Guid nodeId, DateTimeOffset now, IReadOnlyList<NodeCapability> capabilities, SemaphoreSlim admission)
     {
+        public IReadOnlyList<NodeCapability> Capabilities { get; } = Array.AsReadOnly(capabilities.ToArray());
+        internal SemaphoreSlim Admission { get; } = admission;
         public Guid NodeId { get; } = nodeId;
         public Guid ConnectionId { get; } = Guid.NewGuid();
         public bool Ready { get; internal set; }
@@ -35,17 +37,26 @@ public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
         clock.GetUtcNow() - lease.LastSeenAt >= TimeSpan.FromSeconds(options.TimeoutSeconds);
     public bool IsOnline(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease); }
     public Lease? Lookup(Guid id) { lock (gate) return current.GetValueOrDefault(id); }
-    public Lease Register(Guid id, bool ready = true)
+    public IReadOnlyList<NodeCapability>? LiveCapabilities(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease) ? lease.Capabilities : null; }
+    public Lease Register(Guid id, bool ready = true, IReadOnlyList<NodeCapability>? capabilities = null)
     {
         lock (gate)
         {
             if (!current.ContainsKey(id) && current.Count >= options.MaxConnections)
                 throw new NodeException("node_transport_capacity", "Transport temporariamente cheio.", 503);
             if (current.Remove(id, out var old)) End(old, "replaced");
-            var lease = new Lease(id, clock.GetUtcNow()) { Ready = ready }; current[id] = lease;
+            var lease = new Lease(id, clock.GetUtcNow(), capabilities ?? Array.Empty<NodeCapability>(), old?.Admission ?? new SemaphoreSlim(1)) { Ready = ready }; current[id] = lease;
             connections.Add(1); logger.LogInformation("Node transport {Event} NodeId={NodeId} ConnectionId={ConnectionId}", "connected", id, lease.ConnectionId);
             return lease;
         }
+    }
+    // Per replacement chain, only hello metadata persistence is serialized. No gate is
+    // held during heartbeat/resolution; an old hello cannot overwrite B's final snapshot.
+    public async Task AnnounceAsync(Lease lease, Func<Task> announce, CancellationToken ct)
+    {
+        await lease.Admission.WaitAsync(ct);
+        try { if (Lookup(lease.NodeId) != lease || lease.Ended.IsCancellationRequested) throw new OperationCanceledException(ct); await announce(); }
+        finally { lease.Admission.Release(); }
     }
     public bool Activate(Lease lease)
     {

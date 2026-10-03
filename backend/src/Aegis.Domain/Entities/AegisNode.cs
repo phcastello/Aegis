@@ -15,6 +15,8 @@ public sealed class AegisNode : AuditableEntity
     public string Name { get; private set; } = "";
     public NodePlatform Platform { get; private set; }
     public bool Enabled { get; private set; }
+    public int TargetPriority { get; private set; }
+    public void SetTargetPriority(int priority, DateTimeOffset now) { RequireTrusted(); if (priority is < -1000 or > 1000) throw new ArgumentException("Invalid target priority."); TargetPriority = priority; Touch(now); }
     public string AppVersion { get; private set; } = "";
     public int ProtocolVersion { get; private set; }
     public DateTimeOffset PairedAt { get; private set; }
