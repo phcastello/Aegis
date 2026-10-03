@@ -18,7 +18,7 @@ server { listen 18107; location / { proxy_pass http://127.0.0.1:18105; } }`;
   writeFileSync(join(work, 'transport.inc'), readFileSync(join(root, 'deploy/nginx/node-transport-proxy.inc.conf')));
   await run('docker', ['run', '-d', '--name', container, '--network', 'host', '-v', join(work, 'nginx.conf') + ':/etc/nginx/nginx.conf:ro', '-v', join(work, 'transport.inc') + ':/etc/nginx/transport.inc:ro', 'nginx:1.27-alpine']);
   await run('docker', ['exec', container, 'nginx', '-t']);
-  await run('node', ['scripts/node-transport-probe/probe.mjs'], { AEGIS_PROBE_ORIGIN: 'http://127.0.0.1:18106', AEGIS_PROBE_REJECT_ORIGIN: 'http://127.0.0.1:18107', AEGIS_PROBE_CLEANUP_ORIGIN: 'http://127.0.0.1:18104', AEGIS_PROBE_CODE_FILE: bootstrap, AEGIS_PROBE_CYCLES: '4' });
+  await run('node', ['scripts/node-transport-probe/probe.mjs'], { AEGIS_PROBE_ORIGIN: 'http://127.0.0.1:18106', AEGIS_PROBE_REJECT_ORIGIN: 'http://127.0.0.1:18107', AEGIS_PROBE_CLEANUP_ORIGIN: 'http://127.0.0.1:18104', AEGIS_PROBE_CODE_FILE: bootstrap, AEGIS_PROBE_CYCLES: '4', AEGIS_PROBE_CAPABILITIES: 'true' });
   console.log('PASS two-proxy production regression: stripped upgrade rejected; HTTP101, hello, two Nodes, four heartbeat cycles and availability');
 } finally {
   spawnSync('docker', ['rm', '-f', container], { stdio: 'ignore' }); api.kill(); await new Promise(r => api.exitCode !== null ? r() : api.once('exit', r));

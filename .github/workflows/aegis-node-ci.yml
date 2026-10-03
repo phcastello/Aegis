@@ -104,14 +104,17 @@ jobs:
           dotnet-version: '8.0.x'
       - if: matrix.android == 'false'
         name: Validate transport server contracts and lease races on Windows
-        run: dotnet test ../../backend/tests/Aegis.Application.Tests --filter 'FullyQualifiedName~NodeTransportTests'
+        run: dotnet test ../../backend/tests/Aegis.Application.Tests --filter 'FullyQualifiedName~NodeTransportTests|FullyQualifiedName~NodeCapabilityTests'
       - if: matrix.android == 'false'
         name: Build isolated debug runtime for real Node identity acceptance
         env:
           AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
         run: npm run tauri -- build --debug --no-bundle --target x86_64-pc-windows-msvc
       - if: matrix.android == 'false'
-        name: Real Windows pairing, OS storage, restart and management
+        name: Install isolated peer WebSocket fixture
+        run: npm ci --prefix ../../scripts/node-transport-probe
+      - if: matrix.android == 'false'
+        name: Real Windows pairing, OS storage, restart, capabilities and target resolution
         run: node ../../packages/aegis-client/tests/windows-node-identity.mjs src-tauri/target/x86_64-pc-windows-msvc/debug/aegis-node.exe
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows

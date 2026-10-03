@@ -10,12 +10,14 @@ const version = JSON.parse(readFileSync(new URL('../../apps/aegis-node/package.j
 const cycles = Number(process.env.AEGIS_PROBE_CYCLES ?? 6);
 if (!Number.isInteger(cycles) || cycles < 4 || cycles > 12) throw Error('Require 4–12 heartbeat cycles');
 const nodes = [], sockets = [];
+// Opt-in for isolated Stage 05 fixtures; production probe remains backward compatible.
+const capabilities = process.env.AEGIS_PROBE_CAPABILITIES === 'true';
 checkOrigin(origin);
 function checkOrigin(value) { const url = new URL(value); if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw Error('Require HTTPS or explicit loopback fixture'); }
 const safeCodes = new Set(['websocket_required', 'node_disabled', 'node_revoked', 'protocol_mismatch', 'node_authentication_required']);
 function check(condition, reason) { if (!condition) throw Error(reason); }
-async function http(path, secret, body, base = origin) {
-  const response = await fetch(base + '/api/nodes' + path, { method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+async function http(path, secret, body, base = origin, method) {
+  const response = await fetch(base + '/api/nodes' + path, { method: method ?? (body === undefined ? 'GET' : 'POST'), redirect: 'error', signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: 'AegisNode ' + secret } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   if (!response.ok) { console.log(`API HTTP=${response.status} Path=${path}`); throw Error("api_http_status"); } return response.json();
 }
@@ -23,7 +25,7 @@ async function pair(code, platform) {
   const attemptId = randomUUID();
   const receipt = await http('/pair', null, { attemptId, code, recoveryKey: randomBytes(32).toString('base64url'), name: 'Disposable public WSS probe ' + platform, platform, appVersion: version, protocolVersion: 1 });
   // Track before finalize so cleanup still revokes a partially established diagnostic identity.
-  const node = { secret: receipt.credential, id: receipt.nodeId, attemptId, confirmed: false }; nodes.push(node);
+  const node = { secret: receipt.credential, id: receipt.nodeId, attemptId, confirmed: false, capabilities: platform === 'windows' ? [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }] : [{ name: 'audio.input', version: 1 }] }; nodes.push(node);
   const confirmed = await http('/pair/finalize', null, { attemptId, credential: node.secret }); node.id = confirmed.id; node.confirmed = true;
   console.log(`Paired disposable NodeId=${node.id} Platform=${platform}`); return node;
 }
@@ -46,7 +48,7 @@ async function connect(node, socketOrigin = origin) {
     });
     ws.on('error', () => reject(Error('websocket_network_error')));
     ws.on('close', () => { if (socket.ackCount < cycles) reject(Error('closed_before_required_heartbeats')); });
-    ws.on('open', () => { check(upgrade, 'upgrade_failed'); ws.send(JSON.stringify({ protocolVersion: 1, type: 'hello', messageId: helloId, sentAt: new Date().toISOString(), payload: { appVersion: version } })); });
+    ws.on('open', () => { check(upgrade, 'upgrade_failed'); ws.send(JSON.stringify({ protocolVersion: 1, type: 'hello', messageId: helloId, sentAt: new Date().toISOString(), payload: { appVersion: version, ...(capabilities ? { capabilities: node.capabilities } : {}) } })); });
     ws.on('message', raw => {
       try {
         const message = JSON.parse(String(raw)); check(message.protocolVersion === 1, 'protocol_error');
@@ -102,7 +104,29 @@ try {
     check(me.availability === 'online', 'me_availability_inconsistent');
     check(me.lastHeartbeatAt && Date.now() - Date.parse(me.lastHeartbeatAt) < 60000, 'heartbeat_history_not_advancing');
     console.log(`Presence NodeId=${node.id} Online=true LastHeartbeatAt=${me.lastHeartbeatAt}`); }
-  for (const socket of [s1, s2]) { clearInterval(socket.timer); socket.ws.close(1000, 'probe_complete'); check(await socket.closed === 1000, 'abnormal_close'); }
+  if (capabilities) {
+    const list = await http('', first.secret);
+    for (const node of nodes) check(JSON.stringify(list.find(n => n.id === node.id).capabilities) === JSON.stringify(node.capabilities), 'capability_snapshot_inconsistent');
+    await http('/' + first.id + '/priority', first.secret, { targetPriority: 10 }, origin, 'PATCH');
+    await http('/' + second.id + '/priority', first.secret, { targetPriority: 20 }, origin, 'PATCH');
+    const resolve = (name, minimumVersion = 1, preferredNodeId = null) => http('/resolve', first.secret, { requiredCapabilities: [{ name, minimumVersion }], preferredNodeId });
+    check((await resolve('audio.output')).node?.id === first.id, 'capability_filter_failed');
+    check((await resolve('audio.input')).node?.id === second.id, 'priority_failed');
+    check((await resolve('audio.input', 1, first.id)).node?.id === first.id, 'preferred_failed');
+    check((await resolve('audio.output', 2)).code === 'no_eligible_node', 'version_filter_failed');
+    clearInterval(s2.timer); s2.ws.close(1000, 'fixture_offline'); await s2.closed;
+    const end = Date.now() + 10000;
+    while ((await resolve('audio.input')).node?.id !== first.id) { check(Date.now() < end, 'offline_fallback_failed'); await new Promise(r => setTimeout(r, 100)); }
+    // Reconnect uses the same identity but replaces the session and persisted snapshot.
+    second.capabilities = [{ name: 'audio.output', version: 2 }];
+    const replacement = await connect(second); await replacement.ready; await replacement.done;
+    check((await resolve('audio.output', 2)).node?.id === second.id, 'replacement_session_failed');
+    check((await resolve('audio.input')).node?.id === first.id, 'old_capability_retained');
+    check(JSON.stringify((await http('/me', second.secret)).capabilities) === JSON.stringify(second.capabilities), 'replacement_persistence_failed');
+    clearInterval(replacement.timer); replacement.ws.close(1000, 'probe_complete'); await replacement.closed;
+    console.log('PASS Stage05 two different capability sets, snapshot replacement, live resolution, priority, preferred, version and offline fallback');
+  }
+  for (const socket of [s1, s2]) { clearInterval(socket.timer); if (socket.ws.readyState === WebSocket.OPEN) socket.ws.close(1000, 'probe_complete'); check(await socket.closed === 1000, 'abnormal_close'); }
   for (const node of nodes) {
     const end = Date.now() + 10000;
     while ((await http('/me', node.secret)).availability !== 'offline') { check(Date.now() < end, 'disconnect_presence_stale'); await new Promise(r => setTimeout(r, 100)); }

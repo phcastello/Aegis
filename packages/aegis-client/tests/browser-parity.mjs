@@ -65,7 +65,7 @@ try {
    if (host === 'native') await context.addInitScript(() => {
      window.openedUrls = [];
      const now = new Date().toISOString();
-     const current = { id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
+     const current = { capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
      const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
      let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
@@ -78,6 +78,8 @@ try {
        if (command === 'node_list') return [current, other];
        if (command === 'node_create_pairing_code') return { code: 'ABCD-EFGH-JKMP-QRST-VWXY-1234', expiresAt: new Date(Date.now() + 600000).toISOString() };
        if (command === 'node_rename') { other.name = args.name; return other; }
+       if (command === 'node_set_target_priority') { const node = args.id === current.id ? current : other; node.targetPriority = args.priority; return node; }
+       if (command === 'node_resolve_target') return { node: other.targetPriority > current.targetPriority ? other : current, code: null, onlineNodes: 2, capabilityCompatibleNodes: 2 };
        if (command === 'node_set_enabled') { other.enabled = args.enabled; return other; }
        if (command === 'node_revoke') { other.revokedAt = now; other.enabled = false; return other; }
        if (command === 'check_android_update') return null;
@@ -126,6 +128,12 @@ try {
      await panel.getByRole('button', { name: 'Adicionar dispositivo', exact: true }).click();
      await panel.getByText('ABCD-EFGH-JKMP-QRST-VWXY-1234', { exact: true }).waitFor();
      const pc = panel.locator('li').filter({ hasText: 'PC' });
+     await panel.getByText('Capabilities: audio.input@1, audio.output@1', { exact: true }).first().waitFor();
+     await pc.getByRole('button', { name: 'Alterar prioridade', exact: true }).click();
+     await pc.getByLabel('Prioridade do alvo').fill('10'); await pc.getByRole('button', { name: 'Salvar prioridade', exact: true }).click();
+     await pc.getByText('Prioridade: 10', { exact: true }).waitFor();
+     await panel.getByRole('button', { name: 'Diagnóstico: resolver audio.output@1', exact: true }).click();
+     await panel.getByText(/Alvo: PC/).waitFor();
      await pc.getByRole('button', { name: 'Renomear', exact: true }).click(); await pc.getByLabel('Novo nome').fill('PC Pedro'); await pc.getByRole('button', { name: 'Salvar', exact: true }).click();
      await pc.getByText('PC Pedro', { exact: true }).waitFor();
      await pc.getByRole('button', { name: 'Desativar', exact: true }).click(); await panel.getByRole('button', { name: 'Confirmar', exact: true }).click();

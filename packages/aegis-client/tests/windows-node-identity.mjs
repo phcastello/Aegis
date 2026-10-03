@@ -6,12 +6,28 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
+import WebSocket from '../../../scripts/node-transport-probe/node_modules/ws/wrapper.mjs';
 if (process.platform !== 'win32') throw Error('Requires a real Windows runner.');
 const work = mkdtempSync(join(tmpdir(), 'aegis-node-identity-'));
 const bootstrap = join(work, 'temporary-code.txt');
 const exe = resolve(process.argv[2]);
 const api = spawn('dotnet', ['run', '--project', '../../backend/tests/Aegis.NodeRuntimeFixture', '--', bootstrap], { stdio: 'inherit' });
 let app, browser, page, exited;
+const peerSockets = [];
+async function connectPeer(credential) {
+  const ws = new WebSocket(origin.replace(/^http/, 'ws') + '/api/nodes/connect', { headers: { Authorization: 'AegisNode ' + credential, 'X-Aegis-Node-Protocol': '1' }, maxPayload: 4096, handshakeTimeout: 10000 });
+  peerSockets.push(ws); let timer; const id = randomUUID();
+  await new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(Error('peer_hello_timeout')), 10000);
+    ws.on('error', () => reject(Error('peer_network_failed')));
+    ws.on('open', () => ws.send(JSON.stringify({ protocolVersion: 1, type: 'hello', messageId: id, sentAt: new Date().toISOString(), payload: { appVersion: 'fixture-stage05', capabilities: [{ name: 'audio.input', version: 1 }] } })));
+    ws.on('message', raw => { const message = JSON.parse(String(raw)); if (message.type === 'hello_ack') {
+      assert.equal(message.messageId, id); clearTimeout(deadline);
+      timer = setInterval(() => ws.send(JSON.stringify({ protocolVersion: 1, type: 'heartbeat', messageId: randomUUID(), sentAt: new Date().toISOString() })), message.payload.heartbeatSeconds * 1000); resolve(); } });
+    ws.once('close', () => { clearInterval(timer); clearTimeout(deadline); reject(Error('peer_closed')); });
+  });
+  return ws;
+}
 const origin = 'http://127.0.0.1:18104';
 async function waitUntil(action, timeout = 120000) {
   const end = Date.now() + timeout;
@@ -58,6 +74,7 @@ try {
   const attemptId = randomUUID(); const paired = await call('/pair', { attemptId, code: code.code, recoveryKey: randomBytes(32).toString('base64url'), name: 'Android peer CI', platform: 'android', appVersion: identity.node.appVersion, protocolVersion: 1 });
   assert.equal(paired.status, 200); const peerCredential = paired.body.credential;
   const peer = await call('/pair/finalize', { attemptId, credential: peerCredential }); assert.equal(peer.status, 200);
+  let peerSocket = await connectPeer(peerCredential);
   const initialList = await invoke('node_list'); assert.equal(initialList.length, 2);
   assert.equal(initialList.filter(n => n.id === pcId).length, 1);
   await waitUntil(async () => (await call('/' + pcId + '/enable', {}, peerCredential)).status === 200, 15000);
@@ -75,11 +92,28 @@ try {
   }
   assert.equal(await panel.locator(`[data-node-id="${pcId}"]`).count(), 1);
   assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
+  const nativeCapabilities = [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }];
+  assert.deepEqual((await invoke('node_list')).find(n => n.id === pcId).capabilities, nativeCapabilities);
+  assert.deepEqual((await call('/me', undefined, peerCredential)).body.capabilities, [{ name: 'audio.input', version: 1 }]);
+  await invoke('node_set_target_priority', { id: pcId, priority: 10 });
+  await invoke('node_set_target_priority', { id: peer.body.id, priority: 20 });
+  assert.equal((await invoke('node_list')).find(n => n.id === pcId).targetPriority, 10);
+  const resolveTarget = (name, minimumVersion = 1, preferredNodeId = null) => invoke('node_resolve_target', { request: { requiredCapabilities: [{ name, minimumVersion }], preferredNodeId } });
+  assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
+  assert.equal((await resolveTarget('audio.output')).node.id, pcId);
+  assert.equal((await resolveTarget('audio.input', 1, pcId)).node.id, pcId);
+  assert.equal((await resolveTarget('audio.output', 2)).code, 'no_eligible_node');
+  peerSocket.close(1000, 'fixture_offline');
+  await waitUntil(async () => (await resolveTarget('audio.input')).node?.id === pcId, 10000);
+  peerSocket = await connectPeer(peerCredential);
+  assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
+  console.log('Windows real native capability advertisement + two different peers + priority/preferred/version + live offline/reconnect resolution PASS.');
   await close();
   await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'offline', 10000);
   await open();
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000); identity = await invoke('node_status'); assert.equal(identity.node.id, pcId);
   assert.equal((await invoke('node_list')).length, 2);
+  assert.deepEqual((await invoke('node_list')).find(n => n.id === pcId).capabilities, nativeCapabilities);
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
   await invoke('node_set_enabled', { id: peer.body.id, enabled: false }); assert.equal((await call('/me', undefined, peerCredential)).status, 403);
@@ -101,6 +135,7 @@ try {
   console.log('Windows real native authenticated transport + heartbeat + independent server presence + close/offline + automatic re-enable + active revoke PASS.');
   console.log('Windows real native list/rename/disable/re-enable/revoke/re-pair, invalid-secret discard and chat independence PASS.');
 } finally {
+  for (const socket of peerSockets) socket.terminate();
   await browser?.close().catch(() => {});
   if (app && exited === undefined) spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' });
   spawnSync('taskkill', ['/PID', String(api.pid), '/T', '/F'], { stdio: 'ignore' });
