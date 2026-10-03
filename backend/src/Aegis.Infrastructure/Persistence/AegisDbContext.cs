@@ -9,6 +9,11 @@ namespace Aegis.Infrastructure.Persistence;
 
 public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
 {
+    public DbSet<AegisNode> Nodes => Set<AegisNode>();
+    public DbSet<NodeCredential> NodeCredentials => Set<NodeCredential>();
+    public DbSet<NodePairingCode> NodePairingCodes => Set<NodePairingCode>();
+    public DbSet<NodePairingAttempt> NodePairingAttempts => Set<NodePairingAttempt>();
+
     public DbSet<Reminder> Reminders => Set<Reminder>();
     public DbSet<MemoryRecord> MemoryRecords => Set<MemoryRecord>();
     public DbSet<MemoryEvidence> MemoryEvidences => Set<MemoryEvidence>();
@@ -401,6 +406,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureMemory();
+        modelBuilder.ConfigureNodes();
         modelBuilder.Entity<Reminder>(e =>
         {
             e.ToTable("reminders");
