@@ -15,11 +15,15 @@ builder.WebHost.UseUrls("http://127.0.0.1:18104");
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.AddControllers().AddApplicationPart(typeof(NodesController).Assembly)
     .ConfigureApplicationPartManager(manager => { manager.FeatureProviders.Clear(); manager.FeatureProviders.Add(new NodeControllersOnly()); });
-builder.Services.AddNodeApi(); builder.Services.AddSingleton(TimeProvider.System);
+builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> {
+    ["NodeTransport:HeartbeatSeconds"] = "1", ["NodeTransport:TimeoutSeconds"] = "3",
+    ["NodeTransport:MinimumHeartbeatSeconds"] = "1", ["NodeTransport:WatchdogSeconds"] = "1", ["NodeTransport:PersistSeconds"] = "2" });
+builder.Services.AddNodeApi(builder.Configuration);
+builder.Services.AddScoped<INodeTransportHistory, NodeTransportHistory>(); builder.Services.AddSingleton(TimeProvider.System);
 var database = "native-ci-" + Guid.NewGuid();
 builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(database));
 builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
-var app = builder.Build(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
+var app = builder.Build(); app.UseWebSockets(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
 app.MapGet("/api/health", () => new { status = "ok" });
 using (var scope = app.Services.CreateScope())
 {
@@ -29,5 +33,5 @@ using (var scope = app.Services.CreateScope())
 await app.RunAsync(); return 0;
 sealed class NodeControllersOnly : ControllerFeatureProvider
 {
-    protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController);
+    protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController) || type.AsType() == typeof(NodeTransportController);
 }

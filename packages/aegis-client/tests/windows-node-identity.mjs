@@ -48,6 +48,7 @@ try {
   await panel.getByLabel('Nome do dispositivo').fill('PC CI'); await panel.getByLabel('Código de pareamento').fill(readFileSync(bootstrap, 'utf8'));
   rmSync(bootstrap); await panel.getByRole('button', { name: 'Parear dispositivo', exact: true }).click();
   await panel.getByText('PC CI', { exact: true }).first().waitFor();
+  await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000);
   let identity = await invoke('node_status'); assert.equal(identity.state, 'paired'); const pcId = identity.node.id;
   assert.doesNotMatch(JSON.stringify(identity), /credential|recoveryKey|secretHash/i);
   assert.doesNotMatch(await page.evaluate(() => JSON.stringify(localStorage)), /aegis-node-v1\./);
@@ -57,7 +58,14 @@ try {
   assert.equal(paired.status, 200); const peerCredential = paired.body.credential;
   const peer = await call('/pair/finalize', { attemptId, credential: peerCredential }); assert.equal(peer.status, 200);
   assert.equal((await invoke('node_list')).length, 2);
-  await close(); await open(); identity = await invoke('node_status'); assert.equal(identity.node.id, pcId);
+  await waitUntil(async () => (await call('/' + pcId + '/enable', {}, peerCredential)).status === 200, 15000);
+  // Observe presence through the second peer's authenticated HTTP API, outside the WebView.
+  await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'online', 15000);
+  await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.lastHeartbeatAt != null, 10000);
+  await close();
+  await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'offline', 10000);
+  await open();
+  await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000); identity = await invoke('node_status'); assert.equal(identity.node.id, pcId);
   assert.equal((await invoke('node_list')).length, 2);
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
@@ -65,8 +73,10 @@ try {
   await invoke('node_set_enabled', { id: peer.body.id, enabled: true }); assert.equal((await call('/me', undefined, peerCredential)).status, 200);
   await invoke('node_set_enabled', { id: pcId, enabled: false }); assert.equal((await invoke('node_status')).state, 'disabled');
   assert.equal((await call('/' + pcId + '/enable', {}, peerCredential)).status, 200);
+  await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 45000);
   assert.equal((await invoke('node_status')).node.id, pcId);
   assert.equal((await call('/' + pcId + '/revoke', {}, peerCredential)).status, 200);
+  await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'offline', 15000);
   assert.equal((await invoke('node_status')).state, 'revoked');
   await close(); await open(); assert.equal((await invoke('node_status')).state, 'revoked');
   const replacementCode = await call('/pairing-codes', {}, peerCredential); assert.equal(replacementCode.status, 200);
@@ -75,6 +85,7 @@ try {
   await invoke('node_revoke', { id: peer.body.id }); assert.equal((await call('/me', undefined, peerCredential)).status, 401);
   await invoke('node_revoke', { id: identity.node.id }); assert.equal((await invoke('node_status')).state, 'revoked');
   await close();
+  console.log('Windows real native authenticated transport + heartbeat + independent server presence + close/offline + automatic re-enable + active revoke PASS.');
   console.log('Windows real native list/rename/disable/re-enable/revoke/re-pair, invalid-secret discard and chat independence PASS.');
 } finally {
   await browser?.close().catch(() => {});
