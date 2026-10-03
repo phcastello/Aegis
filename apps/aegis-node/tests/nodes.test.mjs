@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { nodeServices } from '../.test-build/services/nodes.js';
 import { useNodes } from '../.test-build/composables/useNodes.js';
-afterEach(clearMocks);
+afterEach(() => { if (globalThis.window) clearMocks(); });
 const node = { id: 'current', name: 'PC', platform: 'windows', enabled: true, revokedAt: null };
 function fixture() {
   let status = { state: 'unpaired', node: null, error: null };
