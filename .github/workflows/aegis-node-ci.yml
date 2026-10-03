@@ -81,6 +81,22 @@ jobs:
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: ${{ matrix.android }}
+      - if: matrix.android == 'true'
+        name: Install Firebase Android client configuration when provisioned
+        env:
+          FIREBASE_ANDROID_CONFIG_B64: ${{ secrets.FIREBASE_ANDROID_CONFIG_B64 }}
+        run: |
+          python3 - <<'PYTHON'
+          import base64, os
+          from pathlib import Path
+          value = os.environ.get('FIREBASE_ANDROID_CONFIG_B64', '')
+          if value:
+              target = Path('src-tauri/gen/android/app/google-services.json')
+              target.write_bytes(base64.b64decode(value, validate=True))
+              target.chmod(0o600)
+          else:
+              print('Firebase client config absent: FCM build integration enabled; real push unavailable.')
+          PYTHON
       - run: npm run check
       - run: npm run build
       - run: npm test
