@@ -42,7 +42,7 @@ jobs:
       - name: Real authenticated transport through two Nginx proxy hops
         run: |
           npm ci --prefix scripts/node-transport-probe
-          node scripts/node-transport-probe/proxy-chain.mjs
+          AEGIS_PROBE_NOTIFICATIONS=true node scripts/node-transport-probe/proxy-chain.mjs
       - working-directory: packages/aegis-client
         run: npm ci
       - working-directory: frontend/aegis-pwa
