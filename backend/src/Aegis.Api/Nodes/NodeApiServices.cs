@@ -41,7 +41,7 @@ public static class NodeApiServices
                 context.Request.Path.StartsWithSegments("/api/nodes/pair")
                     ? RateLimitPartition.GetFixedWindowLimiter("node-establishment", _ => new FixedWindowRateLimiterOptions {
                         PermitLimit = 100, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })
-                    : context.Request.Path == "/api/nodes/connect"
+                    : context.Request.Path.StartsWithSegments("/api/nodes/connect")
                     ? RateLimitPartition.GetFixedWindowLimiter("node-handshake", _ => new FixedWindowRateLimiterOptions {
                         PermitLimit = 200, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })
                     : RateLimitPartition.GetNoLimiter("other"));

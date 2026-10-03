@@ -12,7 +12,7 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     private string failure = "node_authentication_required";
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (Request.Path == "/api/nodes/connect")
+        if (Request.Path.StartsWithSegments("/api/nodes/connect"))
         {
             using var admission = Context.RequestServices.GetRequiredService<Aegis.Api.Controllers.NodeHandshakeCapacity>().Attempts.AttemptAcquire();
             if (!admission.IsAcquired) { failure = "node_rate_limited"; return AuthenticateResult.Fail("Node handshake rate limited."); }
