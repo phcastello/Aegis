@@ -2,7 +2,7 @@
 
 Aegis v0.6.1 refines conversational presence, contextual memory, casual memory search, integration recovery and full conversation history. It preserves the accepted v0.6.0 memory architecture and existing integrations. See the [v0.6.1 validation report](scripts/eval-results-v0.6.1.md).
 
-v0.6.1 is the current stable line. v0.7.0 is in development: the new Tauri native client prioritizes Android and Windows, while the Web Client/PWA remains available. Stage 01 was accepted by the owner on both physical targets; [Stage 02 progress and validation](docs/v0.7.0-stage02-client-parity.md).
+v0.6.1 is the current stable line. v0.7.0 is in development: the new Tauri native client prioritizes Android and Windows, while the Web Client/PWA remains available. Stages 01 and 02 were accepted by the owner on both physical targets. Native installations can now be paired as persistent Aegis Nodes; [Stage 03 implementation and acceptance](docs/v0.7.0-stage03-node-identity-pairing.md).
 
 ## Download Aegis
 
@@ -25,7 +25,20 @@ The development installer does not yet have commercial Windows code signing, so 
 
 During v0.7.0 development, distribution is directly by APK, outside the Play Store. If you installed the Stage 01 debug APK, uninstall it once before installing the first release APK because they use different signing certificates. Later release APKs retain the same signing identity.
 
-Windows signed updates and Android's exact-APK download prompt are implemented but still require a published release and real update/install validation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Native notifications and native reminder delivery belong to later stages. The Web Client keeps its PWA/Web Push features.
+After the first installation, the app checks for new previews and offers an update in its interface. The owner validated stage.2 → stage.3 on both platforms: Windows updates through Tauri; Android opens the matching APK for system installation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Native notifications and native reminder delivery belong to later stages. The Web Client keeps its PWA/Web Push features.
+
+### Pair this installation as a Node
+
+Open **Dispositivos / Nodes** in the native app, choose an editable device name and enter a temporary pairing code. An active paired device can generate a code with **Adicionar dispositivo**. The chat remains available without pairing.
+
+For the first device (or recovery after losing the last active Node), the server administrator generates a one-time code locally after deploying the Stage 03 backend and its migration:
+
+```bash
+docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll migrate
+docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll pairing-code
+```
+
+The code expires after ten minutes. Enter it only on the intended device; keep it out of shared logs. Identity survives normal app restarts and updates. Rename, disable/re-enable and revoke are available in the same panel. Revocation requires new pairing; it is permanent. See [bootstrap, recovery and physical acceptance steps](docs/v0.7.0-stage03-node-identity-pairing.md).
 
 Version history:
 
