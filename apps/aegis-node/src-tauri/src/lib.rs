@@ -3,6 +3,7 @@ mod health;
 #[cfg(feature = "native-runtime")]
 mod node_commands;
 mod node_identity;
+mod node_transport;
 #[cfg(feature = "native-runtime")]
 mod node_vault;
 mod platform;
@@ -79,6 +80,13 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(node_commands::NodeRuntime::initialize());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                handle
+                    .state::<node_commands::NodeRuntime>()
+                    .initialize_transport()
+                    .await;
+            });
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
@@ -100,11 +108,31 @@ pub fn run() {
                 .build()?;
             Ok(())
         })
+        .on_window_event(|window, event| {
+            use tauri::Manager;
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                let runtime = window.state::<node_commands::NodeRuntime>();
+                if cfg!(target_os = "android")
+                    || runtime.transport.state().transport_state != "online"
+                {
+                    runtime.transport.reconnect();
+                }
+            }
+            #[cfg(target_os = "android")]
+            if matches!(event, tauri::WindowEvent::Resumed) {
+                window
+                    .state::<node_commands::NodeRuntime>()
+                    .transport
+                    .reconnect();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             runtime_info,
             check_backend,
             check_android_update,
             node_commands::node_status,
+            node_commands::node_transport_status,
+            node_commands::node_transport_reconnect,
             node_commands::node_pair,
             node_commands::node_list,
             node_commands::node_rename,
@@ -112,8 +140,24 @@ pub fn run() {
             node_commands::node_revoke,
             node_commands::node_create_pairing_code
         ])
-        .run(context)
-        .expect("error while running Aegis");
+        .build(context)
+        .expect("error while building Aegis")
+        .run(|app, event| {
+            use tauri::Manager;
+            if matches!(event, tauri::RunEvent::Resumed) {
+                app.state::<node_commands::NodeRuntime>()
+                    .transport
+                    .reconnect();
+            }
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                app.state::<node_commands::NodeRuntime>()
+                    .transport
+                    .shutdown();
+            }
+        });
 }
 
 // Exercise the exact dependency error check without requiring an Android JNI runtime.

@@ -1,6 +1,6 @@
 [package]
 name = "aegis-node"
-version = "0.7.0-stage.4"
+version = "0.7.0-stage.5"
 description = "Aegis Android and Windows foundation"
 authors = ["Aegis contributors"]
 edition = "2021"
@@ -30,7 +30,11 @@ semver = "1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 getrandom = "0.3"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "rt", "time", "net", "macros"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-opener = { version = "2", optional = true }
 
 [target.'cfg(any(windows, target_os = "android"))'.dependencies]
@@ -46,7 +50,7 @@ tauri-plugin-updater = { version = "2.13.1", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "test-util"] }
 
 [profile.release]
 codegen-units = 1

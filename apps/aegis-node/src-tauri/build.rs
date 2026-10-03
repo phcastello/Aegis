@@ -28,6 +28,8 @@ fn main() {
             "check_backend",
             "check_android_update",
             "node_status",
+            "node_transport_status",
+            "node_transport_reconnect",
             "node_pair",
             "node_list",
             "node_rename",

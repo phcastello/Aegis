@@ -15,6 +15,15 @@ pub struct NodeView {
     pub created_at: String,
     pub updated_at: Option<String>,
     pub revoked_at: Option<String>,
+    #[serde(default = "offline")]
+    pub availability: String,
+    #[serde(default)]
+    pub last_seen_at: Option<String>,
+    #[serde(default)]
+    pub last_heartbeat_at: Option<String>,
+}
+fn offline() -> String {
+    "offline".into()
 }
 #[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +231,24 @@ impl<V: Vault, A: Api> Identity<V, A> {
             ..Record::default()
         };
         self.resume(record).await // Resume durably saves the checkpoint before any network operation.
+    }
+    // Native-only access to an already confirmed, origin-bound identity. No HTTP or IPC.
+    pub(crate) fn transport_credential(&self) -> Result<Option<String>, String> {
+        let record = self.load()?;
+        if record.revoked || record.pending.is_some() || record.node.is_none() {
+            return Ok(None);
+        }
+        Ok(record.credential)
+    }
+    pub(crate) fn transport_rejected(&self, code: &str) -> Result<(), String> {
+        self.failure(
+            &mut self.load()?,
+            ApiError {
+                code: code.into(),
+                message: "Transporte de Node recusado.".into(),
+            },
+        )?;
+        Ok(())
     }
     async fn credential(&self) -> Result<String, String> {
         let status = self.status().await?;
@@ -454,6 +481,9 @@ mod tests {
             created_at: "2026-10-02T00:00:00Z".into(),
             updated_at: None,
             revoked_at: None,
+            availability: "offline".into(),
+            last_seen_at: None,
+            last_heartbeat_at: None,
         }
     }
     impl Api for FakeApi {
