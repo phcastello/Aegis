@@ -1,6 +1,6 @@
 [package]
 name = "aegis-node"
-version = "0.7.0-stage.7"
+version = "0.7.0-stage.8"
 description = "Aegis Android and Windows foundation"
 authors = ["Aegis contributors"]
 edition = "2021"
@@ -14,20 +14,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 default = ["native-runtime"]
 # Allows portable unit tests without linking a desktop WebView runtime.
-native-runtime = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-opener", "dep:tauri-plugin-updater", "dep:tauri-plugin-process", "dep:tauri-plugin-single-instance"]
+native-runtime = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-opener", "dep:tauri-plugin-updater", "dep:tauri-plugin-process", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-notification", "dep:tauri-plugin-autostart"]
+tauri-plugin-notification = ["dep:tauri-plugin-notification"]
+tauri-plugin-autostart = ["dep:tauri-plugin-autostart"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 dotenvy = "0.15"
 
 [dependencies]
-tauri = { version = "2", features = [], optional = true }
+tauri = { version = "2", features = ["tray-icon"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"
 semver = "1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 getrandom = "0.3"
 tokio = { version = "1", features = ["sync", "rt", "time", "net", "macros"] }
@@ -36,6 +38,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
 
 [target.'cfg(any(windows, target_os = "android"))'.dependencies]
 keyring-core = "1.0.0"
@@ -48,6 +51,7 @@ windows-native-keyring-store = "1.1.0"
 tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2.13.1", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "test-util"] }

@@ -30,9 +30,12 @@ pub struct NodeRuntime {
     identity: Arc<tokio::sync::Mutex<Result<NativeIdentity, String>>>,
     pub transport: NodeTransportManager,
     config: Option<TransportConfig>,
+    pub cancel: tokio_util::sync::CancellationToken,
+    #[cfg(target_os = "android")]
+    app: tauri::AppHandle,
 }
 impl NodeRuntime {
-    pub fn initialize() -> Self {
+    pub fn initialize(app: tauri::AppHandle) -> Self {
         let identity = (|| {
             let origin = crate::config::configured_endpoint()?.base_url();
             let vault = OsVault::initialize()?;
@@ -52,7 +55,7 @@ impl NodeRuntime {
                 env!("CARGO_PKG_VERSION").into(),
             ))
         })();
-        let config = crate::config::configured_endpoint()
+        let mut config = crate::config::configured_endpoint()
             .ok()
             .and_then(|endpoint| {
                 TransportConfig::new(
@@ -62,11 +65,21 @@ impl NodeRuntime {
                 )
                 .ok()
             });
+        if let Some(config) = config.as_mut() {
+            config.notifications = Some(crate::native_notifications::executor(&app));
+        }
         Self {
             identity: Arc::new(tokio::sync::Mutex::new(identity)),
             transport: NodeTransportManager::default(),
             config,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            #[cfg(target_os = "android")]
+            app,
         }
+    }
+    pub fn shutdown(&self) {
+        self.cancel.cancel();
+        self.transport.shutdown();
     }
     pub async fn start(&self) {
         if let Some(config) = &self.config {
@@ -82,6 +95,30 @@ impl NodeRuntime {
             let _ = identity.status().await;
         }
         self.start().await;
+        #[cfg(target_os = "android")]
+        self.sync_push().await;
+    }
+    #[cfg(target_os = "android")]
+    pub async fn sync_push(&self) {
+        let guard = self.identity.lock().await;
+        let Ok(identity) = guard.as_ref() else { return };
+        let Ok(status) = identity.status().await else {
+            return;
+        };
+        let node = status
+            .node
+            .as_ref()
+            .filter(|n| n.enabled && n.revoked_at.is_none() && status.state == "paired");
+        crate::native_notifications::bind(&self.app, node.map(|n| n.id.as_str()));
+        if node.is_some() {
+            if let Some(push) = crate::native_notifications::push_state(&self.app) {
+                if push.configured {
+                    if let Some(token) = push.token {
+                        let _ = identity.register_push(&token).await;
+                    }
+                }
+            }
+        }
     }
 }
 #[tauri::command]
@@ -99,6 +136,8 @@ pub async fn node_pair(
     let result = guard.as_ref().map_err(Clone::clone)?.pair(name, code).await;
     drop(guard);
     runtime.start().await;
+    #[cfg(target_os = "android")]
+    runtime.sync_push().await;
     runtime.transport.reconnect();
     result
 }
@@ -181,4 +220,17 @@ pub fn node_transport_status(runtime: tauri::State<'_, NodeRuntime>) -> Transpor
 #[tauri::command]
 pub fn node_transport_reconnect(runtime: tauri::State<'_, NodeRuntime>) {
     runtime.transport.reconnect();
+}
+
+#[tauri::command]
+pub async fn node_test_notification(
+    runtime: tauri::State<'_, NodeRuntime>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let guard = runtime.identity.lock().await;
+    guard
+        .as_ref()
+        .map_err(Clone::clone)?
+        .test_notification(id)
+        .await
 }

@@ -13,7 +13,14 @@ impl CapabilityRegistry {
     pub fn current() -> Vec<NodeCapability> {
         match crate::platform::current() {
             crate::platform::Platform::Windows | crate::platform::Platform::Android => {
-                Self::audio(true, true)
+                let mut capabilities = Self::audio(true, true);
+                if cfg!(feature = "native-runtime") {
+                    capabilities.push(NodeCapability {
+                        name: "notification.show".into(),
+                        version: 1,
+                    });
+                }
+                capabilities
             }
             crate::platform::Platform::Unsupported => Vec::new(),
         }
@@ -62,7 +69,15 @@ mod tests {
             crate::platform::current(),
             crate::platform::Platform::Windows | crate::platform::Platform::Android
         ) {
-            assert_eq!(capabilities, CapabilityRegistry::audio(true, true));
+            assert_eq!(&capabilities[..2], CapabilityRegistry::audio(true, true));
+            assert_eq!(
+                capabilities.len(),
+                if cfg!(feature = "native-runtime") {
+                    3
+                } else {
+                    2
+                }
+            );
         } else {
             assert!(capabilities.is_empty());
         }
@@ -87,8 +102,10 @@ impl TargetRequest {
         if self.required_capabilities.is_empty()
             || self.required_capabilities.len() > 32
             || self.required_capabilities.iter().any(|r| {
-                !matches!(r.name.as_str(), "audio.input" | "audio.output")
-                    || r.minimum_version < 1
+                !matches!(
+                    r.name.as_str(),
+                    "audio.input" | "audio.output" | "notification.show"
+                ) || r.minimum_version < 1
                     || !names.insert(&r.name)
             })
         {

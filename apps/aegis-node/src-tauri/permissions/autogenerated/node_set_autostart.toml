@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-set-autostart"
+description = "Enables the node_set_autostart command without any pre-configured scope."
+commands.allow = ["node_set_autostart"]
+
+[[permission]]
+identifier = "deny-node-set-autostart"
+description = "Denies the node_set_autostart command without any pre-configured scope."
+commands.deny = ["node_set_autostart"]

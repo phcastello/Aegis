@@ -1,9 +1,12 @@
 mod config;
 mod health;
+#[cfg(feature = "native-runtime")]
+mod native_notifications;
 mod node_capabilities;
 #[cfg(feature = "native-runtime")]
 mod node_commands;
 mod node_identity;
+mod node_notification;
 mod node_transport;
 #[cfg(feature = "native-runtime")]
 mod node_vault;
@@ -56,6 +59,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
         use tauri::Manager;
         if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
             let _ = window.set_focus();
         }
     }));
@@ -67,7 +72,15 @@ pub fn run() {
     #[cfg(windows)]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--autostart"])
+                .build(),
+        );
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(native_notifications::plugin());
     let mut context = tauri::generate_context!();
     if let Ok(endpoint) = config::configured_endpoint() {
         if let Some(csp) = context.config_mut().app.security.csp.as_mut() {
@@ -80,13 +93,19 @@ pub fn run() {
     builder
         .setup(|app| {
             use tauri::Manager;
-            app.manage(node_commands::NodeRuntime::initialize());
+            app.manage(node_commands::NodeRuntime::initialize(app.handle().clone()));
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 handle
                     .state::<node_commands::NodeRuntime>()
                     .initialize_transport()
                     .await;
+                #[cfg(target_os="android")]
+                loop {
+                    let cancel=handle.state::<node_commands::NodeRuntime>().cancel.clone();
+                    tokio::select! { _=cancel.cancelled()=>break, _=tokio::time::sleep(std::time::Duration::from_secs(60))=>{} }
+                    handle.state::<node_commands::NodeRuntime>().sync_push().await;
+                }
             });
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
@@ -107,10 +126,16 @@ pub fn run() {
                     _ => PermissionResponse::Deny,
                 })
                 .build()?;
+            #[cfg(windows)] {
+                native_notifications::tray(app.handle())?;
+                if std::env::args().any(|a|a=="--autostart") { if let Some(window)=app.get_webview_window("main") { window.hide()?; } }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             use tauri::Manager;
+            #[cfg(windows)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); let _=window.hide(); }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 let runtime = window.state::<node_commands::NodeRuntime>();
                 if cfg!(target_os = "android")
@@ -141,6 +166,11 @@ pub fn run() {
             node_commands::node_set_target_priority,
             node_commands::node_resolve_target,
             node_commands::node_revoke,
+            native_notifications::node_exit,
+            native_notifications::node_notification_settings,
+            native_notifications::node_request_notification_permission,
+            native_notifications::node_set_autostart,
+            node_commands::node_test_notification,
             node_commands::node_create_pairing_code
         ])
         .build(context)
@@ -148,16 +178,17 @@ pub fn run() {
         .run(|app, event| {
             use tauri::Manager;
             if matches!(event, tauri::RunEvent::Resumed) {
-                app.state::<node_commands::NodeRuntime>()
-                    .transport
-                    .reconnect();
+                app.state::<node_commands::NodeRuntime>().transport.reconnect();
+                #[cfg(target_os="android")] {
+                    let handle=app.clone();
+                    tauri::async_runtime::spawn(async move { handle.state::<node_commands::NodeRuntime>().sync_push().await; });
+                }
             }
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 app.state::<node_commands::NodeRuntime>()
-                    .transport
                     .shutdown();
             }
         });

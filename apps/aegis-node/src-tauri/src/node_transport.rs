@@ -62,6 +62,7 @@ pub(crate) struct TransportConfig {
     pub connect_timeout: Duration,
     pub healthy_reset: Duration,
     pub disabled_retry: Duration,
+    pub notifications: Option<Arc<crate::node_notification::NotificationExecutor>>,
 }
 impl TransportConfig {
     pub fn new(origin: &str, version: &str, allow_http: bool) -> Result<Self, &'static str> {
@@ -77,6 +78,7 @@ impl TransportConfig {
             connect_timeout: Duration::from_secs(10),
             healthy_reset: Duration::from_secs(120),
             disabled_retry: Duration::from_secs(30),
+            notifications: None,
         })
     }
 }
@@ -471,6 +473,10 @@ async fn session(
             return e;
         }
     };
+    let server_now = chrono::DateTime::parse_from_rfc3339(&hello.sent_at)
+        .unwrap()
+        .timestamp();
+    let clock_started = Instant::now();
     let payload = hello.payload.unwrap_or_default();
     let interval = payload["heartbeatSeconds"].as_u64().unwrap_or(0);
     let deadline = payload["timeoutSeconds"].as_u64().unwrap_or(0);
@@ -483,6 +489,7 @@ async fn session(
     let mut next_heartbeat = Instant::now() + Duration::from_secs(interval);
     let mut ack_deadline = Instant::now() + Duration::from_secs(deadline);
     let mut pending: Option<String> = None;
+    let mut commands = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -497,12 +504,33 @@ async fn session(
                 pending = Some(id);
                 next_heartbeat = Instant::now() + Duration::from_secs(interval);
             }
+            result = commands.join_next(), if !commands.is_empty() => {
+                if let Some(Ok((id, result))) = result {
+                    let (_, message) = envelope("command_result", Some(serde_json::json!({"commandId":id,"status":result})));
+                    if !matches!(timeout(Duration::from_secs(2), socket.send(message)).await, Ok(Ok(()))) { return retry(status, "command", "network_disconnected"); }
+                }
+            }
             received = socket.next() => {
                 match received {
                     Some(Ok(Message::Ping(_))) => { if socket.flush().await.is_err() { return retry(status, "heartbeat", "network_disconnected"); } }
                     Some(Ok(Message::Pong(_))) => {},
                     Some(Ok(Message::Close(f))) => return diagnosed_close(status, "heartbeat", f),
                     Some(Ok(message)) => {
+                        if let Message::Text(text) = &message {
+                            let parsed: Result<Envelope, _> = serde_json::from_str(text);
+                            if let Ok(command) = parsed { if command.kind == "command" {
+                                if command.protocol_version != 1 || uuid::Uuid::parse_str(&command.message_id).is_err() || chrono::DateTime::parse_from_rfc3339(&command.sent_at).is_err() || commands.len() >= 4 { return retry(status,"command","protocol_error"); }
+                                let input = match serde_json::from_value::<crate::node_notification::NotificationCommand>(command.payload.unwrap_or_default()) { Ok(c) => c, Err(_) => return retry(status,"command","protocol_error") };
+                                let executor = config.notifications.clone();
+                                let now = server_now + clock_started.elapsed().as_secs() as i64;
+                                commands.spawn(async move {
+                                    let id = input.command_id;
+                                    let status = if let Some(executor) = executor { tokio::task::spawn_blocking(move || executor.execute(&input, now)).await.unwrap_or("failed") } else { "unsupported" };
+                                    (id,status)
+                                });
+                                continue;
+                            } }
+                        }
                         let Some(id) = pending.take() else { diagnose(status, "heartbeat", "protocol_error", None, None); return Outcome::Incompatible; };
                         if let Err(e) = ack(message, "heartbeat_ack", &id) { diagnose(status, "heartbeat", "heartbeat_rejected", None, None); return e; }
                         ack_deadline = Instant::now() + Duration::from_secs(deadline);
@@ -947,5 +975,72 @@ mod tests {
             .contains("test-secret"));
         manager.stop().await;
         server.abort();
+    }
+    #[tokio::test]
+    async fn live_notification_results_dedupe_and_heartbeats_share_session() {
+        use crate::node_notification::{
+            NotificationCommand, NotificationExecutor, NotificationSink,
+        };
+        struct Mock(Arc<AtomicUsize>);
+        impl NotificationSink for Mock {
+            fn show(&self, _: &NotificationCommand) -> &'static str {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                "success"
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let hello: serde_json::Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            socket.send(Message::Text(serde_json::json!({"protocolVersion":1,"type":"hello_ack","messageId":hello["messageId"],"sentAt":chrono::Utc::now().to_rfc3339(),"payload":{"heartbeatSeconds":1,"timeoutSeconds":3}}).to_string().into())).await.unwrap();
+            let id = uuid::Uuid::new_v4();
+            let expiry = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+            let command = serde_json::json!({"protocolVersion":1,"type":"command","messageId":uuid::Uuid::new_v4(),"sentAt":chrono::Utc::now().to_rfc3339(),"payload":{"commandId":id,"capability":"notification.show","capabilityVersion":1,"expiresAt":expiry,"input":{"title":"Aegis","body":"fixture"}}});
+            for expected in ["success", "duplicate"] {
+                socket
+                    .send(Message::Text(command.to_string().into()))
+                    .await
+                    .unwrap();
+                loop {
+                    let m: serde_json::Value = serde_json::from_str(
+                        socket.next().await.unwrap().unwrap().to_text().unwrap(),
+                    )
+                    .unwrap();
+                    if m["type"] == "heartbeat" {
+                        socket.send(Message::Text(serde_json::json!({"protocolVersion":1,"type":"heartbeat_ack","messageId":m["messageId"],"sentAt":chrono::Utc::now().to_rfc3339()}).to_string().into())).await.unwrap();
+                    } else {
+                        assert_eq!(m["type"], "command_result");
+                        assert_eq!(m["payload"]["commandId"], id.to_string());
+                        assert_eq!(m["payload"]["status"], expected);
+                        break;
+                    }
+                }
+            }
+            for _ in 0..3 {
+                let m: serde_json::Value =
+                    serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(m["type"], "heartbeat");
+                socket.send(Message::Text(serde_json::json!({"protocolVersion":1,"type":"heartbeat_ack","messageId":m["messageId"],"sentAt":chrono::Utc::now().to_rfc3339()}).to_string().into())).await.unwrap();
+            }
+            // Wait for normal manager shutdown, never an orphan sender.
+            socket.next().await;
+        });
+        let mut options = config(port);
+        options.notifications = Some(Arc::new(NotificationExecutor::new(Mock(calls.clone()))));
+        let manager = NodeTransportManager::default();
+        manager.start(Source::paired(), options);
+        until(|| calls.load(Ordering::SeqCst) == 1 && manager.state().transport_state == "online")
+            .await;
+        tokio::time::sleep(Duration::from_millis(3200)).await;
+        assert_eq!(manager.state().transport_state, "online");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        manager.stop().await;
+        server.await.unwrap();
     }
 }

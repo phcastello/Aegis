@@ -276,7 +276,7 @@ impl<V: Vault, A: Api> Identity<V, A> {
         )?;
         Ok(false)
     }
-    async fn credential(&self) -> Result<String, String> {
+    pub(crate) async fn credential(&self) -> Result<String, String> {
         let status = self.status().await?;
         if status.state != "paired" || status.error.is_some() {
             return Err(status
@@ -910,5 +910,27 @@ mod tests {
             .transport_rejected("replacement-secret", "node_revoked")
             .unwrap());
         assert!(identity.transport_credential().unwrap().is_none());
+    }
+}
+
+#[cfg(feature = "native-runtime")]
+impl<V: Vault> Identity<V, HttpApi> {
+    pub async fn test_notification(&self, id: String) -> Result<serde_json::Value, String> {
+        uuid::Uuid::parse_str(&id).map_err(|_| "Node inválido.")?;
+        self.api.call(reqwest::Method::POST,"/api/nodes/notifications/test",Some(&self.credential().await?),Some(serde_json::json!({"preferredNodeId":id,"title":"Aegis","body":"Teste de notificação nativa.","ttlSeconds":60}))).await.map_err(|e|self.operation_error(e))
+    }
+    #[cfg(target_os = "android")]
+    pub async fn register_push(&self, token: &str) -> Result<(), String> {
+        let _: serde_json::Value = self
+            .api
+            .call(
+                reqwest::Method::PUT,
+                "/api/nodes/me/push",
+                Some(&self.credential().await?),
+                Some(serde_json::json!({"token":token})),
+            )
+            .await
+            .map_err(|e| self.operation_error(e))?;
+        Ok(())
     }
 }
