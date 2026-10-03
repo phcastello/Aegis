@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { nodeServices } from '../.test-build/services/nodes.js';
 import { useNodes } from '../.test-build/composables/useNodes.js';
@@ -15,6 +16,16 @@ function fixture() {
     createPairingCode: async () => ({ code: 'temporary', expiresAt: '2026-10-02T00:10:00Z' }),
     setStatus: value => status = value };
 }
+test('Node IPC capability is enabled only for the local main Android/Windows WebView', () => {
+  const config = JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url)));
+  const capability = JSON.parse(readFileSync(new URL('../src-tauri/capabilities/node-identity.json', import.meta.url)));
+  assert.ok(config.app.security.capabilities.includes(capability.identifier), 'Node commands require an explicitly enabled capability');
+  assert.deepEqual(capability.windows, ['main']);
+  assert.deepEqual(capability.platforms, ['android', 'windows']);
+  assert.notEqual(capability.local, false);
+  assert.equal(capability.remote, undefined);
+  assert.deepEqual(capability.permissions, ['allow-node-status', 'allow-node-pair', 'allow-node-list', 'allow-node-rename', 'allow-node-set-enabled', 'allow-node-revoke', 'allow-node-create-pairing-code']);
+});
 test('IPC offers typed management operations and never exports credentials', async () => {
   globalThis.window = {}; const calls = [];
   mockIPC((command, args) => { calls.push([command, args]); return command === 'node_list' ? [] : { state: 'unpaired', node: null, error: null }; });

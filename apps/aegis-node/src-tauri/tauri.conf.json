@@ -26,6 +26,7 @@
     "security": {
       "capabilities": [
         "diagnostics",
+        "node-identity",
         "external-links",
         "windows-updater",
         "android-updates"
