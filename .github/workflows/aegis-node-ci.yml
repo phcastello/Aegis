@@ -14,6 +14,19 @@ concurrency:
 jobs:
   regression:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis_nodes_test
+          POSTGRES_USER: aegis_test
+          POSTGRES_PASSWORD: test_only_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis_test -d aegis_nodes_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AEGIS_NODE_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
