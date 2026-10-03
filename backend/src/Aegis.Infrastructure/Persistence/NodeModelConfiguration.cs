@@ -22,6 +22,11 @@ internal static class NodeModelConfiguration
             e.HasKey(c => new { c.NodeId, c.Name }); e.Property(c => c.Name).HasMaxLength(64).IsRequired();
             e.HasOne<AegisNode>().WithMany().HasForeignKey(c => c.NodeId).OnDelete(DeleteBehavior.Cascade);
         });
+        model.Entity<NodePushRegistration>(e => {
+            e.ToTable("node_push_registrations", t => { t.HasCheckConstraint("ck_node_push_provider", "\"Provider\" = 'fcm'"); t.HasCheckConstraint("ck_node_push_hash", "octet_length(\"TokenHash\") = 32"); });
+            e.HasKey(r => r.NodeId); e.Property(r => r.Provider).HasMaxLength(16); e.Property(r => r.EncryptedToken).HasMaxLength(8192);
+            e.HasIndex(r => r.TokenHash).IsUnique(); e.HasOne<AegisNode>().WithOne().HasForeignKey<NodePushRegistration>(r => r.NodeId).OnDelete(DeleteBehavior.Cascade);
+        });
         model.Entity<NodeCredential>(e =>
         {
             e.ToTable("node_credentials", t => t.HasCheckConstraint("ck_node_credential_hash", "octet_length(\"SecretHash\") = 32"));

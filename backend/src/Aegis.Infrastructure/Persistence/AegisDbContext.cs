@@ -9,6 +9,7 @@ namespace Aegis.Infrastructure.Persistence;
 
 public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
 {
+    public DbSet<NodePushRegistration> NodePushRegistrations => Set<NodePushRegistration>();
     public DbSet<NodeCapabilitySnapshot> NodeCapabilities => Set<NodeCapabilitySnapshot>();
     public DbSet<AegisNode> Nodes => Set<AegisNode>();
     public DbSet<NodeCredential> NodeCredentials => Set<NodeCredential>();

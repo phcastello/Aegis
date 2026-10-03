@@ -4,7 +4,7 @@ using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 namespace Aegis.Infrastructure.Nodes;
 
-public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeConnections? connections = null) : INodeRegistry
+public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeConnections? connections = null, INodeBackgroundAvailability? background = null) : INodeRegistry
 {
     // The small administrative registry follows the existing PostgreSQL advisory-lock pattern.
     // Hello snapshot replacement shares this short DB transaction lock; heartbeat/presence do not.
@@ -23,6 +23,7 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
     private NodeView View(AegisNode node) => NodeView.From(node) with {
         Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) == true ? "online" : "offline" };
     private async Task<NodeView> SnapshotView(AegisNode node, CancellationToken ct) => View(node) with {
+        Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) != true && background is not null && await background.HasRouteAsync(node.Id, ct) ? "backgroundReachable" : View(node).Availability,
         Capabilities = await db.NodeCapabilities.AsNoTracking().Where(c => c.NodeId == node.Id).OrderBy(c => c.Name)
             .Select(c => new NodeCapability(c.Name, c.Version)).ToArrayAsync(ct) };
     private async Task<AegisNode> Active(Guid id, CancellationToken ct)
@@ -139,9 +140,10 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
     public Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default) => Locked<IReadOnlyList<NodeView>>(async () =>
     {
         await Active(actor, ct);
-        var capabilities = await db.NodeCapabilities.AsNoTracking().ToArrayAsync(ct);
-        return (await db.Nodes.OrderBy(n => n.CreatedAt).ToListAsync(ct)).Select(n => View(n) with {
-            Capabilities = capabilities.Where(c => c.NodeId == n.Id).OrderBy(c => c.Name, StringComparer.Ordinal).Select(c => new NodeCapability(c.Name, c.Version)).ToArray() }).ToArray();
+        var result = new List<NodeView>();
+        foreach (var node in await db.Nodes.OrderBy(n => n.CreatedAt).ToArrayAsync(ct)) result.Add(await SnapshotView(node, ct));
+        return result;
+
     }, ct);
     public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
     {
@@ -169,6 +171,7 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
         var result = await Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct); node.Revoke(Now);
+            db.NodePushRegistrations.RemoveRange(await db.NodePushRegistrations.Where(r => r.NodeId == target).ToArrayAsync(ct));
         var credential = await db.NodeCredentials.SingleAsync(c => c.NodeId == target, ct); credential.Revoke(Now); return View(node);
         }, ct);
         connections?.Disconnect(target, "node_revoked");

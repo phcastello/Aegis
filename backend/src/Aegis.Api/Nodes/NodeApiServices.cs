@@ -14,10 +14,20 @@ public static class NodeApiServices
         services.AddAuthorization(options => options.AddPolicy("NodeManagement", policy =>
             policy.AddAuthenticationSchemes(NodeAuthenticationHandler.SchemeName).RequireAuthenticatedUser()));
         services.AddScoped<NodeApiFilter>();
+        services.AddDataProtection();
+        services.Configure<Aegis.Infrastructure.Nodes.NodeFcmOptions>(configuration?.GetSection("NodeFcm") ?? new ConfigurationBuilder().Build().GetSection("NodeFcm"));
+        services.AddSingleton<Aegis.Infrastructure.Nodes.INodeFcmCredentials, Aegis.Infrastructure.Nodes.NodeFcmCredentials>();
+        services.AddScoped<Aegis.Infrastructure.Nodes.NodePushRegistrations>();
+        services.AddScoped<Aegis.Application.Nodes.INodePushRegistrations>(p => p.GetRequiredService<Aegis.Infrastructure.Nodes.NodePushRegistrations>());
+        services.AddScoped<Aegis.Application.Nodes.INodeBackgroundAvailability>(p => p.GetRequiredService<Aegis.Infrastructure.Nodes.NodePushRegistrations>());
+        services.AddScoped<Aegis.Application.Nodes.INodePushNotifications, Aegis.Infrastructure.Nodes.NodeFcmTransport>();
+        services.AddScoped<Aegis.Application.Nodes.INodeNotificationDispatcher, Aegis.Application.Nodes.NodeNotificationDispatcher>();
+        services.AddHttpClient("node-fcm", c => c.Timeout = TimeSpan.FromSeconds(8));
         services.AddScoped<Aegis.Application.Nodes.INodeTargetResolver, Aegis.Application.Nodes.NodeTargetResolver>();
         services.AddOptions<Transport.NodeTransportOptions>().Configure(options => configuration?.GetSection("NodeTransport").Bind(options))
             .Validate(o => o.IsValid(), "Invalid NodeTransport limits.").ValidateOnStart();
         services.AddSingleton<Transport.NodeConnectionRegistry>();
+        services.AddSingleton<Aegis.Application.Nodes.INodeLiveNotifications>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Application.Nodes.INodeConnections>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Api.Controllers.NodeHandshakeCapacity>();
         services.AddHostedService<Transport.NodeConnectionWatchdog>();
@@ -34,6 +44,7 @@ public static class NodeApiServices
             options.AddPolicy("node-pairing", context => RateLimitPartition.GetFixedWindowLimiter(
                 context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new FixedWindowRateLimiterOptions {
                     PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+            options.AddPolicy("node-notifications", context => RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
             options.AddPolicy("node-codes", context => RateLimitPartition.GetFixedWindowLimiter(
                 context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions {
                     PermitLimit = 3, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));

@@ -1,9 +1,11 @@
 using Aegis.Application.Nodes;
 using System.Diagnostics.Metrics;
+using System.Net.WebSockets;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 namespace Aegis.Api.Nodes.Transport;
 
-public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
+public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifications, IDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<Guid, Lease> current = [];
@@ -26,6 +28,10 @@ public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
         internal SemaphoreSlim Admission { get; } = admission;
         public Guid NodeId { get; } = nodeId;
         public Guid ConnectionId { get; } = Guid.NewGuid();
+        public WebSocket? Socket { get; internal set; }
+        internal SemaphoreSlim Writer { get; } = new(1);
+        internal ConcurrentDictionary<Guid, TaskCompletionSource<string>> Pending { get; } = new();
+        internal DateTimeOffset ConnectedAt { get; } = now;
         public bool Ready { get; internal set; }
         public DateTimeOffset LastSeenAt { get; internal set; } = now;
         public DateTimeOffset? LastHeartbeatAt { get; internal set; }
@@ -34,7 +40,7 @@ public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
     }
     private bool IsFresh(Lease lease) => lease.Ready && !IsExpired(lease);
     private bool IsExpired(Lease lease) => lease.Ended.IsCancellationRequested ||
-        clock.GetUtcNow() - lease.LastSeenAt >= TimeSpan.FromSeconds(options.TimeoutSeconds);
+        clock.GetUtcNow() - (lease.LastHeartbeatAt ?? lease.ConnectedAt) >= TimeSpan.FromSeconds(options.TimeoutSeconds);
     public bool IsOnline(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease); }
     public Lease? Lookup(Guid id) { lock (gate) return current.GetValueOrDefault(id); }
     public IReadOnlyList<NodeCapability>? LiveCapabilities(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease) ? lease.Capabilities : null; }
@@ -57,6 +63,35 @@ public sealed class NodeConnectionRegistry : INodeConnections, IDisposable
         await lease.Admission.WaitAsync(ct);
         try { if (Lookup(lease.NodeId) != lease || lease.Ended.IsCancellationRequested) throw new OperationCanceledException(ct); await announce(); }
         finally { lease.Admission.Release(); }
+    }
+    public async Task WriteAsync(Lease lease, string type, Guid messageId, object? payload, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        await lease.Writer.WaitAsync(deadline.Token);
+        try { if (Lookup(lease.NodeId) != lease || lease.Socket is null) throw new OperationCanceledException();
+            await NodeProtocol.SendAsync(lease.Socket, type, messageId, clock.GetUtcNow(), payload, deadline.Token); }
+        finally { lease.Writer.Release(); }
+    }
+    public async Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
+    {
+        Lease? lease;
+        var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (gate) { lease = current.GetValueOrDefault(id); if (lease is null || !IsFresh(lease) || lease.Socket is null ||
+            !lease.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1)) return "unavailable";
+            if (lease.Pending.Count >= 16) return "busy";
+            if (!lease.Pending.TryAdd(command.CommandId, result)) return "duplicate"; }
+        if (command.ExpiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(command.CommandId, out _); return "expired"; }
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(8));
+        try { await WriteAsync(lease, "command", Guid.NewGuid(), command, deadline.Token); return await result.Task.WaitAsync(deadline.Token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return lease.Ended.IsCancellationRequested ? "unavailable" : "timeout"; }
+        catch (WebSocketException) { return "unavailable"; }
+        finally { lease.Pending.TryRemove(command.CommandId, out _); }
+    }
+    public void Result(Lease lease, Guid commandId, string status)
+    {
+        lock (gate) { if (current.GetValueOrDefault(lease.NodeId) == lease && IsFresh(lease) && lease.Pending.TryGetValue(commandId, out var pending)) {
+            lease.LastSeenAt = clock.GetUtcNow(); pending.TrySetResult(status);
+            logger.LogInformation("Node command result NodeId={NodeId} ConnectionId={ConnectionId} CommandId={CommandId} Status={Status}", lease.NodeId, lease.ConnectionId, commandId, status); } }
     }
     public bool Activate(Lease lease)
     {

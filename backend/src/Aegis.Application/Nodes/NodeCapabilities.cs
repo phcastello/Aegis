@@ -5,7 +5,7 @@ public sealed record NodeCapability(string Name, int Version);
 public static class NodeCapabilityCatalog
 {
     public const int MaximumCount = 32, MaximumNameLength = 64;
-    private static readonly HashSet<string> names = new(StringComparer.Ordinal) { "audio.input", "audio.output" };
+    private static readonly HashSet<string> names = new(StringComparer.Ordinal) { "audio.input", "audio.output", "notification.show" };
     public static IReadOnlyList<string> Names { get; } = Array.AsReadOnly(names.Order(StringComparer.Ordinal).ToArray());
     public static bool IsKnown(string name) => names.Contains(name);
     public static bool IsValidName(string? name) => name is { Length: > 0 and <= MaximumNameLength } &&
@@ -26,18 +26,21 @@ public static class NodeCapabilityCatalog
     }
 }
 public sealed record RequiredCapability(string Name, int MinimumVersion);
-public sealed record NodeTargetRequest(IReadOnlyList<RequiredCapability> RequiredCapabilities, Guid? PreferredNodeId = null);
+public sealed record NodeTargetRequest(IReadOnlyList<RequiredCapability> RequiredCapabilities, Guid? PreferredNodeId = null, string Reachability = "live");
 public sealed record NodeTargetSummary(Guid Id, string Name);
 public sealed record NodeTargetResult(NodeTargetSummary? Node, string? Code, int OnlineNodes, int CapabilityCompatibleNodes);
 public interface INodeTargetResolver
 {
     Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default);
 }
-public sealed class NodeTargetResolver(INodeRegistry nodes, INodeConnections connections) : INodeTargetResolver
+public sealed class NodeTargetResolver(INodeRegistry nodes, INodeConnections connections, INodeBackgroundAvailability? background = null) : INodeTargetResolver
 {
     public async Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default)
     {
         var required = request.RequiredCapabilities;
+        if (request.Reachability is not ("live" or "notification") || request.Reachability == "notification" &&
+            (required is null || required.Any(r => r is null || r.Name != NotificationContract.Capability)))
+            throw new NodeException("invalid_target_requirements", "Background é elegível somente para notification.show.");
         if (required is null || required.Count is < 1 or > NodeCapabilityCatalog.MaximumCount || request.PreferredNodeId == Guid.Empty ||
             required.Any(r => r is null || !NodeCapabilityCatalog.IsValidName(r.Name) || !NodeCapabilityCatalog.IsKnown(r.Name) || r.MinimumVersion < 1) ||
             required.Select(r => r.Name).Distinct(StringComparer.Ordinal).Count() != required.Count)
@@ -47,7 +50,9 @@ public sealed class NodeTargetResolver(INodeRegistry nodes, INodeConnections con
         var inventory = await nodes.ListAsync(actor, ct); var candidates = new List<NodeView>(); var online = 0;
         foreach (var node in inventory.Where(n => n.Enabled && n.RevokedAt is null))
         {
-            var live = connections.LiveCapabilities(node.Id); if (live is null) continue; online++;
+            var live = connections.LiveCapabilities(node.Id);
+            if (live is null && request.Reachability == "notification" && background is not null && await background.HasRouteAsync(node.Id, ct)) live = node.Capabilities;
+            if (live is null) continue; online++;
             if (required.All(r => live.Any(c => c.Name == r.Name && c.Version >= r.MinimumVersion))) candidates.Add(node);
         }
         var chosen = candidates.FirstOrDefault(n => n.Id == request.PreferredNodeId) ?? candidates

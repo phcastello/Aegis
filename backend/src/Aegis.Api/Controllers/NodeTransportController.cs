@@ -45,11 +45,12 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             // Register before a fresh administrative check: disable/revoke either cancels this
             // lease after commit, or this recheck observes the committed change. No admission gap.
             lease = connections.Register(nodeId, ready: false, capabilities: capabilities);
+            lease.Socket = socket;
             using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token);
             await connections.AnnounceAsync(lease, () => WithHistory(h => h.AnnouncedAsync(nodeId, version, lease.LastSeenAt, capabilities, session.Token)), session.Token);
             using (var scope = scopes.CreateScope()) await scope.ServiceProvider.GetRequiredService<INodeRegistry>().MeAsync(nodeId, session.Token);
             if (!connections.Activate(lease)) throw new OperationCanceledException();
-            await NodeProtocol.SendAsync(socket, "hello_ack", hello.MessageId, clock.GetUtcNow(),
+            await connections.WriteAsync(lease, "hello_ack", hello.MessageId,
                 new { heartbeatSeconds = options.HeartbeatSeconds, timeoutSeconds = options.TimeoutSeconds }, session.Token);
             logger.LogInformation("Node transport acknowledged NodeId={NodeId} ConnectionId={ConnectionId} Phase=hello_ack", nodeId, lease.ConnectionId);
             var lastPersisted = clock.GetUtcNow();
@@ -57,6 +58,7 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             {
                 var message = await NodeProtocol.ReceiveAsync(socket, ct).WaitAsync(session.Token);
                 if (message is null) break;
+                if (message.Type == "command_result") { connections.Result(lease, message.Payload!.Value.GetProperty("commandId").GetGuid(), message.Payload.Value.GetProperty("status").GetString()!); continue; }
                 if (message.Type != "heartbeat") throw new NodeProtocolException("unexpected_hello");
                 if (!connections.Heartbeat(lease)) break;
                 if (clock.GetUtcNow() - lastPersisted >= TimeSpan.FromSeconds(options.PersistSeconds))
@@ -65,7 +67,7 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
                     await WithHistory(h => h.SeenAsync(nodeId, history.SeenAt, history.HeartbeatAt, session.Token));
                     lastPersisted = clock.GetUtcNow();
                 }
-                await NodeProtocol.SendAsync(socket, "heartbeat_ack", message.MessageId, clock.GetUtcNow(), null, session.Token);
+                await connections.WriteAsync(lease, "heartbeat_ack", message.MessageId, null, session.Token);
                 logger.LogDebug("Node transport heartbeat NodeId={NodeId} ConnectionId={ConnectionId} Phase=heartbeat_ack", nodeId, lease.ConnectionId);
             }
         }
@@ -85,7 +87,9 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             logger.LogInformation("Node transport ended NodeId={NodeId} ConnectionId={ConnectionId} Reason={Reason} CloseCode={CloseCode}", nodeId, lease?.ConnectionId, reason, NodeProtocol.CloseCode(reason));
             try { using var closeDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(2), clock);
                 if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                    await socket.CloseOutputAsync((WebSocketCloseStatus)NodeProtocol.CloseCode(reason), reason, closeDeadline.Token);
+                    { if (lease is not null) await lease.Writer.WaitAsync(closeDeadline.Token);
+                      try { await socket.CloseOutputAsync((WebSocketCloseStatus)NodeProtocol.CloseCode(reason), reason, closeDeadline.Token); }
+                      finally { lease?.Writer.Release(); } }
             } catch (Exception e) when (e is OperationCanceledException or WebSocketException) { socket.Abort(); }
             if (lease is not null)
             {

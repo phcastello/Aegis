@@ -7,9 +7,13 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace Aegis.Api.Controllers;
 
 [ApiController, Route("api/nodes"), Authorize(Policy = "NodeManagement"), ServiceFilter(typeof(NodeApiFilter)), RequestSizeLimit(4096)]
-public sealed class NodesController(INodeRegistry registry, INodeTargetResolver resolver) : ControllerBase
+public sealed class NodesController(INodeRegistry registry, INodeTargetResolver resolver, INodeNotificationDispatcher notifications, INodePushRegistrations push) : ControllerBase
 {
     private Guid CurrentNode => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    public sealed record PushRequest(string Token);
+    [HttpPut("me/push")] public async Task<IActionResult> RegisterPush(PushRequest request, CancellationToken ct) { await push.RegisterAsync(CurrentNode, request.Token, ct); return Ok(new { registered = true }); }
+    [HttpDelete("me/push")] public async Task<IActionResult> RemovePush(CancellationToken ct) { await push.RemoveAsync(CurrentNode, ct); return Ok(new { registered = false }); }
+    [HttpPost("notifications/test"), EnableRateLimiting("node-notifications")] public async Task<IActionResult> TestNotification(NotificationShowRequest request, CancellationToken ct) => Ok(await notifications.DispatchAsync(CurrentNode, request, ct));
     public sealed record PriorityRequest(int TargetPriority);
     [HttpPatch("{id:guid}/priority")] public async Task<IActionResult> Priority(Guid id, PriorityRequest request, CancellationToken ct) => Ok(await registry.SetTargetPriorityAsync(CurrentNode, id, request.TargetPriority, ct));
     [HttpPost("resolve")] public async Task<IActionResult> Resolve(NodeTargetRequest request, CancellationToken ct) => Ok(await resolver.ResolveAsync(CurrentNode, request, ct));

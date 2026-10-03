@@ -26,7 +26,7 @@ public static class NodeProtocol
                 json.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() > 1)) throw new NodeProtocolException("invalid_envelope");
             if (json.GetProperty("protocolVersion").GetInt32() != 1) throw new NodeProtocolException("protocol_mismatch");
             var type = json.GetProperty("type").GetString();
-            if (type is not ("hello" or "heartbeat")) throw new NodeProtocolException("unknown_message");
+            if (type is not ("hello" or "heartbeat" or "command_result")) throw new NodeProtocolException("unknown_message");
             var id = json.GetProperty("messageId").GetGuid();
             if (id == Guid.Empty) throw new NodeProtocolException("invalid_message_id");
             var sentAt = json.GetProperty("sentAt").GetDateTimeOffset(); // diagnostic only
@@ -35,6 +35,11 @@ public static class NodeProtocol
             if (type == "hello" && (payload is null || payload.Value.ValueKind != JsonValueKind.Object ||
                 payload.Value.EnumerateObject().Any(p => p.Name is not ("appVersion" or "capabilities")) || payload.Value.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() > 1) || !payload.Value.TryGetProperty("appVersion", out var version) ||
                 version.ValueKind != JsonValueKind.String || version.GetString()!.Length > 80)) throw new NodeProtocolException("invalid_hello");
+            if (type == "command_result") {
+                if (payload is null || payload.Value.ValueKind != JsonValueKind.Object || payload.Value.EnumerateObject().Count() != 2 ||
+                    payload.Value.EnumerateObject().Any(p => p.Name is not ("commandId" or "status")) ||
+                    payload.Value.GetProperty("commandId").GetGuid() == Guid.Empty || !Aegis.Application.Nodes.NotificationContract.Results.Contains(payload.Value.GetProperty("status").GetString()!)) throw new NodeProtocolException("invalid_command_result");
+            }
             return new(1, type, id, sentAt, payload);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
@@ -62,7 +67,8 @@ public static class NodeProtocol
     }
     public static Task SendAsync(WebSocket socket, string type, Guid messageId, DateTimeOffset now, object? payload, CancellationToken ct)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { protocolVersion = 1, type, messageId, sentAt = now, payload });
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { protocolVersion = 1, type, messageId, sentAt = now, payload }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        if (bytes.Length > 4096) throw new Aegis.Application.Nodes.NodeException("invalid_notification", "Payload serializado excessivo.");
         return socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
     }
     public static int CloseCode(string reason) => reason switch {
