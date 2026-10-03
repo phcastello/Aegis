@@ -38,6 +38,16 @@ try {
   const runtime = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('runtime_info'));
   assert.equal(runtime.platform, 'windows'); assert.equal(runtime.version, version);
   assert.equal(runtime.backendUrl, 'https://aegis.phcastello.com');
+  // A second process must not overwrite the same installation's pairing checkpoint.
+  const secondary = spawn(resolve(process.argv[2]), [], { env: { ...process.env }, stdio: 'inherit' });
+  let secondaryExit;
+  secondary.on('exit', code => { secondaryExit = code; });
+  const secondaryDeadline = Date.now() + 15000;
+  while (secondaryExit === undefined && Date.now() < secondaryDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+  if (secondaryExit === undefined) spawnSync('taskkill', ['/PID', String(secondary.pid), '/T', '/F'], { stdio: 'ignore' });
+  assert.equal(secondaryExit, 0, 'Second Windows launch must exit before creating another runtime.');
+  assert.equal(exitCode, undefined, 'Original runtime must remain open.');
+  console.log('Windows single-instance identity checkpoint protection PASS.');
   await page.getByLabel('Sobre a Aegis').click();
   await page.getByText(`Aegis ${version}`, { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Retry', exact: true }).waitFor();

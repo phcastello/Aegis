@@ -16,7 +16,7 @@ import android.content.Context
 class Keyring {
     companion object {
         init {
-          	// see Note 1, below
+            // see Note 1, below
             System.loadLibrary("android_native_keyring_store")
         }
         external fun initializeNdkContext(context: Context);
@@ -34,7 +34,7 @@ Then, from your main activity’s `onCreate` method, you have your app load the 
           Keyring.initializeNdkContext(this.applicationContext);
           ...
       }
-    	...
+        ...
 ```
 
 Note 1: This code expects that a library file `libandroid_native_keyring_store.so` was compiled from this crate and attached to your application. See the next section for details on how to do that. It’s possible that your application framework may already provide a way to attach and pre-load external libraries. If so, you won’t need the `init` section above that loads the library.
@@ -70,7 +70,7 @@ Because the Android/Rust ecosystem is still relatively new, there is a lot of co
    - The linker is provided by the Android NDK. In your NDK root folder you will find a folder called `toolchains` containing a folder called `llvm` containing a folder called `prebuilt` that finally contains a folder named for your development platform (e.g., mine starts with `darwin`). Inside that is a folder named `bin` that contains all the relevant linkers. Each of the linkers is named `<target-architecture><sdk-version>-clang`, where `target-architecture` is the Rust triple you build and `sdk-version` is the Android SDK generation you are building for. You will want to use the appropriate `clang` linker for the target architecture and sdk.
 
    - Now you have to tell Rust which linker to use for each target. To do this, create a `.cargo` subdirectory of your source directory `~/src/android_native_keyring_store`, and create a `config.toml` file in that directory. To this new file, add a pair of lines for each target you will be building. They each will look something like this (but with a path and target of your choosing):
-     ```toml 
+     ```toml
      [target.aarch64-linux-android]
      linker = "$NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android29-clang"
      ```
@@ -117,4 +117,3 @@ at your option.
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you shall be dual licensed as above, without any additional terms or conditions.
-

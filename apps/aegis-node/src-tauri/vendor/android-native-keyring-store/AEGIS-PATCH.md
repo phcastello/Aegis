@@ -3,7 +3,7 @@
 Source: crates.io `android-native-keyring-store` **1.0.0**, archive SHA-256
 `48c6349ddff23194f8fdce2ea8849380f5a4868c1648965b70e801e104cba9b3`.
 Upstream: https://github.com/open-source-cooperative/android-native-keyring-store
-MIT/Apache licenses and source are retained. No cryptographic/storage layout change.
+MIT/Apache licenses and source are retained; README whitespace is normalized. No cryptographic/storage layout change.
 
 The upstream JNI wrapper returns `SharedPreferences.Editor.commit()`'s boolean,
 but its store/credential callers ignore `false`. Android documents `false` as a

@@ -47,7 +47,17 @@ async fn check_android_update() -> Result<Option<updates::AndroidUpdate>, String
 #[cfg(feature = "native-runtime")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(
+    let builder = tauri::Builder::default();
+    // One Windows process owns this installation's credential checkpoint at a time.
+    // Register first so a second launch exits before secure-store initialization.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
+    }));
+    let builder = builder.plugin(
         tauri_plugin_opener::Builder::new()
             .open_js_links_on_click(false)
             .build(),
