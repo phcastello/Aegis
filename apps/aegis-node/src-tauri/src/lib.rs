@@ -111,6 +111,7 @@ pub fn run() {
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
             tauri::WebviewWindowBuilder::from_config(app, config)?
+                .visible(!(cfg!(windows) && std::env::args().any(|a| a == "--autostart")))
                 .on_navigation(move |url| {
                     url.origin().ascii_serialization() == "https://tauri.localhost"
                         || (cfg!(debug_assertions)

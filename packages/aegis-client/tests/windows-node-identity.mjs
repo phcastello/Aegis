@@ -109,8 +109,13 @@ try {
   peerSocket = await connectPeer(peerCredential, identity.node.appVersion);
   assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
   console.log('Windows real native capability advertisement + two different peers + priority/preferred/version + live offline/reconnect resolution PASS.');
+  const hide = spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});
+  assert.equal(hide.status,0);await new Promise(r=>setTimeout(r,1000));assert.equal(exited,undefined);
+  assert.equal((await call('',undefined,peerCredential)).body.find(n=>n.id===pcId).availability,'online');
   const notification = await call('/notifications/test', {preferredNodeId:pcId,title:'Aegis CI',body:'Native fixture'},peerCredential);
   assert.equal(notification.status,200);assert.equal(notification.body.transport,'live_websocket');assert.equal(notification.body.status,'success');
+  const secondary=spawn(exe,[],{env:{...process.env},stdio:'inherit'});let secondaryExit;
+  secondary.on('exit',code=>secondaryExit=code);await waitUntil(()=>secondaryExit!==undefined,15000);assert.equal(secondaryExit,0);assert.equal(exited,undefined);
   const settings = await invoke('node_notification_settings');assert.equal(settings.granted,true);
   await invoke('node_set_autostart',{enabled:true});assert.equal((await invoke('node_notification_settings')).autostart,true);
   await invoke('node_set_autostart',{enabled:false});assert.equal((await invoke('node_notification_settings')).autostart,false);
