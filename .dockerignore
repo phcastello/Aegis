@@ -6,3 +6,6 @@
 .env.*
 frontend/
 conversas_*.zip
+
+.runtime-secrets/
+**/google-services.json

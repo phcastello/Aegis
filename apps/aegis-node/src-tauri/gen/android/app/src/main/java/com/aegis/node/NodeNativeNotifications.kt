@@ -27,7 +27,7 @@ object NodeNativeNotifications {
     val now=Instant.now().epochSecond
     val expiry=try {Instant.parse(expires).epochSecond} catch(_:Exception){return "failed"}
     if(expiry<=now) return "expired"
-    if(expiry>now+300 || title.isBlank() || title.length>120 || body.length>2000 || (title+body).toByteArray(Charsets.UTF_8).size>2800 || title.any {it.isISOControl()} || body.any {it.isISOControl() && it!='\n' && it!='\t'}) return "failed"
+    if(expiry>now+300 || !NodeNotificationPayload.validText(title,body)) return "failed"
     try { if(UUID.fromString(id).toString()!=id || id=="00000000-0000-0000-0000-000000000000") return "failed" } catch(_:Exception){return "failed"}
     if(!granted(context)) return "permission_denied"
     val prefs=prefs(context)
