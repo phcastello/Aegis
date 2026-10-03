@@ -25,7 +25,7 @@ export const nodeServices: NodeServices = {
   revoke: (id) => invoke('node_revoke', { id }), createPairingCode: () => invoke('node_create_pairing_code')
 };
 
-export interface TransportStatus { transportState: 'connecting' | 'online' | 'reconnecting' | 'offline'; lastError: string | null }
+export interface TransportStatus { transportState: 'connecting' | 'online' | 'reconnecting' | 'offline'; lastError: string | null; lastDiagnostic?: { phase: string; reason: string; httpStatus: number | null; closeCode: number | null } | null }
 export const transportServices = {
   status: (): Promise<TransportStatus> => invoke('node_transport_status'),
   reconnect: (): Promise<void> => invoke('node_transport_reconnect')

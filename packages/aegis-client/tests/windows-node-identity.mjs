@@ -47,7 +47,8 @@ try {
   const panel = page.getByRole('dialog', { name: 'Dispositivos / Nodes', exact: true });
   await panel.getByLabel('Nome do dispositivo').fill('PC CI'); await panel.getByLabel('Código de pareamento').fill(readFileSync(bootstrap, 'utf8'));
   rmSync(bootstrap); await panel.getByRole('button', { name: 'Parear dispositivo', exact: true }).click();
-  await panel.getByText('PC CI', { exact: true }).first().waitFor();
+  await panel.getByText('PC CI', { exact: true }).waitFor();
+  assert.equal(await panel.getByText('PC CI', { exact: true }).count(), 1);
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000);
   let identity = await invoke('node_status'); assert.equal(identity.state, 'paired'); const pcId = identity.node.id;
   assert.doesNotMatch(JSON.stringify(identity), /credential|recoveryKey|secretHash/i);
@@ -57,11 +58,23 @@ try {
   const attemptId = randomUUID(); const paired = await call('/pair', { attemptId, code: code.code, recoveryKey: randomBytes(32).toString('base64url'), name: 'Android peer CI', platform: 'android', appVersion: identity.node.appVersion, protocolVersion: 1 });
   assert.equal(paired.status, 200); const peerCredential = paired.body.credential;
   const peer = await call('/pair/finalize', { attemptId, credential: peerCredential }); assert.equal(peer.status, 200);
-  assert.equal((await invoke('node_list')).length, 2);
+  const initialList = await invoke('node_list'); assert.equal(initialList.length, 2);
+  assert.equal(initialList.filter(n => n.id === pcId).length, 1);
   await waitUntil(async () => (await call('/' + pcId + '/enable', {}, peerCredential)).status === 200, 15000);
   // Observe presence through the second peer's authenticated HTTP API, outside the WebView.
   await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'online', 15000);
   await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.lastHeartbeatAt != null, 10000);
+  // Keep real native transport healthy through four negotiated heartbeat cycles.
+  for (let cycle = 0; cycle < 4; cycle++) {
+    await new Promise(r => setTimeout(r, 2100));
+    assert.equal((await invoke('node_transport_status')).transportState, 'online');
+    const list = (await call('', undefined, peerCredential)).body;
+    assert.equal(list.filter(n => n.id === pcId).length, 1);
+    assert.equal(list.find(n => n.id === pcId).availability, 'online');
+    assert.equal((await invoke('node_list')).find(n => n.id === pcId).availability, 'online');
+  }
+  assert.equal(await panel.locator(`[data-node-id="${pcId}"]`).count(), 1);
+  assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
   await close();
   await waitUntil(async () => (await call('', undefined, peerCredential)).body.find(n => n.id === pcId)?.availability === 'offline', 10000);
   await open();

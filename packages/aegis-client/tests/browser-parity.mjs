@@ -118,7 +118,11 @@ try {
      await panel.getByLabel('Nome do dispositivo').fill('Celular Pedro');
      await panel.getByLabel('Código de pareamento').fill('ABCD-EFGH-JKMP-QRST-VWXY-1234');
      await panel.getByRole('button', { name: 'Parear dispositivo', exact: true }).click();
-     await panel.getByText('Celular Pedro', { exact: true }).first().waitFor();
+     await panel.getByText('Celular Pedro', { exact: true }).waitFor();
+     assert.equal(await panel.getByText('Celular Pedro', { exact: true }).count(), 1);
+     assert.equal(await panel.locator('[data-node-id="native-current"]').count(), 1);
+     assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
+     assert.equal(await panel.locator('li').count(), 2);
      await panel.getByRole('button', { name: 'Adicionar dispositivo', exact: true }).click();
      await panel.getByText('ABCD-EFGH-JKMP-QRST-VWXY-1234', { exact: true }).waitFor();
      const pc = panel.locator('li').filter({ hasText: 'PC' });

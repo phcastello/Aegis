@@ -43,14 +43,14 @@ async function confirmAction() {
         <label>Código de pareamento<input v-model="code" required autocomplete="off" autocapitalize="characters" :spellcheck="false" :disabled="busy" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" /></label>
         <button type="submit" :disabled="busy">{{ busy ? 'Pareando…' : 'Parear dispositivo' }}</button>
       </form>
-      <div v-if="identity.node"><strong>{{ identity.node.name }}</strong> · Este dispositivo <small>{{ identity.node.id }}</small></div>
       <p v-if="identity.node">Transporte deste Node: {{ labels[transport.transportState] }}</p>
       <p v-if="transport.lastError" role="status">{{ transport.lastError }}</p>
+      <small v-if="transport.lastDiagnostic">Diagnóstico: {{ transport.lastDiagnostic.phase }} / {{ transport.lastDiagnostic.reason }}<span v-if="transport.lastDiagnostic.httpStatus"> · HTTP {{ transport.lastDiagnostic.httpStatus }}</span><span v-if="transport.lastDiagnostic.closeCode"> · Close {{ transport.lastDiagnostic.closeCode }}</span></small>
       <button :disabled="busy" @click="transportServices.reconnect(); refresh()">{{ busy ? 'Aguarde…' : 'Atualizar / Tentar novamente' }}</button>
       <button v-if="identity.state === 'paired'" :disabled="busy" @click="createCode">Adicionar dispositivo</button>
       <div v-if="pairingCode" class="pairing-code"><p>Digite este código no novo dispositivo:</p><code>{{ pairingCode.code }}</code><p>Expira em {{ new Date(pairingCode.expiresAt).toLocaleTimeString() }}. Uso único.</p></div>
       <ul>
-        <li v-for="node in nodes" :key="node.id">
+        <li v-for="node in nodes" :key="node.id" :data-node-id="node.id">
           <strong>{{ node.name }}</strong><span v-if="isCurrent(node)"> · Este dispositivo</span>
           <p>{{ node.platform === 'android' ? 'Android' : 'Windows' }} · {{ node.revokedAt ? 'Revogado' : node.enabled ? 'Habilitado' : 'Desativado' }}</p>
           <p>Disponibilidade: {{ node.availability === 'online' ? '● Online' : 'Offline' }}</p>
