@@ -22,7 +22,7 @@ public sealed class NodeApiTests
         builder.Services.AddNodeApi(); builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(name)); builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
         var app = builder.Build(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
-        app.MapGet("/existing-chat-boundary", () => "chat unchanged"); await app.StartAsync();
+        app.MapGet("/existing-chat-boundary", (Microsoft.AspNetCore.Http.HttpContext context) => new { authenticated = context.User.Identity?.IsAuthenticated ?? false }); await app.StartAsync();
         var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(name).Options);
         return (app, app.GetTestClient(), new(db, TimeProvider.System));
     }
@@ -47,6 +47,8 @@ public sealed class NodeApiTests
         var receipt = (await response.Content.ReadFromJsonAsync<PairNodeReceipt>())!;
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/nodes/pair/finalize", new FinalizeNodeRequest(request.AttemptId, receipt.Credential))).StatusCode);
         client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + receipt.Credential);
+        var boundary = await client.GetFromJsonAsync<JsonElement>("/existing-chat-boundary");
+        Assert.False(boundary.GetProperty("authenticated").GetBoolean());
         var list = await client.GetAsync("/api/nodes"); Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         Assert.DoesNotContain(receipt.Credential, await list.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.OK, (await client.PatchAsJsonAsync("/api/nodes/" + receipt.NodeId, new { name = "PC renamed" })).StatusCode);

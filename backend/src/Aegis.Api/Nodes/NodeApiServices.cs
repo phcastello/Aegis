@@ -7,6 +7,9 @@ public static class NodeApiServices
 {
     public static IServiceCollection AddNodeApi(this IServiceCollection services)
     {
+        // ASP.NET otherwise promotes a single registered scheme to the implicit default.
+        // Node credentials are opt-in through NodeManagement, never generic tool authorization.
+        AppContext.SetSwitch("Microsoft.AspNetCore.Authentication.SuppressAutoDefaultScheme", true);
         services.AddAuthentication().AddScheme<AuthenticationSchemeOptions, NodeAuthenticationHandler>(NodeAuthenticationHandler.SchemeName, _ => { });
         services.AddAuthorization(options => options.AddPolicy("NodeManagement", policy =>
             policy.AddAuthenticationSchemes(NodeAuthenticationHandler.SchemeName).RequireAuthenticatedUser()));
