@@ -29,17 +29,28 @@ pub(crate) trait CredentialSource: Send + Sync + 'static {
         code: &'static str,
     ) -> impl Future<Output = Result<bool, ()>> + Send;
 }
+// Only fixed local classifications and numeric status codes cross the IPC boundary.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportDiagnostic {
+    pub phase: &'static str,
+    pub reason: &'static str,
+    pub http_status: Option<u16>,
+    pub close_code: Option<u16>,
+}
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TransportStatus {
     pub transport_state: &'static str,
     pub last_error: Option<&'static str>,
+    pub last_diagnostic: Option<TransportDiagnostic>,
 }
 impl Default for TransportStatus {
     fn default() -> Self {
         Self {
             transport_state: "offline",
             last_error: None,
+            last_diagnostic: None,
         }
     }
 }
@@ -146,10 +157,59 @@ impl Drop for NodeTransportManager {
     }
 }
 fn state(status: &Mutex<TransportStatus>, value: &'static str, error: Option<&'static str>) {
-    *status.lock().unwrap() = TransportStatus {
-        transport_state: value,
-        last_error: error,
+    let mut status = status.lock().unwrap();
+    status.transport_state = value;
+    status.last_error = error;
+    if value == "online" {
+        status.last_diagnostic = None;
+    }
+}
+fn diagnose(
+    status: &Mutex<TransportStatus>,
+    phase: &'static str,
+    reason: &'static str,
+    http_status: Option<u16>,
+    close_code: Option<u16>,
+) {
+    let diagnostic = TransportDiagnostic {
+        phase,
+        reason,
+        http_status,
+        close_code,
     };
+    // No library error formatting: some errors carry request headers or server prose.
+    eprintln!("Node transport phase={phase} reason={reason} http_status={http_status:?} close_code={close_code:?}");
+    status.lock().unwrap().last_diagnostic = Some(diagnostic);
+}
+fn retry(status: &Mutex<TransportStatus>, phase: &'static str, reason: &'static str) -> Outcome {
+    diagnose(status, phase, reason, None, None);
+    Outcome::Retry
+}
+fn diagnosed_close(
+    status: &Mutex<TransportStatus>,
+    phase: &'static str,
+    frame: Option<CloseFrame>,
+) -> Outcome {
+    let code = frame.map(|f| u16::from(f.code));
+    let reason = match code {
+        Some(4001) => "node_revoked",
+        Some(4003) => "node_disabled",
+        Some(4006) => "protocol_mismatch",
+        Some(4008) => "heartbeat_timeout",
+        Some(4000) => "connection_replaced",
+        _ => "server_disconnected",
+    };
+    diagnose(status, phase, reason, None, code);
+    code.map(classify_close).unwrap_or(Outcome::Retry)
+}
+fn diagnose_connect(status: &Mutex<TransportStatus>, error: &Error) {
+    let (reason, http) = match error {
+        Error::Http(response) => ("http_status", Some(response.status().as_u16())),
+        Error::Tls(_) => ("tls_failed", None),
+        Error::Protocol(_) | Error::HttpFormat(_) => ("upgrade_failed", None),
+        _ => ("network_connect_failed", None),
+    };
+    diagnose(status, "upgrade", reason, http, None);
 }
 #[derive(Default)]
 struct Backoff(u32);
@@ -378,8 +438,11 @@ async fn session(
     .await
     {
         Ok(Ok((s, _))) => s,
-        Ok(Err(e)) => return classify_http(&e),
-        Err(_) => return Outcome::Retry,
+        Ok(Err(e)) => {
+            diagnose_connect(status, &e);
+            return classify_http(&e);
+        }
+        Err(_) => return retry(status, "upgrade", "connect_timeout"),
     };
     let (id, hello) = envelope(
         "hello",
@@ -389,20 +452,28 @@ async fn session(
         timeout(config.connect_timeout, socket.send(hello)).await,
         Ok(Ok(()))
     ) {
-        return Outcome::Retry;
+        return retry(status, "hello", "network_disconnected");
     }
     let received = match timeout(config.connect_timeout, socket.next()).await {
         Ok(Some(Ok(m))) => m,
-        _ => return Outcome::Retry,
+        Err(_) => return retry(status, "hello", "hello_timeout"),
+        _ => return retry(status, "hello", "network_disconnected"),
     };
+    if let Message::Close(frame) = received {
+        return diagnosed_close(status, "hello", frame);
+    }
     let hello = match ack(received, "hello_ack", &id) {
         Ok(a) => a,
-        Err(e) => return e,
+        Err(e) => {
+            diagnose(status, "hello", "hello_rejected", None, None);
+            return e;
+        }
     };
     let payload = hello.payload.unwrap_or_default();
     let interval = payload["heartbeatSeconds"].as_u64().unwrap_or(0);
     let deadline = payload["timeoutSeconds"].as_u64().unwrap_or(0);
     if interval == 0 || interval > 300 || deadline < interval * 2 || deadline > 900 {
+        diagnose(status, "hello", "protocol_error", None, None);
         return Outcome::Incompatible;
     }
     *online_since = Some(Instant::now());
@@ -417,24 +488,24 @@ async fn session(
                 let _ = timeout(Duration::from_secs(1), socket.send(close)).await;
                 return Outcome::Retry;
             }
-            _ = tokio::time::sleep_until(ack_deadline) => return Outcome::Retry,
+            _ = tokio::time::sleep_until(ack_deadline) => return retry(status, "heartbeat", "heartbeat_timeout"),
             _ = tokio::time::sleep_until(next_heartbeat), if pending.is_none() => {
                 let (id, heartbeat) = envelope("heartbeat", None);
-                if !matches!(timeout(config.connect_timeout, socket.send(heartbeat)).await, Ok(Ok(()))) { return Outcome::Retry; }
+                if !matches!(timeout(config.connect_timeout, socket.send(heartbeat)).await, Ok(Ok(()))) { return retry(status, "heartbeat", "network_disconnected"); }
                 pending = Some(id);
                 next_heartbeat = Instant::now() + Duration::from_secs(interval);
             }
             received = socket.next() => {
                 match received {
-                    Some(Ok(Message::Ping(_))) => { if socket.flush().await.is_err() { return Outcome::Retry; } }
+                    Some(Ok(Message::Ping(_))) => { if socket.flush().await.is_err() { return retry(status, "heartbeat", "network_disconnected"); } }
                     Some(Ok(Message::Pong(_))) => {},
-                    Some(Ok(Message::Close(f))) => return f.map(|f| classify_close(u16::from(f.code))).unwrap_or(Outcome::Retry),
+                    Some(Ok(Message::Close(f))) => return diagnosed_close(status, "heartbeat", f),
                     Some(Ok(message)) => {
-                        let Some(id) = pending.take() else { return Outcome::Incompatible; };
-                        if let Err(e) = ack(message, "heartbeat_ack", &id) { return e; }
+                        let Some(id) = pending.take() else { diagnose(status, "heartbeat", "protocol_error", None, None); return Outcome::Incompatible; };
+                        if let Err(e) = ack(message, "heartbeat_ack", &id) { diagnose(status, "heartbeat", "heartbeat_rejected", None, None); return e; }
                         ack_deadline = Instant::now() + Duration::from_secs(deadline);
                     }
-                    _ => return Outcome::Retry,
+                    _ => return retry(status, "heartbeat", "network_disconnected"),
                 }
             }
         }
@@ -604,7 +675,8 @@ mod tests {
         assert!(manager.start(source.clone(), config(port)));
         assert!(!manager.start(source, config(port)));
         until(|| manager.state().transport_state == "online").await;
-        until(|| heartbeats.load(Ordering::SeqCst) > 0).await;
+        until(|| heartbeats.load(Ordering::SeqCst) >= 4).await;
+        assert_eq!(manager.state().transport_state, "online");
         assert_eq!(connections.load(Ordering::SeqCst), 1);
         let public = serde_json::to_string(&manager.state()).unwrap();
         assert!(!public.contains("test-secret"));
@@ -699,6 +771,60 @@ mod tests {
             ));
             assert_eq!(classify_http(&error), expected);
         }
+    }
+    #[tokio::test]
+    async fn stripped_proxy_upgrade_reports_http_400_without_server_prose_or_secret() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let _ = accept_hdr_async(stream, |_: &Request, _: Response| {
+                    Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(400)
+                        .header("X-Aegis-Node-Error", "websocket_required")
+                        .body(Some(
+                            "test-secret-never-public arbitrary server text".into(),
+                        ))
+                        .unwrap())
+                })
+                .await;
+            }
+        });
+        let manager = NodeTransportManager::default();
+        manager.start(Source::paired(), config(port));
+        until(|| manager.state().last_diagnostic.is_some()).await;
+        let diagnostic = manager.state().last_diagnostic.unwrap();
+        assert_eq!(diagnostic.phase, "upgrade");
+        assert_eq!(diagnostic.http_status, Some(400));
+        assert_eq!(diagnostic.reason, "http_status");
+        assert_eq!(manager.state().transport_state, "reconnecting");
+        assert!(!serde_json::to_string(&manager.state())
+            .unwrap()
+            .contains("test-secret"));
+        manager.stop().await;
+        server.abort();
+    }
+    #[tokio::test]
+    async fn silent_server_reports_hello_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let manager = NodeTransportManager::default();
+        let mut options = config(port);
+        options.connect_timeout = Duration::from_millis(100);
+        manager.start(Source::paired(), options);
+        until(|| manager.state().last_diagnostic.is_some()).await;
+        assert_eq!(
+            manager.state().last_diagnostic.unwrap().reason,
+            "hello_timeout"
+        );
+        assert_eq!(manager.state().last_diagnostic.unwrap().phase, "hello");
+        manager.stop().await;
+        server.abort();
     }
     #[tokio::test]
     async fn network_loss_and_server_restart_recover_without_app_restart() {
