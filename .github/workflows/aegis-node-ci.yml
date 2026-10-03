@@ -137,6 +137,15 @@ jobs:
       - if: matrix.android == 'true'
         run: npm run build:android
       - if: matrix.android == 'true'
+        name: Compile minified Android release with isolated CI signing key
+        run: |
+          AEGIS_CI_KEYSTORE="$RUNNER_TEMP/aegis-node-ci.p12"
+          trap 'rm -f "$AEGIS_CI_KEYSTORE"' EXIT
+          keytool -genkeypair -keystore "$AEGIS_CI_KEYSTORE" -storetype PKCS12 -storepass ci-test-only -keypass ci-test-only -alias aegis-ci -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Aegis CI' > /dev/null 2>&1
+          export ANDROID_KEYSTORE_PATH="$AEGIS_CI_KEYSTORE"
+          export ANDROID_KEYSTORE_PASSWORD=ci-test-only ANDROID_KEY_ALIAS=aegis-ci ANDROID_KEY_PASSWORD=ci-test-only
+          npm run build:android:release
+      - if: matrix.android == 'true'
         name: Android native payload validation unit tests
         run: src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
       - if: matrix.android == 'true'

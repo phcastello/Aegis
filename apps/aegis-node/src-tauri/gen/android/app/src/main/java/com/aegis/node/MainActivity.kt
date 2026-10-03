@@ -13,6 +13,13 @@ class MainActivity : TauriActivity() {
     NodeNativeNotifications.initialize(this)
   }
 
+  // Native Rust JNI only; deliberately not a JavascriptInterface or arbitrary command API.
+  fun showNodeNotification(payload:String):String = try {
+    val command=org.json.JSONObject(payload)
+    if(command.getString("capability")!="notification.show" || command.getInt("capabilityVersion")!=1) "unsupported"
+    else { val input=command.getJSONObject("input");NodeNativeNotifications.show(this,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body")) }
+  } catch(_:Exception){"failed"}
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     // Respect Android edge-to-edge system bars/cutouts and the soft keyboard.

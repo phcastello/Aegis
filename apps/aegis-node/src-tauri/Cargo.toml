@@ -45,6 +45,7 @@ keyring-core = "1.0.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-native-keyring-store = "1.0.0"
+jni = "0.21"
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = "1.1.0"
