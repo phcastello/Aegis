@@ -114,9 +114,12 @@ try {
     check(me.id === node.id && list.filter(n => n.id === me.id).length === 1, 'current_node_not_unique');
     for (const test of nodes) check(list.find(n => n.id === test.id)?.availability === 'online', 'availability_inconsistent');
     check(me.availability === 'online', 'me_availability_inconsistent');
+    if (capabilities) check(JSON.stringify(me.capabilities) === JSON.stringify(node.capabilities), 'capability_snapshot_inconsistent');
     check(me.lastHeartbeatAt && Date.now() - Date.parse(me.lastHeartbeatAt) < 60000, 'heartbeat_history_not_advancing');
     console.log(`Presence NodeId=${node.id} Online=true LastHeartbeatAt=${me.lastHeartbeatAt}`); }
-  if (capabilities) {
+  // The global priority/fallback matrix assumes an isolated inventory. Public notification
+  // diagnostics target only the disposable identity, preserving the owner's eligible Nodes.
+  if (capabilities && !(notifications && origin.startsWith('https:'))) {
     const list = await http('', first.secret);
     for (const node of nodes) check(JSON.stringify(list.find(n => n.id === node.id).capabilities) === JSON.stringify(node.capabilities), 'capability_snapshot_inconsistent');
     await http('/' + first.id + '/priority', first.secret, { targetPriority: 10 }, origin, 'PATCH');
