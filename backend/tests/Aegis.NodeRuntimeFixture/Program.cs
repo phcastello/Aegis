@@ -25,6 +25,11 @@ builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(databas
 builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
 var app = builder.Build(); app.UseWebSockets(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
 app.MapGet("/api/health", () => new { status = "ok" });
+// Isolated test fixture only. Counts contain no endpoint token or credential.
+app.MapGet("/fixture/nodes/{id:guid}/push-count", async (Guid id, AegisDbContext db) => new {
+    count = await db.NodePushRegistrations.CountAsync(r => r.NodeId == id),
+    valid = await db.NodePushRegistrations.CountAsync(r => r.NodeId == id && r.ExpiresAt > DateTimeOffset.UtcNow)
+});
 using (var scope = app.Services.CreateScope())
 {
     var code = await scope.ServiceProvider.GetRequiredService<INodeRegistry>().CreateCodeAsync(null);

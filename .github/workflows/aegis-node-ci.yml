@@ -133,6 +133,9 @@ jobs:
         name: Real Windows pairing, OS storage, restart, capabilities and target resolution
         run: node ../../packages/aegis-client/tests/windows-node-identity.mjs src-tauri/target/x86_64-pc-windows-msvc/debug/aegis-node.exe
       - if: matrix.android == 'false'
+        name: Native HttpApi notification dispatch and Android push register refresh against real controllers
+        run: node ../../scripts/node-transport-probe/native-http.mjs
+      - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
       - if: matrix.android == 'true'
         run: npm run build:android

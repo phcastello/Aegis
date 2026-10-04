@@ -109,6 +109,16 @@ try {
   peerSocket = await connectPeer(peerCredential, identity.node.appVersion);
   assert.equal((await resolveTarget('audio.input')).node.id, peer.body.id);
   console.log('Windows real native capability advertisement + two different peers + priority/preferred/version + live offline/reconnect resolution PASS.');
+  // Regression: the real button invokes native node_test_notification -> HttpApi ->
+  // the production controller -> live dispatcher -> native command/result.
+  const pcRow = panel.locator(`[data-node-id="${pcId}"]`);
+  await pcRow.getByRole('button', {name:'Enviar notificação de teste', exact:true}).click();
+  await pcRow.getByRole('status').filter({hasText:'PC CI: success · live_websocket'}).waitFor();
+  const nativeNotification = await invoke('node_test_notification',{id:pcId});
+  assert.equal(nativeNotification.node.id,pcId);
+  assert.equal(nativeNotification.transport,'live_websocket');
+  assert.equal(nativeNotification.status,'success');
+  console.log('Windows real button -> native HttpApi POST /api/nodes/notifications/test -> production controller -> WebSocket notification.show -> native OS call -> command_result success PASS.');
   const hide = spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});
   assert.equal(hide.status,0);await new Promise(r=>setTimeout(r,1000));assert.equal(exited,undefined);
   assert.equal((await call('',undefined,peerCredential)).body.find(n=>n.id===pcId).availability,'online');
