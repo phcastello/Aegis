@@ -195,13 +195,13 @@ jobs:
       - name: Build debug APK and instrumentation
         run: |
           npm run tauri -- android build --debug --apk --target x86_64
-          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -PabiList=x86_64
+          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
       - name: Test real renderer then real native live path
         run: node ../../scripts/node-transport-probe/android-native.mjs debug
       - name: Build minified release APK and instrumentation
         run: |
           npm run tauri -- android build --apk --target x86_64
-          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalReleaseAndroidTest -PaegisTestBuildType=release -PabiList=x86_64
+          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalReleaseAndroidTest -x :app:rustBuildUniversalRelease -PaegisTestBuildType=release -PabiList=x86_64
       - name: Test minified renderer and fixed JNI methods in real live execution
         run: |
           adb uninstall com.aegis.node.test
