@@ -349,12 +349,12 @@ impl<V: Vault, A: Api> Identity<V, A> {
     }
 }
 
-#[cfg(feature = "native-runtime")]
+#[cfg(any(test, feature = "native-runtime"))]
 pub(crate) struct HttpApi {
     client: reqwest::Client,
     origin: String,
 }
-#[cfg(feature = "native-runtime")]
+#[cfg(any(test, feature = "native-runtime"))]
 impl HttpApi {
     pub fn new(origin: String) -> Result<Self, String> {
         Ok(Self {
@@ -410,7 +410,7 @@ impl HttpApi {
         serde_json::from_slice(&bytes).map_err(|_| unavailable())
     }
 }
-#[cfg(feature = "native-runtime")]
+#[cfg(any(test, feature = "native-runtime"))]
 impl Api for HttpApi {
     async fn pair(&self, request: &Pending) -> Result<Receipt, ApiError> {
         self.call(
@@ -504,6 +504,8 @@ impl Api for HttpApi {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    include!("node_identity_http_tests.rs");
+
     #[derive(Default)]
     struct Storage {
         record: Option<Record>,
@@ -913,19 +915,19 @@ mod tests {
     }
 }
 
-#[cfg(feature = "native-runtime")]
+#[cfg(any(test, feature = "native-runtime"))]
 impl<V: Vault> Identity<V, HttpApi> {
     pub async fn test_notification(&self, id: String) -> Result<serde_json::Value, String> {
         uuid::Uuid::parse_str(&id).map_err(|_| "Node inválido.")?;
-        self.api.call(reqwest::Method::POST,"/api/nodes/notifications/test",Some(&self.credential().await?),Some(serde_json::json!({"preferredNodeId":id,"title":"Aegis","body":"Teste de notificação nativa.","ttlSeconds":60}))).await.map_err(|e|self.operation_error(e))
+        self.api.call(reqwest::Method::POST,"/notifications/test",Some(&self.credential().await?),Some(serde_json::json!({"preferredNodeId":id,"title":"Aegis","body":"Teste de notificação nativa.","ttlSeconds":60}))).await.map_err(|e|self.operation_error(e))
     }
-    #[cfg(target_os = "android")]
+    #[cfg(any(test, target_os = "android"))]
     pub async fn register_push(&self, token: &str) -> Result<(), String> {
         let _: serde_json::Value = self
             .api
             .call(
                 reqwest::Method::PUT,
-                "/api/nodes/me/push",
+                "/me/push",
                 Some(&self.credential().await?),
                 Some(serde_json::json!({"token":token})),
             )
