@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
 const [buildType = 'debug', bootstrap] = process.argv.slice(2);
 assert(['debug', 'release'].includes(buildType));
 const serial = process.env.AEGIS_TEST_EMULATOR_SERIAL ?? 'emulator-5554';
@@ -39,7 +40,7 @@ const instrumentation = (testClass, extra = []) => {
   assert.match(output, /OK \(\d+ tests?\)/, 'Real Android framework test failed');
   assert.doesNotMatch(output, /FAILURES!!!|INSTRUMENTATION_FAILED/);
 };
-run(['logcat', '-c']);
+try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
   permission(true);
   instrumentation('NodeNotificationFrameworkTest');
@@ -51,10 +52,14 @@ try {
   }
 } finally {
   permission(true);
-  const logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S']);
+  let logs = '';
+  try { logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S']); } catch { console.log('phase=logcat_read reason=unavailable'); }
   for (const line of logs.split('\n')) {
     const safe = line.match(/phase=[a-z_]{1,32} errorType=[A-Za-z0-9_]{1,64}$/);
     if (safe) console.log(`AegisNodeNotification ${safe[0]}`);
   }
+  let crash = '';
+  try { crash = run(['logcat','-d','-s','AndroidRuntime:E','libc:F','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
+  for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
 }
 console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap?' including native live WebSocket/JNI':''}`);
