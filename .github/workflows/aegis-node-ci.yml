@@ -180,14 +180,12 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '8.0.x'
-      - name: Prepare real emulator and isolated signing
+      - name: Prepare KVM and isolated signing
         run: |
           rustup target add x86_64-linux-android
-          sdkmanager 'emulator' 'system-images;android-${{ matrix.api }};google_apis;x86_64'
-          printf 'no\n' | avdmanager create avd --name aegis-notification-ci --package 'system-images;android-${{ matrix.api }};google_apis;x86_64'
-          sudo chmod 666 /dev/kvm
-          "$ANDROID_HOME/emulator/emulator" -avd aegis-notification-ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 > "$RUNNER_TEMP/aegis-emulator.log" 2>&1 &
-          echo "AEGIS_TEST_EMULATOR_PID=$!" >> "$GITHUB_ENV"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
           keytool -genkeypair -keystore "$RUNNER_TEMP/aegis-framework.p12" -storetype PKCS12 -storepass ci-test-only -keypass ci-test-only -alias aegis-ci -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Aegis framework CI' > /dev/null 2>&1
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/aegis-framework.p12" >> "$GITHUB_ENV"
           echo 'ANDROID_KEYSTORE_PASSWORD=ci-test-only' >> "$GITHUB_ENV"
@@ -198,16 +196,27 @@ jobs:
           npm run tauri -- android build --debug --apk --target x86_64
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
       - name: Test real renderer then real native live path
-        run: node ../../scripts/node-transport-probe/android-native.mjs debug
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          working-directory: apps/aegis-node
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048
+          script: node ../../scripts/node-transport-probe/android-native.mjs debug
       - name: Build minified release APK and instrumentation
         run: |
           npm run tauri -- android build --apk --target x86_64
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalReleaseAndroidTest -x :app:rustBuildUniversalRelease -PaegisTestBuildType=release -PabiList=x86_64
       - name: Test minified renderer and fixed JNI methods in real live execution
-        run: |
-          adb uninstall com.aegis.node.test
-          adb uninstall com.aegis.node
-          node ../../scripts/node-transport-probe/android-native.mjs release
-      - name: Stop disposable emulator
-        if: always()
-        run: adb -s emulator-5554 emu kill || true
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          working-directory: apps/aegis-node
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048
+          script: |
+            adb uninstall com.aegis.node.test || true
+            adb uninstall com.aegis.node || true
+            node ../../scripts/node-transport-probe/android-native.mjs release
