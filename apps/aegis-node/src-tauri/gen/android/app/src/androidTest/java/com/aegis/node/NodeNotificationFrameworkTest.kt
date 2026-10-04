@@ -12,6 +12,8 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /** Runs on the Android framework, including the minified release APK; no OS mocks. */
@@ -41,12 +43,22 @@ class NodeNotificationFrameworkTest {
     assertNotNull(manager.getNotificationChannel(NodeNativeNotifications.CHANNEL))
     val id = id()
     // System.Text.Json DateTimeOffset format from the backend: numeric UTC offset, 7 fractional digits.
-    val expiry = Instant.now().plusSeconds(60).toString().replace("Z", "+00:00")
+    val expiry = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSSSSSSxxx").withZone(ZoneOffset.UTC).format(Instant.now().plusSeconds(60))
     val result = NodeNativeNotifications.fromCommand(context, command(id, expiry))
     assertEquals("diagnostic=${result.diagnostic?.code}", "success", result.status)
     assertNull(result.diagnostic)
     expectActive(id)
     assertEquals("duplicate", NodeNativeNotifications.fromCommand(context, command(id, expiry)).status)
+  }
+  @Test fun backgroundPayloadUsesSameRendererAndPostsActiveNotification() {
+    assertTrue(NodeNativeNotifications.granted(context))
+    val id = id()
+    val expiry = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSSSSSSxxx").withZone(ZoneOffset.UTC).format(Instant.now().plusSeconds(60))
+    val nodeId = UUID.randomUUID().toString()
+    val payload = NodeNotificationPayload.fromData(mapOf("nodeId" to nodeId, "type" to "notification.show", "version" to "1", "commandId" to id, "expiresAt" to expiry, "title" to "Aegis framework test", "body" to "Fixture"), nodeId)!!
+    val result = NodeNativeNotifications.show(context, payload.commandId, payload.expiresAt, payload.title, payload.body)
+    assertEquals("diagnostic=${result.diagnostic?.code}", "success", result.status)
+    expectActive(id)
   }
   @Test fun invalidExpiryHasClosedDiagnosticAndPostsNothing() {
     val id = id()

@@ -15,6 +15,9 @@ const run = args => {
 };
 const end = Date.now() + 900000;
 while (true) {
+  if (process.env.AEGIS_TEST_EMULATOR_PID) {
+    try { process.kill(Number(process.env.AEGIS_TEST_EMULATOR_PID), 0); } catch { throw Error('emulator_process_exited_before_boot'); }
+  }
   try { if (run(['shell', 'getprop', 'sys.boot_completed']).trim() === '1') break; } catch {}
   assert(Date.now() < end, 'Emulator boot timeout');
   await new Promise(r => setTimeout(r, 1000));
@@ -43,7 +46,6 @@ try {
   permission(false);
   instrumentation('NodeNotificationPermissionDeniedTest');
   if (bootstrap) {
-    permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
     instrumentation('NodeNotificationLiveTest', ['-e','pairingCode',readFileSync(bootstrap,'utf8').trim()]);
   }

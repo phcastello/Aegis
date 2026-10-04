@@ -1,5 +1,7 @@
 package com.aegis.node
 
+import android.Manifest
+import android.os.Build
 import android.app.NotificationManager
 import android.os.SystemClock
 import android.view.View
@@ -55,7 +57,7 @@ class NodeNotificationLiveTest {
         for (method in listOf("showNodeNotification", "nodePushState", "bindNodePush")) {
           assertEquals(String::class.java, activity.javaClass.getMethod(method, String::class.java).returnType)
         }
-        assertTrue(NodeNativeNotifications.granted(activity))
+        assertFalse(NodeNativeNotifications.granted(activity))
       }
       val deadline = SystemClock.elapsedRealtime() + 30000
       while (evaluate(webview, "Boolean(window.__TAURI_INTERNALS__?.invoke)") != "true" && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
@@ -69,6 +71,16 @@ class NodeNotificationLiveTest {
       assertEquals("online", invoke(webview, "node_transport_status").getString("transportState"))
       val context = instrumentation.targetContext
       val manager = context.getSystemService(NotificationManager::class.java)
+      val denied = invoke(webview, "node_test_notification", JSONObject().put("id", id))
+      assertEquals("live_websocket", denied.getString("transport"))
+      assertEquals("permission_denied", denied.getString("status"))
+      assertEquals("android_permission_denied", denied.getString("diagnosticCode"))
+      assertTrue(manager.activeNotifications.none { it.tag == denied.getString("commandId") })
+      if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission("com.aegis.node", Manifest.permission.POST_NOTIFICATIONS)
+      else instrumentation.uiAutomation.executeShellCommand("cmd appops set com.aegis.node POST_NOTIFICATION allow").use { descriptor ->
+        java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
+      }
+      assertTrue(NodeNativeNotifications.granted(context))
       val result = invoke(webview, "node_test_notification", JSONObject().put("id", id))
       assertEquals("live_websocket", result.getString("transport"))
       val commandId = result.getString("commandId")

@@ -1,8 +1,12 @@
 package com.aegis.node
 import java.util.UUID
+import java.time.OffsetDateTime
 /** Fixed FCM schema, never a generic data-payload executor. No Android/WebView dependency. */
 data class NodeNotificationPayload(val commandId:String,val expiresAt:String,val title:String,val body:String) {
  companion object {
+  // Backend DateTimeOffset and FCM payloads use RFC3339 numeric offsets as well as Z.
+  // Instant.parse in desugar_jdk_libs 2.1.5 accepts only Z, unlike a desktop JDK 17.
+  fun expiryEpochSecond(expires: String): Long = OffsetDateTime.parse(expires).toInstant().epochSecond
   private val keys=setOf("nodeId","type","version","commandId","expiresAt","title","body")
   fun validText(title:String,body:String):Boolean = title.isNotBlank() && title.length<=120 && body.length<=2000 && (title+body).toByteArray(Charsets.UTF_8).size<=2800 && !title.any {it.isISOControl()} && !body.any {it.isISOControl() && it!='\n' && it!='\t'}
   fun fromData(data:Map<String,String>,boundNodeId:String?):NodeNotificationPayload? {

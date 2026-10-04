@@ -186,7 +186,8 @@ jobs:
           sdkmanager 'emulator' 'system-images;android-${{ matrix.api }};google_apis;x86_64'
           printf 'no\n' | avdmanager create avd --name aegis-notification-ci --package 'system-images;android-${{ matrix.api }};google_apis;x86_64'
           sudo chmod 666 /dev/kvm
-          emulator -avd aegis-notification-ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 > "$RUNNER_TEMP/aegis-emulator.log" 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd aegis-notification-ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 > "$RUNNER_TEMP/aegis-emulator.log" 2>&1 &
+          echo "AEGIS_TEST_EMULATOR_PID=$!" >> "$GITHUB_ENV"
           keytool -genkeypair -keystore "$RUNNER_TEMP/aegis-framework.p12" -storetype PKCS12 -storepass ci-test-only -keypass ci-test-only -alias aegis-ci -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Aegis framework CI' > /dev/null 2>&1
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/aegis-framework.p12" >> "$GITHUB_ENV"
           echo 'ANDROID_KEYSTORE_PASSWORD=ci-test-only' >> "$GITHUB_ENV"
