@@ -65,7 +65,7 @@ try {
    if (host === 'native') await context.addInitScript(() => {
      window.openedUrls = [];
      const now = new Date().toISOString();
-     const current = { capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
+     const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
      const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
      let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
@@ -75,6 +75,11 @@ try {
        if (command === 'node_transport_reconnect') return;
        if (command === 'node_notification_settings') return {granted:false,pushConfigured:false,autostart:false};
        if (command === 'node_request_notification_permission') return;
+       if (command === 'node_test_notification') {
+         await new Promise(r => setTimeout(r,700));
+         if (window.notificationFailure) throw new Error('arbitrary-secret-server-prose');
+         return {node:args.id===current.id?current:other,status:'success',transport:'live_websocket'};
+       }
        if (command === 'node_status') return identity;
        if (command === 'node_pair') { current.name = args.name; return identity = { state: 'paired', node: current, error: null }; }
        if (command === 'node_list') return [current, other];
@@ -130,7 +135,16 @@ try {
      await panel.getByRole('button', { name: 'Adicionar dispositivo', exact: true }).click();
      await panel.getByText('ABCD-EFGH-JKMP-QRST-VWXY-1234', { exact: true }).waitFor();
      const pc = panel.locator('li').filter({ hasText: 'PC' });
-     await panel.getByText('Capabilities: audio.input@1, audio.output@1', { exact: true }).first().waitFor();
+     await panel.getByText('Capabilities: audio.input@1, audio.output@1, notification.show@1', { exact: true }).first().waitFor();
+     await pc.getByRole('button', { name:'Enviar notificação de teste',exact:true }).click();
+     await pc.getByRole('button', { name:'Enviando...',exact:true }).waitFor();
+     await pc.getByRole('status').filter({hasText:'Enviando...'}).waitFor();
+     await pc.getByRole('status').filter({hasText:'PC: success · live_websocket'}).waitFor();
+     await page.evaluate(() => { window.notificationFailure=true; });
+     await pc.getByRole('button', { name:'Enviar notificação de teste',exact:true }).click();
+     await pc.getByRole('status').filter({hasText:'Falha ao enviar notificação:'}).waitFor();
+     assert.doesNotMatch(await pc.innerText(), /arbitrary-secret-server-prose/);
+     await page.evaluate(() => { window.notificationFailure=false; });
      await pc.getByRole('button', { name: 'Alterar prioridade', exact: true }).click();
      await pc.getByLabel('Prioridade do alvo').fill('10'); await pc.getByRole('button', { name: 'Salvar prioridade', exact: true }).click();
      await pc.getByText('Prioridade: 10', { exact: true }).waitFor();
