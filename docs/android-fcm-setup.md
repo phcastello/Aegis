@@ -16,3 +16,21 @@ Nenhum projeto Firebase existia no início do Stage 06. Background push real dep
 Não commitar/logar: service account, private_key, access token OAuth, Node credential, FCM token, pairing code. Nunca enviar esses dados à WebView. Não usar credentials dos Nodes físicos para testes automatizados.
 
 Referências oficiais: [Android receive](https://firebase.google.com/docs/cloud-messaging/android/receive-messages), [HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api), [Android priority](https://firebase.google.com/docs/cloud-messaging/android-message-priority).
+
+
+## Diagnóstico IAM HTTP v1
+
+Se OAuth funcionar, mas `messages:send` responder HTTP 403 com
+`IAM_PERMISSION_DENIED` / `cloudmessaging.messages.create`, abra Google Cloud
+Console → IAM no projeto de destino. Localize o principal `client_email` do JSON
+privado e conceda **Firebase Cloud Messaging API Admin**
+(`roles/firebasecloudmessaging.admin`). Essa permissão deve existir no projeto
+de destino; não basta haver uma chave de service account válida. Repita o probe
+após propagação do IAM.
+
+`validate_only: true` permite provar autenticação, autorização e schema pela API
+real sem entregar mensagem. PASS desse dry-run não prova token Android, receiver,
+permission ou display: esses casos exigem o app instalado e registration real.
+
+Referências: [papel IAM FCM](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging),
+[validate_only HTTP v1](https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send).
