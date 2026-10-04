@@ -61,7 +61,7 @@ object NodeNativeNotifications {
 
   @Synchronized fun show(context: Context, id: String, expires: String, title: String, body: String): NodeNotificationResult = try {
     val now = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { Instant.now().epochSecond }
-    val expiry = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { Instant.parse(expires).epochSecond }
+    val expiry = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { NodeNotificationPayload.expiryEpochSecond(expires) }
     if (expiry <= now) NodeNotificationResult("expired")
     else if (expiry > now + 300 || !NodeNotificationPayload.validText(title, body)) NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_INVALID)
     else {

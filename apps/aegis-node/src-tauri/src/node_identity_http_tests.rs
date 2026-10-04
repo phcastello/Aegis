@@ -30,6 +30,8 @@ impl HttpFixture {
                         Err(_) => panic!("HTTP fixture accept failed"),
                     }
                 };
+                // Winsock inherits the listener's nonblocking mode; reads below are bounded blocking reads.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();
