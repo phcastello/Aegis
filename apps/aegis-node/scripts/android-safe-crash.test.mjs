@@ -11,7 +11,9 @@ test('crash evidence retains only bounded class/signal types, never arbitrary co
 10-04 20:00:00 123 456 F libc: Fatal signal 6 (SIGABRT), code -1 ${secret}
 10-04 20:00:00 123 456 E AndroidRuntime: ${secret}
 10-04 20:00:00 123 456 E AndroidRuntime: java.lang.RuntimeException: ${secret}
+10-04 20:00:00 123 456 F art: JNI DETECTED ERROR IN APPLICATION: ${secret}
+10-04 20:00:00 123 456 F art: Pending exception java.lang.IllegalArgumentException: ${secret}
 `);
-  assert.deepEqual(evidence, ['RuntimeException', 'UnsatisfiedLinkError', 'SIGABRT']);
+  assert.deepEqual(evidence, ['RuntimeException', 'UnsatisfiedLinkError', 'SIGABRT', 'JniAbort', 'IllegalArgumentException']);
   assert(!JSON.stringify(evidence).includes(secret));
 });

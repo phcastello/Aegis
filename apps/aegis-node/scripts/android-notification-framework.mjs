@@ -79,7 +79,11 @@ try {
     if (safe) console.log(`AegisNodeNotification ${safe[0]}`);
   }
   let crash = '';
-  try { crash = run(['logcat','-d','-s','AndroidRuntime:E','libc:F','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
+  try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
+  for (const line of crash.split('\n')) {
+    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
+    if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
+  }
 }
 console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap && api >= 33?' including native live WebSocket/JNI':''}`);

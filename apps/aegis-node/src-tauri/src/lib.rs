@@ -52,6 +52,8 @@ async fn check_android_update() -> Result<Option<updates::AndroidUpdate>, String
 #[cfg(feature = "native-runtime")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(feature = "android-framework-fixture")]
+    native_notifications::fixture_panic_diagnostics();
     let builder = tauri::Builder::default();
     // One Windows process owns this installation's credential checkpoint at a time.
     // Register first so a second launch exits before secure-store initialization.

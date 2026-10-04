@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class NodeNotificationLiveTest {
   private val instrumentation = InstrumentationRegistry.getInstrumentation()
+  private fun checkpoint(phase: String) = android.util.Log.i("AegisNodeNativeTest", "phase=$phase errorType=Checkpoint")
   private fun findWebView(view: View): WebView? {
     if (view is WebView) return view
     if (view is ViewGroup) for (i in 0 until view.childCount) findWebView(view.getChildAt(i))?.let { return it }
@@ -49,7 +50,9 @@ class NodeNotificationLiveTest {
   }
   @Test fun liveSelfNotificationPostsThroughProductionJni() {
     val code = InstrumentationRegistry.getArguments().getString("pairingCode") ?: error("fixture_bootstrap_missing")
+    checkpoint("live_activity_launch")
     ActivityScenario.launch(notificationActivityClass()).use { scenario ->
+      checkpoint("live_activity_ready")
       var candidate: WebView? = null
       scenario.onActivity { activity ->
         // Verify exact fixed method descriptors in the actual installed/minified activity.
@@ -65,16 +68,20 @@ class NodeNotificationLiveTest {
         if (candidate == null) SystemClock.sleep(100)
       }
       val webview = candidate ?: error("webview_missing")
+      checkpoint("live_webview_ready")
       val deadline = SystemClock.elapsedRealtime() + 30000
       while (evaluate(webview, "Boolean(window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)") != "true" && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
       // Fail before pairing if this APK points anywhere except the isolated fixture.
       assertEquals("http://127.0.0.1:18104", invoke(webview, "runtime_info").getString("backendUrl"))
+      checkpoint("live_runtime_ready")
       val identity = invoke(webview, "node_pair", JSONObject().put("name", "Android instrumentation").put("code", code))
       assertEquals("paired", identity.getString("state"))
+      checkpoint("live_paired")
       val id = identity.getJSONObject("node").getString("id")
       val onlineEnd = SystemClock.elapsedRealtime() + 30000
       while (invoke(webview, "node_transport_status").getString("transportState") != "online" && SystemClock.elapsedRealtime() < onlineEnd) SystemClock.sleep(100)
       assertEquals("online", invoke(webview, "node_transport_status").getString("transportState"))
+      checkpoint("live_online")
       val context = instrumentation.targetContext
       val manager = context.getSystemService(NotificationManager::class.java)
       if (Build.VERSION.SDK_INT >= 33) {
@@ -83,9 +90,11 @@ class NodeNotificationLiveTest {
         assertEquals("permission_denied", denied.getString("status"))
         assertEquals("android_permission_denied", denied.getString("diagnosticCode"))
         assertTrue(manager.activeNotifications.none { it.tag == denied.getString("commandId") })
+        checkpoint("live_permission_denied")
         instrumentation.uiAutomation.grantRuntimePermission("com.aegis.node", Manifest.permission.POST_NOTIFICATIONS)
       }
       assertTrue(frameworkNotificationPermission(context))
+      checkpoint("live_permission_granted")
       val result = invoke(webview, "node_test_notification", JSONObject().put("id", id))
       assertEquals("live_websocket", result.getString("transport"))
       val commandId = result.getString("commandId")
@@ -95,6 +104,7 @@ class NodeNotificationLiveTest {
         val activeEnd = SystemClock.elapsedRealtime() + 5000
         while (manager.activeNotifications.none { it.tag == commandId && it.id == 1 } && SystemClock.elapsedRealtime() < activeEnd) SystemClock.sleep(50)
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
+        checkpoint("live_notification_active")
       } finally {
         manager.cancel(commandId, 1)
         invoke(webview, "node_revoke", JSONObject().put("id", id))

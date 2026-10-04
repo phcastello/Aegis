@@ -6,6 +6,41 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 #[cfg(target_os = "android")]
 pub struct AndroidBridge(pub tauri::plugin::PluginHandle<tauri::Wry>);
+#[cfg(feature = "android-framework-fixture")]
+pub fn fixture_panic_diagnostics() {
+    std::panic::set_hook(Box::new(|panic| {
+        let file = panic
+            .location()
+            .map(|location| location.file())
+            .unwrap_or("");
+        let phase = if file.ends_with("platform_impl/android/ndk_glue.rs") {
+            "tao_activity_jni"
+        } else if file.ends_with("node_commands.rs") {
+            "runtime_state"
+        } else if file.ends_with("native_notifications.rs") {
+            "native_bridge"
+        } else if file.contains("tauri-plugin-notification") {
+            "notification_plugin_init"
+        } else if file.contains("/wry-") {
+            "wry_webview"
+        } else {
+            "tauri_runtime"
+        };
+        let message = panic
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        let error_type = if message.contains("JavaException") {
+            "JavaException"
+        } else {
+            "NativePanic"
+        };
+        // Test-only hook. Never emit the panic message, source location or stack.
+        eprintln!("AegisNodeNativeTest phase={phase} errorType={error_type}");
+    }));
+}
 #[cfg(target_os = "android")]
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("node-notifications")
