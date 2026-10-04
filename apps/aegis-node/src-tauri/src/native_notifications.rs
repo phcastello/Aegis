@@ -1,4 +1,7 @@
-use crate::node_notification::{NotificationCommand, NotificationExecutor, NotificationSink};
+use crate::node_notification::{
+    NotificationCommand, NotificationExecutor, NotificationResult, NotificationSink,
+    NotificationStatus,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 #[cfg(target_os = "android")]
@@ -19,7 +22,7 @@ impl NotificationSink for NativeSink {
     fn show<'a>(
         &'a self,
         command: &'a NotificationCommand,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = &'static str> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = NotificationResult> + Send + 'a>> {
         Box::pin(async move {
             #[cfg(windows)]
             {
@@ -33,29 +36,38 @@ impl NotificationSink for NativeSink {
                     .show()
                     .is_ok()
                 {
-                    "success"
+                    NotificationResult::new(NotificationStatus::Success)
                 } else {
-                    "failed"
+                    NotificationResult::new(NotificationStatus::Failed)
                 }
             }
             #[cfg(target_os = "android")]
             {
-                let payload = serde_json::to_string(command).unwrap_or_default();
-                match android_call(&self.0, "showNodeNotification", payload)
-                    .await
-                    .as_deref()
-                {
-                    Some("success") => "success",
-                    Some("permission_denied") => "permission_denied",
-                    Some("duplicate") => "duplicate",
-                    Some("expired") => "expired",
-                    _ => "failed",
+                use crate::node_notification::AndroidDiagnosticCode as Code;
+                let payload = match serde_json::to_string(command) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return NotificationResult::diagnostic(
+                            NotificationStatus::Failed,
+                            Code::AndroidInvalidNotificationPayload,
+                        )
+                    }
+                };
+                match android_call(&self.0, "showNodeNotification", payload).await {
+                    Ok(output) => serde_json::from_str::<NotificationResult>(&output)
+                        .unwrap_or_else(|_| {
+                            NotificationResult::diagnostic(
+                                NotificationStatus::Failed,
+                                Code::AndroidPayloadParseFailed,
+                            )
+                        }),
+                    Err(code) => NotificationResult::diagnostic(NotificationStatus::Failed, code),
                 }
             }
             #[cfg(not(any(windows, target_os = "android")))]
             {
                 let _ = command;
-                "unsupported"
+                NotificationResult::new(NotificationStatus::Unsupported)
             }
         })
     }
@@ -80,9 +92,16 @@ pub struct NotificationSettings {
 // Private, fixed JNI calls only. The upstream plugin callback unwraps send() after a
 // dropped receiver, so bounded/cancelable operations use this safe oneshot adapter.
 #[cfg(target_os = "android")]
-async fn android_call(app: &AppHandle, method: &'static str, payload: String) -> Option<String> {
+async fn android_call(
+    app: &AppHandle,
+    method: &'static str,
+    payload: String,
+) -> Result<String, crate::node_notification::AndroidDiagnosticCode> {
+    use crate::node_notification::AndroidDiagnosticCode as Code;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let webview = app.get_webview_window("main")?;
+    let webview = app
+        .get_webview_window("main")
+        .ok_or(Code::AndroidJniUnavailable)?;
     webview
         .with_webview(move |native| {
             native.jni_handle().exec(move |env, activity, _| {
@@ -105,20 +124,59 @@ async fn android_call(app: &AppHandle, method: &'static str, payload: String) ->
                     Ok(output)
                 })();
                 if result.is_err() {
-                    let _ = env.exception_clear();
+                    log_jni_failure(env);
                 }
-                let _ = tx.send(result.ok());
+                let _ = tx.send(result.map_err(|_| Code::AndroidJniCallFailed));
             });
         })
-        .ok()?;
+        .map_err(|_| Code::AndroidJniUnavailable)?;
     tokio::time::timeout(std::time::Duration::from_secs(3), rx)
         .await
-        .ok()?
-        .ok()?
+        .map_err(|_| Code::AndroidNativeTimeout)?
+        .map_err(|_| Code::AndroidJniCallFailed)?
+}
+#[cfg(target_os = "android")]
+fn log_jni_failure(env: &mut jni::JNIEnv<'_>) {
+    let throwable = env.exception_occurred().ok();
+    let _ = env.exception_clear();
+    let error_type = throwable
+        .and_then(|throwable| {
+            let class = env
+                .call_method(throwable, "getClass", "()Ljava/lang/Class;", &[])
+                .ok()?
+                .l()
+                .ok()?;
+            let name = env
+                .call_method(class, "getSimpleName", "()Ljava/lang/String;", &[])
+                .ok()?
+                .l()
+                .ok()?;
+            let string = jni::objects::JString::from(name);
+            let value: String = env.get_string(&string).ok()?.into();
+            Some(value)
+        })
+        .filter(|name| {
+            !name.is_empty()
+                && name.len() <= 64
+                && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        })
+        .unwrap_or_else(|| "JniError".into());
+    let _ = env.exception_clear();
+    if let Ok(message) = env.new_string(format!("phase=jni_call errorType={error_type}")) {
+        if let Ok(tag) = env.new_string("AegisNodeNotification") {
+            let _ = env.call_static_method(
+                "android/util/Log",
+                "e",
+                "(Ljava/lang/String;Ljava/lang/String;)I",
+                &[(&tag).into(), (&message).into()],
+            );
+        }
+    }
+    let _ = env.exception_clear();
 }
 #[cfg(target_os = "android")]
 pub async fn push_state(app: &AppHandle) -> Option<PrivatePushState> {
-    serde_json::from_str(&android_call(app, "nodePushState", "{}".into()).await?).ok()
+    serde_json::from_str(&android_call(app, "nodePushState", "{}".into()).await.ok()?).ok()
 }
 #[cfg(target_os = "android")]
 pub async fn bind(app: &AppHandle, id: Option<&str>) -> bool {
@@ -129,7 +187,7 @@ pub async fn bind(app: &AppHandle, id: Option<&str>) -> bool {
     )
     .await
     .as_deref()
-        == Some("success")
+        == Ok("success")
 }
 #[tauri::command]
 pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings {

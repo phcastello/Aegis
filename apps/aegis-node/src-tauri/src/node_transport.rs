@@ -506,7 +506,7 @@ async fn session(
             }
             result = commands.join_next(), if !commands.is_empty() => {
                 if let Some(Ok((id, result))) = result {
-                    let (_, message) = envelope("command_result", Some(serde_json::json!({"commandId":id,"status":result})));
+                    let (_, message) = envelope("command_result", Some({ let mut payload = serde_json::to_value(result).expect("fixed notification result"); payload["commandId"] = serde_json::json!(id); payload }));
                     if !matches!(timeout(Duration::from_secs(2), socket.send(message)).await, Ok(Ok(()))) { return retry(status, "command", "network_disconnected"); }
                 }
             }
@@ -525,7 +525,7 @@ async fn session(
                                 let now = server_now + clock_started.elapsed().as_secs() as i64;
                                 commands.spawn(async move {
                                     let id = input.command_id;
-                                    let status = if let Some(executor) = executor { executor.execute(&input, now).await } else { "unsupported" };
+                                    let status = if let Some(executor) = executor { executor.execute(&input, now).await } else { crate::node_notification::NotificationResult::new(crate::node_notification::NotificationStatus::Unsupported) };
                                     (id,status)
                                 });
                                 continue;
@@ -986,11 +986,18 @@ mod tests {
             fn show<'a>(
                 &'a self,
                 _: &'a NotificationCommand,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = &'static str> + Send + 'a>>
-            {
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = crate::node_notification::NotificationResult>
+                        + Send
+                        + 'a,
+                >,
+            > {
                 Box::pin(async move {
                     self.0.fetch_add(1, Ordering::SeqCst);
-                    "success"
+                    crate::node_notification::NotificationResult::new(
+                        crate::node_notification::NotificationStatus::Success,
+                    )
                 })
             }
         }

@@ -5,11 +5,31 @@ namespace Aegis.Application.Nodes;
 public sealed record NotificationShowRequest(string Title, string Body, Guid? PreferredNodeId = null, int TtlSeconds = 60);
 public sealed record NodeNotificationCommand(Guid CommandId, string Capability, int CapabilityVersion, DateTimeOffset ExpiresAt, NotificationInput Input);
 public sealed record NotificationInput(string Title, string Body);
-public sealed record NotificationDispatchResult(NodeTargetSummary? Node, string Reachability, string? Transport, string Status, Guid? CommandId);
+public sealed record NotificationDispatchResult(NodeTargetSummary? Node, string Reachability, string? Transport, string Status, Guid? CommandId, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DiagnosticCode = null);
 public static class NotificationContract
 {
     public const string Capability = "notification.show";
     public static readonly HashSet<string> Results = new(StringComparer.Ordinal) { "success", "expired", "unsupported", "permission_denied", "failed", "duplicate" };
+    // Diagnostic metadata is transient: only the Nodes test endpoint exposes it.
+    public const int MaximumDiagnosticLength = 48;
+    public static readonly IReadOnlySet<string> DiagnosticCodes = new HashSet<string>(StringComparer.Ordinal) {
+        "android_jni_unavailable",
+        "android_jni_call_failed",
+        "android_native_timeout",
+        "android_payload_parse_failed",
+        "android_expiry_parse_failed",
+        "android_invalid_command_id",
+        "android_invalid_notification_payload",
+        "android_permission_denied",
+        "android_permission_check_failed",
+        "android_channel_missing",
+        "android_pending_intent_failed",
+        "android_notification_build_failed",
+        "android_notification_post_failed",
+        "android_dedupe_read_failed",
+        "android_dedupe_persist_failed"
+    };
+    public static bool ValidDiagnostic(string? code) => code is not null && code.Length <= MaximumDiagnosticLength && DiagnosticCodes.Contains(code);
     public static void Validate(string? title, string? body, int ttl)
     {
         if (string.IsNullOrWhiteSpace(title) || title.Length > 120 || body is null || body.Length > 2000 || ttl is < 5 or > 300 ||
@@ -18,7 +38,8 @@ public static class NotificationContract
             throw new NodeException("invalid_notification", "Título/corpo inválido ou excessivo; expiração deve ser 5–300 segundos.");
     }
 }
-public interface INodeLiveNotifications { Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct); }
+public sealed record NodeLiveNotificationResult(string Status, string? DiagnosticCode = null);
+public interface INodeLiveNotifications { Task<NodeLiveNotificationResult> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct); }
 public interface INodeBackgroundAvailability { Task<bool> HasRouteAsync(Guid id, CancellationToken ct = default); }
 public interface INodePushRegistrations : INodeBackgroundAvailability
 {
@@ -44,13 +65,13 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
         var target = (await nodes.ListAsync(actor, ct)).SingleOrDefault(n => n.Id == id);
         if (target is null || !target.Enabled || target.RevokedAt is not null) return new(selection.Node, "offline", null, "unavailable", null);
         var command = new NodeNotificationCommand(Guid.NewGuid(), NotificationContract.Capability, 1, clock.GetUtcNow().AddSeconds(request.TtlSeconds), new(request.Title, request.Body));
-        Commands.Add(1); string result, transport, availability;
+        Commands.Add(1); string result, transport, availability; string? diagnostic = null;
         if (live.LiveCapabilities(id)?.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) == true)
-        { transport = "live_websocket"; availability = "online"; Live.Add(1); result = await socket.SendAsync(id, command, ct); }
+        { transport = "live_websocket"; availability = "online"; Live.Add(1); var liveResult = await socket.SendAsync(id, command, ct); result = liveResult.Status; diagnostic = NotificationContract.ValidDiagnostic(liveResult.DiagnosticCode) ? liveResult.DiagnosticCode : null; }
         else if (target.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) && await background.HasRouteAsync(id, ct))
         { transport = "fcm"; availability = "backgroundReachable"; Push.Add(1); result = await push.SendAsync(id, command, ct); }
         else return new(selection.Node, "offline", null, "unavailable", command.CommandId);
         Results.Add(1, new KeyValuePair<string, object?>("transport", transport), new KeyValuePair<string, object?>("status", result));
-        return new(selection.Node, availability, transport, result, command.CommandId);
+        return new(selection.Node, availability, transport, result, command.CommandId, diagnostic);
     }
 }

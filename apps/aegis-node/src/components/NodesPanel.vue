@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import { nodeServices, notificationServices, transportServices, type TransportStatus, type TargetResult } from '../services/nodes';
+import { nodeServices, notificationDiagnosticCodes, notificationServices, transportServices, type TransportStatus, type TargetResult } from '../services/nodes';
 import { useNodes } from '../composables/useNodes';
 import type { Platform } from '../services/runtime';
 const props = defineProps<{ platform: Platform }>();
@@ -8,6 +8,7 @@ defineEmits<{ close: [] }>();
 const { identity, nodes, pairingCode, busy, error, refresh, pair, rename, setEnabled, setPriority, revoke, createCode, isCurrent } = useNodes(nodeServices);
 const name = ref(props.platform === 'android' ? 'Meu celular' : 'Meu PC');
 const notificationResult=ref('');
+const notificationDiagnostic=ref('');
 const notificationNodeId=ref<string | null>(null);
 const notificationSending=ref(false);
 const settings=ref({granted:false,pushConfigured:false,autostart:false});
@@ -17,12 +18,14 @@ async function testNotification(id:string) {
   notificationNodeId.value=id;
   notificationSending.value=true;
   notificationResult.value='Enviando...';
+  notificationDiagnostic.value='';
   try {
     const r=await notificationServices.test(id);
     const status=['success','expired','unsupported','permission_denied','failed','duplicate','timeout','busy','unavailable','no_eligible_node','accepted'].includes(r.status) ? r.status : 'failed';
     const transport=['live_websocket','fcm'].includes(r.transport ?? '') ? r.transport : 'sem transporte';
     const nodeName=nodes.value.find(n=>n.id===r.node?.id)?.name ?? 'Sem alvo';
     notificationResult.value=`${nodeName}: ${status} · ${transport}`;
+    if (['failed','permission_denied'].includes(status) && r.diagnosticCode && r.diagnosticCode.length <= 48 && notificationDiagnosticCodes.has(r.diagnosticCode)) notificationDiagnostic.value=r.diagnosticCode;
   } catch {
     notificationResult.value='Falha ao enviar notificação: pedido recusado ou servidor indisponível. Verifique a conexão e tente novamente.';
   } finally { notificationSending.value=false; }
@@ -92,7 +95,7 @@ async function confirmAction() {
           <form v-if="editingId === node.id" @submit.prevent="rename(node.id, editedName); editingId = null"><input v-model="editedName" aria-label="Novo nome" maxlength="100" required /><button :disabled="busy">Salvar</button></form>
           <div v-if="!node.revokedAt">
             <button v-if="node.enabled && node.availability !== 'offline' && node.capabilities?.some(c => c.name === 'notification.show')" :disabled="busy || notificationSending" @click="testNotification(node.id)">{{ notificationSending && notificationNodeId === node.id ? 'Enviando...' : 'Enviar notificação de teste' }}</button>
-            <p v-if="notificationNodeId === node.id && notificationResult" role="status" aria-live="polite" aria-atomic="true">{{ notificationResult }}</p>
+            <p v-if="notificationNodeId === node.id && notificationResult" role="status" aria-live="polite" aria-atomic="true">{{ notificationResult }}<small v-if="notificationDiagnostic">Diagnóstico: {{ notificationDiagnostic }}</small></p>
             <button :disabled="busy" @click="priorityId = node.id; priorityValue = node.targetPriority ?? 0">Alterar prioridade</button>
             <button :disabled="busy" @click="editingId = node.id; editedName = node.name">Renomear</button>
             <button v-if="node.enabled" :disabled="busy" @click="confirmation = { id: node.id, action: 'disable', name: node.name }">Desativar</button>

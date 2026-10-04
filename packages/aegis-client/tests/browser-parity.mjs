@@ -78,7 +78,7 @@ try {
        if (command === 'node_test_notification') {
          await new Promise(r => setTimeout(r,700));
          if (window.notificationFailure) throw new Error('arbitrary-secret-server-prose');
-         return {node:args.id===current.id?current:other,status:'success',transport:'live_websocket'};
+         return {node:args.id===current.id?current:other,status:window.notificationDiagnostic?'failed':'success',transport:'live_websocket',diagnosticCode:window.notificationDiagnostic};
        }
        if (command === 'node_status') return identity;
        if (command === 'node_pair') { current.name = args.name; return identity = { state: 'paired', node: current, error: null }; }
@@ -145,6 +145,16 @@ try {
      await pc.getByRole('status').filter({hasText:'Falha ao enviar notificação:'}).waitFor();
      assert.doesNotMatch(await pc.innerText(), /arbitrary-secret-server-prose/);
      await page.evaluate(() => { window.notificationFailure=false; });
+     await page.evaluate(() => { window.notificationDiagnostic='android_notification_build_failed'; });
+     await pc.getByRole('button', { name:'Enviar notificação de teste',exact:true }).click();
+     await pc.getByRole('status').filter({hasText:'PC: failed · live_websocket'}).waitFor();
+     await pc.getByText('Diagnóstico: android_notification_build_failed', {exact:true}).waitFor();
+     await page.evaluate(() => { window.notificationDiagnostic='arbitrary-secret-prose'; });
+     await pc.getByRole('button', { name:'Enviar notificação de teste',exact:true }).click();
+     await pc.getByRole('button', { name:'Enviando...',exact:true }).waitFor();
+     await pc.getByRole('button', { name:'Enviar notificação de teste',exact:true }).waitFor();
+     assert.doesNotMatch(await pc.innerText(), /arbitrary-secret-prose|Diagnóstico:/);
+     await page.evaluate(() => { window.notificationDiagnostic=undefined; });
      await pc.getByRole('button', { name: 'Alterar prioridade', exact: true }).click();
      await pc.getByLabel('Prioridade do alvo').fill('10'); await pc.getByRole('button', { name: 'Salvar prioridade', exact: true }).click();
      await pc.getByText('Prioridade: 10', { exact: true }).waitFor();

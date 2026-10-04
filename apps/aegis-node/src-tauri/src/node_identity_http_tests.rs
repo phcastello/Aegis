@@ -224,11 +224,11 @@ async fn http_live_notification_and_push_reach_real_backend() {
         fn show<'a>(
             &'a self,
             _: &'a NotificationCommand,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = &'static str> + Send + 'a>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::node_notification::NotificationResult> + Send + 'a>>
         {
             Box::pin(async move {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                "success"
+                crate::node_notification::NotificationResult::new(crate::node_notification::NotificationStatus::Success)
             })
         }
     }

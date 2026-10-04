@@ -18,7 +18,8 @@ public sealed class NodeNotificationTests
         public Task<string> AccessTokenAsync(CancellationToken ct) => Task.FromResult("fixture-authorization");
     }
     private sealed class Delivery : INodePushNotifications, INodeLiveNotifications {
-        public int Calls; public string Result = "success";
+        public int Calls; public string Result = "success"; public string? Diagnostic;
+        Task<NodeLiveNotificationResult> INodeLiveNotifications.SendAsync(Guid id, NodeNotificationCommand c, CancellationToken ct) { Calls++; return Task.FromResult(new NodeLiveNotificationResult(Result, Diagnostic)); }
         public Task<string> SendAsync(Guid id, NodeNotificationCommand c, CancellationToken ct) { Calls++; return Task.FromResult(Result); }
     }
     private sealed class Fixture : IDisposable {
@@ -72,6 +73,20 @@ public sealed class NodeNotificationTests
         var result=await dispatcher.DispatchAsync(f.Actor,new("Aegis","fixture",f.Phone));
         Assert.Equal(status,result.Status);Assert.Equal(online?"live_websocket":"fcm",result.Transport);Assert.Equal(online?1:0,live.Calls);Assert.Equal(online?0:1,push.Calls);Assert.NotEqual(Guid.Empty,result.CommandId);
         await f.Nodes.SetEnabledAsync(f.Actor,f.Phone,false);Assert.Equal("no_eligible_node",(await dispatcher.DispatchAsync(f.Actor,new("Aegis","fixture",f.Phone))).Status);
+    }
+    [Theory]
+    [InlineData("android_notification_build_failed", "android_notification_build_failed")]
+    [InlineData("arbitrary-secret-exception-prose", null)]
+    [InlineData(null, null)]
+    public async Task DiagnosticTestEndpointPropagatesOnlyKnownCodes(string? supplied, string? expected) {
+        using var f = new Fixture(); await f.Announce(); f.Live.Register(f.Phone, capabilities: [new("notification.show", 1)]);
+        var live = new Delivery { Result = "failed", Diagnostic = supplied };
+        var dispatcher = new NodeNotificationDispatcher(f.Nodes, f.Resolver, f.Live, live, new Delivery(), f.Push, TimeProvider.System);
+        var result = await dispatcher.DispatchAsync(f.Actor, new("Aegis", "fixture", f.Phone));
+        Assert.Equal("failed", result.Status); Assert.Equal(expected, result.DiagnosticCode);
+        var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.DoesNotContain("arbitrary-secret", json);
+        if (expected is null) Assert.DoesNotContain("diagnosticCode", json);
     }
     private sealed class Handler(HttpStatusCode status,bool invalid):HttpMessageHandler {
         public int Calls;

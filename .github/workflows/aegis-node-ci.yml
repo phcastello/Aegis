@@ -159,3 +159,54 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           path: apps/aegis-node/release-assets/*
+  android-notification-framework:
+    name: Android framework API ${{ matrix.api }} (debug + minified release)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 35]
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/aegis-node
+    env:
+      AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-aegis-node
+        with:
+          android: 'true'
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Prepare real emulator and isolated signing
+        run: |
+          rustup target add x86_64-linux-android
+          sdkmanager 'emulator' 'system-images;android-${{ matrix.api }};google_apis;x86_64'
+          printf 'no\n' | avdmanager create avd --name aegis-notification-ci --package 'system-images;android-${{ matrix.api }};google_apis;x86_64'
+          sudo chmod 666 /dev/kvm
+          emulator -avd aegis-notification-ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 > "$RUNNER_TEMP/aegis-emulator.log" 2>&1 &
+          keytool -genkeypair -keystore "$RUNNER_TEMP/aegis-framework.p12" -storetype PKCS12 -storepass ci-test-only -keypass ci-test-only -alias aegis-ci -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Aegis framework CI' > /dev/null 2>&1
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/aegis-framework.p12" >> "$GITHUB_ENV"
+          echo 'ANDROID_KEYSTORE_PASSWORD=ci-test-only' >> "$GITHUB_ENV"
+          echo 'ANDROID_KEY_ALIAS=aegis-ci' >> "$GITHUB_ENV"
+          echo 'ANDROID_KEY_PASSWORD=ci-test-only' >> "$GITHUB_ENV"
+      - name: Build debug APK and instrumentation
+        run: |
+          npm run tauri -- android build --debug --apk --target x86_64
+          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -PabiList=x86_64
+      - name: Test real renderer then real native live path
+        run: node ../../scripts/node-transport-probe/android-native.mjs debug
+      - name: Build minified release APK and instrumentation
+        run: |
+          npm run tauri -- android build --apk --target x86_64
+          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalReleaseAndroidTest -PaegisTestBuildType=release -PabiList=x86_64
+      - name: Test minified renderer and fixed JNI methods in real live execution
+        run: |
+          adb uninstall com.aegis.node.test
+          adb uninstall com.aegis.node
+          node ../../scripts/node-transport-probe/android-native.mjs release
+      - name: Stop disposable emulator
+        if: always()
+        run: adb -s emulator-5554 emu kill || true

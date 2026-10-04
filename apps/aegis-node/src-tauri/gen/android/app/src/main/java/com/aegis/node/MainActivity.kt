@@ -14,11 +14,7 @@ class MainActivity : TauriActivity() {
   }
 
   // Native Rust JNI only; deliberately not a JavascriptInterface or arbitrary command API.
-  fun showNodeNotification(payload:String):String = try {
-    val command=org.json.JSONObject(payload)
-    if(command.getString("capability")!="notification.show" || command.getInt("capabilityVersion")!=1) "unsupported"
-    else { val input=command.getJSONObject("input");NodeNativeNotifications.show(this,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body")) }
-  } catch(_:Exception){"failed"}
+  fun showNodeNotification(payload: String): String = NodeNativeNotifications.fromCommand(this, payload).json()
 
   // Sensitive state is returned only to native Rust; these are not WebView interfaces.
   fun nodePushState(payload:String):String {

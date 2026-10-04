@@ -58,7 +58,7 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             {
                 var message = await NodeProtocol.ReceiveAsync(socket, ct).WaitAsync(session.Token);
                 if (message is null) break;
-                if (message.Type == "command_result") { connections.Result(lease, message.Payload!.Value.GetProperty("commandId").GetGuid(), message.Payload.Value.GetProperty("status").GetString()!); continue; }
+                if (message.Type == "command_result") { connections.Result(lease, message.Payload!.Value.GetProperty("commandId").GetGuid(), message.Payload.Value.GetProperty("status").GetString()!, message.Payload.Value.TryGetProperty("diagnosticCode", out var diagnostic) ? diagnostic.GetString() : null); continue; }
                 if (message.Type != "heartbeat") throw new NodeProtocolException("unexpected_hello");
                 if (!connections.Heartbeat(lease)) break;
                 if (clock.GetUtcNow() - lastPersisted >= TimeSpan.FromSeconds(options.PersistSeconds))

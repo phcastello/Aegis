@@ -36,9 +36,13 @@ public static class NodeProtocol
                 payload.Value.EnumerateObject().Any(p => p.Name is not ("appVersion" or "capabilities")) || payload.Value.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() > 1) || !payload.Value.TryGetProperty("appVersion", out var version) ||
                 version.ValueKind != JsonValueKind.String || version.GetString()!.Length > 80)) throw new NodeProtocolException("invalid_hello");
             if (type == "command_result") {
-                if (payload is null || payload.Value.ValueKind != JsonValueKind.Object || payload.Value.EnumerateObject().Count() != 2 ||
-                    payload.Value.EnumerateObject().Any(p => p.Name is not ("commandId" or "status")) ||
+                if (payload is null || payload.Value.ValueKind != JsonValueKind.Object || payload.Value.EnumerateObject().Count() is < 2 or > 3 ||
+                    payload.Value.EnumerateObject().Any(p => p.Name is not ("commandId" or "status" or "diagnosticCode")) ||
+                    payload.Value.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() > 1) ||
                     payload.Value.GetProperty("commandId").GetGuid() == Guid.Empty || !Aegis.Application.Nodes.NotificationContract.Results.Contains(payload.Value.GetProperty("status").GetString()!)) throw new NodeProtocolException("invalid_command_result");
+                if (payload.Value.TryGetProperty("diagnosticCode", out var diagnostic) &&
+                    (diagnostic.ValueKind != JsonValueKind.String || !Aegis.Application.Nodes.NotificationContract.ValidDiagnostic(diagnostic.GetString())))
+                    throw new NodeProtocolException("invalid_command_result");
             }
             return new(1, type, id, sentAt, payload);
         }

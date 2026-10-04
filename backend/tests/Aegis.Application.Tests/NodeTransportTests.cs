@@ -299,14 +299,41 @@ public sealed class NodeTransportTests
         await Send(socket,new {protocolVersion=1,type="heartbeat",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow});Assert.Equal("heartbeat_ack",(await Read(socket)).Json.GetProperty("type").GetString());
         Assert.False(sending.IsCompleted);Assert.True(f.Connections.IsOnline(node.Id));
         await Send(socket,new {protocolVersion=1,type="command_result",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow,payload=new {commandId=command.CommandId,status}});
-        Assert.Equal(status,await sending);Assert.True(f.Connections.IsOnline(node.Id));
+        Assert.Equal(status,(await sending).Status);Assert.True(f.Connections.IsOnline(node.Id));
     }
+    [Fact] public async Task LiveDiagnosticTravelsWithSameCommandResult() {
+        await using var f = await Host(); var (node, secret) = await f.Pair(); using var socket = await f.Connect(secret);
+        await Advertise(socket, new NodeCapability("notification.show", 1));
+        var command = new NodeNotificationCommand(Guid.NewGuid(), "notification.show", 1, DateTimeOffset.UtcNow.AddSeconds(60), new("Aegis", "fixture"));
+        var pending = f.Connections.SendAsync(node.Id, command, default); await Read(socket);
+        await Send(socket, new { protocolVersion = 1, type = "command_result", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow,
+            payload = new { commandId = command.CommandId, status = "failed", diagnosticCode = "android_notification_build_failed" } });
+        var result = await pending; Assert.Equal("failed", result.Status); Assert.Equal("android_notification_build_failed", result.DiagnosticCode);
+        Assert.True(f.Connections.IsOnline(node.Id));
+    }
+    [Theory]
+    [InlineData("\"arbitrary-secret-message\"")]
+    [InlineData("null")]
+    [InlineData("123")]
+    [InlineData("{}")]
+    [InlineData("\"android_notification_build_failed\",\"diagnosticCode\":\"android_notification_post_failed\"")]
+    [InlineData("\"" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + "\"")]
+    public async Task UntrustedDiagnosticCodeIsRejected(string diagnosticJson) {
+        await using var f = await Host(); var (_, secret) = await f.Pair(); using var socket = await f.Connect(secret);
+        await Advertise(socket, new NodeCapability("notification.show", 1));
+        var text = "{\"protocolVersion\":1,\"type\":\"command_result\",\"messageId\":\"" + Guid.NewGuid() + "\",\"sentAt\":\"" + DateTimeOffset.UtcNow.ToString("O") +
+            "\",\"payload\":{\"commandId\":\"" + Guid.NewGuid() + "\",\"status\":\"failed\",\"diagnosticCode\":" + diagnosticJson + "}}";
+        await socket.SendAsync(System.Text.Encoding.UTF8.GetBytes(text), System.Net.WebSockets.WebSocketMessageType.Text, true, default);
+        var closed = await Read(socket); Assert.Equal(System.Net.WebSockets.WebSocketMessageType.Close, closed.Result.MessageType);
+        Assert.Equal(1008, (int)closed.Result.CloseStatus!);
+    }
+
     [Fact] public async Task DisconnectCancelsCommandAndExpiredIsNotSent()
     {
         await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);await Advertise(socket,new NodeCapability("notification.show",1));
         var c=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","fixture"));
-        Assert.Equal("expired",await f.Connections.SendAsync(node.Id,c with {ExpiresAt=DateTimeOffset.UtcNow.AddSeconds(-1)},default));
-        var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);f.Connections.Disconnect(node.Id,"node_disabled");Assert.Equal("unavailable",await pending);
+        Assert.Equal("expired",(await f.Connections.SendAsync(node.Id,c with {ExpiresAt=DateTimeOffset.UtcNow.AddSeconds(-1)},default)).Status);
+        var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);f.Connections.Disconnect(node.Id,"node_disabled");Assert.Equal("unavailable",(await pending).Status);
     }
 
     [Fact] public async Task CommandHasBoundedTimeoutWithoutAffectingHealthyLease()
@@ -314,7 +341,7 @@ public sealed class NodeTransportTests
         await using var f=await Host();var (node,secret)=await f.Pair();using var socket=await f.Connect(secret);await Advertise(socket,new NodeCapability("notification.show",1));
         var c=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","fixture"));
         var pending=f.Connections.SendAsync(node.Id,c,default);await Read(socket);
-        Assert.Equal("timeout",await pending.WaitAsync(TimeSpan.FromSeconds(10)));Assert.True(f.Connections.IsOnline(node.Id));
+        Assert.Equal("timeout",(await pending.WaitAsync(TimeSpan.FromSeconds(10))).Status);Assert.True(f.Connections.IsOnline(node.Id));
     }
     [Fact] public async Task UnsolicitedResultsAreBoundedAndCannotCreateHeartbeatPresence()
     {

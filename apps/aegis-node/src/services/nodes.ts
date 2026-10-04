@@ -39,10 +39,29 @@ export const transportServices = {
 };
 
 export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean }
-export interface NotificationResult { node: {id:string;name:string}|null; reachability: string; transport: string|null; status:string; commandId:string|null }
+export interface NotificationResult { node: {id:string;name:string}|null; reachability: string; transport: string|null; status:string; commandId:string|null; diagnosticCode?:string }
 export const notificationServices = {
  test: (id:string):Promise<NotificationResult> => invoke('node_test_notification',{id}),
  settings: ():Promise<NotificationSettings> => invoke('node_notification_settings'),
  permission: ():Promise<void> => invoke('node_request_notification_permission'),
  autostart: (enabled:boolean):Promise<void> => invoke('node_set_autostart',{enabled})
 };
+
+// Defense in depth at the diagnostic UI boundary; arbitrary Node prose is never rendered.
+export const notificationDiagnosticCodes = new Set([
+  'android_jni_unavailable',
+  'android_jni_call_failed',
+  'android_native_timeout',
+  'android_payload_parse_failed',
+  'android_expiry_parse_failed',
+  'android_invalid_command_id',
+  'android_invalid_notification_payload',
+  'android_permission_denied',
+  'android_permission_check_failed',
+  'android_channel_missing',
+  'android_pending_intent_failed',
+  'android_notification_build_failed',
+  'android_notification_post_failed',
+  'android_dedupe_read_failed',
+  'android_dedupe_persist_failed'
+]);

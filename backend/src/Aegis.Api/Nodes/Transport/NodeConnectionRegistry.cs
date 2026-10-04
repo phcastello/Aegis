@@ -30,7 +30,7 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
         public Guid ConnectionId { get; } = Guid.NewGuid();
         public WebSocket? Socket { get; internal set; }
         internal SemaphoreSlim Writer { get; } = new(1);
-        internal ConcurrentDictionary<Guid, TaskCompletionSource<string>> Pending { get; } = new();
+        internal ConcurrentDictionary<Guid, TaskCompletionSource<NodeLiveNotificationResult>> Pending { get; } = new();
         internal DateTimeOffset ConnectedAt { get; } = now;
         internal DateTimeOffset UnknownResultWindow { get; set; } = now;
         internal int UnknownResults { get; set; }
@@ -74,26 +74,28 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
             await NodeProtocol.SendAsync(lease.Socket, type, messageId, clock.GetUtcNow(), payload, deadline.Token); }
         finally { lease.Writer.Release(); }
     }
-    public async Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
+    public async Task<NodeLiveNotificationResult> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
     {
         Lease? lease;
-        var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new TaskCompletionSource<NodeLiveNotificationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (gate) { lease = current.GetValueOrDefault(id); if (lease is null || !IsFresh(lease) || lease.Socket is null ||
-            !lease.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1)) return "unavailable";
-            if (lease.Pending.Count >= 16) return "busy";
-            if (!lease.Pending.TryAdd(command.CommandId, result)) return "duplicate"; }
-        if (command.ExpiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(command.CommandId, out _); return "expired"; }
+            !lease.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1)) return new("unavailable");
+            if (lease.Pending.Count >= 16) return new("busy");
+            if (!lease.Pending.TryAdd(command.CommandId, result)) return new("duplicate"); }
+        if (command.ExpiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(command.CommandId, out _); return new("expired"); }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(8));
         try { await WriteAsync(lease, "command", Guid.NewGuid(), command, deadline.Token); return await result.Task.WaitAsync(deadline.Token); }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return lease.Ended.IsCancellationRequested ? "unavailable" : "timeout"; }
-        catch (WebSocketException) { return "unavailable"; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(lease.Ended.IsCancellationRequested ? "unavailable" : "timeout"); }
+        catch (WebSocketException) { return new("unavailable"); }
         finally { lease.Pending.TryRemove(command.CommandId, out _); }
     }
-    public void Result(Lease lease, Guid commandId, string status)
+    public void Result(Lease lease, Guid commandId, string status, string? diagnosticCode = null)
     {
+        if (!NotificationContract.Results.Contains(status) || diagnosticCode is not null && !NotificationContract.ValidDiagnostic(diagnosticCode))
+            throw new NodeProtocolException("invalid_command_result");
         lock (gate) {
             if (current.GetValueOrDefault(lease.NodeId) != lease || !IsFresh(lease)) return;
-            if (lease.Pending.TryGetValue(commandId, out var pending) && pending.TrySetResult(status)) {
+            if (lease.Pending.TryGetValue(commandId, out var pending) && pending.TrySetResult(new(status, diagnosticCode))) {
                 lease.LastSeenAt = clock.GetUtcNow();
                 logger.LogInformation("Node command result NodeId={NodeId} ConnectionId={ConnectionId} CommandId={CommandId} Status={Status}", lease.NodeId, lease.ConnectionId, commandId, status);
                 return;
