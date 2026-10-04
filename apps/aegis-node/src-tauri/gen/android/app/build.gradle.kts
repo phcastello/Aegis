@@ -80,6 +80,7 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    sourceSets.getByName("androidTest").java.srcDir("../notificationFrameworkTest/shared")
 }
 
 kotlin {

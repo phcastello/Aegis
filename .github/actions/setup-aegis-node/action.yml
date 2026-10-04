@@ -4,6 +4,9 @@ inputs:
   android:
     description: Install Android SDK and NDK
     default: 'false'
+  cache-variant:
+    description: Separate dependency cache for emulator architecture
+    default: ''
 runs:
   using: composite
   steps:
@@ -19,7 +22,8 @@ runs:
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       with:
         workspaces: apps/aegis-node/src-tauri -> target
-        shared-key: ${{ runner.os }}-${{ inputs.android }}
+        shared-key: ${{ inputs.cache-variant && format('{0}-{1}-{2}', runner.os, inputs.android, inputs.cache-variant) || format('{0}-{1}', runner.os, inputs.android) }}
+        cache-on-failure: ${{ inputs.cache-variant != '' }}
     - if: inputs.android == 'true'
       uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
       with:

@@ -1,3 +1,4 @@
 include ':app'
+include ':notificationFrameworkTest'
 
 apply from: 'tauri.settings.gradle'
