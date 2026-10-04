@@ -15,6 +15,17 @@ fn main() {
             .find_map(|(key, value)| (key == KEY).then_some(value))
     });
     let value = value.unwrap_or_else(|| "https://aegis.phcastello.com".to_owned());
+    if std::env::var_os("CARGO_FEATURE_ANDROID_FRAMEWORK_FIXTURE").is_some() {
+        assert_eq!(
+            std::env::var("TARGET").as_deref(),
+            Ok("x86_64-linux-android"),
+            "Framework fixture is restricted to Android x86_64 emulator APKs"
+        );
+        assert_eq!(
+            value, "http://127.0.0.1:18104",
+            "Framework fixture must use its isolated forwarded listener"
+        );
+    }
     assert!(
         !value.contains(['\r', '\n']),
         "API base URL must be a single line"

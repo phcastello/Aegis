@@ -56,6 +56,9 @@ impl Endpoint {
 
 #[cfg(feature = "native-runtime")]
 pub fn configured_endpoint() -> Result<Endpoint, &'static str> {
+    #[cfg(feature = "android-framework-fixture")]
+    return Endpoint::parse(env!("AEGIS_NODE_API_BASE_URL"), true, false);
+    #[cfg(not(feature = "android-framework-fixture"))]
     Endpoint::parse(
         env!("AEGIS_NODE_API_BASE_URL"),
         cfg!(debug_assertions),

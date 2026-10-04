@@ -61,7 +61,7 @@ impl NodeRuntime {
                 TransportConfig::new(
                     &endpoint.base_url(),
                     env!("CARGO_PKG_VERSION"),
-                    cfg!(debug_assertions),
+                    cfg!(debug_assertions) || cfg!(feature = "android-framework-fixture"),
                 )
                 .ok()
             });

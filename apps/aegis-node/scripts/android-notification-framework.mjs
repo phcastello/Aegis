@@ -29,9 +29,23 @@ const test = resolve(root, `androidTest/universal/${buildType}/app-universal-${b
 assert(existsSync(app) && existsSync(test), 'Build target and instrumentation APKs first');
 run(['install', '-r', app]); run(['install', '-r', test]);
 const api = Number(run(['shell','getprop','ro.build.version.sdk']).trim());
+assert([26,35].includes(api), 'Use a supported disposable framework test emulator');
+let appUid;
+if (api === 26) {
+  run(['root']); run(['wait-for-device']);
+  const installed = run(['shell','dumpsys','package','com.aegis.node']);
+  appUid = installed.match(/\buserId=(\d+)\b/)?.[1];
+  assert(appUid, 'Fixture package UID missing');
+}
 const permission = granted => {
   if (api >= 33) run(['shell','pm',granted?'grant':'revoke','com.aegis.node','android.permission.POST_NOTIFICATIONS']);
-  else run(['shell','cmd','appops','set','com.aegis.node','POST_NOTIFICATION',granted?'allow':'deny']);
+  else {
+    // API 26 INotificationManager transaction 9 updates the actual package notification
+    // ranking permission. AppOps alone does not change areNotificationsEnabled().
+    // Root is available only on this disposable google_apis userdebug emulator.
+    const reply = run(['shell','service','call','notification','9','s16','com.aegis.node','i32',appUid,'i32',granted?'1':'0']);
+    assert(!/Exception|ffffffff/.test(reply), 'Framework permission update failed');
+  }
 };
 const instrumentation = (testClass, extra = []) => {
   const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner']);
@@ -47,6 +61,7 @@ try {
   permission(false);
   instrumentation('NodeNotificationPermissionDeniedTest');
   if (bootstrap) {
+    if (api < 33) permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
     instrumentation('NodeNotificationLiveTest', ['-e','pairingCode',readFileSync(bootstrap,'utf8').trim()]);
   }

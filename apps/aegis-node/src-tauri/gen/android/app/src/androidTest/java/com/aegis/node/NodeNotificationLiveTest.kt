@@ -50,15 +50,21 @@ class NodeNotificationLiveTest {
   @Test fun liveSelfNotificationPostsThroughProductionJni() {
     val code = InstrumentationRegistry.getArguments().getString("pairingCode") ?: error("fixture_bootstrap_missing")
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-      lateinit var webview: WebView
+      var candidate: WebView? = null
       scenario.onActivity { activity ->
-        webview = findWebView(activity.window.decorView) ?: error("webview_missing")
         // Verify exact fixed method descriptors in the actual installed/minified activity.
         for (method in listOf("showNodeNotification", "nodePushState", "bindNodePush")) {
           assertEquals(String::class.java, activity.javaClass.getMethod(method, String::class.java).returnType)
         }
-        assertFalse(NodeNativeNotifications.granted(activity))
+        assertEquals(Build.VERSION.SDK_INT < 33, NodeNativeNotifications.granted(activity))
       }
+      // Tauri creates its WebView asynchronously after the Activity reaches RESUMED.
+      val viewEnd = SystemClock.elapsedRealtime() + 30000
+      while (candidate == null && SystemClock.elapsedRealtime() < viewEnd) {
+        scenario.onActivity { activity -> candidate = findWebView(activity.window.decorView) }
+        if (candidate == null) SystemClock.sleep(100)
+      }
+      val webview = candidate ?: error("webview_missing")
       val deadline = SystemClock.elapsedRealtime() + 30000
       while (evaluate(webview, "Boolean(window.__TAURI_INTERNALS__?.invoke)") != "true" && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
       // Fail before pairing if this APK points anywhere except the isolated fixture.
@@ -71,14 +77,13 @@ class NodeNotificationLiveTest {
       assertEquals("online", invoke(webview, "node_transport_status").getString("transportState"))
       val context = instrumentation.targetContext
       val manager = context.getSystemService(NotificationManager::class.java)
-      val denied = invoke(webview, "node_test_notification", JSONObject().put("id", id))
-      assertEquals("live_websocket", denied.getString("transport"))
-      assertEquals("permission_denied", denied.getString("status"))
-      assertEquals("android_permission_denied", denied.getString("diagnosticCode"))
-      assertTrue(manager.activeNotifications.none { it.tag == denied.getString("commandId") })
-      if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission("com.aegis.node", Manifest.permission.POST_NOTIFICATIONS)
-      else instrumentation.uiAutomation.executeShellCommand("cmd appops set com.aegis.node POST_NOTIFICATION allow").use { descriptor ->
-        java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
+      if (Build.VERSION.SDK_INT >= 33) {
+        val denied = invoke(webview, "node_test_notification", JSONObject().put("id", id))
+        assertEquals("live_websocket", denied.getString("transport"))
+        assertEquals("permission_denied", denied.getString("status"))
+        assertEquals("android_permission_denied", denied.getString("diagnosticCode"))
+        assertTrue(manager.activeNotifications.none { it.tag == denied.getString("commandId") })
+        instrumentation.uiAutomation.grantRuntimePermission("com.aegis.node", Manifest.permission.POST_NOTIFICATIONS)
       }
       assertTrue(NodeNativeNotifications.granted(context))
       val result = invoke(webview, "node_test_notification", JSONObject().put("id", id))
