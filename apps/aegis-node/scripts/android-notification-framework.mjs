@@ -82,7 +82,7 @@ try {
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   for (const line of crash.split('\n')) {
-    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
+    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_activity_closed|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
     if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
   }
 }
