@@ -8,7 +8,8 @@ namespace Aegis.Infrastructure.Reminders;
 
 public sealed class ReminderStore(AegisDbContext db) : IReminderStore
 {
-    public Task<bool> HasActiveSubscriptionAsync(CancellationToken ct) => db.PushSubscriptions.AnyAsync(s => s.DisabledAt == null, ct);
+    public Task<bool> HasNotificationNodeAsync(CancellationToken ct) => db.Nodes.AnyAsync(n => n.Enabled && n.RevokedAt == null &&
+        db.NodeCapabilities.Any(c => c.NodeId == n.Id && c.Name == "notification.show" && c.Version >= 1), ct);
     public async Task AddAsync(Reminder reminder, CancellationToken ct)
     {
         await using var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
@@ -25,7 +26,7 @@ public sealed class ReminderStore(AegisDbContext db) : IReminderStore
         if (to is not null) query = query.Where(r => r.DueAtUtc < to);
         return await query.OrderBy(r => r.DueAtUtc).ThenBy(r => r.Id).Take(limit).ToListAsync(ct);
     }
-    // The row lock serializes chat mutations, interaction timestamps and delivery.
+    // The row lock serializes chat mutations, interaction timestamps and delivery bookkeeping.
     // Production always uses PostgreSQL; InMemory is only for deterministic unit tests.
     public async Task<T> LockedAsync<T>(Guid id, Func<Reminder, Task<T>> action, CancellationToken ct)
     {

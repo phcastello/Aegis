@@ -435,12 +435,14 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
         });
         modelBuilder.Entity<ReminderDeliveryAttempt>(e =>
         {
-            e.ToTable("reminder_delivery_attempts");
+            e.ToTable("reminder_node_delivery_attempts");
             e.HasKey(a => a.Id);
-            e.Property(a => a.FailureReason).HasMaxLength(100);
+            e.Property(a => a.Result).HasMaxLength(40);
+            e.Property(a => a.Transport).HasMaxLength(30);
             e.HasOne<Reminder>().WithMany().HasForeignKey(a => a.ReminderId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne<PushSubscription>().WithMany().HasForeignKey(a => a.PushSubscriptionId).OnDelete(DeleteBehavior.Restrict);
-            e.HasIndex(a => new { a.ReminderId, a.PushSubscriptionId, a.Attempt }).IsUnique();
+            e.HasOne<AegisNode>().WithMany().HasForeignKey(a => a.NodeId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(a => new { a.ReminderId, a.Attempt }).IsUnique();
+            e.HasIndex(a => a.CommandId);
         });
         modelBuilder.Entity<Conversation>(entity =>
         {

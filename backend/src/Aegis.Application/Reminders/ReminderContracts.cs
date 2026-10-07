@@ -4,7 +4,7 @@ namespace Aegis.Application.Reminders;
 
 public interface IReminderStore
 {
-    Task<bool> HasActiveSubscriptionAsync(CancellationToken ct);
+    Task<bool> HasNotificationNodeAsync(CancellationToken ct);
     Task AddAsync(Reminder reminder, CancellationToken ct);
     Task<IReadOnlyList<Reminder>> ListAsync(DateTimeOffset? from, DateTimeOffset? to, int limit, CancellationToken ct);
     Task<T> LockedAsync<T>(Guid id, Func<Reminder, Task<T>> action, CancellationToken ct);

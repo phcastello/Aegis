@@ -31,11 +31,16 @@ public sealed record NodeTargetSummary(Guid Id, string Name);
 public sealed record NodeTargetResult(NodeTargetSummary? Node, string? Code, int OnlineNodes, int CapabilityCompatibleNodes);
 public interface INodeTargetResolver
 {
+    Task<NodeTargetResult> ResolveForDeliveryAsync(NodeTargetRequest request, CancellationToken ct = default);
     Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default);
 }
 public sealed class NodeTargetResolver(INodeRegistry nodes, INodeConnections connections, INodeBackgroundAvailability? background = null) : INodeTargetResolver
 {
-    public async Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default)
+    public async Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default) =>
+        await Resolve(await nodes.ListAsync(actor, ct), request, ct);
+    public async Task<NodeTargetResult> ResolveForDeliveryAsync(NodeTargetRequest request, CancellationToken ct = default) =>
+        await Resolve(await nodes.ListForDeliveryAsync(ct), request, ct);
+    private async Task<NodeTargetResult> Resolve(IReadOnlyList<NodeView> inventory, NodeTargetRequest request, CancellationToken ct)
     {
         var required = request.RequiredCapabilities;
         if (request.Reachability is not ("live" or "notification") || request.Reachability == "notification" &&
@@ -47,7 +52,7 @@ public sealed class NodeTargetResolver(INodeRegistry nodes, INodeConnections con
             throw new NodeException("invalid_target_requirements", "Informe capabilities conhecidas, únicas e versões positivas.");
         // Administrative metadata is a DB snapshot; live capabilities are read atomically from
         // the current healthy lease, never from persisted history or caller/platform preference.
-        var inventory = await nodes.ListAsync(actor, ct); var candidates = new List<NodeView>(); var online = 0;
+        var candidates = new List<NodeView>(); var online = 0;
         foreach (var node in inventory.Where(n => n.Enabled && n.RevokedAt is null))
         {
             var live = connections.LiveCapabilities(node.Id);

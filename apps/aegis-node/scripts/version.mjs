@@ -2,19 +2,21 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export function androidVersionCode(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-stage\.([1-9]\d*))?$/.exec(version);
-  if (!match) throw new Error('Use X.Y.Z or X.Y.Z-stage.N without build metadata.');
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:stage|unstable)\.([1-9]\d*))?$/.exec(version);
+  if (!match) throw new Error('Use X.Y.Z or X.Y.Z-unstable.N without build metadata (stage.N is legacy).');
   const [major, minor, patch] = match.slice(1, 4).map(Number);
-  const stage = match[4] === undefined ? 999 : Number(match[4]);
-  if (major > 20 || minor > 99 || patch > 999 || stage < 1 || stage > 999 || (match[4] !== undefined && stage === 999))
+  const preview = match[4] === undefined ? 999 : Number(match[4]);
+  if (major > 20 || minor > 99 || patch > 999 || preview < 1 || preview > 999 || (match[4] !== undefined && preview === 999))
     throw new Error('Version exceeds the Android versionCode allocation.');
-  return major * 100000000 + minor * 1000000 + patch * 1000 + stage;
+  return major * 100000000 + minor * 1000000 + patch * 1000 + preview;
 }
 
 export function synchronize(write = false) {
   const root = new URL('../', import.meta.url);
   const jsonPath = new URL('package.json', root);
   const version = JSON.parse(readFileSync(jsonPath, 'utf8')).version;
+  if (version.includes('-') && !/^\d+\.\d+\.\d+-unstable\.[1-9]\d*$/.test(version))
+    throw new Error('New prereleases use unstable.N; roadmap Stage numbers are not versions.');
   const versionCode = androidVersionCode(version);
   const configPath = new URL('src-tauri/tauri.conf.json', root);
   const config = JSON.parse(readFileSync(configPath, 'utf8'));

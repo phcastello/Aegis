@@ -6,17 +6,15 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Reminders;
 
-public sealed class ReminderService(IReminderStore store, IWebPushClient push, TimeProvider clock, AegisMetrics metrics)
+public sealed class ReminderService(IReminderStore store, TimeProvider clock, AegisMetrics metrics)
 {
     public Task<string?> GetContextAsync(Guid conversationId, CancellationToken ct) => store.GetContextAsync(conversationId, clock.GetUtcNow(), ct);
     public async Task<Reminder> CreateAsync(Guid conversationId, string text, string dueAt, CancellationToken ct, string? timeZoneId = null)
     {
         var due = ParseInstant(dueAt);
         var zone = ValidateTimeZone(timeZoneId ?? RuntimeContextProvider.ReferenceTimeZoneId);
-        if (!push.IsConfigured)
-            throw new ReminderException("notifications_not_configured", "O envio de notificações ainda não está configurado no servidor da Aegis. Conceder permissão no navegador não resolve essa configuração; o lembrete ainda não foi criado.");
-        if (!await store.HasActiveSubscriptionAsync(ct))
-            throw new ReminderException("notifications_unavailable", "Ative notificações na Aegis para eu conseguir avisar com a aplicação fechada. Depois, peça o lembrete novamente; ele ainda não foi criado.");
+        if (!await store.HasNotificationNodeAsync(ct))
+            throw new ReminderException("notifications_unavailable", "Nenhum Node ativo tem notification.show@1. Pareie e habilite notificações em um Node da Aegis e peça o lembrete novamente; ele ainda não foi criado.");
         var reminder = new Reminder(text, due, zone, conversationId, clock.GetUtcNow());
         await store.AddAsync(reminder, ct);
         metrics.RemindersCreated.Add(1);

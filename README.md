@@ -25,7 +25,9 @@ The development installer does not yet have commercial Windows code signing, so 
 
 During v0.7.0 development, distribution is directly by APK, outside the Play Store. If you installed the Stage 01 debug APK, uninstall it once before installing the first release APK because they use different signing certificates. Later release APKs retain the same signing identity.
 
-After the first installation, the app checks for new previews and offers an update in its interface. The owner validated stage.2 → stage.3 on both platforms: Windows updates through Tauri; Android opens the matching APK for system installation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Native notifications and native reminder delivery belong to later stages. The Web Client keeps its PWA/Web Push features.
+After the first installation, the app checks for new previews and offers an update in its interface. The owner validated stage.2 → stage.3 on both platforms: Windows updates through Tauri; Android opens the matching APK for system installation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Stage 06 native notifications were physically accepted by the owner on Windows and Android, including Android background FCM. [Stage 07](docs/v0.7.0-stage07-native-reminder-delivery.md) delivers internal reminders through one eligible Node using live WebSocket or FCM. The Web Client keeps its legacy PWA/Web Push infrastructure.
+
+New v0.7.0 prereleases use `0.7.0-unstable.N` (independent of roadmap Stage numbers), beginning with `unstable.11` after `stage.10`. Windows uses normal updater ordering. The Android updater shipped in `stage.10` only accepts `stage.N`: download/install the first `unstable.11` APK from its versioned release once; identity and signing certificate remain the same, and subsequent `unstable.N` updates use the in-app link normally.
 
 ### Pair this installation as a Node
 

@@ -235,11 +235,14 @@ public static class DependencyInjection
             o.Subject = Read(configuration, "AEGIS_WEB_PUSH_SUBJECT", o.Subject);
             o.PublicKey = Read(configuration, "AEGIS_WEB_PUSH_PUBLIC_KEY", o.PublicKey);
             o.PrivateKey = Read(configuration, "AEGIS_WEB_PUSH_PRIVATE_KEY", o.PrivateKey);
-            o.PollSeconds = ReadInt(configuration, "AEGIS_REMINDER_POLL_SECONDS", o.PollSeconds);
-        }).Validate(o => o.PollSeconds is >= 1 and <= 60, "Reminder polling must be between 1 and 60 seconds.")
-          .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
+        }).Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
               "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
           .ValidateOnStart();
+        services.AddOptions<ReminderOptions>().Configure(o =>
+        {
+            configuration.GetSection("Reminders").Bind(o);
+            o.PollSeconds = ReadInt(configuration, "AEGIS_REMINDER_POLL_SECONDS", o.PollSeconds);
+        }).Validate(o => o.PollSeconds is >= 1 and <= 60, "Reminder polling must be between 1 and 60 seconds.").ValidateOnStart();
         var semantic = new MemorySemanticOptions();
         configuration.GetSection("MemorySemantic").Bind(semantic);
         semantic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_SEMANTIC_ENABLED", semantic.Enabled);

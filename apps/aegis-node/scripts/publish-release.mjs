@@ -7,6 +7,7 @@ import { androidVersionCode } from './version.mjs';
 const repo = 'phcastello/Aegis';
 const tag = process.env.RELEASE_TAG;
 const next = JSON.parse(readFileSync('release-assets/latest.json', 'utf8'));
+if (!/^0\.7\.0-unstable\.[1-9]\d*$/.test(next.version)) throw new Error('v0.7.0 previews use the independent unstable.N channel.');
 if (tag !== `node-v${next.version}`) throw new Error('Release tag/version mismatch.');
 function gh(args, allowFailure = false) {
   const result = spawnSync('gh', [...args, '--repo', repo], { encoding: 'utf8' });

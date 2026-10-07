@@ -53,9 +53,9 @@ public sealed class NodeTransportTests
     {
         public required WebApplication App; public required NodeRegistry Nodes; public required NodeConnectionRegistry Connections;
         public HttpClient Http => App.GetTestClient();
-        public async Task<(NodeView Node, string Secret)> Pair()
+        public async Task<(NodeView Node, string Secret)> Pair(string platform = "windows")
         {
-            var request = NodeIdentityTests.Request((await Nodes.CreateCodeAsync(null)).Code);
+            var request = NodeIdentityTests.Request((await Nodes.CreateCodeAsync(null)).Code, platform);
             var receipt = await Nodes.PairAsync(request); return (await Nodes.FinalizeAsync(new(request.AttemptId, receipt.Credential)), receipt.Credential);
         }
         public async Task<WebSocket> Connect(string credential, string protocol = "1")
@@ -295,11 +295,39 @@ public sealed class NodeTransportTests
         var command=new NodeNotificationCommand(Guid.NewGuid(),"notification.show",1,DateTimeOffset.UtcNow.AddSeconds(60),new("Aegis","Olá"));
         var sending=f.Connections.SendAsync(node.Id,command,default);
         var received=await Read(socket);Assert.Equal("command",received.Json.GetProperty("type").GetString());
+        Assert.Equal("busy", (await f.Connections.SendAsync(node.Id, command, default)).Status); // Pending work has not executed yet.
         var payload=received.Json.GetProperty("payload");Assert.Equal(command.CommandId,payload.GetProperty("commandId").GetGuid());Assert.Equal("Olá",payload.GetProperty("input").GetProperty("body").GetString());
         await Send(socket,new {protocolVersion=1,type="heartbeat",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow});Assert.Equal("heartbeat_ack",(await Read(socket)).Json.GetProperty("type").GetString());
         Assert.False(sending.IsCompleted);Assert.True(f.Connections.IsOnline(node.Id));
         await Send(socket,new {protocolVersion=1,type="command_result",messageId=Guid.NewGuid(),sentAt=DateTimeOffset.UtcNow,payload=new {commandId=command.CommandId,status}});
         Assert.Equal(status,(await sending).Status);Assert.True(f.Connections.IsOnline(node.Id));
+    }
+    [Theory]
+    [InlineData("windows")] [InlineData("android")]
+    public async Task ReminderToolThroughProcessorAndRealWebSocketPersistsNativeAcceptance(string platform)
+    {
+        await using var f = await Host(); var (node, secret) = await f.Pair(platform);
+        using var socket = await f.Connect(secret); await Advertise(socket, new NodeCapability("notification.show", 1));
+        await using var scope = f.App.Services.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        using var metrics = new Aegis.Application.Observability.AegisMetrics();
+        var store = new Aegis.Infrastructure.Reminders.ReminderStore(db);
+        var service = new Aegis.Application.Reminders.ReminderService(store, TimeProvider.System, metrics);
+        var tool = new Aegis.Application.Reminders.ReminderCreateTool(service);
+        var context = new Aegis.Application.Tools.ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "me lembra daqui um segundo de teste");
+        var created = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { text = "teste nativo", dueAt = DateTimeOffset.UtcNow.AddSeconds(1).ToString("O") }), context);
+        Assert.True(created.Success); await Task.Delay(1100);
+        var processor = new Aegis.Infrastructure.Reminders.ReminderProcessor(db, store,
+            scope.ServiceProvider.GetRequiredService<INodeTargetResolver>(), scope.ServiceProvider.GetRequiredService<INodeNotificationDispatcher>(), TimeProvider.System, metrics);
+        var sending = processor.ProcessNextAsync();
+        var received = (await Read(socket)).Json; Assert.Equal("command", received.GetProperty("type").GetString());
+        var command = received.GetProperty("payload"); var commandId = command.GetProperty("commandId").GetGuid();
+        Assert.Equal("notification.show", command.GetProperty("capability").GetString()); Assert.Equal(1, command.GetProperty("capabilityVersion").GetInt32());
+        Assert.Equal("Aegis", command.GetProperty("input").GetProperty("title").GetString()); Assert.Equal("teste nativo", command.GetProperty("input").GetProperty("body").GetString());
+        await Send(socket, new { protocolVersion = 1, type = "command_result", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow, payload = new { commandId, status = "success" } });
+        Assert.True(await sending); Assert.False(await processor.ProcessNextAsync());
+        var attempt = await db.ReminderDeliveryAttempts.SingleAsync(); Assert.Equal(node.Id, attempt.NodeId); Assert.Equal(commandId, attempt.CommandId);
+        Assert.Equal("success", attempt.Result); Assert.Equal("live_websocket", attempt.Transport); Assert.NotNull(attempt.AcceptedAt);
+        Assert.Equal(Aegis.Domain.Entities.ReminderStatus.Triggered, (await db.Reminders.SingleAsync()).Status); Assert.Empty(await db.PushSubscriptions.ToListAsync());
     }
     [Fact] public async Task LiveDiagnosticTravelsWithSameCommandResult() {
         await using var f = await Host(); var (node, secret) = await f.Pair(); using var socket = await f.Connect(secret);

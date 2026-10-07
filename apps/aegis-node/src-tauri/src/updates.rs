@@ -24,13 +24,14 @@ pub struct AndroidUpdate {
 }
 
 fn version_code(version: &semver::Version) -> Result<u32, String> {
-    let stage = if version.pre.is_empty() {
+    let preview = if version.pre.is_empty() {
         999
     } else {
         version
             .pre
             .as_str()
-            .strip_prefix("stage.")
+            .strip_prefix("unstable.")
+            .or_else(|| version.pre.as_str().strip_prefix("stage."))
             .and_then(|n| n.parse::<u32>().ok())
             .filter(|n| (1..999).contains(n))
             .ok_or("Unsupported preview version")?
@@ -39,7 +40,10 @@ fn version_code(version: &semver::Version) -> Result<u32, String> {
     {
         return Err("Version exceeds Android allocation".into());
     }
-    Ok((version.major * 100000000 + version.minor * 1000000 + version.patch * 1000) as u32 + stage)
+    Ok(
+        (version.major * 100000000 + version.minor * 1000000 + version.patch * 1000) as u32
+            + preview,
+    )
 }
 
 pub fn interpret(body: &str, current: &str) -> Result<Option<AndroidUpdate>, String> {
@@ -143,10 +147,42 @@ mod tests {
         assert!(interpret("not json", "0.7.0-stage.2").is_err());
     }
     #[test]
+    fn preview_channel_migration_and_followups_are_newer() {
+        let versions = [
+            "0.7.0-stage.10",
+            "0.7.0-unstable.11",
+            "0.7.0-unstable.12",
+            "0.7.0-unstable.13",
+            "0.7.0",
+        ];
+        for pair in versions.windows(2) {
+            let installed = semver::Version::parse(pair[0]).unwrap();
+            let next = semver::Version::parse(pair[1]).unwrap();
+            assert!(next > installed); // The same comparison used by the official desktop updater.
+            assert!(version_code(&next).unwrap() > version_code(&installed).unwrap());
+            let url = format!("{RELEASE_ROOT}{}/Aegis-Android-arm64.apk", pair[1]);
+            assert!(interpret(
+                &manifest(pair[1], version_code(&next).unwrap(), &url),
+                pair[0]
+            )
+            .unwrap()
+            .is_some());
+            let old_url = format!("{RELEASE_ROOT}{}/Aegis-Android-arm64.apk", pair[0]);
+            assert!(interpret(
+                &manifest(pair[0], version_code(&installed).unwrap(), &old_url),
+                pair[1]
+            )
+            .unwrap()
+            .is_none());
+        }
+    }
+    #[test]
     fn rejects_unallocated_versions() {
         for value in [
             "0.7.0-stage.999",
             "0.7.0-beta.1",
+            "0.7.0-unstable.999",
+            "0.7.0-unstable.11.extra",
             "0.100.0",
             "0.7.0+untrusted",
         ] {
@@ -157,6 +193,14 @@ mod tests {
 
 #[cfg(all(test, windows, feature = "native-runtime"))]
 mod desktop_tests {
+    #[test]
+    fn official_desktop_updater_orders_unstable_above_published_stage10() {
+        let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(serde_json::json!({
+            "version": "0.7.0-unstable.11",
+            "platforms": { "windows-x86_64": { "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.11/Aegis-Windows-x86_64-Setup.exe", "signature": "fixture" } }
+        })).unwrap();
+        assert!(release.version > semver::Version::parse("0.7.0-stage.10").unwrap());
+    }
     #[test]
     fn official_updater_accepts_manifest_with_separate_android_extension() {
         let manifest = serde_json::json!({

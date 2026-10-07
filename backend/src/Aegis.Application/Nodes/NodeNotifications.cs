@@ -47,7 +47,12 @@ public interface INodePushRegistrations : INodeBackgroundAvailability
     Task RemoveAsync(Guid actor, CancellationToken ct);
 }
 public interface INodePushNotifications { Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct); }
-public interface INodeNotificationDispatcher { Task<NotificationDispatchResult> DispatchAsync(Guid actor, NotificationShowRequest request, CancellationToken ct = default); }
+public interface INodeNotificationDispatcher
+{
+    Task<NotificationDispatchResult> DispatchAsync(Guid actor, NotificationShowRequest request, CancellationToken ct = default);
+    // Internal delivery of an already persisted, infrastructure-selected command/target.
+    Task<NotificationDispatchResult> DispatchToNodeAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct = default);
+}
 public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetResolver resolver, INodeConnections live,
     INodeLiveNotifications socket, INodePushNotifications push, INodeBackgroundAvailability background, TimeProvider clock) : INodeNotificationDispatcher
 {
@@ -59,19 +64,33 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
         NotificationContract.Validate(request.Title, request.Body, request.TtlSeconds);
         var selection = await resolver.ResolveAsync(actor, new([new(NotificationContract.Capability, 1)], request.PreferredNodeId, "notification"), ct);
         if (selection.Node is null) return new(null, "offline", null, "no_eligible_node", null);
-        var id = selection.Node.Id;
-        // Revalidate current administrative metadata and route after resolution. Dispatch is
-        // bounded, no delivery promise/queue, and no fallback after ambiguous live acceptance.
-        var target = (await nodes.ListAsync(actor, ct)).SingleOrDefault(n => n.Id == id);
-        if (target is null || !target.Enabled || target.RevokedAt is not null) return new(selection.Node, "offline", null, "unavailable", null);
         var command = new NodeNotificationCommand(Guid.NewGuid(), NotificationContract.Capability, 1, clock.GetUtcNow().AddSeconds(request.TtlSeconds), new(request.Title, request.Body));
+        return await Send(await nodes.ListAsync(actor, ct), selection.Node, command, ct);
+    }
+    public async Task<NotificationDispatchResult> DispatchToNodeAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct = default)
+    {
+        NotificationContract.Validate(command.Input.Title, command.Input.Body, 300);
+        if (command.CommandId == Guid.Empty || command.Capability != NotificationContract.Capability || command.CapabilityVersion != 1 || command.ExpiresAt > clock.GetUtcNow().AddSeconds(300))
+            throw new NodeException("invalid_notification", "Command de notification inválido.");
+        var inventory = await nodes.ListForDeliveryAsync(ct);
+        var target = inventory.SingleOrDefault(n => n.Id == nodeId);
+        return await Send(inventory, new(nodeId, target?.Name ?? ""), command, ct);
+    }
+    private async Task<NotificationDispatchResult> Send(IReadOnlyList<NodeView> inventory, NodeTargetSummary selection, NodeNotificationCommand command, CancellationToken ct)
+    {
+        var id = selection.Id;
+        // Revalidate administrative metadata and current capability/route immediately before I/O.
+        // Never fallback after a possible send; reminders decide retry from persisted outcomes.
+        var target = inventory.SingleOrDefault(n => n.Id == id);
+        if (target is null || !target.Enabled || target.RevokedAt is not null) return new(selection, "offline", null, "unavailable", command.CommandId);
+        if (command.ExpiresAt <= clock.GetUtcNow()) return new(selection, "offline", null, "expired", command.CommandId);
         Commands.Add(1); string result, transport, availability; string? diagnostic = null;
         if (live.LiveCapabilities(id)?.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) == true)
         { transport = "live_websocket"; availability = "online"; Live.Add(1); var liveResult = await socket.SendAsync(id, command, ct); result = liveResult.Status; diagnostic = NotificationContract.ValidDiagnostic(liveResult.DiagnosticCode) ? liveResult.DiagnosticCode : null; }
         else if (target.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) && await background.HasRouteAsync(id, ct))
         { transport = "fcm"; availability = "backgroundReachable"; Push.Add(1); result = await push.SendAsync(id, command, ct); }
-        else return new(selection.Node, "offline", null, "unavailable", command.CommandId);
+        else return new(selection, "offline", null, "unavailable", command.CommandId);
         Results.Add(1, new KeyValuePair<string, object?>("transport", transport), new KeyValuePair<string, object?>("status", result));
-        return new(selection.Node, availability, transport, result, command.CommandId, diagnostic);
+        return new(selection, availability, transport, result, command.CommandId, diagnostic);
     }
 }

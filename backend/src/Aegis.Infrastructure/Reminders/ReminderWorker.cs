@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aegis.Infrastructure.Reminders;
 
-public sealed class ReminderWorker(IServiceScopeFactory scopes, TimeProvider clock, IOptions<WebPushOptions> options,
+public sealed class ReminderWorker(IServiceScopeFactory scopes, TimeProvider clock, IOptions<ReminderOptions> options,
     ILogger<ReminderWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

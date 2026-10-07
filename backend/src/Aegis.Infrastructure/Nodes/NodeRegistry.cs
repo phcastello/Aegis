@@ -145,6 +145,13 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
         return result;
 
     }, ct);
+    public async Task<IReadOnlyList<NodeView>> ListForDeliveryAsync(CancellationToken ct = default)
+    {
+        var result = new List<NodeView>();
+        foreach (var node in await db.Nodes.AsNoTracking().OrderBy(n => n.CreatedAt).ToArrayAsync(ct))
+            result.Add(await SnapshotView(node, ct));
+        return result;
+    }
     public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct);

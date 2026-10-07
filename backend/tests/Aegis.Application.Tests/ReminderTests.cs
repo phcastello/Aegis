@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aegis.Application.Nodes;
+using Aegis.Infrastructure.Nodes;
 using Aegis.Application.Observability;
 using Aegis.Application.Reminders;
 using Aegis.Application.Tools;
@@ -14,50 +16,38 @@ namespace Aegis.Application.Tests;
 public sealed class ReminderTests
 {
     [Fact]
-    public async Task CreationReportsServerConfigurationSeparatelyFromMissingDeviceRegistration()
+    public async Task CreationRequiresNotificationNodeEvenWithLegacySubscription()
     {
         using var f = new Fixture();
         var tool = new ReminderCreateTool(f.Service);
         var args = JsonSerializer.SerializeToElement(new { text = "teste", dueAt = f.Due });
         var context = new ToolExecutionContext(f.Conversation, Guid.NewGuid(), "me lembra daqui um minuto de testar");
-        f.Push.IsConfigured = false;
+        f.Db.PushSubscriptions.Add(new PushSubscription("https://fcm.googleapis.com/legacy", "key", "auth", Guid.NewGuid(), null, f.Clock.GetUtcNow()));
+        await f.Db.SaveChangesAsync();
         var result = await tool.ExecuteAsync(args, context);
         Assert.False(result.Success);
-        var error = JsonDocument.Parse(result.Content).RootElement;
-        Assert.Equal("notifications_not_configured", error.GetProperty("error").GetString());
-        Assert.Contains("servidor", error.GetProperty("message").GetString());
-        Assert.DoesNotContain("Ative notificações", error.GetProperty("message").GetString());
+        Assert.Equal("notifications_unavailable", JsonDocument.Parse(result.Content).RootElement.GetProperty("error").GetString());
         Assert.Empty(f.Db.Reminders);
-
-        f.Push.IsConfigured = true;
-        result = await tool.ExecuteAsync(args, context);
-        Assert.False(result.Success);
-        error = JsonDocument.Parse(result.Content).RootElement;
-        Assert.Equal("notifications_unavailable", error.GetProperty("error").GetString());
-        Assert.Contains("Ative notificações", error.GetProperty("message").GetString());
-        Assert.Empty(f.Db.Reminders);
-
-        f.Subscribe(); await f.Db.SaveChangesAsync();
+        f.AddNode(online: false); await f.Db.SaveChangesAsync();
         Assert.True((await tool.ExecuteAsync(args, context)).Success);
         Assert.Single(f.Db.Reminders);
     }
 
     [Fact]
-    public async Task CreationRequiresFunctionalChannelAndFutureAbsoluteTime()
+    public async Task CreationRequiresPersistedCapabilityAndFutureAbsoluteTimeButNoWebPush()
     {
         using var f = new Fixture();
         await Assert.ThrowsAsync<ReminderException>(() => f.Service.CreateAsync(f.Conversation, "ração", f.Due, default));
-        Assert.Empty(f.Db.Reminders);
-        f.Subscribe(); await f.Db.SaveChangesAsync();
+        var node = f.AddNode(online: false); await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<ArgumentException>(() => f.Service.CreateAsync(f.Conversation, "ração", "2026-10-01T18:00:00", default));
         await Assert.ThrowsAsync<ArgumentException>(() => f.Service.CreateAsync(f.Conversation, "ração", "2026-09-26T18:00:00-03:00", default));
-        f.Push.IsConfigured = false;
+        node.SetEnabled(false, f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<ReminderException>(() => f.Service.CreateAsync(f.Conversation, "ração", f.Due, default));
-        f.Push.IsConfigured = true;
+        node.SetEnabled(true, f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync();
         var r = await f.Service.CreateAsync(f.Conversation, "ração", f.Due, default);
         Assert.Equal(DateTimeOffset.Parse("2026-09-27T14:00:00Z"), r.DueAtUtc);
-        Assert.Equal("America/Sao_Paulo", r.TimeZoneId);
-        Assert.Equal(f.Conversation, r.SourceConversationId);
+        Assert.Equal("America/Sao_Paulo", r.TimeZoneId); Assert.Equal(f.Conversation, r.SourceConversationId);
+        Assert.Empty(f.Db.PushSubscriptions);
     }
     [Fact]
     public async Task TextAndTimeCanChangeAndCancelIsIdempotent()
@@ -101,7 +91,7 @@ public sealed class ReminderTests
     [Fact]
     public async Task ToolsReturnActualResultsAndRejectUnknownOrInvalidFields()
     {
-        using var f = new Fixture(); f.Subscribe(); await f.Db.SaveChangesAsync();
+        using var f = new Fixture(); f.AddNode(); await f.Db.SaveChangesAsync();
         var context = new ToolExecutionContext(f.Conversation, Guid.NewGuid(), "me lembra");
         var create = new ReminderCreateTool(f.Service);
         Assert.False((await create.ExecuteAsync(JsonSerializer.SerializeToElement(new { text = "X", dueAt = f.Due, unexpected = true }), context)).Success);
@@ -113,21 +103,27 @@ public sealed class ReminderTests
         Assert.True((await new ReminderUpdateTool(f.Service).ExecuteAsync(JsonSerializer.SerializeToElement(new { reminderId = id, text = "Y" }), context)).Success);
         Assert.True((await new ReminderCancelTool(f.Service).ExecuteAsync(JsonSerializer.SerializeToElement(new { reminderId = id }), context)).Success);
     }
-    [Fact]
-    public async Task WorkerWaitsUntilDueThenPushesWithoutModelAndDoesNotRepeat()
+    [Theory]
+    [InlineData(NodePlatform.Windows, false, "live_websocket", "success")]
+    [InlineData(NodePlatform.Android, false, "live_websocket", "success")]
+    [InlineData(NodePlatform.Android, true, "fcm", "accepted")]
+    public async Task WorkerWaitsUntilDueThenDispatchesOneNativeCommand(NodePlatform platform, bool background, string transport, string status)
     {
-        using var f = new Fixture(); var r = await f.Create();
-        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Empty(f.Push.Payloads);
+        using var f = new Fixture(); var node = f.AddNode(platform, online: !background);
+        if (background) f.Background.Nodes.Add(node.Id);
+        var r = await f.Create();
+        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Empty(f.Native.Commands);
         f.Clock.Advance(TimeSpan.FromHours(1));
-        Assert.True(await f.Processor.ProcessNextAsync());
-        Assert.Single(f.Push.Payloads); Assert.False(await f.Processor.ProcessNextAsync());
+        Assert.True(await f.Processor.ProcessNextAsync()); Assert.False(await f.Processor.ProcessNextAsync());
+        var command = Assert.Single(f.Native.Commands);
+        Assert.Equal("notification.show", command.Command.Capability); Assert.Equal(1, command.Command.CapabilityVersion);
+        Assert.Equal("Aegis", command.Command.Input.Title); Assert.Equal("ração", command.Command.Input.Body);
+        Assert.Equal(node.Id, command.NodeId);
         var actual = await f.Db.Reminders.FindAsync(r.Id);
-        Assert.Equal(ReminderStatus.Triggered, actual!.Status);
-        Assert.Equal(f.Clock.GetUtcNow(), actual.TriggeredAt);
-        Assert.NotNull(Assert.Single(f.Db.ReminderDeliveryAttempts).AcceptedAt);
-        var payload = JsonDocument.Parse(f.Push.Payloads[0]).RootElement;
-        Assert.Equal("ração", payload.GetProperty("text").GetString());
-        Assert.False(payload.TryGetProperty("endpoint", out _));
+        Assert.Equal(ReminderStatus.Triggered, actual!.Status); Assert.Equal(f.Clock.GetUtcNow(), actual.TriggeredAt);
+        var attempt = Assert.Single(f.Db.ReminderDeliveryAttempts);
+        Assert.NotNull(attempt.AcceptedAt); Assert.Equal(status, attempt.Result); Assert.Equal(transport, attempt.Transport);
+        Assert.Equal(command.Command.CommandId, attempt.CommandId); Assert.Empty(f.Db.PushSubscriptions);
     }
     [Fact]
     public async Task OverdueReminderSurvivesDowntimeAndCancelledReminderNeverFires()
@@ -136,8 +132,8 @@ public sealed class ReminderTests
         await f.Service.ChangeAsync(f.Conversation, cancelled.Id, null, null, true, default);
         var overdue = await f.Service.CreateAsync(f.Conversation, "overdue", f.Due, default);
         f.Clock.Advance(TimeSpan.FromHours(2));
-        Assert.True(await f.Processor.ProcessNextAsync()); Assert.Single(f.Push.Payloads);
-        Assert.Equal("overdue", JsonDocument.Parse(f.Push.Payloads[0]).RootElement.GetProperty("text").GetString());
+        Assert.True(await f.Processor.ProcessNextAsync()); Assert.Single(f.Native.Commands);
+        Assert.Equal("overdue", f.Native.Commands[0].Command.Input.Body);
         Assert.False(await f.Processor.ProcessNextAsync());
     }
     [Fact]
@@ -148,37 +144,52 @@ public sealed class ReminderTests
         Assert.Null(await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default));
         Assert.False(await f.Processor.ProcessNextAsync());
         f.Clock.Advance(TimeSpan.FromMinutes(3));
-        Assert.True(await f.Processor.ProcessNextAsync()); Assert.Single(f.Push.Payloads);
+        Assert.True(await f.Processor.ProcessNextAsync()); Assert.Single(f.Native.Commands);
     }
     [Fact]
-    public async Task RetryPreservesAcceptedDeviceAndBoundsTransientAttempts()
+    public async Task PriorityChoosesBackgroundAndroidOverLiveWindowsWithoutBroadcast()
     {
-        using var f = new Fixture(); await f.Create(); f.Subscribe(); await f.Db.SaveChangesAsync();
-        f.Push.Results.Enqueue(new PushResult(201)); f.Push.Results.Enqueue(new PushResult(503, "push_http_error"));
+        using var f = new Fixture(); f.AddNode(priority: 10);
+        var phone = f.AddNode(NodePlatform.Android, online: false, priority: 20); f.Background.Nodes.Add(phone.Id);
+        await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        Assert.Equal(phone.Id, Assert.Single(f.Native.Commands).NodeId);
+        Assert.Equal("fcm", Assert.Single(f.Db.ReminderDeliveryAttempts).Transport);
+    }
+    [Fact]
+    public async Task UnavailablePrimaryFallsBackToLiveWindows()
+    {
+        using var f = new Fixture(); var pc = f.AddNode(priority: 10);
+        f.AddNode(NodePlatform.Android, online: false, priority: 20);
+        await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        Assert.Equal(pc.Id, Assert.Single(f.Native.Commands).NodeId);
+    }
+    [Fact]
+    public async Task NoReachableNodeRetriesThenNewRouteDelivers()
+    {
+        using var f = new Fixture(); var pc = f.AddNode(online: false); await f.Create();
         f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
-        Assert.Equal(2, f.Push.Payloads.Count);
+        Assert.Empty(f.Native.Commands); Assert.Equal("no_eligible_node", Assert.Single(f.Db.ReminderDeliveryAttempts).Result);
+        Assert.Equal(ReminderStatus.Scheduled, Assert.Single(f.Db.Reminders).Status);
         Assert.False(await f.Processor.ProcessNextAsync());
-        f.Clock.Advance(TimeSpan.FromSeconds(10)); await f.Processor.ProcessNextAsync();
-        Assert.Equal(3, f.Push.Payloads.Count);
-        Assert.Equal(2, f.Db.ReminderDeliveryAttempts.Count(a => a.AcceptedAt != null));
+        f.Clock.Advance(TimeSpan.FromSeconds(10)); f.Live.Nodes[pc.Id] = [new("notification.show", 1)];
+        await f.Processor.ProcessNextAsync(); Assert.Single(f.Native.Commands);
         Assert.Equal(ReminderStatus.Triggered, Assert.Single(f.Db.Reminders).Status);
     }
     [Fact]
-    public async Task GlobalAcknowledgementStopsOtherDeviceRetryAndRetainsHistory()
+    public async Task GlobalAcknowledgementStopsRetryAndRetainsHistory()
     {
-        using var f = new Fixture(); var reminder = await f.Create(); f.Subscribe(); await f.Db.SaveChangesAsync();
-        f.Push.Results.Enqueue(new PushResult(201)); f.Push.Results.Enqueue(new PushResult(503, "push_http_error"));
+        using var f = new Fixture(); var reminder = await f.Create();
+        f.Native.Results.Enqueue("timeout");
         f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
-        var before = await f.Db.ReminderDeliveryAttempts.AsNoTracking().OrderBy(a => a.Id).ToListAsync();
-        Assert.Equal(2, before.Count); Assert.Single(before, a => a.RetryAt != null);
+        var before = await f.Db.ReminderDeliveryAttempts.AsNoTracking().ToListAsync();
+        Assert.Single(before, a => a.RetryAt != null);
         await f.Store.LockedAsync(reminder.Id, r => { r.Acknowledge(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
         var acknowledged = f.Clock.GetUtcNow(); f.Clock.Advance(TimeSpan.FromMinutes(10));
-        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Equal(2, f.Push.Payloads.Count);
+        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Single(f.Native.Commands);
         var actual = (await f.Db.Reminders.FindAsync(reminder.Id))!;
         Assert.Equal(acknowledged, actual.AcknowledgedAt); Assert.Equal(ReminderStatus.Triggered, actual.Status);
         Assert.Null(actual.CancelledAt); Assert.Null(actual.LeaseId); Assert.False(actual.CanClaim(f.Clock.GetUtcNow()));
-        var after = await f.Db.ReminderDeliveryAttempts.AsNoTracking().OrderBy(a => a.Id).ToListAsync();
-        Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(after));
+        Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(await f.Db.ReminderDeliveryAttempts.AsNoTracking().ToListAsync()));
     }
     [Fact]
     public async Task PreviouslyAcknowledgedScheduledRowsCannotBeListedOrClaimed()
@@ -212,29 +223,39 @@ public sealed class ReminderTests
         }, default);
         f.Clock.Advance(TimeSpan.FromMinutes(3));
         Assert.Null(await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default));
-        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Empty(f.Push.Payloads);
+        Assert.False(await f.Processor.ProcessNextAsync()); Assert.Empty(f.Native.Commands);
     }
 
-    [Fact]
-    public async Task TransientFailuresExhaustFiveAttemptsWithBackoff()
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task UnavailableOrDefiniteFailuresExhaustFiveAttemptsWithBackoff(bool reachable)
     {
-        using var f = new Fixture(); await f.Create();
-        for (var i = 0; i < 6; i++) f.Push.Results.Enqueue(new PushResult(429, "push_http_error"));
+        using var f = new Fixture(); f.AddNode(online: reachable); await f.Create();
+        for (var i = 0; i < 6; i++) f.Native.Results.Enqueue("permission_denied");
         f.Clock.Advance(TimeSpan.FromHours(1));
         foreach (var seconds in new[] { 0, 10, 30, 120, 300 }) { f.Clock.Advance(TimeSpan.FromSeconds(seconds)); Assert.True(await f.Processor.ProcessNextAsync()); }
-        Assert.Equal(5, f.Push.Payloads.Count);
-        Assert.Equal(ReminderStatus.Failed, Assert.Single(f.Db.Reminders).Status);
-        Assert.False(await f.Processor.ProcessNextAsync());
+        Assert.Equal(5, f.Db.ReminderDeliveryAttempts.Count()); Assert.Equal(reachable ? 5 : 0, f.Native.Commands.Count);
+        Assert.Equal(ReminderStatus.Failed, Assert.Single(f.Db.Reminders).Status); Assert.False(await f.Processor.ProcessNextAsync());
+    }
+    [Fact]
+    public async Task TargetRevalidationRejectsDisableAndRetryResolvesAnotherNode()
+    {
+        using var f = new Fixture(); var primary = f.AddNode(priority: 20); var fallback = f.AddNode(priority: 10);
+        f.Resolver.BeforeReturn = async () => { primary.SetEnabled(false, f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync(); };
+        await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        Assert.Empty(f.Native.Commands); Assert.Equal("unavailable", Assert.Single(f.Db.ReminderDeliveryAttempts).Result);
+        f.Resolver.BeforeReturn = null; f.Clock.Advance(TimeSpan.FromSeconds(10)); await f.Processor.ProcessNextAsync();
+        Assert.Equal(fallback.Id, Assert.Single(f.Native.Commands).NodeId);
     }
     [Theory]
-    [InlineData(404)] [InlineData(410)]
-    public async Task PermanentSubscriptionFailureDisablesRatherThanDeletes(int status)
+    [InlineData(false)] [InlineData(true)]
+    public async Task MissingPersistedCapabilityAndRevokedNodesCannotUnlockCreation(bool revoked)
     {
-        using var f = new Fixture(); await f.Create(); f.Push.Results.Enqueue(new PushResult(status, "push_http_error"));
-        f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
-        Assert.NotNull(Assert.Single(f.Db.PushSubscriptions).DisabledAt);
-        Assert.Equal(status, Assert.Single(f.Db.ReminderDeliveryAttempts).HttpStatus);
-        Assert.False(await f.Processor.ProcessNextAsync());
+        using var f = new Fixture(); var node = f.AddNode();
+        if (revoked) node.Revoke(f.Clock.GetUtcNow()); else f.Db.NodeCapabilities.RemoveRange(f.Db.NodeCapabilities.Local);
+        await f.Db.SaveChangesAsync();
+        await Assert.ThrowsAsync<ReminderException>(() => f.Service.CreateAsync(f.Conversation, "X", f.Due, default));
+        Assert.Empty(f.Db.Reminders);
     }
     [Fact]
     public async Task AcknowledgementAndOpeningAreDistinctAndIdempotent()
@@ -263,20 +284,56 @@ public sealed class ReminderTests
         clock.Advance(TimeSpan.FromDays(31)); Assert.False(tokens.Validate(token, id, "acknowledge"));
     }
     [Fact]
-    public async Task RecoverySkipsPersistedAcceptanceAndRetainsUnknownAttempt()
+    public async Task RecoverySkipsPersistedAcceptance()
     {
-        using var f = new Fixture(); var r = await f.Create(); var first = Assert.Single(f.Db.PushSubscriptions); var second = f.Subscribe();
-        f.Clock.Advance(TimeSpan.FromHours(1));
-        var claim = await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default);
-        await f.Store.LockedAsync(r.Id, r => { r.BeginTrigger(f.Clock.GetUtcNow()); return Task.FromResult(true); }, default);
-        var accepted = new ReminderDeliveryAttempt(r.Id, first.Id, 1, f.Clock.GetUtcNow()); accepted.Complete(201, null, null, f.Clock.GetUtcNow());
-        f.Db.ReminderDeliveryAttempts.Add(accepted);
-        f.Db.ReminderDeliveryAttempts.Add(new ReminderDeliveryAttempt(r.Id, second.Id, 1, f.Clock.GetUtcNow()));
-        await f.Db.SaveChangesAsync();
+        using var f = new Fixture(); var r = await f.Create(); var node = Assert.Single(f.Db.Nodes);
+        f.Clock.Advance(TimeSpan.FromHours(1)); await f.Store.ClaimAsync(f.Clock.GetUtcNow(), default);
+        var accepted = new ReminderDeliveryAttempt(r.Id, 1, node.Id, Guid.NewGuid(), f.Clock.GetUtcNow().AddSeconds(300), f.Clock.GetUtcNow());
+        accepted.Complete("accepted", "fcm", false, null, f.Clock.GetUtcNow());
+        f.Db.ReminderDeliveryAttempts.Add(accepted); await f.Db.SaveChangesAsync();
         f.Clock.Advance(TimeSpan.FromMinutes(3)); await f.Processor.ProcessNextAsync();
-        Assert.Single(f.Push.Payloads);
-        Assert.Equal(3, f.Db.ReminderDeliveryAttempts.Count());
-        Assert.Single(f.Db.ReminderDeliveryAttempts, a => a.FailureReason == "push_outcome_unknown");
+        Assert.Empty(f.Native.Commands); Assert.Single(f.Db.ReminderDeliveryAttempts); Assert.Equal(ReminderStatus.Triggered, Assert.Single(f.Db.Reminders).Status);
+    }
+    [Fact]
+    public async Task RestartAfterLostOutcomeReusesCommandAndDuplicateCompletesReminder()
+    {
+        using var f = new Fixture(); var r = await f.Create(); var node = Assert.Single(f.Db.Nodes);
+        f.Clock.Advance(TimeSpan.FromHours(1));
+        f.Native.ThrowAfterSend = true;
+        await Assert.ThrowsAsync<IOException>(() => f.Processor.ProcessNextAsync());
+        var first = Assert.Single(f.Native.Commands); Assert.Null(Assert.Single(f.Db.ReminderDeliveryAttempts).CompletedAt);
+        f.AddNode(priority: 50); await f.Db.SaveChangesAsync(); // Ambiguous send cannot migrate to a higher-priority Node.
+        f.Clock.Advance(TimeSpan.FromMinutes(3)); f.Native.ThrowAfterSend = false; f.Native.Results.Enqueue("duplicate");
+        await using var restarted = new AegisDbContext(f.DbOptions);
+        var processor = f.CreateProcessor(restarted);
+        Assert.True(await processor.ProcessNextAsync()); Assert.Equal(2, f.Native.Commands.Count);
+        Assert.Equal(first, f.Native.Commands[1]);
+        var attempts = await restarted.ReminderDeliveryAttempts.OrderBy(a => a.Attempt).ToListAsync();
+        Assert.Equal("outcome_unknown", attempts[0].Result); Assert.Equal("duplicate", attempts[1].Result);
+        Assert.Equal(attempts[0].CommandId, attempts[1].CommandId); Assert.Equal(node.Id, attempts[1].NodeId);
+        Assert.Equal(ReminderStatus.Triggered, (await restarted.Reminders.SingleAsync()).Status);
+    }
+    [Fact]
+    public async Task TimeoutKeepsCommandAndTargetEvenWhenRouteDisappears()
+    {
+        using var f = new Fixture(); var r = await f.Create(); var node = Assert.Single(f.Db.Nodes);
+        f.Native.Results.Enqueue("timeout"); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        f.Live.Nodes.Remove(node.Id); f.AddNode(priority: 50); await f.Db.SaveChangesAsync();
+        f.Clock.Advance(TimeSpan.FromSeconds(10)); await f.Processor.ProcessNextAsync();
+        Assert.Single(f.Native.Commands);
+        Assert.All(f.Db.ReminderDeliveryAttempts, a => { Assert.Equal(node.Id, a.NodeId); Assert.Equal(f.Native.Commands[0].Command.CommandId, a.CommandId); });
+        f.Live.Nodes[node.Id] = [new("notification.show", 1)]; f.Clock.Advance(TimeSpan.FromSeconds(30));
+        f.Native.Results.Enqueue("duplicate"); await f.Processor.ProcessNextAsync();
+        Assert.Equal(2, f.Native.Commands.Count); Assert.Equal(ReminderStatus.Triggered, Assert.Single(f.Db.Reminders).Status);
+    }
+    [Fact]
+    public async Task ExpiredAmbiguityCannotFallbackAfterRestart()
+    {
+        using var f = new Fixture(); await f.Create(); f.Native.ThrowAfterSend = true;
+        f.Clock.Advance(TimeSpan.FromHours(1)); await Assert.ThrowsAsync<IOException>(() => f.Processor.ProcessNextAsync());
+        f.Clock.Advance(TimeSpan.FromMinutes(6)); await f.Processor.ProcessNextAsync();
+        Assert.Single(f.Native.Commands); Assert.Equal("expired", f.Db.ReminderDeliveryAttempts.OrderBy(a => a.Attempt).Last().Result);
+        Assert.Equal(ReminderStatus.Failed, Assert.Single(f.Db.Reminders).Status); Assert.False(await f.Processor.ProcessNextAsync());
     }
     [Fact]
     public async Task LastListOrderSurvivesTimeUpdateAndTimezoneCanBeAudited()
@@ -293,12 +350,12 @@ public sealed class ReminderTests
         await Assert.ThrowsAsync<ArgumentException>(() => f.Service.CreateAsync(f.Conversation, "X", f.Due, default, "Invented/Timezone"));
     }
     [Fact]
-    public async Task PushPayloadStaysUnderProtocolLimitEvenWithLongUnicodeTextAndSignedTokens()
+    public async Task NativePayloadStaysUnderProtocolLimitWithLongUnicodeText()
     {
-        using var f = new Fixture(); f.Subscribe(); await f.Db.SaveChangesAsync();
+        using var f = new Fixture(); f.AddNode(); await f.Db.SaveChangesAsync();
         await f.Service.CreateAsync(f.Conversation, new string('漢', 600), f.Due, default);
         f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
-        Assert.True(System.Text.Encoding.UTF8.GetByteCount(Assert.Single(f.Push.Payloads)) < 3900);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(Assert.Single(f.Native.Commands).Command)) < 3900);
         Assert.Throws<ArgumentException>(() => new Reminder(new string('\u2028', 600), f.Clock.GetUtcNow().AddHours(1), "America/Sao_Paulo", null, f.Clock.GetUtcNow()));
     }
 
@@ -327,31 +384,80 @@ public sealed class ReminderTests
         public override DateTimeOffset GetUtcNow() => now;
         public void Advance(TimeSpan duration) => now += duration;
     }
-    internal sealed class FakePush : IWebPushClient
+    internal sealed class LiveConnections : INodeConnections
     {
-        public bool IsConfigured { get; set; } = true;
-        public List<string> Payloads { get; } = [];
-        public Queue<PushResult> Results { get; } = [];
-        public Task<PushResult> SendAsync(PushSubscription subscription, string payload, CancellationToken ct) { Payloads.Add(payload); return Task.FromResult(Results.Count > 0 ? Results.Dequeue() : new PushResult(201)); }
+        public Dictionary<Guid, IReadOnlyList<NodeCapability>> Nodes { get; } = [];
+        public IReadOnlyList<NodeCapability>? LiveCapabilities(Guid id) => Nodes.GetValueOrDefault(id);
+        public bool IsOnline(Guid id) => Nodes.ContainsKey(id);
+        public void Disconnect(Guid id, string reason) => Nodes.Remove(id);
+    }
+    internal sealed class BackgroundRoutes : INodeBackgroundAvailability
+    {
+        public HashSet<Guid> Nodes { get; } = [];
+        public Task<bool> HasRouteAsync(Guid id, CancellationToken ct = default) => Task.FromResult(Nodes.Contains(id));
+    }
+    internal sealed class NativeDelivery : INodeLiveNotifications, INodePushNotifications
+    {
+        public List<(Guid NodeId, NodeNotificationCommand Command)> Commands { get; } = [];
+        public Queue<string> Results { get; } = [];
+        public bool ThrowAfterSend { get; set; }
+        private string Send(Guid id, NodeNotificationCommand command, string fallback)
+        {
+            Commands.Add((id, command));
+            if (ThrowAfterSend) throw new IOException("fixture lost response");
+            return Results.Count > 0 ? Results.Dequeue() : fallback;
+        }
+        Task<NodeLiveNotificationResult> INodeLiveNotifications.SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct) =>
+            Task.FromResult(new NodeLiveNotificationResult(Send(id, command, "success")));
+        Task<string> INodePushNotifications.SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct) => Task.FromResult(Send(id, command, "accepted"));
+    }
+    internal sealed class ResolverHook(INodeTargetResolver inner) : INodeTargetResolver
+    {
+        public Func<Task>? BeforeReturn { get; set; }
+        public Task<NodeTargetResult> ResolveAsync(Guid actor, NodeTargetRequest request, CancellationToken ct = default) => inner.ResolveAsync(actor, request, ct);
+        public async Task<NodeTargetResult> ResolveForDeliveryAsync(NodeTargetRequest request, CancellationToken ct = default)
+        {
+            var result = await inner.ResolveForDeliveryAsync(request, ct);
+            if (BeforeReturn is not null) await BeforeReturn();
+            return result;
+        }
     }
     private sealed class Fixture : IDisposable
     {
         public Guid Conversation { get; } = Guid.NewGuid();
         public string Due => "2026-09-27T11:00:00-03:00";
         public TestClock Clock { get; } = new();
-        public FakePush Push { get; } = new();
-        public AegisDbContext Db { get; } = new(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        public LiveConnections Live { get; } = new();
+        public BackgroundRoutes Background { get; } = new();
+        public NativeDelivery Native { get; } = new();
+        public DbContextOptions<AegisDbContext> DbOptions { get; } = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        public AegisDbContext Db { get; }
         public AegisMetrics Metrics { get; } = new();
         public ReminderStore Store { get; }
         public ReminderService Service { get; }
         public ReminderProcessor Processor { get; }
+        public ResolverHook Resolver { get; }
         public Fixture()
         {
-            Store = new ReminderStore(Db); Service = new ReminderService(Store, Push, Clock, Metrics);
-            Processor = new ReminderProcessor(Db, Store, Push, new ReminderInteractionTokens(new EphemeralDataProtectionProvider(), Clock), Clock, Metrics);
+            Db = new(DbOptions); Store = new ReminderStore(Db); Service = new ReminderService(Store, Clock, Metrics);
+            var registry = new NodeRegistry(Db, Clock, Live, Background);
+            Resolver = new(new NodeTargetResolver(registry, Live, Background));
+            Processor = new(Db, Store, Resolver, new NodeNotificationDispatcher(registry, Resolver, Live, Native, Native, Background, Clock), Clock, Metrics);
         }
-        public PushSubscription Subscribe() { var s = new PushSubscription("https://fcm.googleapis.com/test/" + Guid.NewGuid(), "key", "auth", Guid.NewGuid(), null, Clock.GetUtcNow()); Db.PushSubscriptions.Add(s); return s; }
-        public async Task<Reminder> Create() { if (!Db.PushSubscriptions.Any()) Subscribe(); await Db.SaveChangesAsync(); return await Service.CreateAsync(Conversation, "ração", Due, default); }
+        public ReminderProcessor CreateProcessor(AegisDbContext db)
+        {
+            var registry = new NodeRegistry(db, Clock, Live, Background); var resolver = new NodeTargetResolver(registry, Live, Background);
+            return new(db, new(db), resolver, new NodeNotificationDispatcher(registry, resolver, Live, Native, Native, Background, Clock), Clock, Metrics);
+        }
+        public AegisNode AddNode(NodePlatform platform = NodePlatform.Windows, bool online = true, int priority = 0)
+        {
+            var node = new AegisNode(Guid.NewGuid(), "fixture", platform, "0.7.0-unstable.11", 1, Clock.GetUtcNow());
+            node.SetTargetPriority(priority, Clock.GetUtcNow()); Db.Nodes.Add(node);
+            Db.NodeCapabilities.Add(new(node.Id, "notification.show", 1));
+            if (online) Live.Nodes[node.Id] = [new("notification.show", 1)];
+            return node;
+        }
+        public async Task<Reminder> Create() { if (!Db.Nodes.Any() && !Db.Nodes.Local.Any()) AddNode(); await Db.SaveChangesAsync(); return await Service.CreateAsync(Conversation, "ração", Due, default); }
         public void Dispose() { Db.Dispose(); Metrics.Dispose(); }
     }
 }

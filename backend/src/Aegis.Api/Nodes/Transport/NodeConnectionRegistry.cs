@@ -81,7 +81,7 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
         lock (gate) { lease = current.GetValueOrDefault(id); if (lease is null || !IsFresh(lease) || lease.Socket is null ||
             !lease.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1)) return new("unavailable");
             if (lease.Pending.Count >= 16) return new("busy");
-            if (!lease.Pending.TryAdd(command.CommandId, result)) return new("duplicate"); }
+            if (!lease.Pending.TryAdd(command.CommandId, result)) return new("busy"); } // In-flight is not proof of execution.
         if (command.ExpiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(command.CommandId, out _); return new("expired"); }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(8));
         try { await WriteAsync(lease, "command", Guid.NewGuid(), command, deadline.Token); return await result.Task.WaitAsync(deadline.Token); }

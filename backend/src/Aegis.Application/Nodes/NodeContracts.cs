@@ -29,6 +29,8 @@ public interface INodeRegistry
     Task<NodeView> FinalizeAsync(FinalizeNodeRequest request, CancellationToken ct = default);
     Task<NodeAuthentication> AuthenticateAsync(string credential, CancellationToken ct = default);
     Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default);
+    // Backend-only inventory for scheduled delivery; never exposed as an unauthenticated API.
+    Task<IReadOnlyList<NodeView>> ListForDeliveryAsync(CancellationToken ct = default);
     Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default);
     Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default);
     Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default);
