@@ -106,9 +106,14 @@ class NodeNotificationLiveTest {
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
       } finally {
+        checkpoint("live_cleanup_started")
         manager.cancel(commandId, 1)
+        checkpoint("live_notification_cancelled")
+        checkpoint("live_node_revoke_started")
         invoke(webview, "node_revoke", JSONObject().put("id", id))
+        checkpoint("live_node_revoked")
       }
     }
+    checkpoint("live_activity_closed")
   }
 }
