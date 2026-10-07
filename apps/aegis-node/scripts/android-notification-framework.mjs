@@ -68,7 +68,9 @@ try {
   if (live) {
     if (api < 33) permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
-    instrumentation('NodeNotificationLiveTest', ['-e','pairingCode',readFileSync(bootstrap,'utf8').trim()]);
+    // MonitoringInstrumentation otherwise destroys the last Tauri Activity before
+    // publishing the JUnit result, causing Tao to exit the instrumented process.
+    instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim()]);
   }
 } finally {
   permission(true);
@@ -82,8 +84,10 @@ try {
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   for (const line of crash.split('\n')) {
-    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_activity_closed|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
+    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_cleanup_completed|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
     if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
   }
+  // External cleanup happens after instrumentation has published success/failure.
+  run(['shell','am','force-stop','com.aegis.node']);
 }
 console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap && api >= 33?' including native live WebSocket/JNI':''}`);

@@ -51,7 +51,9 @@ class NodeNotificationLiveTest {
   @Test fun liveSelfNotificationPostsThroughProductionJni() {
     val code = InstrumentationRegistry.getArguments().getString("pairingCode") ?: error("fixture_bootstrap_missing")
     checkpoint("live_activity_launch")
-    ActivityScenario.launch(notificationActivityClass()).use { scenario ->
+    // Destroying Tauri's last Activity exits the native process. Keep it alive until
+    // AndroidJUnitRunner reports results; the emulator harness force-stops it afterwards.
+    ActivityScenario.launch(notificationActivityClass()).let { scenario ->
       checkpoint("live_activity_ready")
       var candidate: WebView? = null
       scenario.onActivity { activity ->
@@ -114,6 +116,6 @@ class NodeNotificationLiveTest {
         checkpoint("live_node_revoked")
       }
     }
-    checkpoint("live_activity_closed")
+    checkpoint("live_cleanup_completed")
   }
 }

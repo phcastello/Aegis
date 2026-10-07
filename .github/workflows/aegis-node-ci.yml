@@ -54,6 +54,16 @@ jobs:
         run: npm test
       - working-directory: apps/aegis-node
         run: npm ci
+      - name: Use reachable HTTPS Ubuntu mirror for browser dependencies
+        run: |
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+          mirror = Path('/etc/apt/apt-mirrors.txt')
+          if mirror.exists():
+              mirror.write_text('https://archive.ubuntu.com/ubuntu/\n')
+          Path('/etc/apt/apt.conf.d/99-aegis-ci-network').write_text(
+              'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
+          PYTHON
       - working-directory: packages/aegis-client
         run: npx playwright-core install --with-deps chromium
       - name: Browser regression of shared web and native UI (native IPC mocked)
