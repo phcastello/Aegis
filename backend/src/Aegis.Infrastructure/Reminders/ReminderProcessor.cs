@@ -89,7 +89,10 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IN
             var now = clock.GetUtcNow();
             var accepted = result.Status is "success" or "accepted" or "duplicate";
             // Transport errors/failed renderers may follow a send; be conservative about duplicates.
-            var unknown = !accepted && (ambiguous || result.Transport is not null && (result.Status is "timeout" or "unavailable" or "failed"));
+            // FCM unavailable is pre-send route loss or confirmed UNREGISTERED (not accepted).
+            // Live unavailable may instead follow a socket write whose response was lost.
+            var unknown = !accepted && (ambiguous || result.Transport is not null &&
+                (result.Status is "timeout" or "failed" || result.Status == "unavailable" && result.Transport == "live_websocket"));
             var retryAt = !accepted && saved.Attempt <= Backoff.Length && !(unknown && saved.CommandExpiresAt <= now)
                 ? now.Add(Backoff[saved.Attempt - 1]) : (DateTimeOffset?)null;
             saved.Complete(result.Status, result.Transport, unknown, retryAt, now);

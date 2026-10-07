@@ -164,6 +164,18 @@ public sealed class ReminderTests
         Assert.Equal(pc.Id, Assert.Single(f.Native.Commands).NodeId);
     }
     [Fact]
+    public async Task ConfirmedFcmRouteFailureAllowsRetryOnWindows()
+    {
+        using var f = new Fixture(); var pc = f.AddNode(priority: 10);
+        var phone = f.AddNode(NodePlatform.Android, online: false, priority: 20); f.Background.Nodes.Add(phone.Id);
+        f.Native.Results.Enqueue("unavailable"); f.Native.AfterSend = id => f.Background.Nodes.Remove(id);
+        await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
+        Assert.Equal(phone.Id, Assert.Single(f.Native.Commands).NodeId);
+        var first = Assert.Single(f.Db.ReminderDeliveryAttempts); Assert.Equal("fcm", first.Transport); Assert.False(first.OutcomeAmbiguous);
+        f.Native.AfterSend = null; f.Clock.Advance(TimeSpan.FromSeconds(10)); await f.Processor.ProcessNextAsync();
+        Assert.Equal(pc.Id, f.Native.Commands[1].NodeId); Assert.Equal(ReminderStatus.Triggered, Assert.Single(f.Db.Reminders).Status);
+    }
+    [Fact]
     public async Task NoReachableNodeRetriesThenNewRouteDelivers()
     {
         using var f = new Fixture(); var pc = f.AddNode(online: false); await f.Create();
@@ -401,9 +413,11 @@ public sealed class ReminderTests
         public List<(Guid NodeId, NodeNotificationCommand Command)> Commands { get; } = [];
         public Queue<string> Results { get; } = [];
         public bool ThrowAfterSend { get; set; }
+        public Action<Guid>? AfterSend { get; set; }
         private string Send(Guid id, NodeNotificationCommand command, string fallback)
         {
             Commands.Add((id, command));
+            AfterSend?.Invoke(id);
             if (ThrowAfterSend) throw new IOException("fixture lost response");
             return Results.Count > 0 ? Results.Dequeue() : fallback;
         }
