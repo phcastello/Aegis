@@ -35,11 +35,11 @@ fn version_code(version: &semver::Version) -> Result<u32, String> {
             .or_else(|| version.pre.as_str().strip_prefix("stage."))
             .and_then(|n| n.parse::<u32>().ok())
             .filter(|n| (1..999).contains(n))
-            .ok_or("Unsupported preview version")?
+            .ok_or("update_metadata_invalid")?
     };
     if !version.build.is_empty() || version.major > 20 || version.minor > 99 || version.patch > 999
     {
-        return Err("Version exceeds Android allocation".into());
+        return Err("update_metadata_invalid".into());
     }
     Ok(
         (version.major * 100000000 + version.minor * 1000000 + version.patch * 1000) as u32
@@ -48,10 +48,10 @@ fn version_code(version: &semver::Version) -> Result<u32, String> {
 }
 
 pub fn interpret(body: &str, current: &str) -> Result<Option<AndroidUpdate>, String> {
-    let manifest: Manifest = serde_json::from_str(body).map_err(|_| "Invalid update metadata")?;
+    let manifest: Manifest = serde_json::from_str(body).map_err(|_| "update_metadata_invalid")?;
     let version =
-        semver::Version::parse(&manifest.version).map_err(|_| "Invalid update version")?;
-    let installed = semver::Version::parse(current).map_err(|_| "Invalid installed version")?;
+        semver::Version::parse(&manifest.version).map_err(|_| "update_metadata_invalid")?;
+    let installed = semver::Version::parse(current).map_err(|_| "update_metadata_invalid")?;
     let next_code = version_code(&version)?;
     if version <= installed || next_code <= version_code(&installed)? {
         return Ok(None);
@@ -59,16 +59,26 @@ pub fn interpret(body: &str, current: &str) -> Result<Option<AndroidUpdate>, Str
     let asset = manifest
         .android
         .get("aarch64")
-        .ok_or("Missing Android update")?;
+        .ok_or("update_metadata_invalid")?;
     let expected_url = format!("{RELEASE_ROOT}{}/Aegis-Android-arm64.apk", manifest.version);
     if asset.url != expected_url || asset.version_code != next_code {
-        return Err("Android asset URL or versionCode mismatch".into());
+        return Err("update_asset_mismatch".into());
     }
     Ok(Some(AndroidUpdate {
         version: manifest.version,
         url: asset.url.clone(),
         version_code: next_code,
     }))
+}
+
+fn validate_feed_status(status: reqwest::StatusCode) -> Result<(), String> {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err("update_feed_missing".into());
+    }
+    if !status.is_success() {
+        return Err("update_feed_unavailable".into());
+    }
+    Ok(())
 }
 
 pub async fn check(current: &str) -> Result<Option<AndroidUpdate>, String> {
@@ -91,27 +101,23 @@ pub async fn check(current: &str) -> Result<Option<AndroidUpdate>, String> {
             }
         }))
         .build()
-        .map_err(|_| "Cannot create update client")?;
+        .map_err(|_| "update_feed_unavailable")?;
     let mut response = client
         .get(FEED)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .send()
         .await
-        .map_err(|_| "Update source unavailable")?;
-    // Before the first preview release there is intentionally no feed.
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !response.status().is_success() {
-        return Err("Update source unavailable".into());
-    }
+        .map_err(|error| if error.is_timeout() { "update_timeout" } else { "update_feed_unavailable" })?;
+    // A missing published channel must never be presented as "up to date".
+    validate_feed_status(response.status())?;
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "Cannot read metadata")? {
+    while let Some(chunk) = response.chunk().await.map_err(|_| "update_feed_unavailable")? {
         if bytes.len() + chunk.len() > 65536 {
-            return Err("Update metadata too large".into());
+            return Err("update_metadata_invalid".into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    let body = std::str::from_utf8(&bytes).map_err(|_| "Invalid update metadata encoding")?;
+    let body = std::str::from_utf8(&bytes).map_err(|_| "update_metadata_invalid")?;
     interpret(body, current)
 }
 
@@ -121,6 +127,12 @@ mod tests {
     fn manifest(version: &str, code: u32, url: &str) -> String {
         serde_json::json!({"version":version,"android":{"aarch64":{"url":url,"versionCode":code}}})
             .to_string()
+    }
+    #[test]
+    fn missing_or_failed_channel_is_never_reported_as_up_to_date() {
+        assert_eq!(validate_feed_status(reqwest::StatusCode::NOT_FOUND).unwrap_err(), "update_feed_missing");
+        assert_eq!(validate_feed_status(reqwest::StatusCode::SERVICE_UNAVAILABLE).unwrap_err(), "update_feed_unavailable");
+        assert!(validate_feed_status(reqwest::StatusCode::OK).is_ok());
     }
     #[test]
     fn accepts_only_newer_correctly_versioned_official_apk() {
@@ -155,6 +167,7 @@ mod tests {
             "0.7.0-unstable.11",
             "0.7.0-unstable.12",
             "0.7.0-unstable.13",
+            "0.7.0-unstable.14",
             "0.7.0",
         ];
         for pair in versions.windows(2) {

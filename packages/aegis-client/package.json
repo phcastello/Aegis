@@ -1,6 +1,6 @@
 {
   "name": "@aegis/client",
-  "version": "0.7.0-unstable.13",
+  "version": "0.7.0-unstable.14",
   "private": true,
   "type": "module",
   "exports": {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdirSync, readFileSync } from 'node:fs';
 const appVersion = JSON.parse(readFileSync(new URL('../../../apps/aegis-node/package.json', import.meta.url), 'utf8')).version;
+const updateVersion = appVersion.replace(/-unstable\.(\d+)$/, (_, value) => `-unstable.${Number(value) + 1}`);
 assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
@@ -71,6 +72,7 @@ try {
    if (host === 'native') await context.addInitScript((runtimeVersion) => {
      window.openedUrls = []; window.nativeCalls = []; window.reminderPayloads=[]; window.placePayloads=[];
      const reminders=[],series=[],places=[],geofences=[];
+     window.seedPausedReminder=()=>reminders.push({reminderId:crypto.randomUUID(),text:'Ocorrência temporal pausada',dueAt:'2026-10-20T11:00:00Z',timeZoneId:'America/Sao_Paulo',status:'Paused',seriesId:null,revision:2,generation:1,deliveryPolicy:'allEligible'});
      window.reminderListRequests=[];window.extraFocusedReminders=[];
      window.enableReminderPaging=()=>{
        for(let index=1;index<=101;index++)series.push({seriesId:crypto.randomUUID(),text:`Série paginada ${index}`,timeZoneId:'America/Sao_Paulo',rule:{frequency:'daily',interval:1,localTime:'08:00',startDate:'2026-01-01'},status:'active',revision:1,deliveryPolicy:'allEligible',nextDueAt:'2026-10-20T11:00:00Z'});
@@ -95,8 +97,8 @@ try {
          return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:[window.oldReminder,...window.extraFocusedReminders].find(item=>item?.reminderId===query.focusId)??null});
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
-       if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
-       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
+       if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};if(args.operation==='current')return {latitude:0,longitude:0,accuracyMeters:window.fixtureAccuracyMeters??20,capturedAt:new Date().toISOString(),ageSeconds:0,source:'synthetic-fixture'};return {}; }
+       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){if(window.fixtureGeoSyncReply)return structuredClone(window.fixtureGeoSyncReply);geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
@@ -120,7 +122,8 @@ try {
        if (command === 'node_resolve_target') return { node: other.targetPriority > current.targetPriority ? other : current, code: null, onlineNodes: 2, capabilityCompatibleNodes: 2 };
        if (command === 'node_set_enabled') { other.enabled = args.enabled; return other; }
        if (command === 'node_revoke') { other.revokedAt = now; other.enabled = false; return other; }
-       if (command === 'check_android_update') return null;
+       if (command === 'check_android_update') { if(window.fixtureUpdateFailure)throw window.fixtureUpdateFailure;return window.fixtureUpdate??null; }
+       if (command === 'install_android_update') return window.fixtureInstallResult??{status:'installer_opened'};
        if (command === 'plugin:opener|open_url') { window.openedUrls.push(args.url); return; }
        throw new Error('Unexpected IPC: ' + command);
      } };
@@ -133,6 +136,9 @@ try {
    await page.locator('#conversation-sidebar').getByText(`v${appVersion}`, { exact: true }).waitFor();
    await page.getByRole('button', { name: 'Conversa de teste', exact: true }).click();
    await page.getByText('Histórico preservado.', { exact: true }).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).count(),0,'Collapsed mobile navigation exposes only the normal sidebar opener');
+   assert.equal(await page.locator('.global-navigation-floating').count(),0);
+   await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
    await page.locator('textarea').fill('teste'); await page.getByLabel('Enviar mensagem').click();
    await page.getByText('Parcial', { exact: true }).waitFor();
    assert.equal(await page.locator('.markdown-message strong').count(), 0);
@@ -152,11 +158,47 @@ try {
      await page.getByText('Conta Google conectada', { exact: false }).waitFor();
      assert.equal((await page.evaluate(() => window.openedUrls)).length, 2);
      assert.equal(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length)), 0);
+     await page.getByRole('button',{name:'Abrir histórico',exact:true}).click();
      await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
      const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
      await panel.getByRole('button', {name:'Sobre',exact:true}).click();
      await panel.getByText(appVersion, { exact: true }).waitFor();
      await panel.getByText('Android', { exact: true }).first().waitFor();
+     assert.equal(await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).count(),0);
+     assert.equal(await panel.locator('.update-notice').count(),0,'About has no second updater renderer');
+     assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='check_android_update').length),1,'There is only one initial update check');
+     await panel.getByRole('button',{name:'Abrir Atualizações',exact:true}).click();
+     await page.evaluate(version=>window.fixtureUpdate={version,url:`https://github.com/phcastello/Aegis/releases/download/node-v${version}/Aegis-Android-arm64.apk`},updateVersion);
+     await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
+     await panel.getByRole('status',{name:'Atualização da Aegis',exact:true}).waitFor();
+     assert.equal(await panel.locator('.update-notice').count(),1);
+     await panel.getByText(/^Última consulta:/).waitFor();
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-updates-mobile.png`});
+     await page.evaluate(()=>window.fixtureUpdateFailure='update_feed_missing');
+     await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
+     await panel.getByText('O canal de atualizações não está disponível. Tente novamente mais tarde.',{exact:true}).waitFor();
+     await panel.locator('.update-notice').getByText('Código: update_feed_missing',{exact:true}).waitFor();
+     await panel.locator('.update-notice').getByText(`Aegis ${updateVersion} disponível`,{exact:true}).waitFor();
+     await page.evaluate(()=>{window.fixtureUpdateFailure=null;window.fixtureInstallResult={status:'failed',phase:'verification',code:'update_signature_mismatch'};});
+     await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
+     await panel.getByRole('button',{name:'Baixar e instalar',exact:true}).click();
+     await panel.getByText('A assinatura do instalador não corresponde à Aegis instalada.',{exact:true}).waitFor();
+     await panel.locator('.update-notice').getByText('Código: update_signature_mismatch',{exact:true}).waitFor();
+     assert.equal(await panel.getByText('Confirme a instalação na janela do sistema.',{exact:true}).count(),0);
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-update-verification-mobile.png`});
+     await page.evaluate(()=>window.fixtureInstallResult={status:'permission_required'});
+     await panel.getByRole('button',{name:'Baixar e instalar',exact:true}).click();
+     await panel.getByRole('button',{name:'Continuar instalação',exact:true}).waitFor();
+     await page.evaluate(()=>window.fixtureInstallResult={status:'installer_opened'});
+     await panel.getByRole('button',{name:'Continuar instalação',exact:true}).click();
+     await panel.getByText('Confirme a instalação na janela do sistema.',{exact:true}).waitFor();
+     assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='install_android_update').length),3,'Native installer requests follow only the three explicit UI actions');
+     await panel.getByRole('button',{name:'Sobre',exact:true}).click();
+     assert.equal(await panel.locator('.update-notice').count(),0);
+     assert.equal(await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).count(),0);
+     assert.equal(await panel.getByRole('button',{name:'Baixar e instalar',exact:true}).count(),0);
+     assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='check_android_update').length),4,'Opening About does not run another update check');
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-about-mobile.png`});
      await panel.getByText('Diagnóstico técnico', {exact:true}).click();
      await panel.getByText('Disponível', { exact: true }).waitFor();
      await panel.getByRole('button', {name:'Dispositivos',exact:true}).click();
@@ -211,7 +253,9 @@ try {
      await pc.getByRole('status').filter({hasText:'Dispositivo reativado. Abra a Aegis nele para reconectar. Retome as regras geográficas em Lembretes.'}).waitFor();
      await pc.getByRole('button', { name: 'Remover dispositivo', exact: true }).click(); await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
      await pc.waitFor({state:'detached'});
+     await page.evaluate(()=>window.seedPausedReminder());
      await panel.getByRole('button',{name:'Lembretes',exact:true}).click();
+     await panel.locator('article').filter({hasText:'Ocorrência temporal pausada'}).getByText('Pausado',{exact:true}).waitFor();
      await panel.getByRole('button',{name:'Nova recorrência',exact:true}).click();
      await panel.getByLabel('O que lembrar').fill('Recorrência sintética');
      await panel.getByRole('button',{name:'Lugares',exact:true}).click();
@@ -234,6 +278,17 @@ try {
      await panel.getByLabel('Apelidos pessoais, separados por vírgula').fill('referência sintética');
      await panel.getByRole('button',{name:'Adicionar círculo no mapa',exact:true}).click();
      await panel.locator('.place-map').click({position:{x:140,y:140}});
+     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'150');
+     await panel.getByRole('button',{name:'Usar localização atual do celular',exact:true}).click();
+     await panel.getByText('Última precisão informada: 20 m. A confirmação usa uma margem de 50 m: 30 m mais a precisão, limitada a 100 m. Essa precisão é uma estimativa, sem garantia de estar dentro ou fora.',{exact:true}).waitFor();
+     await panel.getByLabel('Raio em metros',{exact:true}).fill('50');
+     await panel.getByText(/Círculo 1: raio pequeno para a precisão disponível/).waitFor();
+     await page.evaluate(()=>window.fixtureAccuracyMeters=201);
+     await panel.getByRole('button',{name:'Usar localização atual do celular',exact:true}).click();
+     await panel.getByText(/Precisão insuficiente para confirmar presença: acima de 200 m/).waitFor();
+     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'50','Poor accuracy never silently expands a personal area');
+     await page.evaluate(()=>window.fixtureAccuracyMeters=20);
+     await panel.getByRole('button',{name:'Usar localização atual do celular',exact:true}).click();
      await panel.getByLabel('Raio em metros',{exact:true}).fill('250');
      await panel.getByLabel('Conferi o ponto e a área. A cobertura representa este lugar.').check();
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-place-map-mobile.png`});
@@ -246,6 +301,15 @@ try {
      await panel.getByLabel('Lugar sintético',{exact:true}).check();
      await panel.getByRole('button',{name:'Salvar',exact:true}).click();
      await panel.getByText('Pendente de sincronização',{exact:true}).waitFor();
+     const beforePendingSync=await page.evaluate(()=>{window.fixtureGeoSyncReply={status:'installed',syncPending:true};return window.reminderListRequests.length;});
+     await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
+     const localInstallNotice=panel.getByText('Monitoramento instalado neste celular; confirmação ao servidor pendente. A regra pode aguardar a condição inicial.',{exact:true});await localInstallNotice.waitFor();
+     assert.equal(await page.evaluate(()=>window.reminderListRequests.length),beforePendingSync,'A local installation awaiting backend confirmation must not refetch an unreachable backend');
+     await page.evaluate(()=>window.fixtureGeoSyncReply={status:'recoverable_error',syncPending:true,errorCode:'native_registration_failed'});
+     await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
+     await panel.getByRole('alert').filter({hasText:'O Android não conseguiu registrar as áreas.'}).waitFor();
+     assert.equal(await localInstallNotice.count(),0,'A failed native registration must never retain a local installed claim');
+     await page.evaluate(()=>window.fixtureGeoSyncReply=null);
      await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
      await panel.getByText('Ativo no celular',{exact:true}).waitFor();
      const geographicRule=panel.locator('article').filter({hasText:'Evento sintético'});
@@ -299,6 +363,12 @@ try {
      assert.equal(await page.evaluate(id=>document.activeElement.id===`reminder-${id}`,dirtyFocus.id),true);
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));
      await panel.waitFor({state:'hidden'});
+     await page.getByRole('button',{name:'Fechar histórico',exact:true}).click();
+     const updateShortcut=page.getByRole('button',{name:'Ver Atualizações',exact:true});await updateShortcut.waitFor();
+     assert.equal(await page.locator('.update-notice').count(),0,'Chat only summarizes an update and never renders another installer');
+     assert.equal(await page.getByRole('button',{name:'Baixar e instalar',exact:true}).count(),0);
+     await updateShortcut.click();await panel.getByRole('status',{name:'Atualização da Aegis',exact:true}).waitFor();
+     await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));await panel.waitFor({state:'hidden'});
      const listCalls=await page.evaluate(()=>window.nativeCalls.filter(command=>command==='node_list').length);
      await page.waitForTimeout(11000);
      assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='node_list').length),listCalls,'Closed settings must not poll Nodes');
@@ -311,12 +381,18 @@ try {
    await page.getByLabel('Renomear conversa').fill('Renomeada'); await page.getByLabel('Renomear conversa').press('Enter');
    await page.getByRole('button', { name: 'Renomeada', exact: true }).waitFor();
    await page.getByRole('button', { name: 'Nova conversa', exact: true }).click();
+   await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
+   await page.locator('#conversation-sidebar').evaluate(element=>Promise.all(element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));
    if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${host}-chat-mobile.png`});
    await page.setViewportSize({ width: 1600, height: 900 });
    const panelBounds=await page.locator('.chat-panel').boundingBox();const composerBounds=await page.locator('.composer-field').boundingBox();
    assert.ok(Math.abs(composerBounds.x+composerBounds.width/2-(panelBounds.x+panelBounds.width/2))<2,'Composer must center inside usable chat area');
    assert.ok(panelBounds.x>200,'Desktop sidebar must occupy a real layout column');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   await page.getByRole('button',{name:'Fechar histórico',exact:true}).click();
+   assert.equal(await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).count(),0,'Collapsed desktop has no floating settings control');
+   assert.equal(await page.locator('.global-navigation-floating').count(),0);
+   await page.getByRole('button',{name:'Abrir histórico',exact:true}).click();
    if (process.env.PARITY_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.PARITY_SCREENSHOT_DIR}/${host}-parity.png` });
    if(host==='native') {
      const trigger=page.getByRole('button',{name:'Configurações da Aegis',exact:true});await trigger.click();const settings=page.getByRole('dialog',{name:'Configurações',exact:true});await settings.waitFor();

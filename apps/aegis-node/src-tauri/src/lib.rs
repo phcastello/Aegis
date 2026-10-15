@@ -67,13 +67,13 @@ async fn install_android_update(
         let update = updates::check(env!("CARGO_PKG_VERSION"))
             .await?
             .filter(|u| u.version == version)
-            .ok_or("Atualização não disponível.")?;
+            .ok_or("update_asset_mismatch")?;
         let result: Result<serde_json::Value, _> = app
             .state::<native_notifications::AndroidBridge>()
             .0
             .run_mobile_plugin_async("installUpdate", update)
             .await;
-        return result.map_err(|_| "Não foi possível abrir o instalador verificado.".into());
+        return result.map_err(|_| "update_installer_failed".into());
     }
     #[cfg(not(target_os = "android"))]
     {

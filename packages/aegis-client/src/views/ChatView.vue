@@ -844,7 +844,6 @@ onBeforeUnmount(() => {
       >
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
       </button>
-      <div v-if="!isSidebarOpen && $slots['global-navigation']" class="global-navigation-floating"><slot name="global-navigation" /></div>
       <ConversationSidebar
         :app-version="appVersion"
         :conversations="conversations"

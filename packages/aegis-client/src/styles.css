@@ -1565,12 +1565,10 @@ button:disabled {
   .hideout-shell:not(.hideout-shell--sidebar-open) .chat-header { padding-left: max(72px, var(--conversation-inset)); }
 }
 .sidebar-global-navigation { margin-top: auto; flex-shrink: 0; padding-top: 12px; border-top: 1px solid var(--line); }
-.global-navigation-floating { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom)); z-index: 25; }
 .global-settings-trigger { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px; border-radius: var(--radius-sm); color: var(--muted); background: var(--surface); cursor: pointer; }
 .sidebar-global-navigation .global-settings-trigger { width: 100%; background: transparent; }
 .global-settings-trigger:hover { color: var(--text); background: var(--surface-raised); }
 .global-settings-trigger svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.global-navigation-floating .global-settings-trigger span { display: none; }
 @media (max-width: 900px) {
   .hideout-shell {
     display: block;
@@ -1747,9 +1745,7 @@ button:disabled {
 .messages { grid-row: 3; }
 .composer { grid-row: 4; }
 @media (max-width: 900px) {
-  .global-navigation-floating { bottom: auto; top: max(14px, env(safe-area-inset-top)); left: calc(max(14px, env(safe-area-inset-left)) + 44px); }
-  .global-navigation-floating .global-settings-trigger { width: 42px; height: 42px; min-height: 42px; padding: 10px; background: transparent; }
-  .hideout-shell:not(.hideout-shell--sidebar-open) .chat-header { padding-left: max(112px, var(--conversation-inset)); }
+  .hideout-shell:not(.hideout-shell--sidebar-open) .chat-header { padding-left: max(72px, var(--conversation-inset)); }
 }
 
 .settings-content > section > .settings-error { position: sticky; top: 0; z-index: 3; background: var(--surface); }

@@ -19,6 +19,10 @@ import java.util.concurrent.CountDownLatch
 
 /** Only files created by this adapter are cleaned. Browser Downloads are never scanned. */
 object NodeUpdates {
+ private val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+ fun background(action:()->Unit) { executor.execute(action) }
+ private class Rejected(val safeCode:String):Exception()
+ private fun requireUpdate(valid:Boolean,code:String) {if(!valid)throw Rejected(code)}
  private val name=Regex("aegis-update-[0-9]+\\.apk(?:\\.part)?")
  private fun directory(context:Context)=File(context.cacheDir,"aegis-updates").apply{mkdirs()}
  private fun flags():Int=if(Build.VERSION.SDK_INT>=28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
@@ -32,33 +36,47 @@ object NodeUpdates {
   }
  }
  fun install(activity:Activity,version:String,url:String,versionCode:Long):JSONObject {
-  require(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-unstable\\.[0-9]+)?").matches(version))
-  require(url=="https://github.com/phcastello/Aegis/releases/download/node-v$version/Aegis-Android-arm64.apk")
+  var phase="verification"
+  try {
+  requireUpdate(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-unstable\\.[0-9]+)?").matches(version),"update_version_mismatch")
+  requireUpdate(url=="https://github.com/phcastello/Aegis/releases/download/node-v$version/Aegis-Android-arm64.apk","update_package_mismatch")
   cleanup(activity)
   val current=activity.packageManager.getPackageInfo(activity.packageName,flags())
-  require(versionCode>code(current))
+  requireUpdate(versionCode>code(current),"update_version_mismatch")
   val target=File(directory(activity),"aegis-update-$versionCode.apk")
   val partial=File(target.path+".part")
   if(target.exists())try{verify(activity,target,current,version,versionCode)}catch(_:Exception){check(target.delete())}
   if(!target.exists()) {
    partial.delete()
    try {
+    phase="download"
     download(url,partial)
+    phase="verification"
     verify(activity,partial,current,version,versionCode)
     check(partial.renameTo(target))
    }finally{partial.delete()}
   }
   verify(activity,target,current,version,versionCode)
+  phase="install_permission"
   if(Build.VERSION.SDK_INT>=26&&!activity.packageManager.canRequestPackageInstalls()) {
    handoff(activity,Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${activity.packageName}")))
    return JSONObject().put("status","permission_required").put("message","Permita que a Aegis abra o instalador e toque em Atualizar novamente.")
   }
   val uri=FileProvider.getUriForFile(activity,"${activity.packageName}.updates",target)
+  phase="installer_launch"
   val intent=Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive")
    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
   intent.clipData=ClipData.newRawUri("Aegis update",uri)
   handoff(activity,intent)
   return JSONObject().put("status","installer_opened")
+  }catch(failure:Exception) {
+   val code=if(failure is Rejected)failure.safeCode else when(phase){
+    "download"->"update_download_failed";"verification"->"update_archive_invalid"
+    "install_permission"->"update_permission_failed";else->"update_installer_failed"
+   }
+   // Codes identify the failed phase without exposing URLs, payloads or exceptions.
+   return JSONObject().put("status","failed").put("phase",phase).put("code",code)
+  }
  }
  private fun handoff(activity:Activity,intent:Intent) {
   val finished=CountDownLatch(1)
@@ -67,10 +85,11 @@ object NodeUpdates {
   check(finished.await(10,TimeUnit.SECONDS) && accepted)
  }
  private fun verify(context:Context,file:File,current:PackageInfo,version:String,versionCode:Long) {
-  val archive=context.packageManager.getPackageArchiveInfo(file.absolutePath,flags()) ?: error("Invalid archive")
-  require(archive.packageName==context.packageName&&archive.versionName==version&&code(archive)==versionCode)
+  val archive=context.packageManager.getPackageArchiveInfo(file.absolutePath,flags()) ?: throw Rejected("update_archive_invalid")
+  requireUpdate(archive.packageName==context.packageName,"update_package_mismatch")
+  requireUpdate(archive.versionName==version&&code(archive)==versionCode,"update_version_mismatch")
   val previous=signatures(current);val next=signatures(archive)
-  require(previous.isNotEmpty()&&previous==next)
+  requireUpdate(previous.isNotEmpty()&&previous==next,"update_signature_mismatch")
  }
  private fun download(initial:String,target:File) {
   var url=URL(initial)

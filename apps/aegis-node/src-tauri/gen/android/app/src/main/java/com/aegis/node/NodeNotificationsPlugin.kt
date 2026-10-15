@@ -47,6 +47,6 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  }
  @Command fun installUpdate(invoke:Invoke) {
   val args=org.json.JSONObject(invoke.getArgs().toString())
-  NodeGeofences.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode")).toString()))}catch(_:Exception){invoke.reject("Não foi possível verificar ou abrir esta atualização.")} }
+  NodeUpdates.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode")).toString()))}catch(_:Exception){invoke.reject("update_installer_failed")} }
  }
 }

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { androidVersionCode, synchronize } from './version.mjs';
 
 test('Android codes increase across legacy previews, unstable channel, stable and next patch', () => {
-  const versions = ['0.7.0-stage.1', '0.7.0-stage.10', '0.7.0-unstable.11', '0.7.0-unstable.12', '0.7.0-unstable.13', '0.7.0', '0.7.1-unstable.1', '0.8.0-unstable.1', '1.0.0'];
+  const versions = ['0.7.0-stage.1', '0.7.0-stage.10', '0.7.0-unstable.11', '0.7.0-unstable.12', '0.7.0-unstable.13', '0.7.0-unstable.14', '0.7.0', '0.7.1-unstable.1', '0.8.0-unstable.1', '1.0.0'];
   const codes = versions.map(androidVersionCode);
   assert.deepEqual(codes, [...codes].sort((a, b) => a - b));
   assert.equal(androidVersionCode('0.7.0-stage.2'), 7000002);

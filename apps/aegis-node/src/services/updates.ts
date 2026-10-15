@@ -1,13 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { validateWindowsUpdate } from './updateMetadata.js';
 import type { Platform } from './runtime.js';
+import type { UpdatePhase } from './updateDiagnostics.js';
+
+type InstallResult = { status: 'permission_required' | 'installer_opened' } | { status: 'failed'; phase: UpdatePhase; code: string };
 
 export interface AvailableUpdate {
   version: string;
   kind: 'installer' | 'apk';
   prepare?(onProgress: (received: number, total?: number) => void): Promise<void>;
   dispose?(): Promise<void>;
-  install(onProgress: (received: number, total?: number) => void): Promise<void | { status: 'permission_required' | 'installer_opened' }>;
+  install(onProgress: (received: number, total?: number) => void): Promise<void | InstallResult>;
 }
 
 export async function checkUpdate(platform: Platform): Promise<AvailableUpdate | null> {
@@ -34,7 +37,7 @@ export async function checkUpdate(platform: Platform): Promise<AvailableUpdate |
   if (platform === 'android') {
     const update = await invoke<{ version: string; url: string } | null>('check_android_update');
     if (!update) return null;
-    return { version: update.version, kind: 'apk', install: () => invoke<{status:'permission_required'|'installer_opened'}>('install_android_update', {version:update.version}) };
+    return { version: update.version, kind: 'apk', install: () => invoke<InstallResult>('install_android_update', {version:update.version}) };
   }
   return null;
 }

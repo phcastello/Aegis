@@ -101,7 +101,20 @@ async function submit() {
   });
 }
 async function action(item: Reminder, action: 'acknowledge' | 'snooze') { await operation(async () => { const result = await remindersApi<{applied:boolean; conflict:boolean;pending?:boolean}>('action', { actionId: crypto.randomUUID(), expectedRevision: item.revision, generation: item.generation, action, ...(action === 'snooze' ? { snoozeMinutes: 10 } : {}) }, item.reminderId); if (result.pending) { notice.value = action === 'snooze' ? 'Adiamento salvo neste dispositivo e aguardando conexão. Ainda não há confirmação do servidor nem garantia de aviso pontual offline.' : 'Reconhecimento salvo neste dispositivo e aguardando confirmação do servidor.'; return false; } notice.value = !result.applied ? 'Esta ocorrência mudou em outro dispositivo. Sua ação não foi aplicada. Confira o estado atualizado na lista.' : action === 'acknowledge' ? 'Reconhecimento registrado para esta ocorrência. A retirada das outras cópias depende de conexão.' : 'Esta ocorrência foi adiada. A agenda da série continua igual.'; }); }
-async function sync() { await operation(async () => { const result = await geofencesApi<{ status?: string }>('sync'); notice.value = result.status === 'installed' ? 'Registros instalados. Confira o estado de cada regra abaixo.' : 'Sincronização solicitada. Confira o estado de cada regra abaixo.'; }); }
+async function sync() {
+  await operation(async () => {
+    const result = await geofencesApi<{ status?: string; syncPending?: boolean; errorCode?: string }>('sync');
+    if (result.syncPending && ['installed', 'waiting_initial'].includes(result.status ?? '')) {
+      notice.value = 'Monitoramento instalado neste celular; confirmação ao servidor pendente. A regra pode aguardar a condição inicial.';
+      return false;
+    }
+    if (result.status === 'recoverable_error') {
+      error.value = result.errorCode && Object.prototype.hasOwnProperty.call(geofenceErrors, result.errorCode) ? geofenceErrors[result.errorCode] : 'Não foi possível instalar o monitoramento neste celular. Confira as permissões e tente sincronizar novamente.';
+      return false;
+    }
+    notice.value = result.status === 'installed' || result.status === 'waiting_initial' ? 'Registros instalados. Confira o estado de cada regra abaixo.' : 'Sincronização solicitada. Confira o estado de cada regra abaixo.';
+  });
+}
 async function requestLocation(background: boolean) { await operation(async () => { await locationApi('requestPermission', { background, precise: true }); }); }
 </script>
 <template>
