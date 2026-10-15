@@ -6,13 +6,19 @@ on:
   pull_request:
     paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Validate a focused Windows native fix before the full candidate matrix
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || 'all' }}
   cancel-in-progress: true
 jobs:
   regression:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -91,13 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-2022
-            android: 'false'
-            platform: Windows-x86_64
-          - os: ubuntu-24.04
-            android: 'true'
-            platform: Android-arm64
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only && '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"}]' || '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"},{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -223,6 +223,7 @@ jobs:
           if-no-files-found: error
           path: apps/aegis-node/release-assets/*
   android-notification-framework:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     name: Android framework API ${{ matrix.api }} (debug + minified release)
     runs-on: ubuntu-24.04
     strategy:
