@@ -126,12 +126,12 @@ public sealed class ReminderTests
         Assert.Equal(command.Command.CommandId, attempt.CommandId); Assert.Empty(f.Db.PushSubscriptions);
     }
     [Fact]
-    public async Task OverdueReminderSurvivesDowntimeAndCancelledReminderNeverFires()
+    public async Task ReminderWithinLateWindowSurvivesDowntimeAndCancelledReminderNeverFires()
     {
         using var f = new Fixture(); var cancelled = await f.Create();
         await f.Service.ChangeAsync(f.Conversation, cancelled.Id, null, null, true, default);
         var overdue = await f.Service.CreateAsync(f.Conversation, "overdue", f.Due, default);
-        f.Clock.Advance(TimeSpan.FromHours(2));
+        f.Clock.Advance(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(7));
         Assert.True(await f.Processor.ProcessNextAsync()); Assert.Single(f.Native.Commands);
         Assert.Equal("overdue", f.Native.Commands[0].Command.Input.Body);
         Assert.False(await f.Processor.ProcessNextAsync());
@@ -471,7 +471,7 @@ public sealed class ReminderTests
             if (online) Live.Nodes[node.Id] = [new("notification.show", 1)];
             return node;
         }
-        public async Task<Reminder> Create() { if (!Db.Nodes.Any() && !Db.Nodes.Local.Any()) AddNode(); await Db.SaveChangesAsync(); return await Service.CreateAsync(Conversation, "ração", Due, default); }
+        public async Task<Reminder> Create() { if (!Db.Nodes.Any() && !Db.Nodes.Local.Any()) AddNode(); await Db.SaveChangesAsync(); var reminder = await Service.CreateAsync(Conversation, "ração", Due, default); reminder.SetDeliveryPolicy("bestAvailable"); await Db.SaveChangesAsync(); return reminder; }
         public void Dispose() { Db.Dispose(); Metrics.Dispose(); }
     }
 }

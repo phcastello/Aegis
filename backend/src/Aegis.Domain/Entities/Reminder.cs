@@ -19,7 +19,18 @@ public sealed class Reminder : AuditableEntity
         TimeZoneId = timeZoneId;
         SourceConversationId = sourceConversationId;
         NextAttemptAt = DueAtUtc;
+        DeliveryUntil = DueAtUtc.AddMinutes(10);
     }
+    public Guid? SeriesId { get; private set; }
+    public string? OccurrenceKey { get; private set; }
+    public int Revision { get; private set; } = 1;
+    public int Generation { get; private set; } = 1;
+    public bool IsException { get; private set; }
+    public string DeliveryPolicy { get; private set; } = "allEligible";
+    public DateTimeOffset? DeliveryUntil { get; private set; }
+    public Guid? SourceEventId { get; private set; }
+    public Guid? ObserverNodeId { get; private set; }
+    public DateTimeOffset? ObserverPostedAt { get; private set; }
     public string Text { get; private set; } = "";
     public DateTimeOffset DueAtUtc { get; private set; }
     public string TimeZoneId { get; private set; } = "";
@@ -42,7 +53,8 @@ public sealed class Reminder : AuditableEntity
         if (dueAt is not null && dueAt <= now) throw new ArgumentException("O horário precisa estar no futuro.");
         if (timeZoneId is not null) TimeZoneId = timeZoneId;
         if (text is not null) Text = text.Trim();
-        if (dueAt is not null) NextAttemptAt = DueAtUtc = dueAt.Value.ToUniversalTime();
+        if (dueAt is not null) { NextAttemptAt = DueAtUtc = dueAt.Value.ToUniversalTime(); DeliveryUntil = DueAtUtc.AddMinutes(10); }
+        IsException = SeriesId is not null; Revision++;
         Touch(now);
     }
     public void Cancel(DateTimeOffset now)
@@ -51,6 +63,7 @@ public sealed class Reminder : AuditableEntity
         RequireFuture(now);
         Status = ReminderStatus.Cancelled;
         CancelledAt = now;
+        IsException = SeriesId is not null; Revision++;
         Touch(now);
     }
     private void RequireFuture(DateTimeOffset now)
@@ -58,7 +71,7 @@ public sealed class Reminder : AuditableEntity
         if (Status != ReminderStatus.Scheduled || TriggeredAt is not null || DueAtUtc <= now)
             throw new ArgumentException("Esse lembrete já começou a disparar ou não está mais agendado no futuro.");
     }
-    private static void ValidateText(string text)
+    public static void ValidateText(string text)
     {
         if (string.IsNullOrWhiteSpace(text) || text.Trim().Length > 600 ||
             Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(text.Trim(), new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })) > 1900)
@@ -99,6 +112,7 @@ public sealed class Reminder : AuditableEntity
         if (AcknowledgedAt is null)
         {
             AcknowledgedAt = now;
+            Revision++;
             Touch(now);
             // Global recognition fulfills notification work without cancelling the reminder.
             // Existing delivery attempts retain their original outcomes/retry audit.
@@ -111,4 +125,36 @@ public sealed class Reminder : AuditableEntity
         if (TriggeredAt is null) throw new ArgumentException("O lembrete ainda não disparou.");
         if (OpenedAt is null) { OpenedAt = now; Touch(now); }
     }
+    public static void ValidatePolicy(string policy) { if (policy is not ("allEligible" or "bestAvailable")) throw new ArgumentException("Política de entrega inválida."); }
+    public void SetDeliveryPolicy(string policy) { ValidatePolicy(policy); DeliveryPolicy = policy; }
+    public static Reminder ForSeries(ReminderSeries series, RecurrenceInstant item, DateTimeOffset now)
+    {
+        var reminder = new Reminder(series.Text, item.DueAt, series.TimeZoneId, series.SourceConversationId,
+            item.DueAt <= now ? item.DueAt.AddTicks(-1) : now);
+        reminder.CreatedAt = reminder.UpdatedAt = now;
+        reminder.SeriesId = series.Id; reminder.OccurrenceKey = $"r{series.Revision}:{item.LocalKey}"; reminder.DeliveryPolicy = series.DeliveryPolicy;
+        return reminder;
+    }
+    public static Reminder CreateGeographic(Guid occurrenceId, Guid eventId, Guid observerNodeId, string text,
+        DateTimeOffset occurredAt, string timeZoneId, DateTimeOffset now, string deliveryPolicy = "allEligible", DateTimeOffset? observerPostedAt = null)
+    {
+        if (occurrenceId == Guid.Empty || eventId == Guid.Empty || observerNodeId == Guid.Empty) throw new ArgumentException("Evento inválido.");
+        var reminder = new Reminder(text, occurredAt, timeZoneId, null, occurredAt.AddTicks(-1));
+        reminder.CreatedAt = reminder.UpdatedAt = now;
+        reminder.Id = occurrenceId; reminder.SourceEventId = eventId; reminder.ObserverNodeId = observerNodeId;
+        reminder.ObserverPostedAt = observerPostedAt; reminder.TriggeredAt = occurredAt; reminder.SetDeliveryPolicy(deliveryPolicy); return reminder;
+    }
+    public void Snooze(DateTimeOffset now, int minutes)
+    {
+        if (TriggeredAt is null || AcknowledgedAt is not null || Status == ReminderStatus.Cancelled || minutes is < 1 or > 1440)
+            throw new ArgumentException("Esta ocorrência não pode ser adiada.");
+        DueAtUtc = NextAttemptAt = now.AddMinutes(minutes); DeliveryUntil = DueAtUtc.AddMinutes(10);
+        Generation++; Revision++; Status = ReminderStatus.Scheduled; TriggeredAt = null; OpenedAt = null;
+        LeaseId = null; LeaseExpiresAt = null; ProcessingStartedAt = null; ObserverPostedAt = null; Touch(now);
+    }
+    public void CancelFutureForSeries(DateTimeOffset now, bool exception = false)
+    {
+        if (TriggeredAt is null && Status == ReminderStatus.Scheduled) { Status = ReminderStatus.Cancelled; CancelledAt = now; IsException = exception; Revision++; Touch(now); }
+    }
+
 }

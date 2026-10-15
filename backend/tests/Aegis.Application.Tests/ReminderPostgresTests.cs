@@ -47,7 +47,7 @@ public sealed class ReminderPostgresTests
             db.Reminders.Add(r); var nodeId = Guid.NewGuid(); await SeedNode(db, nodeId, clock.GetUtcNow());
             db.Conversations.Remove(conversation); await db.SaveChangesAsync(); db.ChangeTracker.Clear();
             Assert.Null((await db.Reminders.FindAsync(r.Id))!.SourceConversationId);
-            clock.Advance(TimeSpan.FromHours(2));
+            clock.Advance(TimeSpan.FromHours(1));
             await using var first = CreateDb(schema); await using var second = CreateDb(schema);
             var claims = await Task.WhenAll(new ReminderStore(first).ClaimAsync(clock.GetUtcNow(), default), new ReminderStore(second).ClaimAsync(clock.GetUtcNow(), default));
             Assert.Single(claims, c => c is not null);
@@ -116,9 +116,14 @@ public sealed class ReminderPostgresTests
             await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\"");
             await db.GetService<IMigrator>().MigrateAsync("20261003210008_Stage06NodePushRegistration");
             var reminder = new Reminder("legacy", clock.GetUtcNow().AddMinutes(1), "America/Sao_Paulo", null, clock.GetUtcNow());
-            db.Reminders.Add(reminder); var subscription = new PushSubscription("https://fcm.googleapis.com/legacy", "key", "auth", Guid.NewGuid(), null, clock.GetUtcNow());
+            var legacyCreatedAt = clock.GetUtcNow();
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO reminders ("Id", "Text", "DueAtUtc", "TimeZoneId", "Status", "NextAttemptAt", "CreatedAt", "UpdatedAt")
+                VALUES ({reminder.Id}, {reminder.Text}, {reminder.DueAtUtc}, {reminder.TimeZoneId}, 'Scheduled', {reminder.NextAttemptAt}, {legacyCreatedAt}, {legacyCreatedAt})
+                """);
+            var subscription = new PushSubscription("https://fcm.googleapis.com/legacy", "key", "auth", Guid.NewGuid(), null, clock.GetUtcNow());
             db.PushSubscriptions.Add(subscription); await db.SaveChangesAsync(); clock.Advance(TimeSpan.FromMinutes(1));
-            reminder.Claim(Guid.NewGuid(), clock.GetUtcNow()); reminder.BeginTrigger(clock.GetUtcNow()); reminder.Finish(clock.GetUtcNow().AddSeconds(10), true, clock.GetUtcNow()); await db.SaveChangesAsync();
+            await db.Database.ExecuteSqlInterpolatedAsync($"""UPDATE reminders SET "Status" = 'Scheduled', "TriggeredAt" = {clock.GetUtcNow()} WHERE "Id" = {reminder.Id}""");
             var auditId = Guid.NewGuid(); var now = clock.GetUtcNow();
             await db.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO reminder_delivery_attempts ("Id", "ReminderId", "PushSubscriptionId", "Attempt", "AttemptedAt", "AcceptedAt", "HttpStatus", "CreatedAt", "UpdatedAt")

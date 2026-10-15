@@ -1,10 +1,21 @@
 using System.Diagnostics.Metrics;
 using System.Text;
+using System.Text.Json.Serialization;
 namespace Aegis.Application.Nodes;
 
 public sealed record NotificationShowRequest(string Title, string Body, Guid? PreferredNodeId = null, int TtlSeconds = 60);
 public sealed record NodeNotificationCommand(Guid CommandId, string Capability, int CapabilityVersion, DateTimeOffset ExpiresAt, NotificationInput Input);
-public sealed record NotificationInput(string Title, string Body);
+public sealed record NotificationInput(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Title,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Body,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ReminderId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Revision = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Generation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InteractionToken = null);
+public static class ReminderNotificationContract
+{
+    public const string NotifyCapability = "reminder.notify", WithdrawCapability = "reminder.withdraw";
+}
 public sealed record NotificationDispatchResult(NodeTargetSummary? Node, string Reachability, string? Transport, string Status, Guid? CommandId, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DiagnosticCode = null);
 public static class NotificationContract
 {
@@ -69,8 +80,11 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
     }
     public async Task<NotificationDispatchResult> DispatchToNodeAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct = default)
     {
-        NotificationContract.Validate(command.Input.Title, command.Input.Body, 300);
-        if (command.CommandId == Guid.Empty || command.Capability != NotificationContract.Capability || command.CapabilityVersion != 1 || command.ExpiresAt > clock.GetUtcNow().AddSeconds(300))
+        if (command.Capability != ReminderNotificationContract.WithdrawCapability) NotificationContract.Validate(command.Input.Title, command.Input.Body, 300);
+        if (command.Capability is ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability &&
+            (command.Input.ReminderId is null || command.Input.Generation is null) ||
+            command.Capability == ReminderNotificationContract.NotifyCapability && (command.Input.Revision is null || command.Input.InteractionToken is null) ||
+            command.CommandId == Guid.Empty || command.Capability is not (NotificationContract.Capability or ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability) || command.CapabilityVersion != 1 || command.ExpiresAt > clock.GetUtcNow().AddSeconds(300))
             throw new NodeException("invalid_notification", "Command de notification inválido.");
         var inventory = await nodes.ListForDeliveryAsync(ct);
         var target = inventory.SingleOrDefault(n => n.Id == nodeId);
@@ -85,9 +99,9 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
         if (target is null || !target.Enabled || target.RevokedAt is not null) return new(selection, "offline", null, "unavailable", command.CommandId);
         if (command.ExpiresAt <= clock.GetUtcNow()) return new(selection, "offline", null, "expired", command.CommandId);
         Commands.Add(1); string result, transport, availability; string? diagnostic = null;
-        if (live.LiveCapabilities(id)?.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) == true)
+        if (live.LiveCapabilities(id)?.Any(c => c.Name == command.Capability && c.Version >= command.CapabilityVersion) == true)
         { transport = "live_websocket"; availability = "online"; Live.Add(1); var liveResult = await socket.SendAsync(id, command, ct); result = liveResult.Status; diagnostic = NotificationContract.ValidDiagnostic(liveResult.DiagnosticCode) ? liveResult.DiagnosticCode : null; }
-        else if (target.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1) && await background.HasRouteAsync(id, ct))
+        else if (target.Capabilities.Any(c => c.Name == command.Capability && c.Version >= command.CapabilityVersion) && await background.HasRouteAsync(id, ct))
         { transport = "fcm"; availability = "backgroundReachable"; Push.Add(1); result = await push.SendAsync(id, command, ct); }
         else return new(selection, "offline", null, "unavailable", command.CommandId);
         Results.Add(1, new KeyValuePair<string, object?>("transport", transport), new KeyValuePair<string, object?>("status", result));

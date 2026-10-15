@@ -11,6 +11,9 @@ public sealed class ReminderDeliveryAttempt : AuditableEntity
         CommandExpiresAt = commandExpiresAt; AttemptedAt = now;
     }
     public Guid ReminderId { get; private set; }
+    public int Generation { get; private set; } = 1;
+    public Guid? RecipientId { get; private set; }
+    public void BindRecipient(Guid recipientId, int generation) { RecipientId = recipientId; Generation = generation; }
     public Guid? NodeId { get; private set; }
     public Guid? CommandId { get; private set; }
     public DateTimeOffset? CommandExpiresAt { get; private set; }
