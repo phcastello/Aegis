@@ -6,6 +6,8 @@ using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Reminders;
 using Aegis.Application.Reminders;
+using Aegis.Application.Places;
+using Aegis.Infrastructure.Places;
 using Aegis.Domain.Entities;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +20,7 @@ if (args.Length != 1) return 2;
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], EnvironmentName = "Development" });
 var idleMode = Environment.GetEnvironmentVariable("AEGIS_IDLE_FIXTURE");
 var metrics = new FixtureMetrics();
+long backendOfflineUntil = 0;
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
 listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => metrics.Add(instrument.Name, measurement)); listener.Start();
@@ -38,9 +41,15 @@ builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
 builder.Services.AddScoped<ReminderStore>(); builder.Services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
 builder.Services.AddScoped<IReminderActionStore, ReminderActionStore>(); builder.Services.AddScoped<ReminderActionService>();
 builder.Services.AddScoped<IReminderActionTokens, ReminderActionTokens>();
+builder.Services.AddScoped<IPlaceService, PlaceService>();
+builder.Services.AddOptions<LocationContextOptions>();
+builder.Services.AddOptions<PlaceMapOptions>().Configure(o => o.GeocoderUrl = "");
+builder.Services.AddScoped<PlaceMaps>();
+builder.Services.AddHttpClient();
 var app = builder.Build(); app.UseWebSockets();
 app.Use(async (context, next) => {
     if (context.Request.Path.StartsWithSegments("/fixture")) { await next(); return; }
+    if (Environment.TickCount64 < Interlocked.Read(ref backendOfflineUntil)) { context.Response.StatusCode = 503; return; }
     metrics.Add("http_requests", 1); metrics.Add("http_request_body_bytes", context.Request.ContentLength ?? 0);
     if (context.WebSockets.IsWebSocketRequest) { await next(); return; }
     var original = context.Response.Body; await using var copy = new MemoryStream(); context.Response.Body = copy;
@@ -51,6 +60,11 @@ app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapCo
 app.MapGet("/api/health", () => new { status = "ok" });
 // Loopback test executable only; not a production endpoint or new authorization path.
 app.MapGet("/fixture/idle", () => metrics.Snapshot());
+app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
+    if (request.Seconds is < 0 or > 300) return Results.BadRequest();
+    Interlocked.Exchange(ref backendOfflineUntil, Environment.TickCount64 + request.Seconds * 1000L);
+    return Results.Ok(new { seconds = request.Seconds });
+});
 app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, AegisDbContext db, INodeLiveNotifications socket, IReminderActionTokens tokens, CancellationToken ct) => {
     if (request.NodeId == Guid.Empty || request.ReminderId == Guid.Empty || request.CommandId == Guid.Empty || request.Generation < 1 || request.Revision < 1 ||
         request.Capability is not (ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability)) return Results.BadRequest();
@@ -89,7 +103,8 @@ await app.RunAsync(); return 0;
 sealed class NodeControllersOnly : ControllerFeatureProvider
 {
     protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController) || type.AsType() == typeof(NodeTransportController) ||
-        type.AsType() == typeof(RemindersController) || type.AsType() == typeof(ScopedReminderActionsController);
+        type.AsType() == typeof(RemindersController) || type.AsType() == typeof(ScopedReminderActionsController) ||
+        type.AsType() == typeof(PlacesController) || type.AsType() == typeof(LocationController) || type.AsType() == typeof(GeofencesController);
 }
 sealed class FixtureMetrics
 {
@@ -102,3 +117,5 @@ sealed class FixtureWrites(FixtureMetrics metrics) : SaveChangesInterceptor
     public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default) { metrics.Add("entities_written", result); return ValueTask.FromResult(result); }
 }
 sealed record FixtureReminderCommand(Guid NodeId, Guid ReminderId, Guid CommandId, string Capability = "reminder.notify", int Revision = 1, int Generation = 1);
+
+sealed record FixtureOffline(int Seconds);

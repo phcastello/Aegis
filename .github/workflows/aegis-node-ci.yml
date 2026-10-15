@@ -73,10 +73,19 @@ jobs:
       - working-directory: packages/aegis-client
         run: npx playwright-core install --with-deps chromium
       - name: Browser regression of shared web and native UI (native IPC mocked)
+        env:
+          PARITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/v0.7.0-completion/ui
         run: |
+          mkdir -p artifacts/v0.7.0-completion/ui
           npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
           npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
           npm run test:browser --prefix packages/aegis-client
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-UI-Captures
+          path: artifacts/v0.7.0-completion/ui
+          retention-days: 7
   native:
     strategy:
       fail-fast: false
@@ -230,6 +239,7 @@ jobs:
         working-directory: apps/aegis-node
     env:
       AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
+      ORG_GRADLE_PROJECT_aegisFrameworkFixture: 'true'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-aegis-node

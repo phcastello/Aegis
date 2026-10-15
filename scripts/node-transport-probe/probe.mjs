@@ -20,7 +20,7 @@ function check(condition, reason) { if (!condition) throw Error(reason); }
 async function http(path, secret, body, base = origin, method) {
   const response = await fetch(base + '/api/nodes' + path, { method: method ?? (body === undefined ? 'GET' : 'POST'), redirect: 'error', signal: AbortSignal.timeout(10000),
     headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: 'AegisNode ' + secret } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
-  if (!response.ok) { console.log(`API HTTP=${response.status} Path=${path}`); throw Error("api_http_status"); } return response.json();
+  if (!response.ok) { console.log(`API HTTP=${response.status} Path=${path}`); throw Error("api_http_status"); } return response.status === 204 ? null : response.json();
 }
 async function pair(code, platform) {
   const attemptId = randomUUID();
@@ -34,7 +34,7 @@ async function pair(code, platform) {
 async function connect(node, socketOrigin = origin) {
   const ws = new WebSocket(socketOrigin.replace(/^http/, 'ws') + '/api/nodes/connect', { maxPayload: 4096, handshakeTimeout: 10000,
     headers: { Authorization: 'AegisNode ' + node.secret, 'X-Aegis-Node-Protocol': '1' } });
-  const socket = { ws, timer: null, ackCount: 0 }; sockets.push(socket);
+  const socket = { ws, timer: null, ackCount: 0, connectedAt: Date.now(), timeoutSeconds: null, heartbeatSeconds: null }; sockets.push(socket);
   let upgrade = false, helloId = randomUUID(), pending, deadline, ready, rejectReady;
   socket.ready = new Promise((resolve, reject) => { ready = resolve; rejectReady = reject; });
   socket.ready.catch(() => {});
@@ -57,7 +57,8 @@ async function connect(node, socketOrigin = origin) {
         if (message.type === 'hello_ack') {
           check(message.messageId === helloId, 'hello_rejected'); const { heartbeatSeconds, timeoutSeconds } = message.payload;
           check(Number.isInteger(heartbeatSeconds) && heartbeatSeconds >= 1 && timeoutSeconds >= heartbeatSeconds * 2, 'invalid_heartbeat_configuration');
-          if (origin.startsWith('https:')) check(heartbeatSeconds === 25 && timeoutSeconds === 75, 'unexpected_production_timing');
+          if (origin.startsWith('https:')) check(heartbeatSeconds === Number(process.env.AEGIS_PROBE_EXPECT_HEARTBEAT_SECONDS ?? 120) && timeoutSeconds === Number(process.env.AEGIS_PROBE_EXPECT_TIMEOUT_SECONDS ?? 360), 'unexpected_production_timing');
+          socket.heartbeatSeconds = heartbeatSeconds; socket.timeoutSeconds = timeoutSeconds; node.proofSocket = socket;
           console.log(`HelloAck NodeId=${node.id} Interval=${heartbeatSeconds}s Timeout=${timeoutSeconds}s`); clearTimeout(deadline); ready();
           socket.timer = setInterval(() => { if (pending) { reject(Error('heartbeat_timeout')); return; } pending = randomUUID();
             ws.send(JSON.stringify({ protocolVersion: 1, type: 'heartbeat', messageId: pending, sentAt: new Date().toISOString() }));
@@ -85,6 +86,10 @@ async function cleanup() {
     if (!node.confirmed) {
       try { await http('/pair/finalize', null, { attemptId: node.attemptId, credential: node.secret }, local); node.confirmed = true; }
       catch { console.error(`CLEANUP FINALIZE FAILED NodeId=${node.id}`); process.exitCode = 1; continue; }
+    }
+    if (process.env.AEGIS_PROBE_REMOVE === 'true') {
+      try { await http('/' + node.id, node.secret, undefined, origin, 'DELETE'); console.log(`Removed disposable NodeId=${node.id}`); continue; }
+      catch { try { await http('/' + node.id, node.secret, undefined, local, 'DELETE'); console.log(`Removed disposable via local cleanup NodeId=${node.id}`); continue; } catch {} }
     }
     try { await http('/' + node.id + '/revoke', node.secret, {}); console.log(`Revoked disposable NodeId=${node.id}`); }
     catch { try { await http('/' + node.id + '/revoke', node.secret, {}, local); console.log(`Revoked disposable via local cleanup NodeId=${node.id}`); } catch { console.error(`CLEANUP FAILED NodeId=${node.id}`); process.exitCode = 1; } }
@@ -115,7 +120,7 @@ try {
     for (const test of nodes) check(list.find(n => n.id === test.id)?.availability === 'online', 'availability_inconsistent');
     check(me.availability === 'online', 'me_availability_inconsistent');
     if (capabilities) check(JSON.stringify(me.capabilities) === JSON.stringify(node.capabilities), 'capability_snapshot_inconsistent');
-    check(me.lastHeartbeatAt && Date.now() - Date.parse(me.lastHeartbeatAt) < 60000, 'heartbeat_history_not_advancing');
+    check(me.lastHeartbeatAt && Date.parse(me.lastHeartbeatAt) > node.proofSocket.connectedAt + node.proofSocket.heartbeatSeconds * 1000 && Date.now() - Date.parse(me.lastHeartbeatAt) < node.proofSocket.timeoutSeconds * 1000, 'heartbeat_history_not_advancing');
     console.log(`Presence NodeId=${node.id} Online=true LastHeartbeatAt=${me.lastHeartbeatAt}`); }
   // The global priority/fallback matrix assumes an isolated inventory. Public notification
   // diagnostics target only the disposable identity, preserving the owner's eligible Nodes.
