@@ -83,7 +83,7 @@ async function close() {
 }
 try {
   await waitUntil(async () => { try { return existsSync(bootstrap) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
-  await open(); assert.equal((await invoke('node_status')).state, 'unpaired');
+  await open(); assert.ok(['unpaired','revoked'].includes((await invoke('node_status')).state), 'A previous isolated run may leave a revoked vault record; pairing must create a new identity.');
   await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
   const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
   await panel.getByLabel('Nome deste dispositivo').fill('PC CI'); await panel.getByLabel('Código de pareamento').fill(readFileSync(bootstrap, 'utf8'));

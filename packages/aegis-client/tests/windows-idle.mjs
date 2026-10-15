@@ -134,6 +134,12 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   const runtime = await invoke('runtime_info'); assert.equal(runtime.platform, 'windows'); assert.equal(runtime.backendUrl, origin);
+  const expectedVersion = label === 'before' ? '0.7.0-unstable.11' : JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
+  assert.equal(runtime.version, expectedVersion, 'The immutable accepted baseline and candidate must not accidentally run the same executable.');
+  // Previous isolated steps may have left a revoked vault record. Native status
+  // authenticates and discards any record from the preceding disposable API.
+  const startingIdentity = await invoke('node_status');
+  assert.ok(['unpaired', 'revoked'].includes(startingIdentity.state), 'An idle run must pair afresh with this disposable API.');
   const identity = await invoke('node_pair', { name: 'Aegis idle fixture', code: readFileSync(bootstrap, 'utf8') }); rmSync(bootstrap);
   assert.equal(identity.state, 'paired'); pairedId = identity.node.id;
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 30000);
@@ -164,10 +170,11 @@ try {
     }
     const durationSeconds = (Date.now() - started) / 1000;
     const afterTask = await metric('TaskDuration'), afterRenderer = await rendererSnapshot();
+    const nativeTransportState = (await invoke('node_transport_status')).transportState;
     const counts = difference(beforeFixture, await fixtureMetrics());
     const jsonPayloadBytes = (counts.node_transport_payload_bytes_received_total ?? 0) + (counts.node_transport_payload_bytes_sent_total ?? 0);
     const httpBodyBytes = (counts.http_request_body_bytes ?? 0) + (counts.http_response_body_bytes ?? 0);
-    states.push({ state, durationSeconds, fixtureCounters: counts, jsonPayloadBytesPerMinute: jsonPayloadBytes * 60 / durationSeconds, httpBodyBytesPerMinute: httpBodyBytes * 60 / durationSeconds,
+    states.push({ state, durationSeconds, nativeTransportState, fixtureCounters: counts, jsonPayloadBytesPerMinute: jsonPayloadBytes * 60 / durationSeconds, httpBodyBytesPerMinute: httpBodyBytes * 60 / durationSeconds,
       requestsPerMinute: (counts.http_requests ?? 0) * 60 / durationSeconds, heartbeatsPerMinute: (counts.node_transport_heartbeats_total ?? 0) * 60 / durationSeconds,
       cpu: { ...cpu, appPercentOfOneCore: 100 * cpu.appSeconds / durationSeconds, webViewPercentOfOneCore: 100 * cpu.webViewSeconds / durationSeconds, processSampleSeconds: 10, childProcessesAtStart: initialProcesses.filter(row => row.id !== app.pid).length, childProcessesAtEnd: previousProcesses.filter(row => row.id !== app.pid).length },
       rendererTaskSeconds: beforeTask === null || afterTask === null ? null : afterTask - beforeTask,
@@ -175,13 +182,23 @@ try {
     console.log(`${label}: ${state}, ${durationSeconds.toFixed(1)}s, app CPU ${cpu.appSeconds.toFixed(3)}s, WebView CPU ${cpu.webViewSeconds.toFixed(3)}s, JSON payload ${(jsonPayloadBytes * 60 / durationSeconds).toFixed(1)} bytes/min`);
   }
   assert.ok(states.reduce((sum,state) => sum + state.durationSeconds, 0) >= 600);
-  assert.deepEqual(pageErrors, [], 'The app must remain usable during idle measurement.');
   mkdirSync(dirname(output), { recursive: true });
   writeFileSync(output, JSON.stringify({ measuredAt: new Date().toISOString(), kind: 'real Windows application and WebView2, disposable loopback API', label, appVersion: runtime.version,
     hardware: { platform: process.platform, osRelease: release(), cpuModel: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem(), webViewBrowser: browser.version() },
     configuration: { fixture: 'Aegis.NodeRuntimeFixture', heartbeatSeconds: label === 'before' ? 25 : 120, timeoutSeconds: label === 'before' ? 75 : 360, persistSeconds: label === 'before' ? 120 : 300, sameExecutableMode: 'debug with loopback API compiled in', durationRequestedSeconds: seconds },
     limits: ['CPU comes from the native app and its WebView2 descendant processes, not RDP or whole-machine CPU.', 'Fixture network bytes count HTTP bodies and WebSocket JSON payloads; no TCP framing, WebSocket framing, TLS, proxy, FCM or physical network bytes are measured.', 'Page network metrics exclude Rust native HTTP/WebSocket; those are counted separately by the fixture.', 'Each version runs four sequential states for at least 150 seconds each. Process accounting is sampled every 10 seconds; disappeared processes can make child CPU an underestimate.', 'Timers and IPC are observed through CDP injection in this CI process. This is a real Windows runtime measurement, not physical owner acceptance or an Android battery measurement.'], states }, null, 2) + '\n');
   console.log(output);
+  // Preserve the measured artifact even when an acceptance assertion fails.
+  assert.deepEqual(pageErrors, [], 'The app must remain usable during idle measurement.');
+  for (const sample of states) {
+    assert.equal(sample.nativeTransportState, 'online', `${sample.state}: a quiet but disconnected app is not a valid idle-delivery baseline.`);
+    assert.ok((sample.fixtureCounters.node_transport_heartbeats_total ?? 0) > 0, `${sample.state}: the real negotiated channel must remain healthy and instrumented.`);
+  }
+  if (label === 'after') for (const sample of states) {
+    if (sample.state !== 'devices_open') assert.equal(sample.renderer.after.ipc.node_list ?? 0, 0, `${sample.state}: closed settings must not poll the device inventory.`);
+    assert.equal(sample.renderer.after.runningAnimations.filter(animation => animation.iterations === 'Infinity').length, 0, `${sample.state}: quiet UI must not animate indefinitely.`);
+    assert.ok((sample.fixtureCounters.node_transport_connections_total ?? 0) <= 1, `${sample.state}: stable networking must not cause a reconnect loop.`);
+  }
 } finally {
   if (page && appExit === undefined) { if (pairedId) await invoke('node_revoke', { id: pairedId }).catch(() => {}); await invoke('node_exit').catch(() => {}); }
   await browser?.close().catch(() => {});
