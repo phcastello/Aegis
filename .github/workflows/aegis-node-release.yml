@@ -43,13 +43,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          FIREBASE_ANDROID_CONFIG_B64: ${{ secrets.FIREBASE_ANDROID_CONFIG_B64 }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           const version = JSON.parse(readFileSync('package.json')).version;
           if (process.env.RELEASE_TAG !== `node-v${version}`) throw new Error('Tag must match package.json: node-v' + version);
           const required = process.env.BUILD_ANDROID === 'true'
-            ? ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
+            ? ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'FIREBASE_ANDROID_CONFIG_B64']
             : ['TAURI_SIGNING_PRIVATE_KEY'];
           const missing = required.filter(name => !process.env[name]);
           if (missing.length) throw new Error('Missing GitHub signing secrets: ' + missing.join(', '));
@@ -58,20 +59,28 @@ jobs:
         with:
           android: ${{ matrix.android }}
       - if: matrix.android == 'true'
-        name: Install Firebase Android client configuration when provisioned
+        name: Require the existing Firebase Android client configuration
         env:
           FIREBASE_ANDROID_CONFIG_B64: ${{ secrets.FIREBASE_ANDROID_CONFIG_B64 }}
         run: |
           python3 - <<'PYTHON'
           import base64, os
           from pathlib import Path
+          import importlib.util, json
+          spec = importlib.util.spec_from_file_location('distribution', 'scripts/verify-android-distribution.py')
+          guard = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(guard)
           value = os.environ.get('FIREBASE_ANDROID_CONFIG_B64', '')
-          if value:
-              target = Path('src-tauri/gen/android/app/google-services.json')
-              target.write_bytes(base64.b64decode(value, validate=True))
-              target.chmod(0o600)
-          else:
-              print('Firebase client config absent: FCM build integration enabled; real push unavailable.')
+          if not value:
+              raise SystemExit('Firebase client configuration is required for distribution.')
+          try:
+              decoded = base64.b64decode(value, validate=True)
+              guard.firebase_expected(json.loads(decoded))
+          except Exception:
+              raise SystemExit('Firebase client configuration does not match the existing Android app.') from None
+          target = Path('src-tauri/gen/android/app/google-services.json')
+          target.write_bytes(decoded)
+          target.chmod(0o600)
           PYTHON
       - run: npm run check && npm test && npm run test:release && npm run test:rust
       - if: matrix.android == 'false'
@@ -106,10 +115,14 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: npm run build:android:release
       - if: matrix.android == 'true'
-        name: Verify APK signing and package human-facing artifact
+        name: Verify distributable Android identity, configuration and fixture exclusion
         run: |
+          python3 -m unittest discover -s scripts -p verify_android_distribution_test.py
           node scripts/package-artifacts.mjs android
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose release-assets/Aegis-Android-arm64.apk
+          python3 scripts/verify-android-distribution.py \
+            --apk release-assets/Aegis-Android-arm64.apk \
+            --apksigner "$ANDROID_HOME/build-tools/37.0.0/apksigner" \
+            --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
           "$ANDROID_HOME/build-tools/37.0.0/zipalign" -c -P 16 4 release-assets/Aegis-Android-arm64.apk
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -135,11 +148,52 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: '1.94.0'
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: Release-*
           merge-multiple: true
           path: apps/aegis-node/release-assets
+      - name: Verify Windows installer against the existing updater public key
+        shell: bash
+        run: |
+          verifier="$RUNNER_TEMP/aegis-updater-verifier"
+          mkdir -p "$verifier/src"
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const directory = join(process.env.RUNNER_TEMP, 'aegis-updater-verifier');
+          const config = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          writeFileSync(join(directory, 'updater.pub'), Buffer.from(config.plugins.updater.pubkey, 'base64'));
+          writeFileSync(join(directory, 'installer.sig'), Buffer.from(readFileSync('release-assets/Aegis-Windows-x86_64-Setup.exe.sig', 'utf8').trim(), 'base64'));
+          JS
+          cat > "$verifier/Cargo.toml" <<'TOML'
+          [package]
+          name = "aegis-release-signature-verifier"
+          version = "0.1.0"
+          edition = "2021"
+          [dependencies]
+          minisign-verify = "=0.2.5"
+          TOML
+          cat > "$verifier/src/main.rs" <<'RUST'
+          use minisign_verify::{PublicKey, Signature};
+          fn main() {
+              let args: Vec<_> = std::env::args().collect();
+              assert_eq!(args.len(), 5, "Expected installer, public key, signature and version");
+              let data = std::fs::read(&args[1]).expect("Installer must be readable");
+              let key = PublicKey::from_file(&args[2]).expect("Committed updater public key must be valid");
+              let signature = Signature::from_file(&args[3]).expect("Updater signature must have a valid format");
+              key.verify(&data, &signature, true).expect("Installer must verify against the existing updater public key");
+              assert!(signature.trusted_comment().split('\t').any(|field| field == format!("version:{}", args[4])), "Signed version must match this release");
+              println!("Windows updater cryptographic signature and signed version PASS.");
+          }
+          RUST
+          version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          cargo run --quiet --manifest-path "$verifier/Cargo.toml" -- \
+            "$PWD/release-assets/Aegis-Windows-x86_64-Setup.exe" \
+            "$verifier/updater.pub" "$verifier/installer.sig" "$version"
       - name: Generate deterministic metadata and publish preview releases
         env:
           GH_TOKEN: ${{ github.token }}
