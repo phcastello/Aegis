@@ -32,6 +32,8 @@
     "allow-node-location",
     "allow-node-geofences",
     "allow-node-settings-open",
-    "allow-node-consume-reminder-open"
+    "allow-node-consume-reminder-open",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
   ]
 }
