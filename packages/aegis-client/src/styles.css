@@ -1733,7 +1733,10 @@ button:disabled {
 .settings-confirm h2 { margin-top: 0; }
 @media (max-width: 620px) {
   .settings-dialog { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
-  .settings-header { padding: max(12px, env(safe-area-inset-top)) 16px 12px; }
+  .settings-header { gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; }
+  .settings-header > div { min-width: 0; }
+  .settings-header h1 { overflow-wrap: anywhere; }
+  .settings-header > button { flex-shrink: 0; }
   .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-navigation { flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   .settings-navigation button { flex: 0 0 auto; padding: 10px; }

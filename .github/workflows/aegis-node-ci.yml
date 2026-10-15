@@ -7,6 +7,10 @@ on:
     paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
   workflow_dispatch:
     inputs:
+      ui_only:
+        description: Focused browser/layout checks without native builds; takes precedence over other filters
+        type: boolean
+        default: false
       windows_only:
         description: Validate a focused Windows native fix before the full candidate matrix
         type: boolean
@@ -18,11 +22,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && 'android-framework' || 'all' }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && 'android-framework' || 'all' }}
   cancel-in-progress: true
 jobs:
   regression:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.android_framework_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_framework_only) }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -96,6 +100,54 @@ jobs:
           npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
           npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
           npm run test:browser --prefix packages/aegis-client
+          node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-UI-Captures
+          path: artifacts/v0.7.0-completion/ui
+          retention-days: 7
+  ui:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ui_only }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            packages/aegis-client/package-lock.json
+            frontend/aegis-pwa/package-lock.json
+            apps/aegis-node/package-lock.json
+      - name: Build clients and check shared behavior
+        run: |
+          npm ci --prefix packages/aegis-client
+          npm ci --prefix frontend/aegis-pwa
+          npm ci --prefix apps/aegis-node
+          npm run build --prefix frontend/aegis-pwa
+          npm run build --prefix apps/aegis-node
+          npm test --prefix apps/aegis-node
+      - name: Install browser for visual checks
+        working-directory: packages/aegis-client
+        run: |
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+          mirror = Path('/etc/apt/apt-mirrors.txt')
+          if mirror.exists():
+              mirror.write_text('https://archive.ubuntu.com/ubuntu/\n')
+          Path('/etc/apt/apt.conf.d/99-aegis-ci-network').write_text(
+              'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
+          PYTHON
+          npx playwright-core install --with-deps chromium
+      - name: Render real components and exercise sidebar/update navigation
+        env:
+          PARITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/v0.7.0-completion/ui
+        run: |
+          npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
+          npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
+          npm run test:browser --prefix packages/aegis-client
+          node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -103,7 +155,7 @@ jobs:
           path: artifacts/v0.7.0-completion/ui
           retention-days: 7
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.android_framework_only || inputs.windows_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && (!inputs.android_framework_only || inputs.windows_only)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -233,7 +285,7 @@ jobs:
           if-no-files-found: error
           path: apps/aegis-node/release-assets/*
   android-notification-framework:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only) }}
     name: Android framework API ${{ matrix.api }} (debug + minified release)
     runs-on: ubuntu-24.04
     strategy:

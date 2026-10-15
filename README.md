@@ -6,7 +6,7 @@ Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana d
 
 ## Download Aegis
 
-A unstable.13 não foi aprovada. A revisão corrige R01–R03/R05–R06 e melhora descoberta/diagnóstico do updater (R04); a causa física anterior continua sem comprovação. Campo e atualização 13→14 mantendo dados/NodeId dependem do aceite do proprietário. **Não desinstale para atualizar.**
+A unstable.13 não foi aprovada. A revisão corrige R01–R03/R05–R06 e melhora descoberta/diagnóstico do updater (R04); a causa física anterior continua desconhecida. O proprietário confirmou que o fluxo do updater **para unstable.14 funcionou no aparelho**. A preservação de NodeId, credential, dados, lugares, regras e permissões não foi informada; essas verificações e o campo integrado continuam pendentes. **Não desinstale para atualizar.**
 
 **Candidata integrada: 0.7.0-unstable.14**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.14). A v0.7.0 estável ainda depende desse aceite.
 
@@ -39,7 +39,7 @@ O instalador não possui certificado comercial de editor Windows; o SmartScreen 
 
 ### Aceite ainda pendente
 
-O proprietário fará um único roteiro integrado de campo das geofences Android e verificará atualização no hardware de uso. CI, emulador e trajetórias sintéticas validam os caminhos implementados; não comprovam precisão ou latência física em casa/campus. [Checklist e limitações da candidata](docs/v0.7.0-completion.md).
+O proprietário confirmou o fluxo de atualização Android para unstable.14 no hardware de uso. Permanecem pendentes as verificações detalhadas de preservação de identidade/dados e o único roteiro integrado de campo das geofences Android. CI, emulador e trajetórias sintéticas validam os caminhos implementados; não comprovam precisão ou latência física em casa/campus. [Checklist e limitações da candidata](docs/v0.7.0-completion.md).
 
 ### Pair this installation as a Node
 

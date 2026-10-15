@@ -178,7 +178,8 @@ try {
      await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
      await panel.getByText('O canal de atualizações não está disponível. Tente novamente mais tarde.',{exact:true}).waitFor();
      await panel.locator('.update-notice').getByText('Código: update_feed_missing',{exact:true}).waitFor();
-     await panel.locator('.update-notice').getByText(`Aegis ${updateVersion} disponível`,{exact:true}).waitFor();
+     await panel.locator('.update-notice .update-title-mobile').getByText('Atualização disponível',{exact:true}).waitFor();
+     await panel.locator('.update-notice .update-version').getByText(`Versão ${updateVersion}`,{exact:true}).waitFor();
      await page.evaluate(()=>{window.fixtureUpdateFailure=null;window.fixtureInstallResult={status:'failed',phase:'verification',code:'update_signature_mismatch'};});
      await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
      await panel.getByRole('button',{name:'Baixar e instalar',exact:true}).click();
