@@ -34,4 +34,14 @@ class NodeGeoEngineTest {
   val exitCandidate=NodeGeoEngine.observe(enter.state,"outside",300000)
   assertEquals("exit",NodeGeoEngine.observe(exitCandidate.state,"outside",330000).transition)
  }
+ @Test fun unknownEventCanUseTwoBoundedAcquisitionsWithoutPollingForever() {
+  val initial=NodeGeoEngine.State(confirmed="inside",lastCapturedAt=1)
+  val poor=NodeGeoEngine.observe(initial,"unknown",1000);assertTrue(poor.needsConfirmation)
+  val first=NodeGeoEngine.observe(poor.state,"outside",31000);assertNull(first.transition)
+  assertTrue(NodeGeoEngine.canConfirmAgain(1,31000,90000,first.state.candidate!="unknown"))
+  val second=NodeGeoEngine.observe(first.state,"outside",62000);assertEquals("exit",second.transition)
+  assertFalse(NodeGeoEngine.canConfirmAgain(2,62000,90000,true))
+  assertFalse(NodeGeoEngine.canConfirmAgain(1,61000,90000,true))
+  assertFalse(NodeGeoEngine.canConfirmAgain(1,31000,90000,false))
+ }
 }

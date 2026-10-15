@@ -34,7 +34,11 @@ pub async fn node_reminders(
         let mut body = payload.unwrap_or_else(|| json!({}));
         let identifier = id.clone().ok_or("Identificador necessário.")?;
         let (_, path) = route("reminders", "action", id, &mut body)?;
-        match runtime.domain_action_call(path, body.clone()).await {
+        let scope = runtime
+            .scope_id()
+            .await?
+            .ok_or("Pareie este dispositivo para continuar.")?;
+        match runtime.domain_action_call(path, body.clone(), &scope).await {
             Ok(value) => return Ok(value),
             Err((message, false)) => return Err(message),
             Err((message, true)) => {
@@ -45,7 +49,7 @@ pub async fn node_reminders(
                         .0
                         .run_mobile_plugin_async(
                             "queueReminderAction",
-                            json!({"reminderId":identifier,"payload":body}),
+                            json!({"reminderId":identifier,"payload":body,"scopeNodeId":scope}),
                         )
                         .await;
                     return result
@@ -53,7 +57,7 @@ pub async fn node_reminders(
                 }
                 #[cfg(windows)]
                 {
-                    crate::windows_notifications::enqueue_ui(&app, &identifier, &body)?;
+                    crate::windows_notifications::enqueue_ui(&app, &identifier, &body, &scope)?;
                     return Ok(json!({"pending":true,"applied":false}));
                 }
                 #[cfg(not(any(windows, target_os = "android")))]

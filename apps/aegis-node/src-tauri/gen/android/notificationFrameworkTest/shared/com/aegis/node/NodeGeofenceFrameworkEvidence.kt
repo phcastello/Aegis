@@ -91,7 +91,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   position(0.01,115000);position(0.01,84000)
   assertEquals(1,events().size)
   val first=events().single();occurrences.add(first)
-  assertTrue(manager.activeNotifications.any{it.tag=="reminder:$first:1"})
+  awaitFrameworkReminder(manager,first,1)
   position(0.01,84000);position(0.0,90000)
   assertEquals(listOf(first),events()) // repeated and out of order observations cannot replay.
   position(0.0,83000);position(0.0,52000)
@@ -114,6 +114,14 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   assertEquals(occurrences,events())
   assertTrue(context.packageManager.queryBroadcastReceivers(Intent(Intent.ACTION_BOOT_COMPLETED).setPackage(context.packageName),0).isNotEmpty())
   checkpoint("geofence_restore_no_duplicate")
+  val bind=geoRuntime(context).getMethod("bindIdentity",Context::class.java,String::class.java)
+  bind.invoke(null,context,nodeId)
+  assertEquals(occurrences,events()) // Same identity preserves its persisted pending delivery.
+  bind.invoke(null,context,UUID.randomUUID().toString())
+  assertTrue(events().isEmpty())
+  for(id in occurrences)awaitFrameworkReminderWithdrawal(manager,id,1)
+  bind.invoke(null,context,nodeId)
+  checkpoint("native_identity_scope_reset")
  } finally {
   fixtureOffline(0)
   // Authoritative cleanup is revision checked. Normal reconciliation may already have completed it.

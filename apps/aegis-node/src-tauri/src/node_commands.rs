@@ -98,13 +98,33 @@ impl NodeRuntime {
         &self,
         path: String,
         payload: serde_json::Value,
+        expected_scope: &str,
     ) -> Result<serde_json::Value, (String, bool)> {
         let guard = self.identity.lock().await;
-        guard
+        let identity = guard.as_ref().map_err(|e| (e.clone(), false))?;
+        if identity
+            .cached_node()
+            .map_err(|e| (e, false))?
             .as_ref()
-            .map_err(|e| (e.clone(), false))?
+            .map(|n| n.id.as_str())
+            != Some(expected_scope)
+        {
+            return Err((
+                "A identidade mudou. Confira o lembrete antes de tentar novamente.".into(),
+                false,
+            ));
+        }
+        identity
             .domain_call_kind(reqwest::Method::POST, path, payload)
             .await
+    }
+    pub(crate) async fn scope_id(&self) -> Result<Option<String>, String> {
+        let guard = self.identity.lock().await;
+        Ok(guard
+            .as_ref()
+            .map_err(Clone::clone)?
+            .cached_node()?
+            .map(|node| node.id))
     }
     pub(crate) async fn has_identity(&self) -> bool {
         self.identity

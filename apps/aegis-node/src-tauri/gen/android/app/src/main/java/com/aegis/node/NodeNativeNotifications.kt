@@ -20,6 +20,7 @@ import org.json.JSONObject
 /** One native renderer for both live JNI and the background Firebase service. */
 object NodeNativeNotifications {
   const val CHANNEL = "aegis_node_notifications"
+  private val tokenRequested=java.util.concurrent.atomic.AtomicBoolean(false)
   fun prefs(context: Context) = context.getSharedPreferences("aegis-node-push-v1", Context.MODE_PRIVATE)
   fun granted(context: Context): Boolean {
     if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
@@ -38,9 +39,10 @@ object NodeNativeNotifications {
   fun initialize(context: Context) {
     try { notificationPhase("channel", NotificationDiagnostic.CHANNEL) { ensureChannel(context) } }
     catch (_: NotificationPhaseFailure) { /* show() retries and reports the bounded code. */ }
-    if (FirebaseApp.initializeApp(context) != null && prefs(context).getString("token", null) == null) FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-      if (prefs(context).getString("token", null) != token) { prefs(context).edit().putString("token", token).apply(); NodeBackgroundWork.enqueue(context) }
-    }
+    if (FirebaseApp.initializeApp(context) != null && tokenRequested.compareAndSet(false,true)) FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+      // Recover the SDK's durable current token once per process, including a previous interrupted update.
+      if (prefs(context).getString("token", null) != token) { if(prefs(context).edit().putString("token", token).commit())NodeBackgroundWork.enqueue(context) else tokenRequested.set(false) }
+    }.addOnFailureListener { tokenRequested.set(false) }
   }
   fun fromCommand(context: Context, payload: String): NodeNotificationResult = try {
     val command = notificationPhase("payload_parse", NotificationDiagnostic.PAYLOAD_PARSE) {
@@ -92,6 +94,7 @@ object NodeNativeNotifications {
         }
         if (recent.any { it.first == id }) NodeNotificationResult("duplicate")
         else {
+          if(reminder?.ruleId!=null && reminder.observerNodeId!=NodeNativeSession.read(context)?.nodeId)return NodeNotificationResult("expired")
           if(reminder!=null && !NodeReminderActions.remember(context,reminder)) return NodeNotificationResult("expired")
           val click = notificationPhase("pending_intent", NotificationDiagnostic.PENDING_INTENT) {
             val intent=Intent(context,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -103,7 +106,7 @@ object NodeNativeNotifications {
             check(ContextCompat.getDrawable(context, R.drawable.ic_node_notification) != null)
             val builder=NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_node_notification)
               .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
-              .setContentIntent(click).setAutoCancel(true)
+              .setContentIntent(click).setAutoCancel(true).setOnlyAlertOnce(true)
             if(reminder!=null) NodeReminderActions.addButtons(context,builder,reminder)
             builder.build()
           }

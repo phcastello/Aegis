@@ -32,6 +32,22 @@ impl OsVault {
             .map_err(|_| storage_error())
     }
 }
+#[cfg(windows)]
+pub(crate) fn scope_id() -> Result<Option<String>, String> {
+    let origin = crate::config::configured_endpoint()?.base_url();
+    match OsVault.load()? {
+        Some(record) => record.scope_id(&origin),
+        None => Ok(None),
+    }
+}
+#[cfg(windows)]
+pub(crate) fn scope_enabled() -> Result<bool, String> {
+    let origin = crate::config::configured_endpoint()?.base_url();
+    match OsVault.load()? {
+        Some(record) => record.scope_enabled(&origin),
+        None => Ok(false),
+    }
+}
 fn storage_error() -> String {
     "O armazenamento seguro do sistema não está disponível. Nenhuma credencial será salva em arquivo comum.".into()
 }

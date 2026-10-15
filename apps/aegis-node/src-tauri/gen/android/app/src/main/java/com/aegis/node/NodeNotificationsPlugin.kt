@@ -43,7 +43,7 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofences.sync(activity).toString()))}catch(_:Exception){invoke.reject("Sincronização pendente. Verifique a conexão e as permissões.")} }
  }
  @Command fun queueReminderAction(invoke:Invoke) {
-  try{val args=invoke.getArgs();invoke.resolve(JSObject(NodeReminderActions.enqueueUi(activity,args.getString("reminderId"),args.getJSONObject("payload")).toString()))}catch(_:Exception){invoke.reject("Não foi possível guardar esta ação no aparelho.")}
+  try{val args=invoke.getArgs();invoke.resolve(JSObject(NodeReminderActions.enqueueUi(activity,args.getString("reminderId"),args.getJSONObject("payload"),args.getString("scopeNodeId")).toString()))}catch(_:Exception){invoke.reject("Não foi possível guardar esta ação no aparelho.")}
  }
  @Command fun installUpdate(invoke:Invoke) {
   val args=org.json.JSONObject(invoke.getArgs().toString())

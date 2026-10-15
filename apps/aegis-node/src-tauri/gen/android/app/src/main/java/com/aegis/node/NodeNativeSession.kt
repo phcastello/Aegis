@@ -40,9 +40,10 @@ object NodeNativeSession {
   } catch (_: Exception) { false }
 
   class HttpFailure(val status: Int) : Exception()
-  fun call(context: Context, method: String, path: String, body: JSONObject? = null, tokenOnly: Boolean = false): JSONObject {
+  fun call(context: Context, method: String, path: String, body: JSONObject? = null, tokenOnly: Boolean = false, expectedScope:String?=null): JSONObject {
     require(path.startsWith("/api/") && !path.contains("?") && !path.contains(".."))
     val session = if (tokenOnly) null else read(context) ?: throw HttpFailure(401)
+    if(expectedScope!=null && (session?:read(context))?.nodeId!=expectedScope)throw HttpFailure(409)
     val origin = session?.origin ?: NodeNativeNotifications.prefs(context).getString("origin", null) ?: throw HttpFailure(401)
     require(validOrigin(origin, context))
     val connection = URL(origin + path).openConnection() as HttpURLConnection

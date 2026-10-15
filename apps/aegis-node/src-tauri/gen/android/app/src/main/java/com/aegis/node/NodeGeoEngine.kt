@@ -8,6 +8,7 @@ object NodeGeoEngine {
   data class Observation(val latitude: Double,val longitude: Double,val accuracyMeters: Double,val capturedAt: Long)
   data class State(val confirmed: String="unknown",val candidate: String="unknown",val candidateAt: Long=0,val lastCapturedAt: Long=0)
   data class Decision(val state: State,val transition: String?=null,val needsConfirmation: Boolean=false)
+  fun canConfirmAgain(attempt:Int,now:Long,deadline:Long,hasCandidate:Boolean):Boolean = attempt<2 && hasCandidate && deadline-now>30000
   fun distance(a: Double,b: Double,c: Double,d: Double): Double {
     val p=Math.toRadians(c-a); val q=Math.toRadians(d-b)
     val h=sin(p/2).pow(2)+cos(Math.toRadians(a))*cos(Math.toRadians(c))*sin(q/2).pow(2)

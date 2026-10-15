@@ -25,15 +25,16 @@ object NodeLocation {
     val provider=com.google.android.gms.common.GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)==com.google.android.gms.common.ConnectionResult.SUCCESS
     return JSONObject().put("supported",true).put("providerAvailable",provider).put("granted",fine||coarse).put("foreground",fine||coarse).put("precise",fine).put("background",background).put("servicesEnabled",enabled).put("pendingActions",NodeReminderActions.pending(context))
   }
-  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false): JSONObject {
+  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false,durationMillis:Long=15000): JSONObject {
     val state=permissions(context)
     if(!state.getBoolean("providerAvailable")) return state.put("status","provider_unavailable")
     if(!state.getBoolean("granted")) return state.put("status","permission_denied")
     if(!state.getBoolean("servicesEnabled")) return state.put("status","location_disabled")
     val cancel=CancellationTokenSource()
     try {
-      val request=CurrentLocationRequest.Builder().setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY).setMaxUpdateAgeMillis(if(fresh) 0 else 120000).setDurationMillis(15000).build()
-      val result=Tasks.await(LocationServices.getFusedLocationProviderClient(context).getCurrentLocation(request,cancel.token),16,TimeUnit.SECONDS)
+      val duration=durationMillis.coerceIn(1,15000)
+      val request=CurrentLocationRequest.Builder().setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY).setMaxUpdateAgeMillis(if(fresh) 0 else 120000).setDurationMillis(duration).build()
+      val result=Tasks.await(LocationServices.getFusedLocationProviderClient(context).getCurrentLocation(request,cancel.token),duration+1000,TimeUnit.MILLISECONDS)
         ?: return state.put("status","unavailable")
       val age=TimeUnit.NANOSECONDS.toMillis((SystemClock.elapsedRealtimeNanos()-result.elapsedRealtimeNanos).coerceAtLeast(0))
       if(age>120000) return state.put("status","stale")

@@ -25,8 +25,20 @@ object NodeReminderActions {
       db.execSQL("CREATE TABLE actions (actionId TEXT PRIMARY KEY, reminderId TEXT NOT NULL, revision INTEGER NOT NULL, generation INTEGER NOT NULL, action TEXT NOT NULL, token TEXT, created INTEGER NOT NULL)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Unsupported native reminder schema") }
+    override fun onOpen(db:SQLiteDatabase) {super.onOpen(db);db.execSQL("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)") }
   }
-  data class Presentation(val id: String, val revision: Long, val generation: Long, val token: String?, val commandId: String,val ruleId:String?=null,val ruleRevision:Long?=null)
+  fun bindIdentity(context:Context,id:String) { synchronized(NodeNotificationGate.lock) {
+    Store(context).use{store->val db=store.writableDatabase
+      val previous=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
+      if(previous!=id) {
+        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
+        val manager=context.getSystemService(android.app.NotificationManager::class.java)
+        for(notification in manager.activeNotifications)if(notification.tag?.startsWith("reminder:")==true)manager.cancel(notification.tag,notification.id)
+        manager.cancel("aegis-action-pending",709)
+      }
+    }
+  } }
+  data class Presentation(val id: String, val revision: Long, val generation: Long, val token: String?, val commandId: String,val ruleId:String?=null,val ruleRevision:Long?=null,val observerNodeId:String?=null)
   fun read(input: JSONObject, commandId: String): Presentation {
     require(input.keys().asSequence().toSet() == setOf("title", "body", "reminderId", "revision", "generation", "interactionToken"))
     val id = input.getString("reminderId"); require(UUID.fromString(id).toString() == id && id!="00000000-0000-0000-0000-000000000000")
@@ -55,9 +67,11 @@ object NodeReminderActions {
   }
   }
   fun addButtons(context: Context, builder: NotificationCompat.Builder, presentation: Presentation) {
+    val scope=NodeNativeSession.read(context)?.nodeId
     for ((action,label) in listOf("acknowledge" to "OK", "snooze" to "Adiar 10 min")) {
       val intent = Intent(context, NodeReminderActionReceiver::class.java)
-        .setAction("com.aegis.node.reminder.$action.${presentation.id}.${presentation.generation}")
+        .setAction("com.aegis.node.reminder.${scope?:"unbound"}.$action.${presentation.id}.${presentation.generation}")
+        .putExtra("scopeNodeId",scope)
         .putExtra("reminderId",presentation.id).putExtra("revision",presentation.revision)
         .putExtra("generation",presentation.generation).putExtra("action",action)
       val pending=PendingIntent.getBroadcast(context,0,intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -65,6 +79,8 @@ object NodeReminderActions {
     }
   }
   fun enqueue(context: Context, intent: Intent): Boolean { synchronized(NodeNotificationGate.lock) {
+    val capturedScope=intent.getStringExtra("scopeNodeId")
+    if(capturedScope!=NodeNativeSession.read(context)?.nodeId)return false
     val id=intent.getStringExtra("reminderId") ?: return false
     val revision=intent.getLongExtra("revision",-1); val generation=intent.getLongExtra("generation",-1)
     val action=intent.getStringExtra("action") ?: return false
@@ -73,6 +89,8 @@ object NodeReminderActions {
       val db=store.writableDatabase
       db.beginTransaction()
       try {
+        val currentScope=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
+        if(currentScope!=capturedScope)return false
         db.delete("actions","created < ?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))
         val row=db.rawQuery("SELECT revision,generation,token,expires FROM presentations WHERE id=?",arrayOf(id)).use {
           if(!it.moveToFirst() || it.getLong(0)!=revision || it.getLong(1)!=generation || it.getLong(3)<System.currentTimeMillis()) return false
@@ -111,8 +129,10 @@ object NodeReminderActions {
     }
   }
   }
-  fun enqueueUi(context:Context,id:String,body:JSONObject):JSONObject {
+  fun enqueueUi(context:Context,id:String,body:JSONObject,expectedScope:String):JSONObject {
     synchronized(NodeNotificationGate.lock) {
+      require(NodeNativeSession.read(context)?.nodeId==expectedScope)
+      bindIdentity(context,expectedScope)
       require(UUID.fromString(id).toString()==id)
       val actionId=body.getString("actionId");require(UUID.fromString(actionId).toString()==actionId)
       val revision=body.getLong("expectedRevision");val generation=body.getLong("generation");val action=body.getString("action")
@@ -139,19 +159,27 @@ object NodeReminderActions {
     }}
     for((id,generation)in obsolete){withdraw(context,id,generation);discardAction(context,id)}
   }
+  fun withdrawScoped(context:Context,id:String,generation:Long,scope:String,discard:Boolean=false) { synchronized(NodeNotificationGate.lock) {
+    if(NodeNativeSession.read(context)?.nodeId!=scope)return
+    withdraw(context,id,generation)
+    if(discard)discardAction(context,id)
+  } }
   fun discardAction(context:Context,id:String) {Store(context).use{it.writableDatabase.delete("actions","reminderId=?",arrayOf(id))}}
   fun reconcilePresentations(context:Context) {
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return
     val pendingEvents=NodeGeofences.pendingOccurrences(context)
     val items=mutableListOf<JSONObject>()
     Store(context).use{store->store.readableDatabase.rawQuery("SELECT id,revision,generation FROM presentations WHERE expires>?",arrayOf(System.currentTimeMillis().toString())).use{
       while(it.moveToNext())if(it.getString(0) !in pendingEvents)items.add(JSONObject().put("reminderId",it.getString(0)).put("revision",it.getLong(1)).put("generation",it.getLong(2)))
     }}
     for(batch in items.chunked(100)) {
-      val response=NodeNativeSession.call(context,"POST","/api/nodes/reminders/reconcile",JSONObject().put("items",org.json.JSONArray(batch)))
-      for(item in response.getJSONArray("withdraw").objects())withdraw(context,item.getString("reminderId"),item.getLong("generation"))
+      val response=NodeNativeSession.call(context,"POST","/api/nodes/reminders/reconcile",JSONObject().put("items",org.json.JSONArray(batch)),expectedScope=scope)
+      for(item in response.getJSONArray("withdraw").objects())withdrawScoped(context,item.getString("reminderId"),item.getLong("generation"),scope)
     }
   }
   fun flush(context: Context) {
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return
+    bindIdentity(context,scope)
     Store(context).use { store ->
       val db=store.writableDatabase
       db.delete("actions","created < ?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))
@@ -165,12 +193,12 @@ object NodeReminderActions {
         try {
           val tokenOnly=body.has("token")
           val path=if(tokenOnly) "/api/reminder-actions/$id" else "/api/nodes/reminders/$id/actions"
-          val response=NodeNativeSession.call(context,"POST",path,body,tokenOnly)
+          val response=NodeNativeSession.call(context,"POST",path,body,tokenOnly,expectedScope=scope)
           // A snooze response already names the next generation. Withdraw only the presentation acted on.
-          withdraw(context,id,body.getLong("generation"))
+          withdrawScoped(context,id,body.getLong("generation"),scope)
           db.delete("actions","actionId=?",arrayOf(body.getString("actionId")))
         } catch(error:NodeNativeSession.HttpFailure) {
-          if(error.status in setOf(400,401,403,404,410)) db.delete("actions","actionId=?",arrayOf(body.getString("actionId"))) else throw error
+          if(error.status in setOf(400,401,403,404,409,410)) db.delete("actions","actionId=?",arrayOf(body.getString("actionId"))) else throw error
         }
       }
       db.rawQuery("SELECT COUNT(*) FROM actions",null).use{it.moveToFirst();if(it.getInt(0)==0)NotificationManagerCompat.from(context).cancel("aegis-action-pending",709)}

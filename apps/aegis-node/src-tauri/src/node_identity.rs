@@ -69,6 +69,23 @@ pub(crate) struct Record {
     node: Option<NodeView>,
     revoked: bool,
 }
+impl Record {
+    pub(crate) fn scope_enabled(&self, origin: &str) -> Result<bool, String> {
+        Ok(self.scope_id(origin)?.is_some() && self.node.as_ref().is_some_and(|node| node.enabled))
+    }
+    pub(crate) fn scope_id(&self, origin: &str) -> Result<Option<String>, String> {
+        if !self.origin.is_empty() && self.origin != origin {
+            return Err("A identidade pertence a outro backend.".into());
+        }
+        Ok(
+            if self.revoked || self.pending.is_some() || self.credential.is_none() {
+                None
+            } else {
+                self.node.as_ref().map(|node| node.id.clone())
+            },
+        )
+    }
+}
 pub(crate) trait Vault {
     fn load(&self) -> Result<Option<Record>, String>;
     fn save(&self, record: &Record) -> Result<(), String>;
@@ -145,7 +162,13 @@ impl<V: Vault, A: Api> Identity<V, A> {
     }
     fn failure(&self, record: &mut Record, error: ApiError) -> Result<IdentityStatus, String> {
         let state = match error.code.as_str() {
-            "node_disabled" => "disabled",
+            "node_disabled" => {
+                if let Some(node) = record.node.as_mut() {
+                    node.enabled = false;
+                    self.vault.save(record)?;
+                }
+                "disabled"
+            }
             "node_revoked" | "node_authentication_required" => {
                 // Replace the OS entry: do not keep the rejected credential in a local cache.
                 *record = Record {
@@ -594,6 +617,32 @@ mod tests {
             receive_reminders: true,
             capabilities: Vec::new(),
         }
+    }
+    #[test]
+    fn native_scope_keeps_disabled_identity_and_rejects_revoked_or_different_origin() {
+        let mut record = Record {
+            origin: "https://fixture.example".into(),
+            credential: Some("disposable-test-credential".into()),
+            node: Some(node()),
+            ..Record::default()
+        };
+        let id = record.node.as_ref().unwrap().id.clone();
+        assert_eq!(
+            record.scope_id("https://fixture.example").unwrap(),
+            Some(id.clone())
+        );
+        record.node.as_mut().unwrap().enabled = false;
+        assert!(!record.scope_enabled("https://fixture.example").unwrap());
+        assert_eq!(
+            record.scope_id("https://fixture.example").unwrap(),
+            Some(id)
+        );
+        assert!(record.scope_id("https://other.example").is_err());
+        record.revoked = true;
+        assert_eq!(record.scope_id("https://fixture.example").unwrap(), None);
+        record.revoked = false;
+        record.credential = None;
+        assert_eq!(record.scope_id("https://fixture.example").unwrap(), None);
     }
     impl Api for FakeApi {
         async fn pair(&self, _: &Pending) -> Result<Receipt, ApiError> {

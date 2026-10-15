@@ -4,7 +4,7 @@ import com.google.firebase.messaging.RemoteMessage
 class NodeMessagingService:FirebaseMessagingService() {
  override fun onNewToken(token:String) {
    val prefs=NodeNativeNotifications.prefs(this)
-   if(prefs.getString("token",null)!=token) { prefs.edit().putString("token",token).apply(); NodeBackgroundWork.enqueue(this) }
+   if(prefs.getString("token",null)!=token) { if(prefs.edit().putString("token",token).commit())NodeBackgroundWork.enqueue(this) else notificationLog("token_persist",IllegalStateException()) }
  }
  override fun onMessageReceived(message:RemoteMessage) {
   try {

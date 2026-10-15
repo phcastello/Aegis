@@ -62,6 +62,7 @@ class MainActivity : TauriActivity() {
       val prefs=NodeNativeNotifications.prefs(this)
       val origin=value.optString("origin")
       require(NodeNativeSession.validOrigin(origin,this))
+      if(id!=null) { NodeGeofenceRuntime.bindIdentity(this,id) }
       if(prefs.getString("nodeId",null)!=id || prefs.getString("origin",null)!=origin) check(prefs.edit().putString("nodeId",id).putString("origin",origin).commit())
       if(id!=null) { NodeBackgroundWork.enqueue(this); NodeBackgroundWork.scheduleRenewal(this) } else NodeGeofences.background{NodeGeofenceRuntime.deactivate(this)}
       "success"

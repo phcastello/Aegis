@@ -42,6 +42,14 @@ object NodeGeofences {
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
   if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
  } }
+ fun bindIdentity(context:Context,id:String) { synchronized(applyGate) {
+  val previous=prefs(context).getString("scopeNodeId",null) ?: manifest(context)?.optString("observerNodeId")
+  if(previous!=id) {
+   Store(context).use{it.writableDatabase.delete("events",null,null)}
+   NodeNativeNotifications.prefs(context).edit().remove("lastObservation").remove("observationPending").commit()
+  }
+  check(prefs(context).edit().putString("scopeNodeId",id).commit())
+ } }
  private fun manifest(context:Context):JSONObject?=prefs(context).getString("manifest",null)?.let { JSONObject(it) }
  private fun stamp(text:String):Long=java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli()
  fun reconcile(context:Context) { synchronized(manifestGate) {
@@ -52,7 +60,7 @@ object NodeGeofences {
   require(expiry>now && expiry<=now+TimeUnit.DAYS.toMillis(7)+60000)
   val old=manifest(context)
   if(old!=null && stamp(current.getString("generatedAt"))<stamp(old.getString("generatedAt")))return
-  synchronized(applyGate){check(prefs(context).edit().putString("manifest",current.toString()).commit())}
+  synchronized(applyGate){if(NodeNativeSession.read(context)?.nodeId!=session.nodeId)return;check(prefs(context).edit().putString("manifest",current.toString()).commit())}
   val revision=current.getString("revision")
   val rules=current.getJSONArray("rules")
   NodeReminderActions.reconcileRules(context,rules.objects())
@@ -163,11 +171,13 @@ object NodeGeofences {
   NodeNativeSession.call(context,"POST","/api/nodes/geofences/sync",JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules))
  }
  @Synchronized fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true) {
-  if(NodeNativeSession.read(context)==null)return
-  val value=manifest(context) ?: return; val now=System.currentTimeMillis()
+  val observer=NodeNativeSession.read(context)?.nodeId ?: return
+  val value=manifest(context) ?: return
+  if(value.optString("observerNodeId")!=observer)return
+   val now=System.currentTimeMillis()
   if(prefs(context).getBoolean("needsInstall",true)||prefs(context).getString("installedRevision",null)!=value.getString("revision"))return
   if(stamp(value.getString("leaseUntil"))<=now || now-observation.capturedAt !in 0..300000) return
-  val rules=activeRules(value,now)
+  val rules=activeRules(value,now).filter{prefs(context).getLong("ruleRevision:${it.getString("id")}",-1)!=it.getLong("revision") || !prefs(context).getBoolean("completed:${it.getString("id")}",false)}
   var confirm=false
   var needsSync=false
   var retireRegions=false
@@ -185,7 +195,7 @@ object NodeGeofences {
     if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {prefs(context).edit().putBoolean("armed:$id",true).commit();needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
      synchronized(applyGate){
-      if(manifest(context)?.optString("revision")!=value.getString("revision"))return
+      if(manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return
       needsSync=true
       NodeLocation.queueTransition(context,observation)
       if(createOccurrence(context,rule,observation.capturedAt)) {
@@ -197,7 +207,7 @@ object NodeGeofences {
    }
   }
   if(confirm && allowConfirmation) {
-   val work=OneTimeWorkRequestBuilder<NodeGeoConfirmWorker>().setInitialDelay(30,TimeUnit.SECONDS).build()
+   val work=OneTimeWorkRequestBuilder<NodeGeoConfirmWorker>().setInitialDelay(30,TimeUnit.SECONDS).setInputData(workDataOf("attempt" to 1,"deadline" to (now+90000))).build()
    WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-confirm",ExistingWorkPolicy.KEEP,work)
   }
   if(needsSync) {
@@ -213,6 +223,18 @@ object NodeGeofences {
    NodeBackgroundWork.enqueue(context)
   }
  }
+ fun hasConsumers(context:Context):Boolean {
+  val current=manifest(context) ?: return false
+  if(NodeNativeSession.read(context)?.nodeId!=current.optString("observerNodeId") || stamp(current.getString("leaseUntil"))<=System.currentTimeMillis() || prefs(context).getBoolean("needsInstall",true))return false
+  return activeRules(current).any{prefs(context).getLong("ruleRevision:${it.getString("id")}",-1)!=it.getLong("revision") || !prefs(context).getBoolean("completed:${it.getString("id")}",false)}
+ }
+ fun confirmationPending(context:Context):Boolean {
+  val current=manifest(context) ?: return false
+  return activeRules(current).flatMap{it.getJSONArray("placeIds").strings()}.distinct().any {id->
+   val state=prefs(context).getString("state:$id",null)?.let{JSONObject(it)}
+   state!=null && state.optString("candidate","unknown")!="unknown"
+  }
+ }
  private fun createOccurrence(context:Context,rule:JSONObject,capturedAt:Long):Boolean {
   Store(context).use { store ->
    val db=store.writableDatabase;db.beginTransaction()
@@ -224,7 +246,7 @@ object NodeGeofences {
     val eventId=UUID.randomUUID().toString();val occurrenceId=UUID.randomUUID().toString()
     db.insertOrThrow("events",null,ContentValues().apply {
      put("eventId",eventId);put("occurrenceId",occurrenceId);put("ruleId",rule.getString("id"));put("ruleRevision",rule.getLong("revision"))
-     put("transition",rule.getString("transition"));put("occurredAt",Instant.ofEpochMilli(capturedAt).toString());put("sequence",sequence);put("payload",rule.toString())
+     put("transition",rule.getString("transition"));put("occurredAt",Instant.ofEpochMilli(capturedAt).toString());put("sequence",sequence);put("payload",JSONObject(rule.toString()).put("observerNodeId",NodeNativeSession.read(context)?.nodeId).toString())
     })
     db.setTransactionSuccessful()
    }finally{db.endTransaction()}
@@ -241,13 +263,14 @@ object NodeGeofences {
    }
    for((eventId,id,rule) in rows) {
     val at=stamp(rule.getString("occurredAt"));val now=System.currentTimeMillis()
-    val result=if(now-at<=300000) NodeNativeNotifications.show(context,eventId,Instant.ofEpochMilli(at+300000).toString(),"Aegis",rule.getString("text"),NodeReminderActions.Presentation(id,1,1,null,eventId,rule.getString("id"),rule.getLong("revision"))) else NodeNotificationResult("expired")
+    val result=if(now-at<=300000) NodeNativeNotifications.show(context,eventId,Instant.ofEpochMilli(at+300000).toString(),"Aegis",rule.getString("text"),NodeReminderActions.Presentation(id,1,1,null,eventId,rule.getString("id"),rule.getLong("revision"),rule.optString("observerNodeId").takeIf{it.isNotEmpty()})) else NodeNotificationResult("expired")
     db.update("events",ContentValues().apply {put("postResult",result.status);if(result.status in setOf("success","duplicate")) put("postedAt",Instant.now().toString())},"eventId=?",arrayOf(eventId))
    }
   }
  }
  fun pendingOccurrences(context:Context):Set<String> = Store(context).use{store->store.readableDatabase.rawQuery("SELECT occurrenceId FROM events",null).use{cursor->val result=mutableSetOf<String>();while(cursor.moveToNext())result.add(cursor.getString(0));result}}
  fun flushEvents(context:Context) {
+  val scope=NodeNativeSession.read(context)?.nodeId ?: return
   finishLocalPosts(context)
   Store(context).use { store ->
    val db=store.writableDatabase;val events=mutableListOf<JSONObject>()
@@ -256,15 +279,14 @@ object NodeGeofences {
    }
    for(event in events) {
     try {
-     val response=NodeNativeSession.call(context,"POST","/api/nodes/geofences/events",event)
+     val response=NodeNativeSession.call(context,"POST","/api/nodes/geofences/events",event,expectedScope=scope)
      if(response.optString("status") in setOf("superseded")) {
-      NodeReminderActions.withdraw(context,event.getString("occurrenceId"),1)
-      NodeReminderActions.discardAction(context,event.getString("occurrenceId"))
+      NodeReminderActions.withdrawScoped(context,event.getString("occurrenceId"),1,scope,true)
      }
      db.delete("events","eventId=?",arrayOf(event.getString("eventId")))
     }
     catch(error:NodeNativeSession.HttpFailure){if(error.status in setOf(400,403,404,409,410)) {
-      NodeReminderActions.withdraw(context,event.getString("occurrenceId"),1);NodeReminderActions.discardAction(context,event.getString("occurrenceId"));db.delete("events","eventId=?",arrayOf(event.getString("eventId")))
+      NodeReminderActions.withdrawScoped(context,event.getString("occurrenceId"),1,scope,true);db.delete("events","eventId=?",arrayOf(event.getString("eventId")))
      }else throw error}
    }
   }
@@ -277,6 +299,7 @@ object NodeGeofences {
   if(NodeNativeSession.read(context)==null){clear(context);return}
   prefs(context).edit().putBoolean("needsInstall",true).commit()
   val current=manifest(context)
+  if(current!=null && current.optString("observerNodeId")!=NodeNativeSession.read(context)?.nodeId){clear(context);return}
   if(current!=null && stamp(current.getString("leaseUntil"))>System.currentTimeMillis()) try{install(context,current)}catch(_:Exception){}
   NodeBackgroundWork.enqueue(context)
  }
@@ -299,9 +322,17 @@ class NodeGeofenceReceiver:BroadcastReceiver() {
 }
 class NodeGeoConfirmWorker(context:Context,params:WorkerParameters):Worker(context,params) {
  override fun doWork():Result=try {
-  val observation=NodeLocation.current(applicationContext,upload=false,fresh=true)
-  if(observation.optString("status")=="available")NodeGeofenceRuntime.observe(applicationContext,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,false)
-  Result.success()
+  val deadline=inputData.getLong("deadline",0);val attempt=inputData.getInt("attempt",1)
+  val remaining=deadline-System.currentTimeMillis()
+  if(remaining<=0 || attempt !in 1..2 || !NodeGeofences.hasConsumers(applicationContext))Result.success() else {
+   val observation=NodeLocation.current(applicationContext,upload=false,fresh=true,durationMillis=minOf(15000,remaining))
+   if(observation.optString("status")=="available")NodeGeofenceRuntime.observe(applicationContext,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,false)
+   if(NodeGeoEngine.canConfirmAgain(attempt,System.currentTimeMillis(),deadline,NodeGeofences.confirmationPending(applicationContext))) {
+    val next=OneTimeWorkRequestBuilder<NodeGeoConfirmWorker>().setInitialDelay(30,TimeUnit.SECONDS).setInputData(workDataOf("attempt" to (attempt+1),"deadline" to deadline)).build()
+    WorkManager.getInstance(applicationContext).enqueueUniqueWork("aegis-geofence-confirm",ExistingWorkPolicy.APPEND_OR_REPLACE,next)
+   }
+   Result.success()
+  }
  }catch(_:Exception){Result.success()}
 }
 class NodeGeofenceRestoreReceiver:BroadcastReceiver() {

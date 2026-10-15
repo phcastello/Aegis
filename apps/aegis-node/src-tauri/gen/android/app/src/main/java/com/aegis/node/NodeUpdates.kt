@@ -15,6 +15,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
 
 /** Only files created by this adapter are cleaned. Browser Downloads are never scanned. */
 object NodeUpdates {
@@ -49,15 +50,21 @@ object NodeUpdates {
   }
   verify(activity,target,current,version,versionCode)
   if(Build.VERSION.SDK_INT>=26&&!activity.packageManager.canRequestPackageInstalls()) {
-   activity.runOnUiThread{activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${activity.packageName}")))}
+   handoff(activity,Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${activity.packageName}")))
    return JSONObject().put("status","permission_required").put("message","Permita que a Aegis abra o instalador e toque em Atualizar novamente.")
   }
   val uri=FileProvider.getUriForFile(activity,"${activity.packageName}.updates",target)
   val intent=Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive")
    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
   intent.clipData=ClipData.newRawUri("Aegis update",uri)
-  activity.runOnUiThread{activity.startActivity(intent)}
+  handoff(activity,intent)
   return JSONObject().put("status","installer_opened")
+ }
+ private fun handoff(activity:Activity,intent:Intent) {
+  val finished=CountDownLatch(1)
+  var accepted=false
+  activity.runOnUiThread{try{activity.startActivity(intent);accepted=true}catch(_:Exception){}finally{finished.countDown()}}
+  check(finished.await(10,TimeUnit.SECONDS) && accepted)
  }
  private fun verify(context:Context,file:File,current:PackageInfo,version:String,versionCode:Long) {
   val archive=context.packageManager.getPackageArchiveInfo(file.absolutePath,flags()) ?: error("Invalid archive")

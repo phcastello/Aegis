@@ -25,7 +25,7 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
   override fun doWork(): Result = try {
     val prefs = NodeNativeNotifications.prefs(applicationContext)
     val session = NodeNativeSession.read(applicationContext)
-    if (session == null) { NodeGeofenceRuntime.deactivate(applicationContext); Result.success() }
+    if (session == null) { NodeGeofenceRuntime.deactivate(applicationContext);WorkManager.getInstance(applicationContext).cancelUniqueWork("aegis-native-renewal"); Result.success() }
     else {
       var retry=false
       // Independent channels: a location/provider error cannot strand temporal actions.

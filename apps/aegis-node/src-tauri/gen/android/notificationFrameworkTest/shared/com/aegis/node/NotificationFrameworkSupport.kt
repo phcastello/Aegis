@@ -36,19 +36,24 @@ internal fun exerciseReminderNotificationActions(render:(String)->org.json.JSONO
     org.junit.Assert.assertEquals("expired",render(notify(withdrawn,1)).getString("status"))
     org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$withdrawn:1"})
     org.junit.Assert.assertEquals("success",render(notify(id,1)).getString("status"))
-    val first=manager.activeNotifications.single{it.tag=="reminder:$id:1"}.notification
+    val first=awaitFrameworkReminder(manager,id,1).notification
     org.junit.Assert.assertEquals(listOf("OK","Adiar 10 min"),first.actions.map{it.title.toString()})
     org.junit.Assert.assertNotNull(first.contentIntent)
     org.junit.Assert.assertEquals("success",render(notify(id,2)).getString("status"))
     org.junit.Assert.assertEquals("success",render(withdraw(id,1)).getString("status"))
-    org.junit.Assert.assertTrue(manager.activeNotifications.any{it.tag=="reminder:$id:2"})
-    org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$id:1"})
+    awaitFrameworkReminder(manager,id,2)
+    awaitFrameworkReminderWithdrawal(manager,id,1)
     // A stale button cannot acknowledge the new generation. The receiver is native, no WebView.
     first.actions[0].actionIntent.send()
     android.os.SystemClock.sleep(200)
     val database=android.database.sqlite.SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY)
     database.use{db->db.rawQuery("SELECT COUNT(*) FROM actions WHERE reminderId=?",arrayOf(id)).use{it.moveToFirst();org.junit.Assert.assertEquals(0,it.getInt(0))}}
-    val current=manager.activeNotifications.single{it.tag=="reminder:$id:2"}.notification
+    // The same occurrence/revision/generation from another installation scope is invalid.
+    context.sendBroadcast(android.content.Intent().setClassName(context.packageName,"com.aegis.node.NodeReminderActionReceiver")
+      .putExtra("reminderId",id).putExtra("revision",2L).putExtra("generation",2L).putExtra("action","acknowledge").putExtra("scopeNodeId",java.util.UUID.randomUUID().toString()))
+    android.os.SystemClock.sleep(200)
+    android.database.sqlite.SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT COUNT(*) FROM actions WHERE reminderId=?",arrayOf(id)).use{it.moveToFirst();org.junit.Assert.assertEquals(0,it.getInt(0))}}
+    val current=awaitFrameworkReminder(manager,id,2).notification
     current.actions[1].actionIntent.send()
     val deadline=android.os.SystemClock.elapsedRealtime()+5000
     var count=0
@@ -57,7 +62,7 @@ internal fun exerciseReminderNotificationActions(render:(String)->org.json.JSONO
       android.database.sqlite.SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT COUNT(*) FROM actions WHERE reminderId=? AND generation=2 AND action='snooze'",arrayOf(id)).use{it.moveToFirst();count=it.getInt(0)}}
     }
     org.junit.Assert.assertEquals(1,count)
-    org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$id:2"})
+    awaitFrameworkReminderWithdrawal(manager,id,2)
     org.junit.Assert.assertEquals("expired",render(notify(id,2)).getString("status"))
     org.junit.Assert.assertEquals("success",render(notify(id,3)).getString("status"))
   }finally{
@@ -70,4 +75,16 @@ internal fun exerciseReminderNotificationActions(render:(String)->org.json.JSONO
       }
     }
   }
+}
+
+/** NotificationManager accepts IPC before its asynchronous record/cancellation is visible. */
+internal fun awaitFrameworkReminder(manager:NotificationManager,id:String,generation:Int):android.service.notification.StatusBarNotification {
+ val deadline=android.os.SystemClock.elapsedRealtime()+5000
+ while(manager.activeNotifications.none{it.tag=="reminder:$id:$generation"} && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+ return manager.activeNotifications.single{it.tag=="reminder:$id:$generation"}
+}
+internal fun awaitFrameworkReminderWithdrawal(manager:NotificationManager,id:String,generation:Int) {
+ val deadline=android.os.SystemClock.elapsedRealtime()+5000
+ while(manager.activeNotifications.any{it.tag=="reminder:$id:$generation"} && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+ org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$id:$generation"})
 }

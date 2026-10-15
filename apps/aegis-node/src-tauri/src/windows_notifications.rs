@@ -23,11 +23,65 @@ fn db(app: &AppHandle) -> Result<Connection, ()> {
     db.busy_timeout(std::time::Duration::from_secs(2))
         .map_err(|_| ())?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS withdrawals(id TEXT PRIMARY KEY,generation INTEGER NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS presentations(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,generation INTEGER NOT NULL,token TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY,reminderId TEXT NOT NULL,revision INTEGER NOT NULL,generation INTEGER NOT NULL,action TEXT NOT NULL,token TEXT NOT NULL,created INTEGER NOT NULL,queued INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,expires INTEGER NOT NULL);").map_err(|_|())?;
     Ok(db)
+}
+fn bind_scope(app: &AppHandle) -> Result<Option<String>, ()> {
+    let scope = crate::node_vault::scope_id().map_err(|_| ())?;
+    let _gate = PRESENTATION_GATE.lock().map_err(|_| ())?;
+    let mut database = db(app)?;
+    if let Some(id) = scope.as_ref() {
+        let previous: Option<String> = database
+            .query_row("SELECT value FROM metadata WHERE key='scopeId'", [], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(|_| ())?;
+        if previous.as_ref().is_some_and(|old| old != id) {
+            let mut query = database
+                .prepare("SELECT id FROM presentations")
+                .map_err(|_| ())?;
+            let reminders = query
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|_| ())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| ())?;
+            drop(query);
+            for reminder in reminders {
+                if let Ok(id) = uuid::Uuid::parse_str(&reminder) {
+                    let _ = ToastNotificationManager::History().and_then(|h| {
+                        h.RemoveGroupWithId(
+                            &HSTRING::from(group(id)),
+                            &HSTRING::from(app.config().identifier.as_str()),
+                        )
+                    });
+                }
+            }
+            let tx = database.transaction().map_err(|_| ())?;
+            tx.execute_batch(
+                "DELETE FROM actions;DELETE FROM presentations;DELETE FROM withdrawals;",
+            )
+            .map_err(|_| ())?;
+            tx.execute(
+                "INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",
+                params![id],
+            )
+            .map_err(|_| ())?;
+            tx.commit().map_err(|_| ())?;
+        } else if previous.is_none() {
+            database
+                .execute(
+                    "INSERT INTO metadata(key,value) VALUES('scopeId',?)",
+                    params![id],
+                )
+                .map_err(|_| ())?;
+        }
+    }
+    Ok(scope)
 }
 fn xml(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -59,6 +113,9 @@ pub fn supported(app: &AppHandle) -> bool {
     register().is_ok() && db(app).is_ok()
 }
 pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResult {
+    if bind_scope(app).ok().flatten().is_none() {
+        return NotificationResult::new(NotificationStatus::Failed);
+    }
     let result = (|| -> Result<NotificationStatus, ()> {
         if command.capability == "reminder.withdraw" {
             let input: ReminderWithdrawInput =
@@ -187,6 +244,9 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
 }
 fn withdraw(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(), ()> {
     let _presentation = PRESENTATION_GATE.lock().map_err(|_| ())?;
+    withdraw_locked(app, id, generation)
+}
+fn withdraw_locked(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(), ()> {
     let database = db(app)?;
     database.execute("INSERT INTO withdrawals(id,generation,expires) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET generation=MAX(generation,excluded.generation),expires=MAX(expires,excluded.expires)",params![id.to_string(),generation,chrono::Utc::now().timestamp()+604800]).map_err(|_|())?;
     ToastNotificationManager::History()
@@ -224,6 +284,12 @@ fn withdraw(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(), ()> 
     Ok(())
 }
 pub fn activate(app: &AppHandle, args: &[String]) {
+    let Ok(Some(scope)) = bind_scope(app) else {
+        return;
+    };
+    let Ok(_gate) = PRESENTATION_GATE.lock() else {
+        return;
+    };
     let uri = args
         .iter()
         .find(|v| v.starts_with("aegis-reminder://action/"));
@@ -235,6 +301,16 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         return;
     };
     let Ok(mut database) = db(app) else { return };
+    if database
+        .query_row("SELECT value FROM metadata WHERE key='scopeId'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+        .as_ref()
+        != Some(&scope)
+    {
+        return;
+    }
     let Ok(tx) = database.transaction() else {
         return;
     };
@@ -307,7 +383,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         return;
     }
     drop(database);
-    let _ = withdraw(
+    let _ = withdraw_locked(
         app,
         uuid::Uuid::parse_str(&reminder_id).unwrap(),
         generation,
@@ -316,6 +392,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         .notify_one();
 }
 async fn flush(app: &AppHandle) -> Result<bool, ()> {
+    let scope = bind_scope(app)?;
     if !app
         .state::<crate::node_commands::NodeRuntime>()
         .has_identity()
@@ -348,7 +425,19 @@ async fn flush(app: &AppHandle) -> Result<bool, ()> {
             .map_err(|_| ())?;
         rows
     };
+    if scope.is_some() && !crate::node_vault::scope_enabled().map_err(|_| ())? {
+        return Ok(false);
+    }
     for (id, reminder, revision, generation, action) in rows {
+        let current_scope = bind_scope(app)?;
+        if current_scope != scope {
+            if current_scope.is_none() {
+                db(app)?
+                    .execute("DELETE FROM actions WHERE queued=1", [])
+                    .map_err(|_| ())?;
+            }
+            return Ok(false);
+        }
         if !app
             .state::<crate::node_commands::NodeRuntime>()
             .has_identity()
@@ -359,21 +448,23 @@ async fn flush(app: &AppHandle) -> Result<bool, ()> {
                 .map_err(|_| ())?;
             return Ok(false);
         }
-        match app.state::<crate::node_commands::NodeRuntime>().domain_action_call(format!("/reminders/{reminder}/actions"),json!({"actionId":id,"expectedRevision":revision,"generation":generation,"action":action,"snoozeMinutes":10})).await {
+        match app.state::<crate::node_commands::NodeRuntime>().domain_action_call(format!("/reminders/{reminder}/actions"),json!({"actionId":id,"expectedRevision":revision,"generation":generation,"action":action,"snoozeMinutes":10}),scope.as_deref().ok_or(())?).await {
             Ok(_) => {},
             Err((_, true)) => return Err(()),
             // An authoritative rejection is terminal for this immutable ActionId/revision.
             // Dropping it records no acknowledgement and never rewrites server state.
-            Err((_, false)) => {},
+            Err((_, false)) => {
+                if crate::node_vault::scope_id().map_err(|_|())?==scope && !crate::node_vault::scope_enabled().map_err(|_|())? { return Ok(false); }
+            },
         }
         db(app)?
             .execute("DELETE FROM actions WHERE id=?", params![id])
             .map_err(|_| ())?;
     }
-    reconcile_presentations(app).await?;
+    reconcile_presentations(app, scope.as_deref().ok_or(())?).await?;
     Ok(false)
 }
-async fn reconcile_presentations(app: &AppHandle) -> Result<(), ()> {
+async fn reconcile_presentations(app: &AppHandle, expected_scope: &str) -> Result<(), ()> {
     let rows = {
         let database = db(app)?;
         let mut query = database
@@ -385,17 +476,27 @@ async fn reconcile_presentations(app: &AppHandle) -> Result<(), ()> {
     for batch in rows.chunks(100) {
         let result = app
             .state::<crate::node_commands::NodeRuntime>()
-            .domain_call(
-                reqwest::Method::POST,
+            .domain_action_call(
                 "/reminders/reconcile".into(),
                 json!({"items":batch}),
+                expected_scope,
             )
             .await
             .map_err(|_| ())?;
         for item in result["withdraw"].as_array().ok_or(())? {
             let id =
                 uuid::Uuid::parse_str(item["reminderId"].as_str().ok_or(())?).map_err(|_| ())?;
-            withdraw(app, id, item["generation"].as_u64().ok_or(())?)?;
+            let _gate = PRESENTATION_GATE.lock().map_err(|_| ())?;
+            if db(app)?
+                .query_row("SELECT value FROM metadata WHERE key='scopeId'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .ok()
+                .as_deref()
+                == Some(expected_scope)
+            {
+                withdraw_locked(app, id, item["generation"].as_u64().ok_or(())?)?;
+            }
         }
     }
     Ok(())
@@ -462,7 +563,22 @@ pub fn granted(app: &AppHandle) -> bool {
     .is_ok_and(|s| s == windows::UI::Notifications::NotificationSetting::Enabled)
 }
 
-pub fn enqueue_ui(app: &AppHandle, id: &str, body: &serde_json::Value) -> Result<(), String> {
+pub fn enqueue_ui(
+    app: &AppHandle,
+    id: &str,
+    body: &serde_json::Value,
+    expected_scope: &str,
+) -> Result<(), String> {
+    if bind_scope(app)
+        .map_err(|_| "Identidade indisponível.")?
+        .as_deref()
+        != Some(expected_scope)
+    {
+        return Err("A identidade mudou. Confira o lembrete antes de tentar novamente.".into());
+    }
+    let _gate = PRESENTATION_GATE
+        .lock()
+        .map_err(|_| "Identidade indisponível.")?;
     let invalid = || "Não foi possível guardar esta ação no aparelho.".to_string();
     let reminder = uuid::Uuid::parse_str(id).map_err(|_| invalid())?;
     let action_id = body["actionId"]
@@ -487,6 +603,16 @@ pub fn enqueue_ui(app: &AppHandle, id: &str, body: &serde_json::Value) -> Result
         return Err(invalid());
     }
     let mut database = db(app).map_err(|_| invalid())?;
+    if database
+        .query_row("SELECT value FROM metadata WHERE key='scopeId'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+        .as_deref()
+        != Some(expected_scope)
+    {
+        return Err(invalid());
+    }
     let tx = database.transaction().map_err(|_| invalid())?;
     let now = chrono::Utc::now().timestamp();
     tx.execute("DELETE FROM actions WHERE created<?", params![now - 604800])
@@ -513,7 +639,7 @@ pub fn enqueue_ui(app: &AppHandle, id: &str, body: &serde_json::Value) -> Result
     }
     tx.commit().map_err(|_| invalid())?;
     drop(database);
-    withdraw(app, reminder, generation).map_err(|_| invalid())?;
+    withdraw_locked(app, reminder, generation).map_err(|_| invalid())?;
     WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
         .notify_one();
     Ok(())
