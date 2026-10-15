@@ -28,8 +28,14 @@ export function synchronize(write = false) {
   const nextCargoLock = cargoLock.replace(/(name = "aegis-node"\nversion = )"[^"]+"/, `$1"${version}"`);
   const npmLockPath = new URL('package-lock.json', root);
   const npmLock = JSON.parse(readFileSync(npmLockPath, 'utf8'));
+  const companionRoots = ['../../packages/aegis-client/', '../../frontend/aegis-pwa/'].map(path => new URL(path, root));
+  const companions = companionRoots.map(directory => {
+    const manifestPath = new URL('package.json', directory), lockPath = new URL('package-lock.json', directory);
+    return { manifestPath, lockPath, manifest: JSON.parse(readFileSync(manifestPath, 'utf8')), lock: JSON.parse(readFileSync(lockPath, 'utf8')) };
+  });
   const valid = config.version === '../package.json' && config.bundle.android.versionCode === versionCode &&
-    cargo === nextCargo && cargoLock === nextCargoLock && npmLock.version === version && npmLock.packages[''].version === version;
+    cargo === nextCargo && cargoLock === nextCargoLock && npmLock.version === version && npmLock.packages[''].version === version &&
+    companions.every(({ manifest, lock }) => manifest.version === version && lock.version === version && lock.packages[''].version === version);
   if (write) {
     config.version = '../package.json';
     config.bundle.android = { ...config.bundle.android, versionCode };
@@ -38,6 +44,11 @@ export function synchronize(write = false) {
     writeFileSync(cargoPath, nextCargo);
     writeFileSync(cargoLockPath, nextCargoLock);
     writeFileSync(npmLockPath, JSON.stringify(npmLock, null, 2) + '\n');
+    for (const { manifestPath, lockPath, manifest, lock } of companions) {
+      manifest.version = lock.version = lock.packages[''].version = version;
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+      writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+    }
   } else if (!valid) throw new Error('Version drift: run npm run version:sync.');
   return { version, versionCode };
 }

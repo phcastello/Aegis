@@ -7,6 +7,8 @@ test('Android codes increase across legacy previews, unstable channel, stable an
   const codes = versions.map(androidVersionCode);
   assert.deepEqual(codes, [...codes].sort((a, b) => a - b));
   assert.equal(androidVersionCode('0.7.0-stage.2'), 7000002);
+  assert.equal(androidVersionCode('0.7.0-unstable.12'), 7000012);
+  assert.equal(androidVersionCode('0.7.0'), 7000999);
 });
 
 test('ambiguous, invalid and overflowing versions are rejected', () => {

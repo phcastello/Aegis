@@ -27,7 +27,7 @@ if (feedExists) {
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 gh(['release', 'create', tag, '--verify-tag', '--prerelease', '--title', `Aegis ${next.version}`,
-  '--notes', 'Preview v0.7.0. Windows: Setup.exe. Android: signed ARM64 APK. Android updates open the APK in your browser for system installation.',
+  '--notes', 'Candidata integrada v0.7.0 para aceite do proprietário. Android: APK ARM64 assinado; novos downloads no app usam cache privado e instalador do sistema. Windows: Setup.exe e updater assinado. Lembretes recorrentes, OK/adiamento, entrega por dispositivo e lugares/geofences. Consulte docs/v0.7.0-completion.md no commit da release para evidências e testes físicos pendentes. A tag estável v0.7.0 ainda não está autorizada.',
   'release-assets/Aegis-Windows-x86_64-Setup.exe', 'release-assets/Aegis-Windows-x86_64-Setup.exe.sig',
   'release-assets/Aegis-Android-arm64.apk', 'release-assets/latest.json']);
 if (!feedExists) {

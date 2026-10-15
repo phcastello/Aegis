@@ -1,12 +1,14 @@
-# Aegis v0.6.1 — "Yeah, I know."
+# Aegis v0.7.0 — preview integrada
 
-Aegis v0.6.1 refines conversational presence, contextual memory, casual memory search, integration recovery and full conversation history. It preserves the accepted v0.6.0 memory architecture and existing integrations. See the [v0.6.1 validation report](scripts/eval-results-v0.6.1.md).
+Aegis é uma assistente pessoal com modelos acessados por API. A candidata em preparação é **0.7.0-unstable.12** para **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
 
-v0.6.1 is the current stable line. v0.7.0 is in development: the new Tauri native client prioritizes Android and Windows, while the Web Client/PWA remains available. Stages 01 and 02 were accepted by the owner on both physical targets. Native installations can now be paired as persistent Aegis Nodes; [Stage 03 implementation and acceptance](docs/v0.7.0-stage03-node-identity-pairing.md).
+Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana de uso cotidiano do Stage 07 sem lembretes perdidos relatados. Isso não comprova todos os casos extremos físicos. A conclusão acrescenta séries/ocorrências, entrega por dispositivo, OK/adiamento, lugares contextuais e execução geográfica nativa Android. O Web Client/PWA continua disponível; esta versão não distribui aplicativos Linux, iOS ou macOS.
 
 ## Download Aegis
 
 Open **[GitHub Releases](https://github.com/phcastello/Aegis/releases)** and choose an Aegis native preview (`node-v…`). Native releases are prereleases during v0.7.0 development. If a preview has no installers yet, its signing/publishing setup is still pending; see the Stage 02 report.
+
+Arquivos oficiais: **Android: `Aegis-Android-arm64.apk`**; **Windows: `Aegis-Windows-x86_64-Setup.exe`**. Durante a validação da candidata, a última release publicada pode ser anterior à versão deste código; confira o número na página da release.
 
 ### Windows
 
@@ -25,13 +27,13 @@ The development installer does not yet have commercial Windows code signing, so 
 
 During v0.7.0 development, distribution is directly by APK, outside the Play Store. If you installed the Stage 01 debug APK, uninstall it once before installing the first release APK because they use different signing certificates. Later release APKs retain the same signing identity.
 
-After the first installation, the app checks for new previews and offers an update in its interface. The owner validated stage.2 → stage.3 on both platforms: Windows updates through Tauri; Android opens the matching APK for system installation. Android installation uses the system confirmation; the official Tauri updater currently supports desktop only. Stage 06 native notifications were physically accepted by the owner on Windows and Android, including Android background FCM. [Stage 07](docs/v0.7.0-stage07-native-reminder-delivery.md) delivers internal reminders through one eligible Node using live WebSocket or FCM. The Web Client keeps its legacy PWA/Web Push infrastructure.
+Depois da primeira instalação, a faixa de atualização informa a versão e permite adiar a decisão; Sobre também oferece verificação manual. Windows usa o updater assinado do Tauri, com download e instalação/reinício consentidos separadamente. Android usa um adaptador nativo: novos APKs ficam no cache privado da Aegis, são conferidos por pacote/versão/certificado e entregues ao instalador do sistema, que pede a confirmação normal. O updater oficial do Tauri não suporta Android. APKs antigos baixados pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos; remova-os manualmente uma única vez, se desejar.
 
-New v0.7.0 prereleases use `0.7.0-unstable.N` (independent of roadmap Stage numbers), beginning with `unstable.11` after `stage.10`. Windows uses normal updater ordering. The Android updater shipped in `stage.10` only accepts `stage.N`: download/install the first `unstable.11` APK from its versioned release once; identity and signing certificate remain the same, and subsequent `unstable.N` updates use the in-app link normally.
+Previews usam `0.7.0-unstable.N`, independente dos Stages. O updater Android antigo de `stage.10` aceita apenas `stage.N`: instale uma preview `unstable.N` assinada pela página de releases uma vez. Package, certificado e identidade do Node permanecem os mesmos; não desinstale uma instalação release para atualizar. Android versionCode da candidata é 7000012; o estável 0.7.0 reserva 7000999, mantendo a ordem crescente.
 
 ### Pair this installation as a Node
 
-Open **Dispositivos / Nodes** in the native app, choose an editable device name and enter a temporary pairing code. An active paired device can generate a code with **Adicionar dispositivo**. The chat remains available without pairing.
+Abra **Configurações → Dispositivos**, escolha o nome e informe um código temporário. Um dispositivo pareado pode gerar um código em **Adicionar dispositivo**. O chat continua disponível sem pareamento. Desativar é reversível; Remover invalida a identidade e retira o cadastro operacional, preservando o histórico dos lembretes. Um dispositivo removido precisa de novo pareamento.
 
 For the first device (or recovery after losing the last active Node), the server administrator generates a one-time code locally after deploying the Stage 03 backend and its migration:
 
@@ -41,6 +43,24 @@ docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll pairing-c
 ```
 
 The code expires after ten minutes. Enter it only on the intended device; keep it out of shared logs. Identity survives normal app restarts and updates. Rename, disable/re-enable and revoke are available in the same panel. Revocation requires new pairing; it is permanent. See [bootstrap, recovery and physical acceptance steps](docs/v0.7.0-stage03-node-identity-pairing.md).
+
+### Lembretes e lugares
+
+Lembretes pessoais usam **todos os dispositivos elegíveis** por padrão; a opção de destino único mantém a prioridade configurada. Cada destinatário possui seu resultado de entrega. Sessão conhecida ou token FCM não prova que o aparelho está acordado, nem que o usuário leu. OK reconhece somente a ocorrência; Adiar muda somente aquela apresentação, preservando a próxima data da série. As ações são globais e cópias offline são reconciliadas quando voltam. Sem rede, a ação fica pendente: não há promessa de adiamento pontual antes da confirmação.
+
+Séries diárias, semanais e mensais usam horário local e timezone IANA, com intervalo, dias selecionados e encerramento. Dia 31 pula meses sem esse dia; último dia é uma regra própria. Pausa/retomada não produz uma coleção de avisos vencidos. A janela de entrega temporal é de dez minutos; eventos geográficos antigos não geram distribuição após cinco minutos.
+
+Em Lugares, confirme o ponto e ajuste um ou vários círculos no mapa. Cômodos servem à localização fixa de Nodes e herdam contexto da propriedade; GPS não identifica entrada em cômodos. Escolha explicitamente o celular que informa a posição pessoal. Apelidos como “casa” podem representar várias residências e são resolvidos por contexto recente do celular; PC/RDP não muda a posição do usuário. Cada lembrete criado fixa seu lugar.
+
+Geofences Android precisam de localização em uso e, ao habilitar monitoramento, permissão de background. Recusar localização mantém chat e lembretes temporais. **Salvo** e **ativo no celular** são estados distintos. O Android pode notificar com o backend indisponível, usando a definição sincronizada; detecção depende dos serviços nativos, permissões e condições de localização. Force Stop, localização desligada ou falta total de conectividade podem impedir eventos. Uma regra offline tem validade renovável de até sete dias; cancelamento/removal não é instantâneo em aparelho offline. O teste de campo integrado permanece no checklist.
+
+### Mapas, busca e privacidade
+
+O editor carrega [Leaflet](https://leafletjs.com/) somente quando necessário. Tiles padrão: OpenStreetMap, com atribuição visível, cache normal do navegador e sem prefetch/download offline; respeite a [política de tiles](https://operations.osmfoundation.org/policies/tiles/). Busca explícita de endereço usa [Photon/Komoot](https://github.com/komoot/photon), cujo serviço público permite uso razoável, sem garantia de disponibilidade. Não há autocomplete nem busca em lote; o backend limita a uma consulta por segundo. Falhas de tiles/busca não apagam áreas salvas e não interrompem seu monitoramento nativo.
+
+Configuração opcional do operador: `PlaceMaps__TileUrl`, `PlaceMaps__Attribution`, `PlaceMaps__GeocoderProvider` (`photon` ou `nominatim-compatible`), `PlaceMaps__GeocoderUrl` e `PlaceMaps__GeocoderApiKey` (somente backend). URL vazia desabilita a busca; o mapa e a posição atual continuam disponíveis. Um endpoint Nominatim compatível deve ter contrato que permita este uso; o Nominatim público não é o padrão. Não são necessários cartão, compra de créditos ou chave privada no cliente.
+
+A busca transmite ao provedor somente o endereço digitado quando o usuário pede a consulta. Tiles revelam ao provedor a área visualizada. A Aegis guarda a última observação de posição, com idade/precisão/origem, e as áreas escolhidas; não guarda uma trilha contínua por padrão nem inclui coordenadas precisas em prompts/logs. Parâmetros contextuais testáveis ficam em `LocationContext__MaximumAgeSeconds` (900), `MaximumCityAccuracyMeters` (2000), `LocalResidenceMeters` (50000), `CandidateMarginMeters` (100000), `CandidateDistanceRatio` (3) e `RefreshTimeoutSeconds` (15), todos sob o prefixo `LocationContext__`.
 
 Version history:
 

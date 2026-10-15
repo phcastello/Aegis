@@ -34,7 +34,13 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet build backend/Aegis.sln
-      - run: dotnet test backend/Aegis.sln --no-build
+      - run: dotnet test backend/Aegis.sln --no-build --logger trx --results-directory artifacts/v0.7.0-completion/backend
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-Backend-Regression
+          path: artifacts/v0.7.0-completion/backend/*.trx
+          retention-days: 7
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -123,8 +129,20 @@ jobs:
           projectPath: apps/aegis-node
           args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - if: matrix.android == 'false'
+        name: Install the actual Windows NSIS package in the isolated runner
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe')
+          if ($installer.Count -ne 1) { throw 'Expected one Windows installer' }
+          $destination = Join-Path $env:RUNNER_TEMP 'aegis-installed'
+          $process = Start-Process -FilePath $installer[0].FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS failed with exit code $($process.ExitCode)" }
+          $executables = @(Get-ChildItem $destination -Filter '*.exe' | Where-Object Name -NotLike '*uninstall*')
+          if ($executables.Count -ne 1) { throw 'Installed executable missing or ambiguous' }
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "AEGIS_INSTALLED_EXE=$($executables[0].FullName)`n", [Text.UTF8Encoding]::new($false))
+      - if: matrix.android == 'false'
         name: Run real Windows WebView2 smoke test
-        run: node ../../packages/aegis-client/tests/windows-runtime.mjs src-tauri/target/x86_64-pc-windows-msvc/release/aegis-node.exe
+        run: node ../../packages/aegis-client/tests/windows-runtime.mjs "$AEGIS_INSTALLED_EXE"
       - if: matrix.android == 'false'
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -146,6 +164,35 @@ jobs:
       - if: matrix.android == 'false'
         name: Native HttpApi notification dispatch and Android push register refresh against real controllers
         run: node ../../scripts/node-transport-probe/native-http.mjs
+      - if: matrix.android == 'false'
+        name: Preserve the candidate executable for the idle comparison
+        run: cp src-tauri/target/x86_64-pc-windows-msvc/debug/aegis-node.exe "$RUNNER_TEMP/aegis-idle-after.exe"
+      - if: matrix.android == 'false'
+        name: Build the immutable accepted baseline for an equivalent native idle window
+        env:
+          AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
+          CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
+        run: |
+          git fetch origin 43650d1c2cf58a1fc188e2c33eae0af579eabcac --depth=1
+          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 43650d1c2cf58a1fc188e2c33eae0af579eabcac
+          npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/packages/aegis-client"
+          npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
+          cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
+          npm run tauri -- build --debug --no-bundle --target x86_64-pc-windows-msvc
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/debug/aegis-node.exe" "$RUNNER_TEMP/aegis-idle-before.exe"
+      - if: matrix.android == 'false'
+        name: Measure Windows native and WebView idle before (at least ten minutes)
+        run: node ../../packages/aegis-client/tests/windows-idle.mjs "$RUNNER_TEMP/aegis-idle-before.exe" before ../../artifacts/v0.7.0-completion/windows-idle-before.json 600
+      - if: matrix.android == 'false'
+        name: Measure Windows native and WebView idle after (at least ten minutes)
+        run: node ../../packages/aegis-client/tests/windows-idle.mjs "$RUNNER_TEMP/aegis-idle-after.exe" after ../../artifacts/v0.7.0-completion/windows-idle-after.json 600
+      - if: ${{ !cancelled() && matrix.android == 'false' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Aegis-Windows-Idle-Comparison
+          path: artifacts/v0.7.0-completion/windows-idle-*.json
+          if-no-files-found: warn
+          retention-days: 14
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
       - if: matrix.android == 'true'
