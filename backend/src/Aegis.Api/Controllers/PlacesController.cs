@@ -15,7 +15,9 @@ public sealed class PlacesController(IPlaceService places, PlaceMaps maps) : Con
     [HttpPut("{id:guid}")] public async Task<IActionResult> Update(Guid id, PlaceWrite request, CancellationToken ct) => Ok(await places.SaveAsync(id, request, ct));
     [HttpDelete("{id:guid}")] public async Task<IActionResult> Delete(Guid id, [FromQuery] int expectedRevision, CancellationToken ct) { await places.DeleteAsync(id, expectedRevision, ct); return NoContent(); }
     [HttpGet("config")] public IActionResult MapConfig() => Ok(maps.Configuration());
-    [HttpGet("search")] public async Task<IActionResult> Search([FromQuery] string query, CancellationToken ct) => Ok(await maps.SearchAsync(query, ct));
+    public sealed record SearchRequest(string Query);
+    [HttpPost("search"), RequestSizeLimit(2048)]
+    public async Task<IActionResult> Search([FromBody] SearchRequest request, CancellationToken ct) => Ok(await maps.SearchAsync(request.Query, ct));
 }
 
 [ApiController, Route("api/nodes/location"), Authorize(Policy = "NodeManagement"), ServiceFilter(typeof(NodeApiFilter)), RequestSizeLimit(4096)]

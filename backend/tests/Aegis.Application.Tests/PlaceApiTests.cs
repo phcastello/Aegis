@@ -22,6 +22,7 @@ namespace Aegis.Application.Tests;
 
 // TestServer executes production authorization, controllers and domain services.
 // No native credentials belonging to the owner, public probes or external map services.
+[Collection("Place map provider")]
 public sealed class PlaceApiTests
 {
     private sealed class Clock : TimeProvider
@@ -35,6 +36,16 @@ public sealed class PlaceApiTests
         public Task<string> SendAsync(Guid nodeId, string capability, object input, CancellationToken ct = default)
         { LastNode = nodeId; LastCapability = capability; return Task.FromResult("unavailable"); }
     }
+    private sealed class Geocoder : HttpMessageHandler
+    {
+        public List<Uri> Requested { get; } = [];
+        public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Requested.Add(request.RequestUri!);
+            return Task.FromResult(new HttpResponseMessage(Status) { Content = new StringContent("{\"features\":[]}", System.Text.Encoding.UTF8, "application/json") });
+        }
+    }
     private sealed class Host : IAsyncDisposable
     {
         public required WebApplication App { get; init; }
@@ -43,7 +54,7 @@ public sealed class PlaceApiTests
         public required Clock Clock { get; init; }
         public required Signals Signals { get; init; }
         public AegisDbContext Db() => new(DbOptions);
-        public static async Task<Host> Create()
+        public static async Task<Host> Create(Geocoder? geocoder = null)
         {
             var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
             var database = Guid.NewGuid().ToString();
@@ -53,7 +64,9 @@ public sealed class PlaceApiTests
             builder.Services.AddNodeApi(); builder.Services.AddSingleton<TimeProvider>(clock);
             builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(database));
             builder.Services.AddScoped<INodeRegistry, NodeRegistry>(); builder.Services.AddSingleton<INodeDomainSignals>(signals);
-            builder.Services.AddOptions<LocationContextOptions>(); builder.Services.AddOptions<PlaceMapOptions>();
+            builder.Services.AddOptions<LocationContextOptions>();
+            builder.Services.AddOptions<PlaceMapOptions>().Configure(o => o.GeocoderUrl = geocoder is null ? "" : "https://synthetic-geocoder.invalid/api/");
+            if (geocoder is not null) builder.Services.AddHttpClient("place-geocoder").ConfigurePrimaryHttpMessageHandler(() => geocoder).RemoveAllLoggers();
             builder.Services.AddScoped<IPlaceService, PlaceService>(); builder.Services.AddScoped<PlaceMaps>();
             builder.Services.AddScoped<ReminderStore>(); builder.Services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
             builder.Services.AddScoped<ReminderSeriesStore>(); builder.Services.AddScoped<IReminderSeriesStore>(p => p.GetRequiredService<ReminderSeriesStore>());
@@ -78,6 +91,57 @@ public sealed class PlaceApiTests
         Enumerable.Range(0, count).Select(i => new PlaceCircle(Guid.NewGuid(), 10 + (seed + i) * .000123456789, 20 + (seed + i) * .000987654321, 123.123456789 + i)).ToArray(), []);
     private static async Task<JsonElement> Read(HttpResponseMessage response, HttpStatusCode expected = HttpStatusCode.OK)
     { Assert.Equal(expected, response.StatusCode); return (await response.Content.ReadFromJsonAsync<JsonElement>()); }
+
+    [Fact]
+    public async Task AddressSearchUsesAuthenticatedPostBodyWithoutQueryAndPreservesPacingAndSafeProviderErrors()
+    {
+        using var geocoder = new Geocoder(); await using var host = await Host.Create(geocoder);
+        const string path = "/api/nodes/places/search";
+        var anonymous = await host.Client.PostAsJsonAsync(path, new { query = "Synthetic private address" });
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode); Assert.Empty(geocoder.Requested);
+        var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, (await host.Client.GetAsync(path + "?query=SyntheticLegacyAddress")).StatusCode);
+        try
+        {
+            await Task.Delay(1050); // Share the production one-second provider limiter with the parser tests.
+            using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(new { query = new string('x', 200) }) };
+            var response = await host.Client.SendAsync(request); var result = await Read(response);
+            Assert.Equal("", request.RequestUri!.Query); Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+            Assert.True(result.GetProperty("configured").GetBoolean()); Assert.Empty(result.GetProperty("results").EnumerateArray()); Assert.Single(geocoder.Requested);
+            var limited = await Read(await host.Client.PostAsJsonAsync(path, new { query = "Synthetic rate-limited address" }), HttpStatusCode.TooManyRequests);
+            Assert.Equal("address_search_rate_limited", limited.GetProperty("code").GetString()); Assert.Single(geocoder.Requested);
+            await Task.Delay(1050); geocoder.Status = HttpStatusCode.ServiceUnavailable;
+            const string privateQuery = "Synthetic confidential address to omit from errors";
+            var unavailable = await Read(await host.Client.PostAsJsonAsync(path, new { query = privateQuery }), HttpStatusCode.ServiceUnavailable);
+            Assert.Equal("address_search_unavailable", unavailable.GetProperty("code").GetString()); Assert.DoesNotContain(privateQuery, unavailable.GetRawText()); Assert.Equal(2, geocoder.Requested.Count);
+        }
+        finally { await Task.Delay(1050); }
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"query\":null}")]
+    [InlineData("{\"query\":42}")]
+    [InlineData("{\"query\":\"\"}")]
+    [InlineData("{\"query\":\"   \"}")]
+    [InlineData("{\"query\":\"Synthetic\\nprivate address\"}")]
+    public async Task AddressSearchRejectsMissingWrongTypeAndUnsafeInputWithoutEchoingIt(string json)
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var response = await host.Client.PostAsync("/api/nodes/places/search", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode); Assert.DoesNotContain("Synthetic", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task AddressSearchRejectsOverlongBodyQueryAndDoesNotReadLegacyQueryParametersAsInput()
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        var query = new string('x', 201); var response = await host.Client.PostAsJsonAsync("/api/nodes/places/search", new { query });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode); Assert.DoesNotContain(query, await response.Content.ReadAsStringAsync());
+        var legacyOnly = await host.Client.PostAsJsonAsync("/api/nodes/places/search?query=SyntheticLegacyAddress", new { });
+        Assert.Equal(HttpStatusCode.BadRequest, legacyOnly.StatusCode); Assert.DoesNotContain("SyntheticLegacyAddress", await legacyOnly.Content.ReadAsStringAsync());
+    }
 
     [Fact]
     public async Task AnonymousNativeRoutesRejectManagementLocationManifestAndInteractionsWithoutMutatingState()
