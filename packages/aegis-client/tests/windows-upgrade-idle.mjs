@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { reloadReadyWindowsPage } from './windows-webview-ready.mjs';
 
 if (process.platform !== 'win32') throw Error('Requires an isolated real Windows runner.');
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -48,10 +49,12 @@ async function installedSmoke(executable, version, profile, sentinel, first) {
   try {
     await waitUntil(async () => { if (exited !== undefined) throw Error('Installed runtime exited during upgrade smoke.'); try { return (await fetch('http://127.0.0.1:9463/json/version', {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } }, 30000);
     browser = await chromium.connectOverCDP('http://127.0.0.1:9463');
-    await waitUntil(() => { page = browser.contexts().flatMap(context => context.pages())[0]; return Boolean(page); }, 30000);
-    await page.route('**/api/**', route => route.fulfill({ json: route.request().url().includes('/chat/') ? { items: [], hasMore: false } : { enabled: false, available: false, configured: false, isConnected: false } }));
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
+    const routed=new Set();
+    page=await reloadReadyWindowsPage(async timeout=>{
+      await waitUntil(()=>{page=browser.contexts().flatMap(context=>context.pages()).find(candidate=>!candidate.isClosed() && /^(?:https?:\/\/tauri\.localhost(?:\/|$)|tauri:\/\/localhost(?:\/|$))/.test(candidate.url()));return Boolean(page);},Math.min(timeout,30000));
+      if(!routed.has(page)){await page.route('**/api/**',route=>route.fulfill({json:route.request().url().includes('/chat/')?{items:[],hasMore:false}:{enabled:false,available:false,configured:false,isConnected:false}}));routed.add(page);}
+      return page;
+    },()=>exited===undefined);
     const runtime = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('runtime_info'));
     assert.equal(runtime.platform, 'windows'); assert.equal(runtime.version, version);
     assert.equal(runtime.backendUrl, 'https://aegis.phcastello.com');
