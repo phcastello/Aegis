@@ -1,7 +1,7 @@
 // Isolated loopback proof. Build this fixture and install scripts/node-transport-probe first.
 // Synthetic credentials and scoped tokens stay in memory and are never printed.
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,13 +68,14 @@ async function commandCount(count) {
 }
 const command = (body, expected = 200) => request('/fixture/reminder-command', body, expected);
 try {
-  let code, ready = false;
+  let code, replacementCode, ready = false;
   for (let i = 0; i < 600; i++) {
     check(!fixtureStartFailed && fixture.exitCode === null && fixture.signalCode === null, 'fixture_exited_before_ready');
-    try { code = (await readFile(bootstrap, 'utf8')).trim(); await request('/api/health'); ready = true; break; }
+    try { code = (await readFile(bootstrap, 'utf8')).trim(); replacementCode = (await readFile(bootstrap + '.replacement', 'utf8')).trim(); await request('/api/health'); ready = true; break; }
     catch { await delay(50); }
   }
-  check(ready && code, 'fixture_bootstrap_timeout');
+  check(ready && code && replacementCode && code !== replacementCode, 'fixture_bootstrap_timeout');
+  if (process.platform !== 'win32') for (const path of [bootstrap, bootstrap + '.replacement']) check(((await stat(path)).mode & 0o777) === 0o600, 'bootstrap_file_not_private');
   const attemptId = randomUUID();
   const node = await request('/api/nodes/pair', { code, attemptId, recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic cache proof', platform: 'windows', appVersion: '0.7.0-unstable.12', protocolVersion: 1 });
   await request('/api/nodes/pair/finalize', { attemptId, credential: node.credential });
@@ -130,12 +131,23 @@ try {
   const next = await request('/api/nodes/pair', { code: nextCode.code, attemptId: nextAttempt, recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic offline lifecycle proof', platform: 'android', appVersion: '0.7.0-unstable.12', protocolVersion: 1 });
   await request('/api/nodes/pair/finalize', { attemptId: nextAttempt, credential: next.credential });
   await request('/api/nodes/me', undefined, 200, next.credential);
+  const staleCode = await request('/api/nodes/pairing-codes', {}, 200, node.credential);
+  const pendingCode = await request('/api/nodes/pairing-codes', {}, 200, node.credential);
+  const pendingAttempt = randomUUID();
+  const pending = await request('/api/nodes/pair', { code: pendingCode.code, attemptId: pendingAttempt, recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic invalidated establishment', platform: 'android', appVersion: '0.7.0-unstable.12', protocolVersion: 1 });
   await request('/api/nodes/' + node.nodeId + '/revoke', {}, 200, next.credential);
   await request('/api/nodes/me', undefined, 401, node.credential);
   await request('/api/nodes/geofences/events', {}, 503, next.credential);
+  await request('/api/nodes/pair', { code: staleCode.code, attemptId: randomUUID(), recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic revoked issuer proof', platform: 'android', appVersion: '0.7.0-unstable.12', protocolVersion: 1 }, 400);
+  await request('/api/nodes/pair/finalize', { attemptId: pendingAttempt, credential: pending.credential }, 400);
+  const replacementAttempt = randomUUID();
+  const replacement = await request('/api/nodes/pair', { code: replacementCode, attemptId: replacementAttempt, recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic reserved bootstrap proof', platform: 'android', appVersion: '0.7.0-unstable.12', protocolVersion: 1 });
+  await request('/api/nodes/pair/finalize', { attemptId: replacementAttempt, credential: replacement.credential });
+  await request('/api/nodes/me', undefined, 200, replacement.credential);
   await request('/fixture/backend-offline', { seconds: 0 });
   await request('/api/nodes/me', undefined, 200, next.credential);
   console.log('PASS fixture offline lifecycle exact method/path allowlist, default503, normal authorization, real pairing/finalization/revocation and domain503');
+  console.log('PASS private issuerless replacement bootstrap survives issuer revocation; issued pairing and pending finalization remain rejected');
 } finally {
   clearInterval(heartbeat); socket?.terminate();
   try {

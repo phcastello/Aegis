@@ -126,10 +126,23 @@ app.MapGet("/fixture/nodes/{id:guid}/push-count", async (Guid id, AegisDbContext
 });
 using (var scope = app.Services.CreateScope())
 {
-    var code = await scope.ServiceProvider.GetRequiredService<INodeRegistry>().CreateCodeAsync(null);
-    await File.WriteAllTextAsync(args[0], code.Code); // Temporary proof only, never a Node credential.
+    var registry = scope.ServiceProvider.GetRequiredService<INodeRegistry>();
+    var code = await registry.CreateCodeAsync(null);
+    var replacement = await registry.CreateCodeAsync(null);
+    // Both are the existing issuerless bootstrap procedure. The reserve survives
+    // revocation of the first paired Node; no test bypass or HTTP endpoint exists.
+    await WriteBootstrapCode(args[0] + ".replacement", replacement.Code);
+    await WriteBootstrapCode(args[0], code.Code); // Main file is the readiness marker.
 }
 await app.RunAsync(); return 0;
+static async Task WriteBootstrapCode(string path, string code)
+{
+    var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.Asynchronous };
+    if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    await using var file = new FileStream(path, options);
+    await using var writer = new StreamWriter(file);
+    await writer.WriteAsync(code);
+}
 static bool PairingLifecycle(HttpRequest request)
 {
     var path = request.Path.Value;
