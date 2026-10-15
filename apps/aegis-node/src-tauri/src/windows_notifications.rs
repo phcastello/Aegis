@@ -23,6 +23,9 @@ static OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static WAKE: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
 static IDENTITY_BOOTSTRAPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 const TOAST_ACTIVATOR_CLSID: &str = "{D8B06B09-79F3-42D2-9B58-542E8694CE97}";
+const PENDING_ACTION_TAG: &str = "reminder-actions-pending";
+const SYSTEM_TOAST_GROUP: &str = "aegis-system";
+const PENDING_FEEDBACK_KEY: &str = "pendingFeedbackActionId";
 // windows-core caches agile activation factories for the process lifetime. Keep
 // their MTA alive when the last temporary worker's balanced RoUninitialize runs.
 // The process owns this one cookie, as windows-core's automatic MTA fallback does;
@@ -131,11 +134,22 @@ fn bind_scope(app: &AppHandle) -> Result<Option<String>, ()> {
                     });
                 }
             }
+            // SDK cleanup cannot keep the old identity's actions usable. Keep a
+            // generic status marker only if removal needs another bounded retry.
+            let feedback_removed =
+                remove_pending_feedback(app.config().identifier.as_str()).is_ok();
             let tx = database.transaction().map_err(|_| ())?;
             tx.execute_batch(
                 "DELETE FROM actions;DELETE FROM presentations;DELETE FROM withdrawals;",
             )
             .map_err(|_| ())?;
+            if feedback_removed {
+                tx.execute(
+                    "DELETE FROM metadata WHERE key=?",
+                    params![PENDING_FEEDBACK_KEY],
+                )
+                .map_err(|_| ())?;
+            }
             tx.execute(
                 "INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",
                 params![id],
@@ -152,6 +166,97 @@ fn bind_scope(app: &AppHandle) -> Result<Option<String>, ()> {
         }
     }
     Ok(scope)
+}
+fn remove_pending_feedback(aumid: &str) -> Result<(), ()> {
+    winrt("pending_history", ToastNotificationManager::History())?
+        .RemoveGroupedTagWithId(
+            &HSTRING::from(PENDING_ACTION_TAG),
+            &HSTRING::from(SYSTEM_TOAST_GROUP),
+            &HSTRING::from(aumid),
+        )
+        .map_err(|error| log_hresult("pending_remove", &error))
+}
+// This is a local outbox status card, never a delivery receipt or acknowledgement.
+// Record the immutable ActionId before handoff: retries/restarts must not make an
+// already dismissed status card reappear, including an ambiguous SDK result.
+fn pending_feedback(database: &Connection, aumid: &str, retry_failed: bool) -> Result<bool, ()> {
+    let first: Option<String> = database
+        .query_row(
+            "SELECT id FROM actions WHERE queued=1 ORDER BY created,id LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| ())?;
+    let previous: Option<String> = database
+        .query_row(
+            "SELECT value FROM metadata WHERE key=?",
+            params![PENDING_FEEDBACK_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| ())?;
+    let Some(action_id) = first else {
+        if previous.is_none() {
+            return Ok(false);
+        }
+        remove_pending_feedback(aumid)?;
+        database
+            .execute(
+                "DELETE FROM metadata WHERE key=?",
+                params![PENDING_FEEDBACK_KEY],
+            )
+            .map_err(|_| ())?;
+        return Ok(false);
+    };
+    if !retry_failed {
+        return Ok(false);
+    }
+    if previous.as_ref() == Some(&action_id) {
+        return Ok(false);
+    }
+    let notifier = winrt(
+        "pending_notifier",
+        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(aumid)),
+    )?;
+    if notification_setting(&notifier, aumid)? != NotificationSetting::Enabled {
+        return Ok(false);
+    }
+    let document = winrt("pending_xml", XmlDocument::new())?;
+    winrt("pending_xml", document.LoadXml(&HSTRING::from("<toast activationType=\"protocol\" launch=\"aegis-reminder://open\"><visual><binding template=\"ToastGeneric\"><text>Aegis</text><text>Ação aguardando conexão. Adiamentos serão confirmados ao sincronizar.</text></binding></visual><audio silent=\"true\"/></toast>")))?;
+    let toast = winrt(
+        "pending_build",
+        ToastNotification::CreateToastNotification(&document),
+    )?;
+    winrt(
+        "pending_tag",
+        toast.SetTag(&HSTRING::from(PENDING_ACTION_TAG)),
+    )?;
+    winrt(
+        "pending_group",
+        toast.SetGroup(&HSTRING::from(SYSTEM_TOAST_GROUP)),
+    )?;
+    let expiration = DateTime {
+        UniversalTime: (chrono::Utc::now().timestamp_millis() + 604_800_000 + 11_644_473_600_000)
+            * 10_000,
+    };
+    let boxed: IReference<DateTime> =
+        winrt("pending_expiry", PropertyValue::CreateDateTime(expiration))?
+            .cast()
+            .map_err(|error| log_hresult("pending_expiry", &error))?;
+    winrt("pending_expiry", toast.SetExpirationTime(&boxed))?;
+    database
+        .execute(
+            "INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)",
+            params![PENDING_FEEDBACK_KEY, action_id],
+        )
+        .map_err(|_| ())?;
+    winrt("pending_post", notifier.Show(&toast)).map(|_| true)
+}
+fn update_pending_feedback(app: &AppHandle, retry_failed: bool) -> Result<(), ()> {
+    let _apartment = Apartment::enter()?;
+    let _gate = PRESENTATION_GATE.lock().map_err(|_| ())?;
+    pending_feedback(&db(app)?, app.config().identifier.as_str(), retry_failed).map(|_| ())
 }
 fn xml(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -725,6 +830,7 @@ pub fn initialize(app: &AppHandle) -> bool {
                 }
                 pending = false;
             }
+            let _ = update_pending_feedback(&app, pending);
             if pending {
                 tokio::select! {_=wake.notified()=>{},_=tokio::time::sleep(std::time::Duration::from_secs(retry))=>{}};
                 retry = (retry * 2).min(300);
@@ -926,6 +1032,73 @@ mod tests {
                 .unwrap(),
             0
         );
+
+        // A real SDK status card is distinct from reminder delivery. Reopening
+        // SQLite simulates process restart; a dismissed card must stay dismissed.
+        let pending_path = fixture.directory.join("pending.sqlite");
+        let database = Connection::open(&pending_path).unwrap();
+        database.execute_batch("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);CREATE TABLE actions(id TEXT PRIMARY KEY,created INTEGER NOT NULL,queued INTEGER NOT NULL);").unwrap();
+        let action_id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute("INSERT INTO actions VALUES(?,1,1)", params![action_id])
+            .unwrap();
+        assert!(!pending_feedback(&database, &fixture.aumid, false).unwrap());
+        assert!(pending_feedback(&database, &fixture.aumid, true).unwrap());
+        let has_pending = || {
+            let cards = history
+                .GetHistoryWithId(&HSTRING::from(&fixture.aumid))
+                .unwrap();
+            (0..cards.Size().unwrap()).any(|index| {
+                let card = cards.GetAt(index).unwrap();
+                card.Tag().unwrap() == PENDING_ACTION_TAG
+                    && card.Group().unwrap() == SYSTEM_TOAST_GROUP
+            })
+        };
+        let wait_pending = |expected| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while has_pending() != expected && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert_eq!(has_pending(), expected);
+        };
+        wait_pending(true);
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT value FROM metadata WHERE key=?",
+                    params![PENDING_FEEDBACK_KEY],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            action_id
+        );
+        drop(database);
+        remove_pending_feedback(&fixture.aumid).unwrap();
+        wait_pending(false);
+        let database = Connection::open(&pending_path).unwrap();
+        assert!(!pending_feedback(&database, &fixture.aumid, true).unwrap());
+        assert!(!has_pending());
+        database.execute("DELETE FROM actions", []).unwrap();
+        assert!(!pending_feedback(&database, &fixture.aumid, false).unwrap());
+        assert_eq!(
+            database
+                .query_row("SELECT COUNT(*) FROM metadata", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+
+        database
+            .execute(
+                "INSERT INTO actions VALUES(?,2,1)",
+                params![uuid::Uuid::new_v4().to_string()],
+            )
+            .unwrap();
+        assert!(pending_feedback(&database, &fixture.aumid, true).unwrap());
+        wait_pending(true);
+        database.execute("DELETE FROM actions", []).unwrap();
+        assert!(!pending_feedback(&database, &fixture.aumid, false).unwrap());
+        wait_pending(false);
     }
 
     #[test]
