@@ -120,14 +120,23 @@ pub(crate) fn route(
         }
         ("places", "config") => return Ok((Method::GET, "/places/config".into())),
         ("places", "search") => {
-            let query = payload["query"]
+            if payload
+                .as_object()
+                .is_none_or(|fields| fields.keys().any(|key| key != "query"))
+            {
+                return Err("Dados de busca inválidos.".into());
+            }
+            payload["query"]
                 .as_str()
-                .filter(|v| !v.trim().is_empty() && v.len() <= 300)
+                .filter(|value| {
+                    !value.trim().is_empty()
+                        && value.encode_utf16().count() <= 200
+                        && !value.chars().any(char::is_control)
+                })
                 .ok_or("Informe um endereço válido.")?;
-            let query = url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("query", query)
-                .finish();
-            return Ok((Method::GET, format!("/places/search?{query}")));
+            // Native authentication is unchanged; personal addresses belong in
+            // the JSON body, rather than proxy access logs of request URLs.
+            return Ok((Method::POST, "/places/search".into()));
         }
         ("location", "settings") => return Ok((Method::GET, "/location/settings".into())),
         ("location", "configureNode" | "selectSource") => {
@@ -152,6 +161,7 @@ pub(crate) fn route(
 }
 #[cfg(test)]
 mod tests {
+    use reqwest::Method;
     use super::*;
     #[test]
     fn reminder_pages_preserve_the_legacy_route_and_encode_only_bounded_parameters() {
@@ -204,16 +214,34 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn encodes_search_and_binds_revisions() {
-        let (_, path) = route(
-            "places",
-            "search",
-            None,
-            &mut json!({"query":"São Paulo & x=y"}),
-        )
-        .unwrap();
-        assert!(path.contains("%26"));
-        assert!(!path.contains("&x="));
+    fn search_keeps_the_exact_address_in_the_body_and_out_of_the_url() {
+        let mut payload = json!({"query":"São Paulo & x=y / número 12"});
+        let original = payload.clone();
+        let (method, path) = route("places", "search", None, &mut payload).unwrap();
+        assert_eq!(method, Method::POST);
+        assert_eq!(path, "/places/search");
+        assert_eq!(payload, original);
+        assert!(!path.contains('?'));
+    }
+    #[test]
+    fn search_has_a_closed_bounded_body_including_unicode() {
+        for mut payload in [
+            json!({}),
+            json!({"query":"  "}),
+            json!({"query":"private\naddress"}),
+            json!({"query":"a".repeat(201)}),
+            json!({"query":"😀".repeat(101)}),
+            json!({"query":"Rua sintética", "url":"https://evil.invalid"}),
+            json!([]),
+        ] {
+            assert!(route("places", "search", None, &mut payload).is_err());
+        }
+        for query in ["界".repeat(200), "😀".repeat(100)] {
+            assert!(route("places", "search", None, &mut json!({"query":query})).is_ok());
+        }
+    }
+    #[test]
+    fn binds_revisions_to_the_known_action_route() {
         let (_, path) = route(
             "reminders",
             "seriesCancel",
