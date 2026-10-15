@@ -1,7 +1,16 @@
 {
   "identifier": "windows-updater",
   "description": "Check and install signed updates with explicit user action, then restart.",
-  "windows": ["main"],
-  "platforms": ["windows"],
-  "permissions": ["updater:allow-check", "updater:allow-download-and-install", "process:allow-restart"]
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "permissions": [
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "core:resources:allow-close"
+  ]
 }

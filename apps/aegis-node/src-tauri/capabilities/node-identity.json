@@ -24,6 +24,14 @@
     "allow-node-notification-settings",
     "allow-node-request-notification-permission",
     "allow-node-set-autostart",
-    "allow-node-exit"
+    "allow-node-exit",
+    "allow-node-set-reminders",
+    "allow-node-remove",
+    "allow-node-reminders",
+    "allow-node-places",
+    "allow-node-location",
+    "allow-node-geofences",
+    "allow-node-settings-open",
+    "allow-node-consume-reminder-open"
   ]
 }

@@ -508,6 +508,9 @@ async fn session(
                 if let Some(Ok((id, result))) = result {
                     let (_, message) = envelope("command_result", Some({ let mut payload = serde_json::to_value(result).expect("fixed notification result"); payload["commandId"] = serde_json::json!(id); payload }));
                     if !matches!(timeout(Duration::from_secs(2), socket.send(message)).await, Ok(Ok(()))) { return retry(status, "command", "network_disconnected"); }
+                    // A validated command/result exchange is useful channel traffic; avoid a redundant keepalive.
+                    next_heartbeat = Instant::now() + Duration::from_secs(interval);
+                    ack_deadline = Instant::now() + Duration::from_secs(deadline);
                 }
             }
             received = socket.next() => {

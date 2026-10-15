@@ -58,7 +58,7 @@ class NodeNotificationLiveTest {
       var candidate: WebView? = null
       scenario.onActivity { activity ->
         // Verify exact fixed method descriptors in the actual installed/minified activity.
-        for (method in listOf("showNodeNotification", "nodePushState", "bindNodePush")) {
+        for (method in listOf("showNodeNotification", "nodePushState", "bindNodePush","settingsOpen","nodeActionState","consumeReminderOpen")) {
           assertEquals(String::class.java, activity.javaClass.getMethod(method, String::class.java).returnType)
         }
         assertEquals(Build.VERSION.SDK_INT < 33, frameworkNotificationPermission(activity))
@@ -76,6 +76,14 @@ class NodeNotificationLiveTest {
       // Fail before pairing if this APK points anywhere except the isolated fixture.
       assertEquals("http://127.0.0.1:18104", invoke(webview, "runtime_info").getString("backendUrl"))
       checkpoint("live_runtime_ready")
+      val permissions=invoke(webview,"node_location",JSONObject().put("operation","permissions"))
+      assertTrue(permissions.getBoolean("supported"))
+      assertFalse(permissions.getBoolean("foreground"))
+      assertFalse(permissions.getBoolean("precise"))
+      val current=invoke(webview,"node_location",JSONObject().put("operation","current"))
+      assertTrue(current.getString("status") in setOf("permission_denied","provider_unavailable"))
+      assertFalse(current.has("latitude"));assertFalse(current.has("longitude"))
+      checkpoint("location_bridge_framework")
       val identity = invoke(webview, "node_pair", JSONObject().put("name", "Android instrumentation").put("code", code))
       assertEquals("paired", identity.getString("state"))
       checkpoint("live_paired")

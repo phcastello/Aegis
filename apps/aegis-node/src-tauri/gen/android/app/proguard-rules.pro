@@ -19,3 +19,17 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Fixed native JNI entrypoints; no broad keep for tests or generic reflection.
+-keepclassmembers class com.aegis.node.MainActivity {
+  public java.lang.String settingsOpen(java.lang.String);
+  public java.lang.String nodeActionState(java.lang.String);
+  public java.lang.String consumeReminderOpen(java.lang.String);
+}
+# Android components instantiated by framework / WorkManager names persisted across process death.
+-keepnames class com.aegis.node.NodeSyncWorker
+-keepnames class com.aegis.node.NodeLocationWorker
+-keepnames class com.aegis.node.NodeGeoConfirmWorker
+-keepclassmembers class com.aegis.node.NodeNotificationsPlugin {
+ @app.tauri.annotation.Command <methods>;
+ @app.tauri.annotation.PermissionCallback <methods>;
+}

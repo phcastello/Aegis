@@ -61,20 +61,7 @@ impl NotificationSink for NativeSink {
         Box::pin(async move {
             #[cfg(windows)]
             {
-                use tauri_plugin_notification::NotificationExt;
-                if self
-                    .0
-                    .notification()
-                    .builder()
-                    .title(&command.input.title)
-                    .body(&command.input.body)
-                    .show()
-                    .is_ok()
-                {
-                    NotificationResult::new(NotificationStatus::Success)
-                } else {
-                    NotificationResult::new(NotificationStatus::Failed)
-                }
+                crate::windows_notifications::show(&self.0, command)
             }
             #[cfg(target_os = "android")]
             {
@@ -123,11 +110,12 @@ pub struct NotificationSettings {
     pub granted: bool,
     pub push_configured: bool,
     pub autostart: bool,
+    pub pending_actions: u32,
 }
 // Private, fixed JNI calls only. The upstream plugin callback unwraps send() after a
 // dropped receiver, so bounded/cancelable operations use this safe oneshot adapter.
 #[cfg(target_os = "android")]
-async fn android_call(
+pub(crate) async fn android_call(
     app: &AppHandle,
     method: &'static str,
     payload: String,
@@ -218,7 +206,7 @@ pub async fn bind(app: &AppHandle, id: Option<&str>) -> bool {
     android_call(
         app,
         "bindNodePush",
-        serde_json::json!({"nodeId":id}).to_string(),
+        serde_json::json!({"nodeId":id,"origin":crate::config::configured_endpoint().ok().map(|e|e.base_url())}).to_string(),
     )
     .await
     .as_deref()
@@ -233,15 +221,22 @@ pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings 
             granted: state.granted,
             push_configured: state.configured,
             autostart: false,
+            pending_actions: android_call(&app, "nodeActionState", "{}".into())
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+                .and_then(|value| value["pendingActions"].as_u64())
+                .unwrap_or(0) as u32,
         }
     }
     #[cfg(windows)]
     {
         use tauri_plugin_autostart::ManagerExt;
         NotificationSettings {
-            granted: true,
+            granted: crate::windows_notifications::granted(&app),
             push_configured: false,
             autostart: app.autolaunch().is_enabled().unwrap_or(false),
+            pending_actions: crate::windows_notifications::pending(&app),
         }
     }
     #[cfg(not(any(windows, target_os = "android")))]
@@ -251,6 +246,7 @@ pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings 
             granted: false,
             push_configured: false,
             autostart: false,
+            pending_actions: 0,
         }
     }
 }

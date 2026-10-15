@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-consume-reminder-open"
+description = "Enables the node_consume_reminder_open command without any pre-configured scope."
+commands.allow = ["node_consume_reminder_open"]
+
+[[permission]]
+identifier = "deny-node-consume-reminder-open"
+description = "Denies the node_consume_reminder_open command without any pre-configured scope."
+commands.deny = ["node_consume_reminder_open"]

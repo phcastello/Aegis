@@ -21,6 +21,7 @@ struct AndroidAsset {
 pub struct AndroidUpdate {
     pub version: String,
     pub url: String,
+    pub version_code: u32,
 }
 
 fn version_code(version: &semver::Version) -> Result<u32, String> {
@@ -66,6 +67,7 @@ pub fn interpret(body: &str, current: &str) -> Result<Option<AndroidUpdate>, Str
     Ok(Some(AndroidUpdate {
         version: manifest.version,
         url: asset.url.clone(),
+        version_code: next_code,
     }))
 }
 

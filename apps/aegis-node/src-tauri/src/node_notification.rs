@@ -15,7 +15,7 @@ pub struct NotificationCommand {
     pub capability: String,
     pub capability_version: u32,
     pub expires_at: String,
-    pub input: NotificationInput,
+    pub input: serde_json::Value,
 }
 // Diagnostics are a closed, bounded vocabulary; never native error prose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -87,7 +87,15 @@ impl NotificationExecutor {
     }
     pub async fn execute(&self, c: &NotificationCommand, now: i64) -> NotificationResult {
         let started = tokio::time::Instant::now();
-        if c.capability != "notification.show" || c.capability_version != 1 {
+        if !matches!(
+            c.capability.as_str(),
+            "notification.show"
+                | "reminder.notify"
+                | "reminder.withdraw"
+                | "geofence.monitor"
+                | "location.current"
+        ) || c.capability_version != 1
+        {
             return NotificationResult::new(NotificationStatus::Unsupported);
         }
         let expiry = match chrono::DateTime::parse_from_rfc3339(&c.expires_at) {
@@ -97,7 +105,7 @@ impl NotificationExecutor {
         if expiry <= now {
             return NotificationResult::new(NotificationStatus::Expired);
         }
-        if expiry > now + 300 || c.command_id.is_nil() || !valid(&c.input) {
+        if expiry > now + 300 || c.command_id.is_nil() || !valid_command_input(c) {
             return NotificationResult::new(NotificationStatus::Failed);
         }
         // Serialize the short native API invocation with dedupe reservation; never hold the socket writer.
@@ -137,6 +145,51 @@ impl NotificationExecutor {
         result
     }
 }
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderNotificationInput {
+    pub title: String,
+    pub body: String,
+    pub reminder_id: uuid::Uuid,
+    pub revision: u64,
+    pub generation: u64,
+    pub interaction_token: String,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderWithdrawInput {
+    pub reminder_id: uuid::Uuid,
+    pub generation: u64,
+}
+fn valid_command_input(c: &NotificationCommand) -> bool {
+    match c.capability.as_str() {
+        "notification.show" => {
+            serde_json::from_value::<NotificationInput>(c.input.clone()).is_ok_and(|i| valid(&i))
+        }
+        "reminder.notify" => serde_json::from_value::<ReminderNotificationInput>(c.input.clone())
+            .is_ok_and(|i| {
+                !i.reminder_id.is_nil()
+                    && i.revision > 0
+                    && (20..=2048).contains(&i.interaction_token.len())
+                    && !i.interaction_token.chars().any(char::is_control)
+                    && valid(&NotificationInput {
+                        title: i.title,
+                        body: i.body,
+                    })
+            }),
+        "reminder.withdraw" => serde_json::from_value::<ReminderWithdrawInput>(c.input.clone())
+            .is_ok_and(|i| !i.reminder_id.is_nil()),
+        "geofence.monitor" => c.input == serde_json::json!({"operation":"sync"}),
+        "location.current" => c.input.as_object().is_some_and(|o| {
+            o.len() == 2
+                && o.get("operation").and_then(|v| v.as_str()) == Some("refresh")
+                && o.get("requestId")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+        }),
+        _ => false,
+    }
+}
 pub fn valid(input: &NotificationInput) -> bool {
     !input.title.trim().is_empty()
         && input.title.chars().count() <= 120
@@ -173,11 +226,36 @@ mod tests {
             capability: "notification.show".into(),
             capability_version: 1,
             expires_at: "2026-10-03T12:01:00Z".into(),
-            input: NotificationInput {
-                title: "Aegis".into(),
-                body: "Olá".into(),
-            },
+            input: serde_json::json!({"title":"Aegis","body":"Olá"}),
         }
+    }
+    #[test]
+    fn legacy_input_stays_strict_and_new_reminder_requires_scoped_context() {
+        let mut c = command();
+        c.input["reminderId"] = serde_json::json!(uuid::Uuid::new_v4());
+        assert!(!valid_command_input(&c));
+        c.capability = "reminder.notify".into();
+        c.input["revision"] = serde_json::json!(1);
+        c.input["generation"] = serde_json::json!(1);
+        assert!(!valid_command_input(&c));
+        c.input["interactionToken"] = serde_json::json!("restricted-fixture-token-value");
+        assert!(valid_command_input(&c));
+        c.input["arbitrary"] = serde_json::json!(true);
+        assert!(!valid_command_input(&c));
+    }
+    #[test]
+    fn domain_signals_are_fixed_operations_not_generic_rpc() {
+        let mut c = command();
+        c.capability = "geofence.monitor".into();
+        c.input = serde_json::json!({"operation":"sync"});
+        assert!(valid_command_input(&c));
+        c.input = serde_json::json!({"operation":"shell","command":"bad"});
+        assert!(!valid_command_input(&c));
+        c.capability = "location.current".into();
+        c.input = serde_json::json!({"operation":"refresh","requestId":uuid::Uuid::new_v4()});
+        assert!(valid_command_input(&c));
+        c.input["url"] = serde_json::json!("https://evil.invalid");
+        assert!(!valid_command_input(&c));
     }
     #[tokio::test]
     async fn execution_dedupe_expiry_and_only_notification() {
@@ -209,10 +287,10 @@ mod tests {
     #[test]
     fn strict_payload_and_limits() {
         let mut c = command();
-        c.input.title = "".into();
-        assert!(!valid(&c.input));
-        c.input.title = "a".repeat(121);
-        assert!(!valid(&c.input));
+        c.input["title"] = serde_json::json!("");
+        assert!(!valid_command_input(&c));
+        c.input["title"] = serde_json::json!("a".repeat(121));
+        assert!(!valid_command_input(&c));
         assert!(
             serde_json::from_str::<NotificationCommand>("{\"credential\":\"secret\"}").is_err()
         );

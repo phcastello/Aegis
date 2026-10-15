@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-android-update"
+description = "Enables the install_android_update command without any pre-configured scope."
+commands.allow = ["install_android_update"]
+
+[[permission]]
+identifier = "deny-install-android-update"
+description = "Denies the install_android_update command without any pre-configured scope."
+commands.deny = ["install_android_update"]

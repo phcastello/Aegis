@@ -54,6 +54,15 @@ fn main() {
             "node_resolve_target",
             "node_revoke",
             "node_create_pairing_code",
+            "node_set_reminders",
+            "node_remove",
+            "node_reminders",
+            "node_places",
+            "node_location",
+            "node_geofences",
+            "node_settings_open",
+            "node_consume_reminder_open",
+            "install_android_update",
         ]),
     ))
     .expect("failed to build Tauri application manifest");

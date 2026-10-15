@@ -15,10 +15,23 @@ impl CapabilityRegistry {
             crate::platform::Platform::Windows | crate::platform::Platform::Android => {
                 let mut capabilities = Self::audio(true, true);
                 if cfg!(feature = "native-runtime") {
-                    capabilities.push(NodeCapability {
-                        name: "notification.show".into(),
-                        version: 1,
-                    });
+                    for name in ["notification.show", "reminder.notify", "reminder.withdraw"] {
+                        capabilities.push(NodeCapability {
+                            name: name.into(),
+                            version: 1,
+                        });
+                    }
+                    if matches!(
+                        crate::platform::current(),
+                        crate::platform::Platform::Android
+                    ) {
+                        for name in ["location.current", "geofence.monitor"] {
+                            capabilities.push(NodeCapability {
+                                name: name.into(),
+                                version: 1,
+                            });
+                        }
+                    }
                 }
                 capabilities
             }
@@ -73,7 +86,14 @@ mod tests {
             assert_eq!(
                 capabilities.len(),
                 if cfg!(feature = "native-runtime") {
-                    3
+                    if matches!(
+                        crate::platform::current(),
+                        crate::platform::Platform::Android
+                    ) {
+                        7
+                    } else {
+                        5
+                    }
                 } else {
                     2
                 }

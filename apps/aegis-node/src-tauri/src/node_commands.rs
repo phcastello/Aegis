@@ -31,6 +31,8 @@ pub struct NodeRuntime {
     pub transport: NodeTransportManager,
     config: Option<TransportConfig>,
     pub cancel: tokio_util::sync::CancellationToken,
+    foreground: std::sync::atomic::AtomicBool,
+    lifecycle_gate: tokio::sync::Mutex<()>,
     #[cfg(target_os = "android")]
     app: tauri::AppHandle,
 }
@@ -73,15 +75,55 @@ impl NodeRuntime {
             transport: NodeTransportManager::default(),
             config,
             cancel: tokio_util::sync::CancellationToken::new(),
+            foreground: std::sync::atomic::AtomicBool::new(true),
+            lifecycle_gate: tokio::sync::Mutex::new(()),
             #[cfg(target_os = "android")]
             app,
         }
+    }
+    pub(crate) async fn domain_call(
+        &self,
+        method: reqwest::Method,
+        path: String,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let guard = self.identity.lock().await;
+        guard
+            .as_ref()
+            .map_err(Clone::clone)?
+            .domain_call(method, path, payload)
+            .await
+    }
+    pub(crate) async fn domain_action_call(
+        &self,
+        path: String,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, (String, bool)> {
+        let guard = self.identity.lock().await;
+        guard
+            .as_ref()
+            .map_err(|e| (e.clone(), false))?
+            .domain_call_kind(reqwest::Method::POST, path, payload)
+            .await
+    }
+    pub(crate) async fn has_identity(&self) -> bool {
+        self.identity
+            .lock()
+            .await
+            .as_ref()
+            .ok()
+            .and_then(|i| i.transport_credential().ok().flatten())
+            .is_some()
     }
     pub fn shutdown(&self) {
         self.cancel.cancel();
         self.transport.shutdown();
     }
     pub async fn start(&self) {
+        if cfg!(target_os = "android") && !self.foreground.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         if let Some(config) = &self.config {
             self.transport.start(
                 Arc::new(NativeSource(self.identity.clone())),
@@ -98,28 +140,34 @@ impl NodeRuntime {
         #[cfg(target_os = "android")]
         self.sync_push().await;
     }
+    pub async fn lifecycle(&self, foreground: bool) {
+        let _gate = self.lifecycle_gate.lock().await;
+        let previous = self
+            .foreground
+            .swap(foreground, std::sync::atomic::Ordering::SeqCst);
+        if !foreground && cfg!(target_os = "android") {
+            self.transport.stop().await;
+        } else if foreground {
+            self.start().await;
+            if self.transport.state().transport_state != "online" && !previous {
+                self.transport.reconnect();
+            }
+            #[cfg(target_os = "android")]
+            self.sync_push().await;
+        }
+    }
     #[cfg(target_os = "android")]
     pub async fn sync_push(&self) {
         let guard = self.identity.lock().await;
         let Ok(identity) = guard.as_ref() else { return };
-        let Ok(status) = identity.status().await else {
+        let Ok(cached) = identity.cached_node() else {
             return;
         };
-        let node = status
-            .node
+        let node = cached
             .as_ref()
-            .filter(|n| n.enabled && n.revoked_at.is_none() && status.state == "paired");
+            .filter(|n| n.enabled && n.revoked_at.is_none());
         if !crate::native_notifications::bind(&self.app, node.map(|n| n.id.as_str())).await {
             return;
-        }
-        if node.is_some() {
-            if let Some(push) = crate::native_notifications::push_state(&self.app).await {
-                if push.configured {
-                    if let Some(token) = push.token {
-                        let _ = identity.register_push(&token).await;
-                    }
-                }
-            }
         }
     }
 }
@@ -234,5 +282,35 @@ pub async fn node_test_notification(
         .as_ref()
         .map_err(Clone::clone)?
         .test_notification(id)
+        .await
+}
+
+#[tauri::command]
+pub async fn node_set_reminders(
+    runtime: tauri::State<'_, NodeRuntime>,
+    id: String,
+    receive_reminders: bool,
+) -> Result<serde_json::Value, String> {
+    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo inválido.")?;
+    runtime
+        .domain_call(
+            reqwest::Method::PUT,
+            format!("/{id}/reminders"),
+            serde_json::json!({"receiveReminders":receive_reminders}),
+        )
+        .await
+}
+#[tauri::command]
+pub async fn node_remove(
+    runtime: tauri::State<'_, NodeRuntime>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo inválido.")?;
+    runtime
+        .domain_call(
+            reqwest::Method::DELETE,
+            format!("/{id}"),
+            serde_json::Value::Null,
+        )
         .await
 }

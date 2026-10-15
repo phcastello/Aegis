@@ -23,8 +23,13 @@ pub struct NodeView {
     pub last_heartbeat_at: Option<String>,
     #[serde(default)]
     pub target_priority: i32,
+    #[serde(default = "default_receive_reminders")]
+    pub receive_reminders: bool,
     #[serde(default)]
     pub capabilities: Vec<crate::node_capabilities::NodeCapability>,
+}
+fn default_receive_reminders() -> bool {
+    true
 }
 fn offline() -> String {
     "offline".into()
@@ -224,6 +229,17 @@ impl<V: Vault, A: Api> Identity<V, A> {
     pub async fn status(&self) -> Result<IdentityStatus, String> {
         self.resume(self.load()?).await
     }
+    // Lifecycle work reads the existing vault without polling the registry.
+    pub(crate) fn cached_node(&self) -> Result<Option<NodeView>, String> {
+        let record = self.load()?;
+        Ok(
+            if record.revoked || record.pending.is_some() || record.credential.is_none() {
+                None
+            } else {
+                record.node
+            },
+        )
+    }
     pub async fn pair(&self, name: String, code: String) -> Result<IdentityStatus, String> {
         let mut record = self.load()?;
         if record.credential.is_some() || record.pending.is_some() {
@@ -366,7 +382,7 @@ impl HttpApi {
             origin,
         })
     }
-    async fn call<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn call<T: serde::de::DeserializeOwned>(
         &self,
         method: reqwest::Method,
         path: &str,
@@ -384,6 +400,9 @@ impl HttpApi {
         }
         if let Some(json) = body {
             request = request.json(&json);
+        }
+        if path == "/location/current" {
+            request = request.timeout(std::time::Duration::from_secs(20));
         }
         let mut response = request.send().await.map_err(|_| unavailable())?;
         let success = response.status().is_success();
@@ -407,7 +426,8 @@ impl HttpApi {
                     .into(),
             });
         }
-        serde_json::from_slice(&bytes).map_err(|_| unavailable())
+        serde_json::from_slice(if bytes.is_empty() { b"null" } else { &bytes })
+            .map_err(|_| unavailable())
     }
 }
 #[cfg(any(test, feature = "native-runtime"))]
@@ -563,6 +583,7 @@ mod tests {
             last_seen_at: None,
             last_heartbeat_at: None,
             target_priority: 0,
+            receive_reminders: true,
             capabilities: Vec::new(),
         }
     }
@@ -934,5 +955,42 @@ impl<V: Vault> Identity<V, HttpApi> {
             .await
             .map_err(|e| self.operation_error(e))?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "native-runtime")]
+impl<V: Vault> Identity<V, HttpApi> {
+    pub(crate) async fn domain_call_kind(
+        &self,
+        method: reqwest::Method,
+        path: String,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, (String, bool)> {
+        let credential = self
+            .transport_credential()
+            .map_err(|e| (e, false))?
+            .ok_or(("Pareie este dispositivo para continuar.".into(), false))?;
+        let body = if method == reqwest::Method::GET || method == reqwest::Method::DELETE {
+            None
+        } else {
+            Some(payload)
+        };
+        self.api
+            .call(method, &path, Some(&credential), body)
+            .await
+            .map_err(|e| {
+                let network = e.code == "network_unavailable";
+                (self.operation_error(e), network)
+            })
+    }
+    pub(crate) async fn domain_call(
+        &self,
+        method: reqwest::Method,
+        path: String,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.domain_call_kind(method, path, payload)
+            .await
+            .map_err(|(message, _)| message)
     }
 }

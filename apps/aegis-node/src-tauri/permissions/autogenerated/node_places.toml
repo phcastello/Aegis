@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-places"
+description = "Enables the node_places command without any pre-configured scope."
+commands.allow = ["node_places"]
+
+[[permission]]
+identifier = "deny-node-places"
+description = "Denies the node_places command without any pre-configured scope."
+commands.deny = ["node_places"]

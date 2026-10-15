@@ -61,6 +61,7 @@ class NodeNotificationFrameworkTest {
     ids.forEach { manager.cancel(it, 1) }
     context.getSharedPreferences("aegis-node-push-v1", Context.MODE_PRIVATE).edit().remove("recent").commit()
   }
+  @Test fun reminderActionsAndWithdrawalSurviveNativeFramework() {exerciseReminderNotificationActions({payload->render(payload)},context)}
   @Test fun validBackendCommandPostsActiveNotification() {
     assertTrue(frameworkNotificationPermission(context))
     manager.createNotificationChannel(NotificationChannel(NODE_NOTIFICATION_CHANNEL, "Aegis", NotificationManager.IMPORTANCE_DEFAULT))

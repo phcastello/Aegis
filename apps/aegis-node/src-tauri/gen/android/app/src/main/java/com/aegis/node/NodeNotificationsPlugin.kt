@@ -1,7 +1,10 @@
 package com.aegis.node
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import app.tauri.PermissionState
 import app.tauri.annotation.Command
 import app.tauri.annotation.Permission
@@ -9,7 +12,9 @@ import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
-@TauriPlugin(permissions=[Permission(strings=[Manifest.permission.POST_NOTIFICATIONS],alias="notifications")])
+import app.tauri.plugin.JSObject
+
+@TauriPlugin(permissions=[Permission(strings=[Manifest.permission.POST_NOTIFICATIONS],alias="notifications"),Permission(strings=[Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION],alias="location")])
 class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  @Command override fun requestPermissions(invoke:Invoke) {
   val prefs=NodeNativeNotifications.prefs(activity)
@@ -18,4 +23,30 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   requestPermissionForAlias("notifications",invoke,"permissionCallback")
  }
  @PermissionCallback private fun permissionCallback(invoke:Invoke) {invoke.resolve()}
+ @Command fun locationPermissions(invoke:Invoke) { invoke.resolve(JSObject(NodeLocation.permissions(activity).toString())) }
+ @Command fun requestLocationPermission(invoke:Invoke) {
+  val args=org.json.JSONObject(invoke.getArgs().toString())
+  val background=args.optBoolean("background",false)
+  if(background) {
+   if(!NodeLocation.permissions(activity).getBoolean("foreground")) { invoke.reject("Permita localização em uso antes de habilitar lembretes por lugar.");return }
+   if(Build.VERSION.SDK_INT>=30) activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${activity.packageName}")))
+   else if(Build.VERSION.SDK_INT==29) activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),708)
+   invoke.resolve(JSObject(NodeLocation.permissions(activity).toString()));return
+  }
+  requestPermissionForAlias("location",invoke,"locationPermissionCallback")
+ }
+ @PermissionCallback private fun locationPermissionCallback(invoke:Invoke) {invoke.resolve(JSObject(NodeLocation.permissions(activity).toString()))}
+ @Command fun currentLocation(invoke:Invoke) {
+  NodeGeofences.background { try{invoke.resolve(JSObject(NodeLocation.current(activity).toString()))}catch(_:Exception){invoke.reject("Não foi possível obter uma localização recente.")} }
+ }
+ @Command fun syncGeofences(invoke:Invoke) {
+  NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofences.sync(activity).toString()))}catch(_:Exception){invoke.reject("Sincronização pendente. Verifique a conexão e as permissões.")} }
+ }
+ @Command fun queueReminderAction(invoke:Invoke) {
+  try{val args=invoke.getArgs();invoke.resolve(JSObject(NodeReminderActions.enqueueUi(activity,args.getString("reminderId"),args.getJSONObject("payload")).toString()))}catch(_:Exception){invoke.reject("Não foi possível guardar esta ação no aparelho.")}
+ }
+ @Command fun installUpdate(invoke:Invoke) {
+  val args=org.json.JSONObject(invoke.getArgs().toString())
+  NodeGeofences.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode")).toString()))}catch(_:Exception){invoke.reject("Não foi possível verificar ou abrir esta atualização.")} }
+ }
 }

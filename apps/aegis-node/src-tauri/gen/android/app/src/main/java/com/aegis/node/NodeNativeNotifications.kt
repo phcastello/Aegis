@@ -38,7 +38,9 @@ object NodeNativeNotifications {
   fun initialize(context: Context) {
     try { notificationPhase("channel", NotificationDiagnostic.CHANNEL) { ensureChannel(context) } }
     catch (_: NotificationPhaseFailure) { /* show() retries and reports the bounded code. */ }
-    if (FirebaseApp.initializeApp(context) != null) FirebaseMessaging.getInstance().token.addOnSuccessListener { prefs(context).edit().putString("token", it).apply() }
+    if (FirebaseApp.initializeApp(context) != null && prefs(context).getString("token", null) == null) FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+      if (prefs(context).getString("token", null) != token) { prefs(context).edit().putString("token", token).apply(); NodeBackgroundWork.enqueue(context) }
+    }
   }
   fun fromCommand(context: Context, payload: String): NodeNotificationResult = try {
     val command = notificationPhase("payload_parse", NotificationDiagnostic.PAYLOAD_PARSE) {
@@ -47,19 +49,27 @@ object NodeNativeNotifications {
       require(value.keys().asSequence().toSet() == setOf("commandId", "capability", "capabilityVersion", "expiresAt", "input"))
       value
     }
-    if (command.getString("capability") != "notification.show" || command.getInt("capabilityVersion") != 1) NodeNotificationResult("unsupported")
+    val capability=command.getString("capability")
+    if(command.getInt("capabilityVersion")!=1) NodeNotificationResult("unsupported")
+    else if(capability=="reminder.withdraw") {
+      val input=command.getJSONObject("input")
+      require(input.keys().asSequence().toSet()==setOf("reminderId","generation"))
+      require(NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"))>Instant.now().epochSecond)
+      NodeReminderActions.withdraw(context,input.getString("reminderId"),input.getLong("generation"))
+      NodeNotificationResult("success")
+    } else if(capability=="geofence.monitor" || capability=="location.current") {
+      NodeDomainCommands.accept(context,command)
+    } else if(capability!="notification.show" && capability!="reminder.notify") NodeNotificationResult("unsupported")
     else {
-      val fields = notificationPhase("payload_parse", NotificationDiagnostic.PAYLOAD_PARSE) {
-        val input = command.getJSONObject("input")
-        require(input.keys().asSequence().toSet() == setOf("title", "body"))
-        NodeNotificationPayload(command.getString("commandId"), command.getString("expiresAt"), input.getString("title"), input.getString("body"))
-      }
-      show(context, fields.commandId, fields.expiresAt, fields.title, fields.body)
+      val input=command.getJSONObject("input")
+      val reminder=if(capability=="reminder.notify") NodeReminderActions.read(input,command.getString("commandId")) else null
+      if(reminder==null) require(input.keys().asSequence().toSet()==setOf("title","body"))
+      show(context,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body"),reminder)
     }
   } catch (error: NotificationPhaseFailure) { NodeNotificationResult("failed", error.diagnostic) }
     catch (error: Exception) { notificationLog("payload_parse", error); NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_PARSE) }
 
-  @Synchronized fun show(context: Context, id: String, expires: String, title: String, body: String): NodeNotificationResult = try {
+  fun show(context: Context, id: String, expires: String, title: String, body: String, reminder: NodeReminderActions.Presentation? = null): NodeNotificationResult { synchronized(NodeNotificationGate.lock) { return try {
     val now = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { Instant.now().epochSecond }
     val expiry = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { NodeNotificationPayload.expiryEpochSecond(expires) }
     if (expiry <= now) NodeNotificationResult("expired")
@@ -79,19 +89,24 @@ object NodeNativeNotifications {
         }
         if (recent.any { it.first == id }) NodeNotificationResult("duplicate")
         else {
+          if(reminder!=null && !NodeReminderActions.remember(context,reminder)) return NodeNotificationResult("expired")
           val click = notificationPhase("pending_intent", NotificationDiagnostic.PENDING_INTENT) {
-            PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val intent=Intent(context,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if(reminder!=null) intent.setAction("com.aegis.node.open.${reminder.id}.${reminder.generation}").putExtra("reminderId",reminder.id)
+            PendingIntent.getActivity(context,0,intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
           }
           val notification = notificationPhase("notification_build", NotificationDiagnostic.BUILD) {
             // Resolve the actual packaged drawable before passing its resource ID to the framework.
             check(ContextCompat.getDrawable(context, R.drawable.ic_node_notification) != null)
-            NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_node_notification)
+            val builder=NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_node_notification)
               .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
-              .setContentIntent(click).setAutoCancel(true).build()
+              .setContentIntent(click).setAutoCancel(true)
+            if(reminder!=null) NodeReminderActions.addButtons(context,builder,reminder)
+            builder.build()
           }
           try {
             notificationPhase("notification_post", NotificationDiagnostic.POST) {
-              try { NotificationManagerCompat.from(context).notify(id, 1, notification) }
+              try { NotificationManagerCompat.from(context).notify(if(reminder==null) id else "reminder:${reminder.id}:${reminder.generation}", 1, notification) }
               catch (error: SecurityException) {
                 if (!granted(context)) { notificationLog("notification_post", error); return NodeNotificationResult("permission_denied", NotificationDiagnostic.PERMISSION_DENIED) }
                 throw error
@@ -106,4 +121,5 @@ object NodeNativeNotifications {
       }
     }
   } catch (error: NotificationPhaseFailure) { NodeNotificationResult("failed", error.diagnostic) }
+  } }
 }

@@ -1,7 +1,14 @@
 {
   "identifier": "android-updates",
-  "description": "Read the fixed HTTPS Android preview feed; no native installation permission.",
-  "windows": ["main"],
-  "platforms": ["android"],
-  "permissions": ["allow-check-android-update"]
+  "description": "Fixed HTTPS Android update feed and verified private-cache installer handoff.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android"
+  ],
+  "permissions": [
+    "allow-check-android-update",
+    "allow-install-android-update"
+  ]
 }

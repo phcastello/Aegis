@@ -5,6 +5,9 @@ mod native_notifications;
 mod node_capabilities;
 #[cfg(feature = "native-runtime")]
 mod node_commands;
+mod node_domain_routes;
+#[cfg(feature = "native-runtime")]
+mod node_domains;
 mod node_identity;
 mod node_notification;
 mod node_transport;
@@ -12,6 +15,8 @@ mod node_transport;
 mod node_vault;
 mod platform;
 mod updates;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_notifications;
 
 #[cfg(feature = "native-runtime")]
 #[derive(serde::Serialize)]
@@ -50,6 +55,33 @@ async fn check_android_update() -> Result<Option<updates::AndroidUpdate>, String
 }
 
 #[cfg(feature = "native-runtime")]
+#[tauri::command]
+async fn install_android_update(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        let update = updates::check(env!("CARGO_PKG_VERSION"))
+            .await?
+            .filter(|u| u.version == version)
+            .ok_or("Atualização não disponível.")?;
+        let result: Result<serde_json::Value, _> = app
+            .state::<native_notifications::AndroidBridge>()
+            .0
+            .run_mobile_plugin_async("installUpdate", update)
+            .await;
+        return result.map_err(|_| "Não foi possível abrir o instalador verificado.".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, version);
+        Err("Atualização Android disponível somente no celular.".into())
+    }
+}
+
+#[cfg(feature = "native-runtime")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(feature = "android-framework-fixture")]
@@ -58,7 +90,14 @@ pub fn run() {
     // One Windows process owns this installation's credential checkpoint at a time.
     // Register first so a second launch exits before secure-store initialization.
     #[cfg(windows)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
+        if args
+            .iter()
+            .any(|a| a.starts_with("aegis-reminder://action/"))
+        {
+            windows_notifications::activate(app, &args);
+            return;
+        }
         use tauri::Manager;
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
@@ -102,18 +141,16 @@ pub fn run() {
                     .state::<node_commands::NodeRuntime>()
                     .initialize_transport()
                     .await;
-                #[cfg(target_os="android")]
-                loop {
-                    let cancel=handle.state::<node_commands::NodeRuntime>().cancel.clone();
-                    tokio::select! { _=cancel.cancelled()=>break, _=tokio::time::sleep(std::time::Duration::from_secs(60))=>{} }
-                    handle.state::<node_commands::NodeRuntime>().sync_push().await;
-                }
             });
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
             tauri::WebviewWindowBuilder::from_config(app, config)?
-                .visible(!(cfg!(windows) && std::env::args().any(|a| a == "--autostart")))
+                .visible(
+                    !(cfg!(windows)
+                        && std::env::args()
+                            .any(|a| a == "--autostart" || a == "--reminder-action")),
+                )
                 .on_navigation(move |url| {
                     url.origin().ascii_serialization() == "https://tauri.localhost"
                         || (cfg!(debug_assertions)
@@ -129,30 +166,40 @@ pub fn run() {
                     _ => PermissionResponse::Deny,
                 })
                 .build()?;
-            #[cfg(windows)] {
+            #[cfg(windows)]
+            {
                 native_notifications::tray(app.handle())?;
-                if std::env::args().any(|a|a=="--autostart") { if let Some(window)=app.get_webview_window("main") { window.hide()?; } }
+                windows_notifications::initialize(app.handle());
+                if std::env::args().any(|a| a == "--autostart" || a == "--reminder-action") {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.hide()?;
+                    }
+                }
             }
             Ok(())
         })
         .on_window_event(|window, event| {
             use tauri::Manager;
             #[cfg(windows)]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); let _=window.hide(); }
-            if matches!(event, tauri::WindowEvent::Focused(true)) {
-                let runtime = window.state::<node_commands::NodeRuntime>();
-                if cfg!(target_os = "android")
-                    || runtime.transport.state().transport_state != "online"
-                {
-                    runtime.transport.reconnect();
-                }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
             #[cfg(target_os = "android")]
-            if matches!(event, tauri::WindowEvent::Resumed) {
-                window
-                    .state::<node_commands::NodeRuntime>()
-                    .transport
-                    .reconnect();
+            if matches!(event, tauri::WindowEvent::Suspended) {
+                let handle = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    handle
+                        .state::<node_commands::NodeRuntime>()
+                        .lifecycle(false)
+                        .await;
+                });
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                let runtime = window.state::<node_commands::NodeRuntime>();
+                if runtime.transport.state().transport_state != "online" {
+                    runtime.transport.reconnect();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -174,25 +221,35 @@ pub fn run() {
             native_notifications::node_request_notification_permission,
             native_notifications::node_set_autostart,
             node_commands::node_test_notification,
-            node_commands::node_create_pairing_code
+            node_commands::node_create_pairing_code,
+            node_commands::node_set_reminders,
+            node_commands::node_remove,
+            node_domains::node_reminders,
+            node_domains::node_places,
+            node_domains::node_location,
+            node_domains::node_geofences,
+            node_domains::node_settings_open,
+            node_domains::node_consume_reminder_open,
+            install_android_update
         ])
         .build(context)
         .expect("error while building Aegis")
         .run(|app, event| {
             use tauri::Manager;
             if matches!(event, tauri::RunEvent::Resumed) {
-                app.state::<node_commands::NodeRuntime>().transport.reconnect();
-                #[cfg(target_os="android")] {
-                    let handle=app.clone();
-                    tauri::async_runtime::spawn(async move { handle.state::<node_commands::NodeRuntime>().sync_push().await; });
-                }
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    handle
+                        .state::<node_commands::NodeRuntime>()
+                        .lifecycle(true)
+                        .await;
+                });
             }
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
-                app.state::<node_commands::NodeRuntime>()
-                    .shutdown();
+                app.state::<node_commands::NodeRuntime>().shutdown();
             }
         });
 }
