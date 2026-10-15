@@ -84,7 +84,7 @@ try {
        if(command === 'node_reminders') { if(args.operation === 'list') return structuredClone({reminders,series}); window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
-       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}return {}; }
+       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
@@ -228,6 +228,10 @@ try {
      await panel.getByText('Pendente de sincronização',{exact:true}).waitFor();
      await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
      await panel.getByText('Ativo no celular',{exact:true}).waitFor();
+     const geographicRule=panel.locator('article').filter({hasText:'Evento sintético'});
+     await geographicRule.getByRole('button',{name:'Pausar',exact:true}).click();
+     await geographicRule.getByText('Pausa pendente no celular',{exact:true}).waitFor();
+     await geographicRule.getByText('O celular offline pode conservar e executar a regra anterior até sincronizar ou até a validade local expirar.',{exact:true}).waitFor();
      assert.equal(await page.getByRole('dialog').count(),1);
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-settings-mobile.png`});
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));
