@@ -71,6 +71,12 @@ try {
    if (host === 'native') await context.addInitScript((runtimeVersion) => {
      window.openedUrls = []; window.nativeCalls = []; window.reminderPayloads=[]; window.placePayloads=[];
      const reminders=[],series=[],places=[],geofences=[];
+     window.reminderListRequests=[];
+     window.enableReminderPaging=()=>{
+       for(let index=1;index<=101;index++)series.push({seriesId:crypto.randomUUID(),text:`Série paginada ${index}`,timeZoneId:'America/Sao_Paulo',rule:{frequency:'daily',interval:1,localTime:'08:00',startDate:'2026-01-01'},status:'active',revision:1,deliveryPolicy:'allEligible',nextDueAt:'2026-10-20T11:00:00Z'});
+       for(let index=1;index<=201;index++)reminders.push({reminderId:crypto.randomUUID(),text:`Ocorrência paginada ${index}`,dueAt:'2026-10-20T11:00:00Z',timeZoneId:'America/Sao_Paulo',status:'Scheduled',seriesId:null,revision:1,generation:1,deliveryPolicy:'allEligible'});
+       window.oldReminder={reminderId:crypto.randomUUID(),text:'Ocorrência antiga focalizada',dueAt:'2020-01-01T11:00:00Z',timeZoneId:'America/Sao_Paulo',status:'Cancelled',seriesId:null,revision:1,generation:1,deliveryPolicy:'allEligible'};
+     };
      const location={sourceNodeId:'native-current',nodes:[],latest:null};
      const now = new Date().toISOString();
      const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: runtimeVersion, protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
@@ -81,7 +87,12 @@ try {
        // Match Tauri's JSON IPC boundary instead of retaining Vue proxy references.
        if(args!==undefined)args=JSON.parse(JSON.stringify(args));
        if(command === 'node_settings_open') return;
-       if(command === 'node_reminders') { if(args.operation === 'list') return structuredClone({reminders,series}); window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
+       if(command === 'node_reminders') { if(args.operation === 'list') {
+         const query=args.payload??{};window.reminderListRequests.push(query);
+         if(query.offset>0 || query.seriesOffset>0) {await new Promise(resolve=>setTimeout(resolve,350));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
+         const offset=query.offset??0,seriesOffset=query.seriesOffset??0;
+         return structuredClone({reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:query.focusId===window.oldReminder?.reminderId?window.oldReminder:null});
+       } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
        if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
@@ -234,6 +245,26 @@ try {
      await geographicRule.getByText('O celular offline pode conservar e executar a regra anterior até sincronizar ou até a validade local expirar.',{exact:true}).waitFor();
      assert.equal(await page.getByRole('dialog').count(),1);
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-settings-mobile.png`});
+     await page.evaluate(()=>window.enableReminderPaging());
+     await panel.getByRole('button',{name:'Atualizar',exact:true}).click();
+     await panel.getByRole('heading',{name:'Série paginada 1',exact:true}).waitFor();
+     assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),0);
+     const seriesMore=panel.getByRole('button',{name:'Carregar mais séries',exact:true});
+     const pageRequests=await page.evaluate(()=>window.reminderListRequests.length);
+     await seriesMore.click();assert.equal(await seriesMore.isDisabled(),true);
+     await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).waitFor();
+     assert.equal(await seriesMore.count(),0);assert.equal(await page.evaluate(()=>window.reminderListRequests.length),pageRequests+1,'One click fetches exactly one series page');
+     const occurrencesMore=panel.getByRole('button',{name:'Carregar mais ocorrências',exact:true});
+     await page.evaluate(()=>window.reminderPageFailure=true);await occurrencesMore.click();assert.equal(await occurrencesMore.isDisabled(),true);
+     await panel.getByRole('alert').filter({hasText:'Falha sintética de página.'}).waitFor();
+     assert.equal(await panel.getByRole('heading',{name:'Ocorrência paginada 1',exact:true}).count(),1,'A failed page preserves existing occurrences');
+     assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),1,'A failed occurrence page preserves loaded series');
+     await occurrencesMore.click();await panel.getByRole('heading',{name:'Ocorrência paginada 201',exact:true}).waitFor();assert.equal(await occurrencesMore.count(),0);
+     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:window.oldReminder.reminderId}})));
+     const oldReminder=panel.getByRole('heading',{name:'Ocorrência antiga focalizada',exact:true});await oldReminder.waitFor();
+     assert.equal(await oldReminder.count(),1);assert.equal(await page.evaluate(()=>document.activeElement.id===`reminder-${window.oldReminder.reminderId}`),true,'A notification body focuses its old authenticated occurrence outside the page');
+     assert.equal(await panel.getByLabel('Mostrar histórico e cancelados').isChecked(),true);
+     const focusedRequest=await page.evaluate(()=>window.reminderListRequests.at(-1));assert.equal(focusedRequest.offset,0);assert.equal(focusedRequest.seriesOffset,0);assert.match(focusedRequest.focusId,/^[0-9a-f-]{36}$/i);
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));
      await panel.waitFor({state:'hidden'});
      const listCalls=await page.evaluate(()=>window.nativeCalls.filter(command=>command==='node_list').length);
