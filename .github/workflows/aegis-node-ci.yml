@@ -131,7 +131,7 @@ jobs:
           PYTHON
       - if: matrix.android == 'false'
         name: Validate Windows CDP observer without replacing native IPC
-        run: node --test ../../packages/aegis-client/tests/windows-cdp-observer.test.mjs
+        run: node --test ../../packages/aegis-client/tests/windows-cdp-observer.test.mjs ../../packages/aegis-client/tests/windows-toast-history.test.mjs
       - run: npm run check
       - run: npm run build
       - run: npm test
