@@ -28,13 +28,19 @@ object NodeReminderActions {
     override fun onOpen(db:SQLiteDatabase) {super.onOpen(db);db.execSQL("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)") }
   }
   fun bindIdentity(context:Context,id:String) { synchronized(NodeNotificationGate.lock) {
+    if(!NodeNativeSession.bindingAllowed(context,id))return
     Store(context).use{store->val db=store.writableDatabase
       val previous=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
       if(previous!=id) {
-        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
+        val known=mutableListOf<Pair<String,Long>>()
+        db.rawQuery("SELECT id,generation FROM presentations",null).use{while(it.moveToNext())known.add(it.getString(0) to it.getLong(1))}
         val manager=context.getSystemService(android.app.NotificationManager::class.java)
-        for(notification in manager.activeNotifications)if(notification.tag?.startsWith("reminder:")==true)manager.cancel(notification.tag,notification.id)
-        manager.cancel("aegis-action-pending",709)
+        val active=try{manager.activeNotifications.mapNotNull{notification->notification.tag?.let{it to notification.id}}}catch(error:Exception){notificationLog("scope_list",error);emptyList()}
+        // notify() accepts IPC before its record appears in activeNotifications.
+        // Under the same gate as show(), cancel every durable accepted generation.
+        for((tag,notificationId)in identityReminderTags(known,active))try{manager.cancel(tag,notificationId)}catch(error:Exception){notificationLog("scope_withdraw",error)}
+        try{manager.cancel("aegis-action-pending",709)}catch(error:Exception){notificationLog("scope_withdraw",error)}
+        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
       }
     }
   } }
@@ -54,7 +60,14 @@ object NodeReminderActions {
       db.delete("withdrawals","expires < ?",arrayOf(System.currentTimeMillis().toString()))
       db.rawQuery("SELECT generation FROM withdrawals WHERE id=?",arrayOf(value.id)).use { if(it.moveToFirst() && it.getLong(0)>=value.generation) return false }
       db.rawQuery("SELECT generation, revision FROM presentations WHERE id=?", arrayOf(value.id)).use {
-        if(it.moveToFirst() && (it.getLong(0) > value.generation || it.getLong(0) == value.generation && it.getLong(1) > value.revision)) return false
+        if(it.moveToFirst()) {
+          if(it.getLong(0) > value.generation || it.getLong(0) == value.generation && it.getLong(1) > value.revision)return false
+          supersededReminderTag(value.id,it.getLong(0),value.generation)?.let { (tag,notificationId)->
+            // Retire the accepted old generation even while its post is still in
+            // the OS queue. On failure keep its row and report failure for retry.
+            notificationPhase("generation_withdraw",NotificationDiagnostic.POST){NotificationManagerCompat.from(context).cancel(tag,notificationId)}
+          }
+        }
       }
       val row=ContentValues().apply {
         put("id",value.id); put("generation",value.generation); put("revision",value.revision)
@@ -179,7 +192,7 @@ object NodeReminderActions {
   }
   fun flush(context: Context) {
     val scope=NodeNativeSession.read(context)?.nodeId ?: return
-    bindIdentity(context,scope)
+    synchronized(NodeNotificationGate.lock){if(!applyForCurrentIdentity({NodeNativeSession.bindingAllowed(context,scope)}){bindIdentity(context,scope)})return}
     Store(context).use { store ->
       val db=store.writableDatabase
       db.delete("actions","created < ?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))

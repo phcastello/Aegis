@@ -54,7 +54,7 @@ class MainActivity : TauriActivity() {
       .put("token",NodeNativeNotifications.prefs(this).getString("token",null)).toString()
   }
 
-  fun bindNodePush(payload:String):String = try {
+  fun bindNodePush(payload:String):String {return try {
     val value=org.json.JSONObject(payload)
     val id=if(value.isNull("nodeId")) null else value.getString("nodeId")
     if(id!=null && java.util.UUID.fromString(id).toString()!=id) "failed"
@@ -62,12 +62,17 @@ class MainActivity : TauriActivity() {
       val prefs=NodeNativeNotifications.prefs(this)
       val origin=value.optString("origin")
       require(NodeNativeSession.validOrigin(origin,this))
+      if(!NodeNativeSession.bindingAllowed(this,id,origin))return "failed"
       if(id!=null) { NodeGeofenceRuntime.bindIdentity(this,id) }
-      if(prefs.getString("nodeId",null)!=id || prefs.getString("origin",null)!=origin) check(prefs.edit().putString("nodeId",id).putString("origin",origin).commit())
-      if(id!=null) { NodeBackgroundWork.enqueue(this); NodeBackgroundWork.scheduleRenewal(this) } else NodeGeofences.background{NodeGeofenceRuntime.deactivate(this)}
+      synchronized(NodeNotificationGate.lock) {
+        if(!applyForCurrentIdentity({NodeNativeSession.bindingAllowed(this,id,origin)}) {
+          if(prefs.getString("nodeId",null)!=id || prefs.getString("origin",null)!=origin) check(prefs.edit().putString("nodeId",id).putString("origin",origin).commit())
+        })return "failed"
+      }
+      if(id!=null) { NodeBackgroundWork.enqueue(this); NodeBackgroundWork.scheduleRenewal(this) } else NodeGeofences.background{NodeGeofences.clearIfUnbound(this,origin)}
       "success"
     }
-  } catch(_:Exception){"failed"}
+  } catch(_:Exception){"failed"} }
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)

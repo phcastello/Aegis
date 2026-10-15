@@ -38,13 +38,17 @@ object NodeGeofences {
   val flags=PendingIntent.FLAG_UPDATE_CURRENT or if(Build.VERSION.SDK_INT>=31) PendingIntent.FLAG_MUTABLE else 0
   return PendingIntent.getBroadcast(context,0,Intent(context,NodeGeofenceReceiver::class.java).setAction("com.aegis.node.GEOFENCE"),flags)
  }
- fun clear(context:Context) { synchronized(manifestGate) {
+ fun clear(context:Context) = clearWhen(context){true}
+ fun clearIfUnbound(context:Context,origin:String?=null) = clearWhen(context){NodeNativeSession.bindingAllowed(context,null,origin)}
+ fun clearForScope(context:Context,id:String,origin:String) = clearWhen(context){NodeNativeSession.scopeIsCurrent(context,id,origin)}
+ private fun clearWhen(context:Context,current:()->Boolean) { synchronized(manifestGate) {
   val hadRegions=prefs(context).getBoolean("hasRegions",false)
-  synchronized(applyGate){check(prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
+  synchronized(applyGate){if(!current())return;check(prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
   if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
  } }
  fun bindIdentity(context:Context,id:String) { synchronized(applyGate) {
+  if(!NodeNativeSession.bindingAllowed(context,id))return
   val previous=prefs(context).getString("scopeNodeId",null) ?: manifest(context)?.optString("observerNodeId")
   if(previous!=id) {
    Store(context).use{it.writableDatabase.delete("events",null,null)}

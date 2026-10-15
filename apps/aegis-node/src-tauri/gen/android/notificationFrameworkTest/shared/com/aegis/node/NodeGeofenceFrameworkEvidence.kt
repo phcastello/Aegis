@@ -27,13 +27,13 @@ internal fun exerciseLocationPermissionFramework(context:Context) {
  assertEquals(Build.VERSION.SDK_INT<29 || context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)==android.content.pm.PackageManager.PERMISSION_GRANTED,state.getBoolean("background"))
 }
 private fun geoStamp(time:Long)=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",Locale.ROOT).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date(time))
-private fun fixtureOffline(seconds:Int) {
+private fun fixtureOffline(seconds:Int,allowPairing:Boolean=false) {
  val connection=URL("http://127.0.0.1:18104/fixture/backend-offline").openConnection() as HttpURLConnection
- try {connection.requestMethod="POST";connection.connectTimeout=5000;connection.readTimeout=5000;connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(JSONObject().put("seconds",seconds).toString().toByteArray())};check(connection.responseCode==200)}finally{connection.disconnect()}
+ try {connection.requestMethod="POST";connection.connectTimeout=5000;connection.readTimeout=5000;connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(JSONObject().put("seconds",seconds).put("allowPairing",allowPairing).toString().toByteArray())};check(connection.responseCode==200)}finally{connection.disconnect()}
 }
 
 /** Authenticated Kotlin HTTP and real Google Task are separate from seeded deterministic state tests. */
-internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:(String,JSONObject,Long)->JSONObject) {
+internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:(String,JSONObject,Long)->JSONObject):String {
  fun ipc(name:String,operation:String,payload:JSONObject?=null,id:String?=null,timeout:Long=20000):JSONObject=invoke(name,JSONObject().put("operation",operation).apply{if(payload!=null)put("payload",payload);if(id!=null)put("id",id)},timeout)
  fun checkpoint(phase:String)=android.util.Log.i("AegisNodeNativeTest","phase=$phase errorType=Checkpoint")
  // This empty-manifest round trip must read the actual Rust keyring credential in Kotlin.
@@ -126,11 +126,23 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   val bind=geoRuntime(context).getMethod("bindIdentity",Context::class.java,String::class.java)
   bind.invoke(null,context,nodeId)
   assertEquals(occurrences,events()) // Same identity preserves its persisted pending delivery.
-  bind.invoke(null,context,UUID.randomUUID().toString())
+  // Keep the event/action endpoints unavailable while allowing only the real
+  // authenticated pairing lifecycle. An empty outbox must result from the new
+  // identity binding, never a background worker flushing it before revocation.
+  fixtureOffline(120,allowPairing=true)
+  // Create the code while the existing credential is still authorized. Use the
+  // real native vault/pairing path; a fake scope must not override its authority.
+  val nextCode=invoke("node_create_pairing_code",JSONObject(),20000).getString("code")
+  assertEquals(occurrences,events())
+  invoke("node_revoke",JSONObject().put("id",nodeId),20000)
+  val replacement=invoke("node_pair",JSONObject().put("name","Android replacement fixture").put("code",nextCode),30000)
+  assertEquals("paired",replacement.getString("state"))
+  val nextId=replacement.getJSONObject("node").getString("id")
+  assertNotEquals(nodeId,nextId)
   assertTrue(events().isEmpty())
   for(id in occurrences)awaitFrameworkReminderWithdrawal(manager,id,1)
-  bind.invoke(null,context,nodeId)
   checkpoint("native_identity_scope_reset")
+  return nextId
  } finally {
   fixtureOffline(0)
   // Authoritative cleanup is revision checked. Normal reconciliation may already have completed it.

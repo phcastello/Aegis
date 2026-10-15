@@ -121,7 +121,8 @@ class NodeNotificationLiveTest {
         manager.cancel(commandId, 1)
         checkpoint("live_notification_cancelled")
         checkpoint("live_node_revoke_started")
-        invoke(webview, "node_revoke", JSONObject().put("id", id))
+        val currentIdentity=invoke(webview,"node_status")
+        if(currentIdentity.getString("state")=="paired")invoke(webview, "node_revoke", JSONObject().put("id", currentIdentity.getJSONObject("node").getString("id")))
         checkpoint("live_node_revoked")
       }
     }

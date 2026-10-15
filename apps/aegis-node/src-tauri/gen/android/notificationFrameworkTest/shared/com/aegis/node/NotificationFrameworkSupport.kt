@@ -40,6 +40,9 @@ internal fun exerciseReminderNotificationActions(render:(String)->org.json.JSONO
     org.junit.Assert.assertEquals(listOf("OK","Adiar 10 min"),first.actions.map{it.title.toString()})
     org.junit.Assert.assertNotNull(first.contentIntent)
     org.junit.Assert.assertEquals("success",render(notify(id,2)).getString("status"))
+    // Advancing the generation retires its predecessor before any delayed
+    // withdrawal command arrives. The pure selector also covers an empty OS list.
+    awaitFrameworkReminderWithdrawal(manager,id,1)
     org.junit.Assert.assertEquals("success",render(withdraw(id,1)).getString("status"))
     awaitFrameworkReminder(manager,id,2)
     awaitFrameworkReminderWithdrawal(manager,id,1)

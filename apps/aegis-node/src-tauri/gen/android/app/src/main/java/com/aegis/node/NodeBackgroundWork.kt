@@ -22,10 +22,15 @@ object NodeBackgroundWork {
   fun fingerprint(token: String): String = MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
 }
 class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
-  override fun doWork(): Result = try {
+  override fun doWork(): Result {
+   val session = NodeNativeSession.read(applicationContext)
+   return try {
     val prefs = NodeNativeNotifications.prefs(applicationContext)
-    val session = NodeNativeSession.read(applicationContext)
-    if (session == null) { NodeGeofenceRuntime.deactivate(applicationContext);WorkManager.getInstance(applicationContext).cancelUniqueWork("aegis-native-renewal"); Result.success() }
+    if (session == null) {
+      NodeGeofences.clearIfUnbound(applicationContext)
+      synchronized(NodeNotificationGate.lock){if(NodeNativeSession.bindingAllowed(applicationContext,null))WorkManager.getInstance(applicationContext).cancelUniqueWork("aegis-native-renewal")}
+      Result.success()
+    }
     else {
       var retry=false
       // Independent channels: a location/provider error cannot strand temporal actions.
@@ -46,9 +51,17 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
     }
   } catch (error: NodeNativeSession.HttpFailure) {
     if (error.status == 401 || error.status == 403 || error.status == 404) {
-      NodeGeofenceRuntime.deactivate(applicationContext)
-      if(error.status!=403)NodeNativeNotifications.prefs(applicationContext).edit().remove("nodeId").commit()
+      if(session!=null) {
+        NodeGeofences.clearForScope(applicationContext,session.nodeId,session.origin)
+        synchronized(NodeNotificationGate.lock) {
+          if(NodeNativeSession.scopeIsCurrent(applicationContext,session.nodeId,session.origin)&&error.status!=403) {
+            NodeNativeNotifications.prefs(applicationContext).edit().remove("nodeId").commit()
+            WorkManager.getInstance(applicationContext).cancelUniqueWork("aegis-native-renewal")
+          }
+        }
+      }
       Result.success()
     } else Result.retry()
   } catch (_: Exception) { Result.retry() }
+  }
 }

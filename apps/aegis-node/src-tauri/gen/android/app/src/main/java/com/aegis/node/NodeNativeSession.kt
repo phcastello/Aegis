@@ -14,16 +14,33 @@ object NodeNativeSession {
   private const val VAULT = "keyring-aegis-node-identity-v1"
   private const val ENTRY = "installation\uFEFF@\uFEFFcom.aegis.node.identity.v1"
   data class Session(val origin: String, val nodeId: String, val credential: String)
-  fun read(context: Context): Session? {return try {
+  // Native AndroidKeyStore/SharedPreferences only: no JNI callback or Rust mutex.
+  private fun vault(context:Context):JSONObject? {
     val encrypted = context.getSharedPreferences(VAULT, Context.MODE_PRIVATE).getString(ENTRY, null)
-    if (encrypted == null) null else {
+    return if (encrypted == null) null else {
       val bytes = Base64.decode(encrypted, Base64.DEFAULT)
       require(bytes.size > 29 && bytes[0].toInt() == 12)
       val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
       val key = store.getKey(VAULT, null) ?: return null
       val cipher = Cipher.getInstance("AES/GCM/NoPadding")
       cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
-      val record = JSONObject(String(cipher.doFinal(bytes.copyOfRange(13, bytes.size)), Charsets.UTF_8))
+      JSONObject(String(cipher.doFinal(bytes.copyOfRange(13, bytes.size)), Charsets.UTF_8))
+    }
+  }
+  private fun authority(record:JSONObject?):NativeIdentityAuthority {
+    val node=record?.optJSONObject("node")
+    val active=record!=null&&node!=null&&!record.optBoolean("revoked")&&record.isNull("pending")&&node.optBoolean("enabled")&&node.isNull("revokedAt")
+    return NativeIdentityAuthority(node?.optString("id"),record?.optString("origin"),active)
+  }
+  /** Authorizes native identity binding only; it never returns a credential/session. */
+  fun bindingAllowed(context:Context,id:String?,origin:String?=null):Boolean = try {
+    identityBindingAllowed(authority(vault(context)),id,origin)
+  }catch(_:Exception){false}
+  fun scopeIsCurrent(context:Context,id:String,origin:String?=null):Boolean = try {
+    identityScopeMatches(authority(vault(context)),id,origin)
+  }catch(_:Exception){false}
+  fun read(context: Context): Session? {return try {
+      val record = vault(context) ?: return null
       val node = record.optJSONObject("node") ?: return null
       if (record.optBoolean("revoked") || !record.isNull("pending") || !node.optBoolean("enabled") || !node.isNull("revokedAt")) return null
       val origin = record.getString("origin")
@@ -31,7 +48,6 @@ object NodeNativeSession {
       val bound = NodeNativeNotifications.prefs(context)
       if (bound.getString("nodeId", null) != node.getString("id") || bound.getString("origin", null) != origin) null
       else Session(origin, node.getString("id"), record.getString("credential"))
-    }
   } catch (_: Exception) { null }}
 
   fun validOrigin(origin: String, context: Context): Boolean = try {
