@@ -11,14 +11,18 @@ on:
         description: Validate a focused Windows native fix before the full candidate matrix
         type: boolean
         default: false
+      android_framework_only:
+        description: Android framework checks without idle windows; Windows-only takes precedence; full matrix remains required
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || 'all' }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && 'android-framework' || 'all' }}
   cancel-in-progress: true
 jobs:
   regression:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.android_framework_only) }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -99,6 +103,7 @@ jobs:
           path: artifacts/v0.7.0-completion/ui
           retention-days: 7
   native:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.android_framework_only || inputs.windows_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -301,13 +306,13 @@ jobs:
             node ../../scripts/node-transport-probe/android-native.mjs release
 
       - name: Preserve candidate APK and generic instrumentation for idle comparison
-        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.release_build.outcome == 'success' }}
         run: |
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-after.apk"
           cp src-tauri/gen/android/notificationFrameworkTest/build/outputs/apk/release/notificationFrameworkTest-release.apk "$RUNNER_TEMP/aegis-idle-test.apk"
       - name: Build accepted Android baseline with the same isolated signing identity
         id: idle_baseline_build
-        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.release_build.outcome == 'success' }}
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
         run: |
@@ -322,7 +327,7 @@ jobs:
           npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-before.apk"
       - name: Equivalent Android idle windows before and after (ten minutes each)
-        if: ${{ !cancelled() && matrix.api == 35 && steps.idle_baseline_build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.idle_baseline_build.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           api-level: 35
@@ -333,7 +338,7 @@ jobs:
           script: |
             node ../../scripts/node-transport-probe/android-idle.mjs "$RUNNER_TEMP/aegis-idle-before.apk" "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        if: ${{ !cancelled() && matrix.api == 35 }}
+        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only }}
         with:
           name: Aegis-Android-Idle-Comparison
           path: artifacts/v0.7.0-completion/android-idle-*.json
