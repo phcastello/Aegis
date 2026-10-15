@@ -88,6 +88,7 @@ public sealed class NotificationsController(AegisDbContext db, ReminderStore rem
         {
             await reminders.LockedAsync(id, r =>
             {
+                if (r.Generation != 1 || r.SeriesId is not null) throw new ReminderException("legacy_interaction_expired", "Use as ações da ocorrência atual.");
                 if (action == "acknowledge") r.Acknowledge(clock.GetUtcNow()); else r.Open(clock.GetUtcNow());
                 return Task.FromResult(true);
             }, ct);

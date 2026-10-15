@@ -60,6 +60,8 @@ public sealed class NodePushRegistrations(AegisDbContext db, IDataProtectionProv
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         if (await db.NodePushRegistrations.AnyAsync(r => r.NodeId != actor && r.TokenHash == hash, ct)) throw new NodeException("push_registration_conflict", "Registration já vinculada.", 409);
         var current = await db.NodePushRegistrations.SingleOrDefaultAsync(r => r.NodeId == actor, ct);
+        if (current is not null && current.TokenHash.SequenceEqual(hash) && current.ExpiresAt > clock.GetUtcNow().AddDays(14))
+        { if (tx is not null) await tx.CommitAsync(ct); return; }
         if (current is null) db.NodePushRegistrations.Add(new(actor, protector.Protect(token), hash, clock.GetUtcNow()));
         else current.Refresh(protector.Protect(token), hash, clock.GetUtcNow());
         await db.SaveChangesAsync(ct); if (tx is not null) await tx.CommitAsync(ct); Registered.Add(1);
@@ -75,13 +77,24 @@ public sealed class NodePushRegistrations(AegisDbContext db, IDataProtectionProv
     }
 }
 public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations registrations, INodeFcmCredentials credentials,
-    IHttpClientFactory clients, IOptions<NodeFcmOptions> options, TimeProvider clock, ILogger<NodeFcmTransport> logger) : INodePushNotifications
+    IHttpClientFactory clients, IOptions<NodeFcmOptions> options, TimeProvider clock, ILogger<NodeFcmTransport> logger) : INodePushNotifications, INodePushDomainSignals
 {
     private static readonly Meter Meter = new("Aegis.NodePush", "1");
     private static readonly Counter<long> Failures = Meter.CreateCounter<long>("node_push_failures_total");
-    public async Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
+    public Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
     {
-        if (command.ExpiresAt <= clock.GetUtcNow()) return "expired";
+        var data = new Dictionary<string, string> { ["nodeId"] = id.ToString(), ["type"] = command.Capability, ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O") };
+        if (command.Capability == NotificationContract.Capability) { data["title"] = command.Input.Title!; data["body"] = command.Input.Body!; }
+        else data["input"] = JsonSerializer.Serialize(command.Input, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        return SendDataAsync(id, command.CommandId, command.ExpiresAt, data, ct);
+    }
+    public Task<string> SendDomainAsync(Guid id, NodeDomainCommand command, CancellationToken ct) => SendDataAsync(id, command.CommandId, command.ExpiresAt,
+        new() { ["nodeId"] = id.ToString(), ["type"] = "domain.sync", ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O"), ["capability"] = command.Capability,
+            ["input"] = JsonSerializer.Serialize(command.Input, new JsonSerializerOptions(JsonSerializerDefaults.Web)) }, ct);
+    private async Task<string> SendDataAsync(Guid id, Guid commandId, DateTimeOffset expiresAt, Dictionary<string, string> data, CancellationToken ct)
+    {
+        if (JsonSerializer.SerializeToUtf8Bytes(data, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }).Length > 3900) return "failed";
+        if (expiresAt <= clock.GetUtcNow()) return "expired";
         if (!await registrations.HasRouteAsync(id, ct)) return "unavailable";
         var registration = await db.NodePushRegistrations.AsNoTracking().SingleOrDefaultAsync(r => r.NodeId == id, ct);
         if (registration is null) return "unavailable";
@@ -90,11 +103,11 @@ public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations re
             using var request = new HttpRequestMessage(HttpMethod.Post, $"https://fcm.googleapis.com/v1/projects/{options.Value.ProjectId}/messages:send");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await credentials.AccessTokenAsync(deadline.Token));
             request.Content = JsonContent.Create(new { message = new { token = registrations.Unprotect(registration),
-                data = new Dictionary<string, string> { ["nodeId"] = id.ToString(), ["type"] = "notification.show", ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O"), ["title"] = command.Input.Title, ["body"] = command.Input.Body },
-                android = new { priority = "HIGH", ttl = Math.Clamp((int)Math.Ceiling((command.ExpiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } });
+                data,
+                android = new { priority = "HIGH", ttl = Math.Clamp((int)Math.Ceiling((expiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } });
             if (!await registrations.HasRouteAsync(id, deadline.Token)) return "unavailable";
             using var response = await clients.CreateClient("node-fcm").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-            if (response.IsSuccessStatusCode) { logger.LogInformation("Node notification accepted NodeId={NodeId} CommandId={CommandId} Transport=fcm", id, command.CommandId); return "accepted"; }
+            if (response.IsSuccessStatusCode) { logger.LogInformation("Node notification accepted NodeId={NodeId} CommandId={CommandId} Transport=fcm", id, commandId); return "accepted"; }
             // Inspect only known typed FCM codes; never log the response body/token/content.
             using var stream = await response.Content.ReadAsStreamAsync(deadline.Token); var bytes = new byte[8193]; var length = 0;
             while (length < bytes.Length) { var count = await stream.ReadAsync(bytes.AsMemory(length), deadline.Token); if (count == 0) break; length += count; }
@@ -102,8 +115,8 @@ public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations re
             if (length <= 8192) try { using var json = JsonDocument.Parse(bytes.AsMemory(0, length)); if (json.RootElement.TryGetProperty("error", out var error) && error.TryGetProperty("details", out var details))
                 invalid = details.EnumerateArray().Any(d => d.TryGetProperty("@type", out var type) && type.GetString() == "type.googleapis.com/google.firebase.fcm.v1.FcmError" && d.TryGetProperty("errorCode", out var code) && code.GetString() == "UNREGISTERED"); } catch (JsonException) { }
             if (invalid) await registrations.InvalidateAsync(id, registration.TokenHash, deadline.Token);
-            Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} HttpStatus={HttpStatus} Reason={Reason}", id, command.CommandId, (int)response.StatusCode, invalid ? "unregistered" : "provider_rejected"); return invalid ? "unavailable" : "failed";
+            Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} HttpStatus={HttpStatus} Reason={Reason}", id, commandId, (int)response.StatusCode, invalid ? "unregistered" : "provider_rejected"); return invalid ? "unavailable" : "failed";
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { Failures.Add(1); return "timeout"; }
-        catch (Exception e) when (e is HttpRequestException or CryptographicException or InvalidOperationException or Google.Apis.Auth.OAuth2.Responses.TokenResponseException) { Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} Reason=sender_failed", id, command.CommandId); return "failed"; }
+        catch (Exception e) when (e is HttpRequestException or CryptographicException or InvalidOperationException or Google.Apis.Auth.OAuth2.Responses.TokenResponseException) { Failures.Add(1); logger.LogWarning("Node push failed NodeId={NodeId} CommandId={CommandId} Reason=sender_failed", id, commandId); return "failed"; }
     }
 }

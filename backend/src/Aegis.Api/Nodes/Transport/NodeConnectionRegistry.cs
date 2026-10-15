@@ -5,7 +5,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 namespace Aegis.Api.Nodes.Transport;
 
-public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifications, IDisposable
+public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifications, INodeLiveDomainSignals, IDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<Guid, Lease> current = [];
@@ -42,7 +42,7 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
     }
     private bool IsFresh(Lease lease) => lease.Ready && !IsExpired(lease);
     private bool IsExpired(Lease lease) => lease.Ended.IsCancellationRequested ||
-        clock.GetUtcNow() - (lease.LastHeartbeatAt ?? lease.ConnectedAt) >= TimeSpan.FromSeconds(options.TimeoutSeconds);
+        clock.GetUtcNow() - lease.LastSeenAt >= TimeSpan.FromSeconds(options.TimeoutSeconds);
     public bool IsOnline(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease); }
     public Lease? Lookup(Guid id) { lock (gate) return current.GetValueOrDefault(id); }
     public IReadOnlyList<NodeCapability>? LiveCapabilities(Guid id) { lock (gate) return current.TryGetValue(id, out var lease) && IsFresh(lease) ? lease.Capabilities : null; }
@@ -74,20 +74,24 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
             await NodeProtocol.SendAsync(lease.Socket, type, messageId, clock.GetUtcNow(), payload, deadline.Token); }
         finally { lease.Writer.Release(); }
     }
-    public async Task<NodeLiveNotificationResult> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
+    public Task<NodeLiveNotificationResult> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct) =>
+        SendCommandAsync(id, command.CommandId, command.Capability, command.CapabilityVersion, command.ExpiresAt, command, ct);
+    public async Task<string> SendDomainAsync(Guid id, NodeDomainCommand command, CancellationToken ct) =>
+        (await SendCommandAsync(id, command.CommandId, command.Capability, command.CapabilityVersion, command.ExpiresAt, command, ct)).Status;
+    private async Task<NodeLiveNotificationResult> SendCommandAsync(Guid id, Guid commandId, string capability, int capabilityVersion, DateTimeOffset expiresAt, object command, CancellationToken ct)
     {
         Lease? lease;
         var result = new TaskCompletionSource<NodeLiveNotificationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (gate) { lease = current.GetValueOrDefault(id); if (lease is null || !IsFresh(lease) || lease.Socket is null ||
-            !lease.Capabilities.Any(c => c.Name == NotificationContract.Capability && c.Version >= 1)) return new("unavailable");
+            !lease.Capabilities.Any(c => c.Name == capability && c.Version >= capabilityVersion)) return new("unavailable");
             if (lease.Pending.Count >= 16) return new("busy");
-            if (!lease.Pending.TryAdd(command.CommandId, result)) return new("busy"); } // In-flight is not proof of execution.
-        if (command.ExpiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(command.CommandId, out _); return new("expired"); }
+            if (!lease.Pending.TryAdd(commandId, result)) return new("busy"); } // In-flight is not proof of execution.
+        if (expiresAt <= clock.GetUtcNow()) { lease.Pending.TryRemove(commandId, out _); return new("expired"); }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(8));
         try { await WriteAsync(lease, "command", Guid.NewGuid(), command, deadline.Token); return await result.Task.WaitAsync(deadline.Token); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(lease.Ended.IsCancellationRequested ? "unavailable" : "timeout"); }
         catch (WebSocketException) { return new("unavailable"); }
-        finally { lease.Pending.TryRemove(command.CommandId, out _); }
+        finally { lease.Pending.TryRemove(commandId, out _); }
     }
     public void Result(Lease lease, Guid commandId, string status, string? diagnosticCode = null)
     {

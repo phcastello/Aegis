@@ -409,6 +409,8 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     {
         modelBuilder.ConfigureMemory();
         modelBuilder.ConfigureNodes();
+        Aegis.Infrastructure.Reminders.ReminderCompletionModelConfiguration.ConfigureReminderCompletion(modelBuilder);
+        Aegis.Infrastructure.Places.PlaceModelConfiguration.ConfigurePlaces(modelBuilder);
         modelBuilder.Entity<Reminder>(e =>
         {
             e.ToTable("reminders");
@@ -440,8 +442,8 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             e.Property(a => a.Result).HasMaxLength(40);
             e.Property(a => a.Transport).HasMaxLength(30);
             e.HasOne<Reminder>().WithMany().HasForeignKey(a => a.ReminderId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne<AegisNode>().WithMany().HasForeignKey(a => a.NodeId).OnDelete(DeleteBehavior.Restrict);
-            e.HasIndex(a => new { a.ReminderId, a.Attempt }).IsUnique();
+            e.HasOne<AegisNode>().WithMany().HasForeignKey(a => a.NodeId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(a => new { a.ReminderId, a.Attempt }).IsUnique(false);
             e.HasIndex(a => a.CommandId);
         });
         modelBuilder.Entity<Conversation>(entity =>

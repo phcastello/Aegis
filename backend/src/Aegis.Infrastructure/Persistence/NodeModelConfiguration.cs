@@ -13,6 +13,7 @@ internal static class NodeModelConfiguration
                 t.HasCheckConstraint("ck_node_name", "length(trim(\"Name\")) BETWEEN 1 AND 100");
                 t.HasCheckConstraint("ck_node_revoked_disabled", "\"RevokedAt\" IS NULL OR NOT \"Enabled\""); });
             e.Property(n => n.TargetPriority).HasDefaultValue(0);
+            e.Property(n => n.ReceiveReminders).HasDefaultValue(true);
             e.HasKey(n => n.Id); e.Property(n => n.Name).HasMaxLength(100).IsRequired();
             e.Property(n => n.Platform).HasConversion<string>().HasMaxLength(16);
             e.Property(n => n.AppVersion).HasMaxLength(80).IsRequired(); e.HasIndex(n => new { n.Enabled, n.RevokedAt });

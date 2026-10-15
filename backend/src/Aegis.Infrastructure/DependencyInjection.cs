@@ -340,6 +340,18 @@ public static class DependencyInjection
         services.AddScoped<MemoryGraphRebuild>();
         services.AddHostedService<MemoryGraphProjectionWorker>();
         services.AddScoped<ReminderStore>();
+        services.AddScoped<ReminderSeriesStore>();
+        services.AddScoped<IReminderSeriesStore, ReminderSeriesStore>();
+        services.AddScoped<IReminderActionStore, ReminderActionStore>();
+        services.AddScoped<IReminderActionTokens, ReminderActionTokens>();
+        services.AddScoped<ReminderWithdrawalReconciler>();
+        services.AddScoped<Aegis.Application.Places.IPlaceService, Aegis.Infrastructure.Places.PlaceService>();
+        services.Configure<Aegis.Infrastructure.Places.PlaceMapOptions>(configuration.GetSection("PlaceMaps"));
+        services.AddScoped<Aegis.Infrastructure.Places.PlaceMaps>();
+        services.AddHttpClient("place-geocoder", client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
+        services.AddOptions<Aegis.Application.Places.LocationContextOptions>()
+            .Bind(configuration.GetSection("LocationContext")).Validate(o => o.IsValid(), "Invalid location context thresholds.").ValidateOnStart();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();
         services.AddScoped<IReminderInteractionTokens, ReminderInteractionTokens>();

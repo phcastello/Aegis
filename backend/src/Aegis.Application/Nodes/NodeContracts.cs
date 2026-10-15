@@ -5,9 +5,10 @@ public sealed record NodeView(Guid Id, string Name, string Platform, bool Enable
     DateTimeOffset PairedAt, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? RevokedAt, DateTimeOffset? LastSeenAt = null, DateTimeOffset? LastHeartbeatAt = null, string Availability = "offline")
 {
     public int TargetPriority { get; init; }
+    public bool ReceiveReminders { get; init; } = true;
     public IReadOnlyList<NodeCapability> Capabilities { get; init; } = Array.Empty<NodeCapability>();
     public static NodeView From(AegisNode node) => new(node.Id, node.Name, node.Platform.ToString().ToLowerInvariant(), node.Enabled,
-        node.AppVersion, node.ProtocolVersion, node.PairedAt, node.CreatedAt, node.UpdatedAt, node.RevokedAt, node.LastSeenAt, node.LastHeartbeatAt) { TargetPriority = node.TargetPriority };
+        node.AppVersion, node.ProtocolVersion, node.PairedAt, node.CreatedAt, node.UpdatedAt, node.RevokedAt, node.LastSeenAt, node.LastHeartbeatAt) { TargetPriority = node.TargetPriority, ReceiveReminders = node.ReceiveReminders };
 }
 public sealed record PairNodeRequest(Guid AttemptId, string Code, string RecoveryKey, string Name, string Platform, string AppVersion, int ProtocolVersion);
 public sealed record PairNodeReceipt(Guid NodeId, string Credential, DateTimeOffset ExpiresAt);
@@ -37,4 +38,6 @@ public interface INodeRegistry
     Task<NodeView> RevokeAsync(Guid actor, Guid target, CancellationToken ct = default);
     Task<NodeView> SetTargetPriorityAsync(Guid actor, Guid target, int priority, CancellationToken ct = default);
     Task CleanupAsync(CancellationToken ct = default);
+    Task<NodeView> SetReceiveRemindersAsync(Guid actor, Guid target, bool receive, CancellationToken ct = default) => throw new NotSupportedException();
+    Task RemoveAsync(Guid actor, Guid target, CancellationToken ct = default) => throw new NotSupportedException();
 }

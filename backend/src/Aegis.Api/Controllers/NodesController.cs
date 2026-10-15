@@ -7,9 +7,16 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace Aegis.Api.Controllers;
 
 [ApiController, Route("api/nodes"), Authorize(Policy = "NodeManagement"), ServiceFilter(typeof(NodeApiFilter)), RequestSizeLimit(4096)]
-public sealed class NodesController(INodeRegistry registry, INodeTargetResolver resolver, INodeNotificationDispatcher notifications, INodePushRegistrations push) : ControllerBase
+public sealed class NodesController(INodeRegistry registry, INodeTargetResolver resolver, INodeNotificationDispatcher notifications, INodePushRegistrations push, INodeDomainSignals? signals = null) : ControllerBase
 {
     private Guid CurrentNode => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    public sealed record ReminderPreferenceRequest(bool ReceiveReminders);
+    [HttpPut("{id:guid}/reminders")] public async Task<IActionResult> ReminderPreference(Guid id, ReminderPreferenceRequest request, CancellationToken ct) {
+        var result = await registry.SetReceiveRemindersAsync(CurrentNode, id, request.ReceiveReminders, ct);
+        if (!request.ReceiveReminders && signals is not null) try { await signals.SendAsync(id, "geofence.monitor", new { operation = "sync" }, ct); } catch (Exception e) when (e is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested) { }
+        return Ok(result);
+    }
+    [HttpDelete("{id:guid}")] public async Task<IActionResult> Remove(Guid id, CancellationToken ct) { await registry.RemoveAsync(CurrentNode, id, ct); return Ok(new { removed = true, localCancellation = "pending_until_sync_or_lease_expiry" }); }
     public sealed record PushRequest(string Token);
     [HttpPut("me/push")] public async Task<IActionResult> RegisterPush(PushRequest request, CancellationToken ct) { await push.RegisterAsync(CurrentNode, request.Token, ct); return Ok(new { registered = true }); }
     [HttpDelete("me/push")] public async Task<IActionResult> RemovePush(CancellationToken ct) { await push.RemoveAsync(CurrentNode, ct); return Ok(new { registered = false }); }

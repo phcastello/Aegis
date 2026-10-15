@@ -5,6 +5,9 @@ public sealed record NodeMessage(int ProtocolVersion, string Type, Guid MessageI
 public sealed class NodeProtocolException(string reason) : Exception(reason);
 public static class NodeProtocol
 {
+    private static readonly System.Diagnostics.Metrics.Meter PayloadMeter = new("Aegis.NodeTransport.Payload", "1");
+    private static readonly System.Diagnostics.Metrics.Counter<long> ReceivedBytes = PayloadMeter.CreateCounter<long>("node_transport_payload_bytes_received_total");
+    private static readonly System.Diagnostics.Metrics.Counter<long> SentBytes = PayloadMeter.CreateCounter<long>("node_transport_payload_bytes_sent_total");
     public static async Task<NodeMessage?> ReceiveAsync(WebSocket socket, CancellationToken ct)
     {
         var bytes = new byte[NodeTransportOptions.MaxMessageBytes + 1]; var count = 0; var fragments = 0;
@@ -18,6 +21,7 @@ public static class NodeProtocol
             if (count > NodeTransportOptions.MaxMessageBytes) throw new NodeProtocolException("message_too_large");
             if (frame.EndOfMessage) break;
         }
+        ReceivedBytes.Add(count);
         try
         {
             using var document = JsonDocument.Parse(bytes.AsMemory(0, count), new JsonDocumentOptions { MaxDepth = 8 });
@@ -69,11 +73,11 @@ public static class NodeProtocol
         catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or FormatException)
         { throw new NodeProtocolException("invalid_capabilities"); }
     }
-    public static Task SendAsync(WebSocket socket, string type, Guid messageId, DateTimeOffset now, object? payload, CancellationToken ct)
+    public static async Task SendAsync(WebSocket socket, string type, Guid messageId, DateTimeOffset now, object? payload, CancellationToken ct)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new { protocolVersion = 1, type, messageId, sentAt = now, payload }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         if (bytes.Length > 4096) throw new Aegis.Application.Nodes.NodeException("invalid_notification", "Payload serializado excessivo.");
-        return socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct); SentBytes.Add(bytes.Length);
     }
     public static int CloseCode(string reason) => reason switch {
         "node_revoked" => 4001, "node_disabled" => 4003, "protocol_mismatch" => 4006,

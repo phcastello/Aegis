@@ -34,10 +34,15 @@ public sealed class NodeTransportTests
         Assert.False(registry.Unregister(a)); Assert.True(registry.IsOnline(id)); Assert.Same(b, registry.Lookup(id));
         Assert.True(registry.Unregister(b)); Assert.False(registry.IsOnline(id));
     }
-    [Fact] public void HeartbeatTimeoutAndReconnectUseOnlyServerClock()
+    [Theory]
+    [InlineData(25, 75, 120)]
+    [InlineData(120, 360, 300)]
+    public void HeartbeatTimeoutAndReconnectUseOnlyServerClock(int heartbeatSeconds, int timeoutSeconds, int persistSeconds)
     {
-        var clock = new Clock(); using var registry = Registry(clock); var id = Guid.NewGuid(); var lease = registry.Register(id);
-        clock.Advance(25); Assert.True(registry.Heartbeat(lease)); clock.Advance(74); Assert.True(registry.IsOnline(id));
+        var clock = new Clock(); using var registry = new NodeConnectionRegistry(clock,
+            Options.Create(new NodeTransportOptions { HeartbeatSeconds = heartbeatSeconds, TimeoutSeconds = timeoutSeconds, PersistSeconds = persistSeconds }), NullLogger<NodeConnectionRegistry>.Instance);
+        var id = Guid.NewGuid(); var lease = registry.Register(id);
+        clock.Advance(heartbeatSeconds); Assert.True(registry.Heartbeat(lease)); clock.Advance(timeoutSeconds - 1); Assert.True(registry.IsOnline(id));
         clock.Advance(1); Assert.False(registry.IsOnline(id)); Assert.False(registry.Heartbeat(lease)); registry.ExpireStale();
         Assert.True(lease.Ended.IsCancellationRequested); Assert.Equal("heartbeat_timeout", lease.Reason);
         registry.Register(id); Assert.True(registry.IsOnline(id));

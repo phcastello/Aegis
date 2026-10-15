@@ -141,7 +141,7 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
     {
         await Active(actor, ct);
         var result = new List<NodeView>();
-        foreach (var node in await db.Nodes.OrderBy(n => n.CreatedAt).ToArrayAsync(ct)) result.Add(await SnapshotView(node, ct));
+        foreach (var node in await db.Nodes.Where(n => n.RevokedAt == null).OrderBy(n => n.CreatedAt).ToArrayAsync(ct)) result.Add(await SnapshotView(node, ct));
         return result;
 
     }, ct);
@@ -178,10 +178,42 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
         var result = await Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct); node.Revoke(Now);
+            foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && (r.Status == "active" || r.Status == "paused")).ToArrayAsync(ct)) rule.SetStatus("cancel", Now);
+            db.Set<NodeLocationProfile>().RemoveRange(await db.Set<NodeLocationProfile>().Where(p => p.NodeId == target).ToArrayAsync(ct));
             db.NodePushRegistrations.RemoveRange(await db.NodePushRegistrations.Where(r => r.NodeId == target).ToArrayAsync(ct));
         var credential = await db.NodeCredentials.SingleAsync(c => c.NodeId == target, ct); credential.Revoke(Now); return View(node);
         }, ct);
         connections?.Disconnect(target, "node_revoked");
         return result with { Availability = "offline" };
+    }
+    public Task<NodeView> SetReceiveRemindersAsync(Guid actor, Guid target, bool receive, CancellationToken ct = default) => Locked(async () => {
+        await Active(actor, ct); var node = await Target(target, ct); node.SetReceiveReminders(receive, Now);
+        if (!receive) foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && r.Status == "active").ToArrayAsync(ct)) rule.SetStatus("pause", Now);
+        return await SnapshotView(node, ct);
+    }, ct);
+    public async Task RemoveAsync(Guid actor, Guid target, CancellationToken ct = default)
+    {
+        await Locked(async () => {
+            await Active(actor, ct);
+            var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == target, ct);
+            if (node is null) return true;
+            foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && (r.Status == "active" || r.Status == "paused")).ToArrayAsync(ct)) rule.SetStatus("cancel", Now);
+            // Issued pairing receipts must become unusable before deleting their issuer.
+            var codes = await db.NodePairingCodes.Where(c => c.IssuerNodeId == target).ToArrayAsync(ct);
+            var codeIds = codes.Select(c => c.Id).ToArray();
+            db.NodePairingAttempts.RemoveRange(await db.NodePairingAttempts.Where(a => codeIds.Contains(a.PairingCodeId) || a.NodeId == target).ToArrayAsync(ct));
+            db.NodePairingCodes.RemoveRange(codes);
+            // SET NULL preserves reminder/event history without retaining a device dossier.
+            // Explicit updates also make the deterministic InMemory tests match PostgreSQL.
+            foreach (var attempt in await db.ReminderDeliveryAttempts.Where(a => a.NodeId == target).ToArrayAsync(ct)) db.Entry(attempt).Property(a => a.NodeId).CurrentValue = null;
+            foreach (var recipient in await db.Set<ReminderRecipient>().Where(a => a.NodeId == target).ToArrayAsync(ct)) db.Entry(recipient).Property(a => a.NodeId).CurrentValue = null;
+            foreach (var item in await db.Set<GeographicReminderEvent>().Where(e => e.ObserverNodeId == target).ToArrayAsync(ct)) db.Entry(item).Property(e => e.ObserverNodeId).CurrentValue = null;
+            db.NodePushRegistrations.RemoveRange(await db.NodePushRegistrations.Where(p => p.NodeId == target).ToArrayAsync(ct));
+            db.NodeCredentials.RemoveRange(await db.NodeCredentials.Where(c => c.NodeId == target).ToArrayAsync(ct));
+            db.NodeCapabilities.RemoveRange(await db.NodeCapabilities.Where(c => c.NodeId == target).ToArrayAsync(ct));
+            db.Set<NodeLocationProfile>().RemoveRange(await db.Set<NodeLocationProfile>().Where(p => p.NodeId == target).ToArrayAsync(ct));
+            db.Nodes.Remove(node); return true;
+        }, ct);
+        connections?.Disconnect(target, "node_revoked");
     }
 }

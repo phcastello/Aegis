@@ -21,6 +21,8 @@ public static class NodeApiServices
         services.AddScoped<Aegis.Application.Nodes.INodePushRegistrations>(p => p.GetRequiredService<Aegis.Infrastructure.Nodes.NodePushRegistrations>());
         services.AddScoped<Aegis.Application.Nodes.INodeBackgroundAvailability>(p => p.GetRequiredService<Aegis.Infrastructure.Nodes.NodePushRegistrations>());
         services.AddScoped<Aegis.Application.Nodes.INodePushNotifications, Aegis.Infrastructure.Nodes.NodeFcmTransport>();
+        services.AddScoped<Aegis.Application.Nodes.INodePushDomainSignals, Aegis.Infrastructure.Nodes.NodeFcmTransport>();
+        services.AddScoped<Aegis.Application.Nodes.INodeDomainSignals, Aegis.Application.Nodes.NodeDomainSignals>();
         services.AddScoped<Aegis.Application.Nodes.INodeNotificationDispatcher, Aegis.Application.Nodes.NodeNotificationDispatcher>();
         services.AddHttpClient("node-fcm", c => c.Timeout = TimeSpan.FromSeconds(8));
         services.AddScoped<Aegis.Application.Nodes.INodeTargetResolver, Aegis.Application.Nodes.NodeTargetResolver>();
@@ -28,6 +30,7 @@ public static class NodeApiServices
             .Validate(o => o.IsValid(), "Invalid NodeTransport limits.").ValidateOnStart();
         services.AddSingleton<Transport.NodeConnectionRegistry>();
         services.AddSingleton<Aegis.Application.Nodes.INodeLiveNotifications>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
+        services.AddSingleton<Aegis.Application.Nodes.INodeLiveDomainSignals>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Application.Nodes.INodeConnections>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Api.Controllers.NodeHandshakeCapacity>();
         services.AddHostedService<Transport.NodeConnectionWatchdog>();
