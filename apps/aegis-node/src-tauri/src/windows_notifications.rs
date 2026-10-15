@@ -359,8 +359,13 @@ async fn flush(app: &AppHandle) -> Result<bool, ()> {
                 .map_err(|_| ())?;
             return Ok(false);
         }
-        let value=app.state::<crate::node_commands::NodeRuntime>().domain_call(reqwest::Method::POST,format!("/reminders/{reminder}/actions"),json!({"actionId":id,"expectedRevision":revision,"generation":generation,"action":action,"snoozeMinutes":10})).await.map_err(|_|())?;
-        let _ = value;
+        match app.state::<crate::node_commands::NodeRuntime>().domain_action_call(format!("/reminders/{reminder}/actions"),json!({"actionId":id,"expectedRevision":revision,"generation":generation,"action":action,"snoozeMinutes":10})).await {
+            Ok(_) => {},
+            Err((_, true)) => return Err(()),
+            // An authoritative rejection is terminal for this immutable ActionId/revision.
+            // Dropping it records no acknowledgement and never rewrites server state.
+            Err((_, false)) => {},
+        }
         db(app)?
             .execute("DELETE FROM actions WHERE id=?", params![id])
             .map_err(|_| ())?;

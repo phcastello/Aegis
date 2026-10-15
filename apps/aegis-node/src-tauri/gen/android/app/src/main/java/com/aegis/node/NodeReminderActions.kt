@@ -27,7 +27,8 @@ object NodeReminderActions {
   data class Presentation(val id: String, val revision: Long, val generation: Long, val token: String?, val commandId: String,val ruleId:String?=null,val ruleRevision:Long?=null)
   fun read(input: JSONObject, commandId: String): Presentation {
     require(input.keys().asSequence().toSet() == setOf("title", "body", "reminderId", "revision", "generation", "interactionToken"))
-    val id = input.getString("reminderId"); require(UUID.fromString(id).toString() == id)
+    val id = input.getString("reminderId"); require(UUID.fromString(id).toString() == id && id!="00000000-0000-0000-0000-000000000000")
+    require((input.get("revision") is Int || input.get("revision") is Long) && (input.get("generation") is Int || input.get("generation") is Long))
     val revision = input.getLong("revision"); val generation = input.getLong("generation")
     val token = input.getString("interactionToken")
     require(revision >= 1 && generation >= 0 && token.length in 20..2048 && !token.any { it.isISOControl() })
@@ -94,7 +95,7 @@ object NodeReminderActions {
   }
   }
   fun withdraw(context: Context, id: String, generation: Long) { synchronized(NodeNotificationGate.lock) {
-    UUID.fromString(id)
+    require(UUID.fromString(id).toString()==id && id!="00000000-0000-0000-0000-000000000000" && generation>=0)
     Store(context).use { store ->
       val previous=store.readableDatabase.rawQuery("SELECT generation FROM withdrawals WHERE id=?",arrayOf(id)).use { if(it.moveToFirst()) it.getLong(0) else -1L }
       check(store.writableDatabase.insertWithOnConflict("withdrawals",null,ContentValues().apply{put("id",id);put("generation",maxOf(previous,generation));put("expires",System.currentTimeMillis()+TimeUnit.DAYS.toMillis(7))},SQLiteDatabase.CONFLICT_REPLACE)>=0)

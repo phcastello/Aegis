@@ -43,7 +43,7 @@ object NodeGeofences {
   if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
  } }
  private fun manifest(context:Context):JSONObject?=prefs(context).getString("manifest",null)?.let { JSONObject(it) }
- private fun stamp(text:String):Long=NodeNotificationPayload.expiryEpochSecond(text)*1000
+ private fun stamp(text:String):Long=java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli()
  fun reconcile(context:Context) { synchronized(manifestGate) {
   val session=NodeNativeSession.read(context) ?: return
   val current=NodeNativeSession.call(context,"GET","/api/nodes/geofences/manifest")

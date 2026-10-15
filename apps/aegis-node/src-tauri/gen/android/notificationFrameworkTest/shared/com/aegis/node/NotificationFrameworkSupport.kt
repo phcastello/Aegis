@@ -28,6 +28,10 @@ internal fun exerciseReminderNotificationActions(render:(String)->org.json.JSONO
   fun notify(target:String,generation:Int)=command("reminder.notify",org.json.JSONObject().put("title","Aegis framework").put("body","Fixture").put("reminderId",target).put("revision",generation).put("generation",generation).put("interactionToken","isolated-framework-token-value"))
   fun withdraw(target:String,generation:Int)=command("reminder.withdraw",org.json.JSONObject().put("reminderId",target).put("generation",generation))
   try {
+    val malformed=org.json.JSONObject(withdraw(withdrawn,1)).apply{getJSONObject("input").put("generation",-1)}
+    org.junit.Assert.assertEquals("failed",render(malformed.toString()).getString("status"))
+    malformed.getJSONObject("input").put("generation","1")
+    org.junit.Assert.assertEquals("failed",render(malformed.toString()).getString("status"))
     org.junit.Assert.assertEquals("success",render(withdraw(withdrawn,1)).getString("status"))
     org.junit.Assert.assertEquals("expired",render(notify(withdrawn,1)).getString("status"))
     org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$withdrawn:1"})

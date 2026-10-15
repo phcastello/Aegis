@@ -54,7 +54,10 @@ object NodeNativeNotifications {
     else if(capability=="reminder.withdraw") {
       val input=command.getJSONObject("input")
       require(input.keys().asSequence().toSet()==setOf("reminderId","generation"))
-      require(NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"))>Instant.now().epochSecond)
+      val commandId=command.getString("commandId");require(UUID.fromString(commandId).toString()==commandId && commandId!="00000000-0000-0000-0000-000000000000")
+      val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"));val now=Instant.now().epochSecond
+      require(expiry>now && expiry<=now+300)
+      require(input.get("generation") is Int || input.get("generation") is Long)
       NodeReminderActions.withdraw(context,input.getString("reminderId"),input.getLong("generation"))
       NodeNotificationResult("success")
     } else if(capability=="geofence.monitor" || capability=="location.current") {
