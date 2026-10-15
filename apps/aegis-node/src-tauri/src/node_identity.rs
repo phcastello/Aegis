@@ -39,6 +39,26 @@ fn operational_node_id(node: Option<&NodeView>) -> Option<&str> {
     node.filter(|node| node.enabled && node.revoked_at.is_none())
         .map(|node| node.id.as_str())
 }
+#[cfg(any(target_os = "android", test))]
+pub(crate) struct NativeBindingTransition {
+    pub changed: bool,
+    active_after: bool,
+}
+#[cfg(any(target_os = "android", test))]
+impl NativeBindingTransition {
+    pub fn between(before: Option<&str>, after: Option<&str>) -> Self {
+        Self {
+            changed: before != after,
+            active_after: after.is_some(),
+        }
+    }
+    pub fn should_start_transport(&self, foreground: bool) -> bool {
+        self.changed && self.active_after && foreground
+    }
+    pub fn should_reconnect_transport(&self, foreground: bool, online: bool) -> bool {
+        self.should_start_transport(foreground) && !online
+    }
+}
 #[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityStatus {
@@ -672,6 +692,32 @@ mod tests {
         current.revoked_at = Some("2026-10-15T00:00:00Z".into());
         assert_eq!(operational_node_id(Some(&current)), None);
         assert_eq!(operational_node_id(None), None);
+    }
+    #[test]
+    fn binding_transition_only_wakes_a_new_active_foreground_identity_without_an_online_session() {
+        let reenabled = NativeBindingTransition::between(None, Some("same-node"));
+        assert!(reenabled.changed);
+        assert!(reenabled.should_start_transport(true));
+        assert!(reenabled.should_reconnect_transport(true, false));
+        assert!(!reenabled.should_reconnect_transport(true, true));
+        assert!(!reenabled.should_start_transport(false));
+        assert!(!reenabled.should_reconnect_transport(false, false));
+        for unchanged in [
+            NativeBindingTransition::between(Some("same-node"), Some("same-node")),
+            NativeBindingTransition::between(None, None),
+        ] {
+            assert!(!unchanged.changed);
+            assert!(!unchanged.should_start_transport(true));
+            assert!(!unchanged.should_reconnect_transport(true, false));
+        }
+        let disabled_or_revoked = NativeBindingTransition::between(Some("same-node"), None);
+        assert!(disabled_or_revoked.changed);
+        assert!(!disabled_or_revoked.should_start_transport(true));
+        assert!(!disabled_or_revoked.should_reconnect_transport(true, false));
+        assert!(
+            NativeBindingTransition::between(Some("old-node"), Some("new-node"))
+                .should_reconnect_transport(true, false)
+        );
     }
     impl Api for FakeApi {
         async fn pair(&self, _: &Pending) -> Result<Receipt, ApiError> {

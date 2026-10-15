@@ -190,6 +190,27 @@ impl NodeRuntime {
             return;
         }
     }
+    #[cfg(target_os = "android")]
+    async fn reconcile_identity_binding(&self, before: Option<String>, after: Option<String>) {
+        use crate::node_identity::NativeBindingTransition;
+        use std::sync::atomic::Ordering::SeqCst;
+        let transition = NativeBindingTransition::between(before.as_deref(), after.as_deref());
+        if !transition.changed {
+            return;
+        }
+        self.sync_push().await;
+        if transition.should_start_transport(self.foreground.load(SeqCst)) {
+            self.start().await;
+            // start is idempotent; only wake a disconnected foreground channel.
+            // Recheck lifecycle after the await so background never starts a retry.
+            if transition.should_reconnect_transport(
+                self.foreground.load(SeqCst),
+                self.transport.state().transport_state == "online",
+            ) {
+                self.transport.reconnect();
+            }
+        }
+    }
 }
 #[tauri::command]
 pub async fn node_status(runtime: tauri::State<'_, NodeRuntime>) -> Result<IdentityStatus, String> {
@@ -199,12 +220,10 @@ pub async fn node_status(runtime: tauri::State<'_, NodeRuntime>) -> Result<Ident
     let before = identity.cached_operational_node_id()?;
     let result = identity.status().await;
     #[cfg(target_os = "android")]
-    let binding_changed = before != identity.cached_operational_node_id()?;
+    let after = identity.cached_operational_node_id()?;
     drop(guard); // sync_push acquires the same identity lock before calling JNI.
     #[cfg(target_os = "android")]
-    if binding_changed {
-        runtime.sync_push().await;
-    }
+    runtime.reconcile_identity_binding(before, after).await;
     result
 }
 #[tauri::command]
@@ -254,12 +273,10 @@ pub async fn node_set_enabled(
         .modify(id, if enabled { "enable" } else { "disable" }, None)
         .await;
     #[cfg(target_os = "android")]
-    let binding_changed = before != identity.cached_operational_node_id()?;
+    let after = identity.cached_operational_node_id()?;
     drop(guard);
     #[cfg(target_os = "android")]
-    if binding_changed {
-        runtime.sync_push().await;
-    }
+    runtime.reconcile_identity_binding(before, after).await;
     result
 }
 #[tauri::command]
@@ -294,12 +311,10 @@ pub async fn node_revoke(
     let before = identity.cached_operational_node_id()?;
     let result = identity.modify(id, "revoke", None).await;
     #[cfg(target_os = "android")]
-    let binding_changed = before != identity.cached_operational_node_id()?;
+    let after = identity.cached_operational_node_id()?;
     drop(guard);
     #[cfg(target_os = "android")]
-    if binding_changed {
-        runtime.sync_push().await;
-    }
+    runtime.reconcile_identity_binding(before, after).await;
     result
 }
 #[tauri::command]
