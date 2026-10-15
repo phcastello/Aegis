@@ -68,17 +68,30 @@ function activateReminderAction(actionId) {
   const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`Start-Process -FilePath '${uri}'`],{encoding:'utf8'});
   assert.equal(result.status,0,'The registered Windows URI handler must activate the installed native adapter.');
 }
+function nativeWindowState() {
+  assert.ok(Number.isSafeInteger(app.pid) && app.pid>0);
+  // Real Win32 visibility, rather than CDP/DOM visibility of a hidden WebView.
+  // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowvisible
+  const script=`$ErrorActionPreference='Stop'; Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AegisFixtureWindow { [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr window); }'; $application=Get-Process -Id ${app.pid}; $application.Refresh(); $handle=$application.MainWindowHandle; [pscustomobject]@{visible=($handle -ne [IntPtr]::Zero -and [AegisFixtureWindow]::IsWindowVisible($handle));mainWindowTitle=$application.MainWindowTitle} | ConvertTo-Json -Compress`;
+  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,'Inspect only the owned native process window.');return JSON.parse(result.stdout);
+}
+async function assertNativeWindowVisible(expected) {
+  let state;await waitUntil(()=>{state=nativeWindowState();return state.visible===expected;},10000);
+  if(expected)assert.equal(state.mainWindowTitle,'Aegis');return state;
+}
 
-async function open() {
+async function open(args=[]) {
   exited = undefined;
-  app = spawn(exe, [], { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9461', WEBVIEW2_USER_DATA_FOLDER: join(work, 'webview') }, stdio: 'inherit' });
+  app = spawn(exe, args, { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9461', WEBVIEW2_USER_DATA_FOLDER: join(work, 'webview') }, stdio: 'inherit' });
   app.on('exit', code => exited = code);
   await waitUntil(async () => { if (exited !== undefined) throw Error('Native app exited'); try { return (await fetch('http://127.0.0.1:9461/json/version')).ok; } catch { return false; } }, 30000);
   browser = await chromium.connectOverCDP('http://127.0.0.1:9461');
   await waitUntil(() => { page = browser.contexts().flatMap(c => c.pages())[0]; return Boolean(page); }, 30000);
   // Existing chat requests use private empty fixtures. Node requests execute in Rust and reach the real API.
   await page.route(origin + '/api/**', route => route.fulfill({ json: route.request().url().endsWith('/conversations') ? { items: [], hasMore: false } : { enabled: false, configured: false, isConnected: false } }));
-  await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
+  if(args.some(value=>value.startsWith('aegis-reminder://action/')))await page.getByRole('heading',{name:'Lembretes',exact:true}).waitFor();
+  else await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   assert.equal((await invoke('runtime_info')).backendUrl, origin);
   await page.evaluate(installWindowsIpcObserver, {diagnosticCodes:knownDiagnostics});
   await invoke('node_status');
@@ -184,10 +197,26 @@ try {
   await page.getByRole('heading',{name:'Lembretes',exact:true}).waitFor();
   await page.locator('#reminder-'+acknowledgementOccurrence).waitFor();
   assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,0,'Opening the body must not acknowledge the occurrence.');
+  await close();
+  // Use exactly the registered protocol handler argv, with the private fixture
+  // CDP environment; the UI may consume the durable open before this test sees IPC.
+  await open(['--reminder-action','aegis-reminder://action/'+openAction.id]);
+  await page.locator('#reminder-'+acknowledgementOccurrence).waitFor();
+  await page.waitForFunction(id=>document.activeElement?.id==='reminder-'+id,acknowledgementOccurrence);
+  const coldBodyWindow=await assertNativeWindowVisible(true);
+  assert.equal((await invoke('node_status')).node.id,pcId);
+  assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,0,'Cold body activation must open the occurrence without ACK.');
+  await close();
+  await open(['--reminder-action','aegis-reminder://open']);
+  const coldLegacyWindow=await assertNativeWindowVisible(true);
+  assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,0,'Legacy open must not ACK an occurrence.');
+  writeFileSync(join(artifacts,'windows-native-cold-open.json'),JSON.stringify({body:{...coldBodyWindow,reminderId:acknowledgementOccurrence,ackReceipts:0},legacy:{...coldLegacyWindow,ackReceipts:0}},null,2)+'\n');
+  console.log('Windows cold opaque body action + legacy URI: actual visible native window, focused occurrence, same native identity and no implicit ACK PASS.');
   const settingsClose=page.getByRole('button',{name:'Fechar configurações',exact:true});if(await settingsClose.count())await settingsClose.click();
   const actionHide=spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});assert.equal(actionHide.status,0);assert.equal(actionHide.stdout.trim(),'True');
   activateReminderAction(ackAction.id);
   await waitUntil(async()=>(await reminderReceipts(acknowledgementOccurrence)).some(item=>item.action==='acknowledge'&&item.applied),45000);
+  await assertNativeWindowVisible(false);
   await waitUntil(()=>nativeReminderMetadata(acknowledgementOccurrence).actions.every(item=>item.queued===0),10000);
   assert.equal(exited,undefined,'A background action must preserve the resident app.');
   activateReminderAction(ackAction.id);await new Promise(resolve=>setTimeout(resolve,700));
@@ -197,6 +226,7 @@ try {
   const firstPresentation=nativeReminderMetadata(snoozeOccurrence);const snoozeAction=firstPresentation.actions.find(item=>item.action==='snooze');const oldAck=firstPresentation.actions.find(item=>item.action==='acknowledge');
   assert.ok(snoozeAction&&oldAck);activateReminderAction(snoozeAction.id);
   await waitUntil(async()=>(await reminderReceipts(snoozeOccurrence)).some(item=>item.action==='snooze'&&item.applied),45000);
+  await assertNativeWindowVisible(false);
   const occurrences=(await invoke('node_reminders',{operation:'list'})).reminders;const snoozed=occurrences.find(item=>item.reminderId===snoozeOccurrence);
   assert.equal(snoozed.generation,2);assert.equal(snoozed.revision,2);assert.equal(snoozed.status,'Scheduled');
   assert.ok(new Date(snoozed.dueAt)>new Date(),'Snooze must schedule a future generation.');
