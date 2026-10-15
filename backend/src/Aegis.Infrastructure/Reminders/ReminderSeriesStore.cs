@@ -43,7 +43,7 @@ public sealed class ReminderSeriesStore(AegisDbContext db, TimeProvider clock) :
     private async Task<bool> Materialize(ReminderSeries series, CancellationToken ct)
     {
         var now = clock.GetUtcNow(); if (series.Status != "active") return false;
-        if (await db.Reminders.AnyAsync(r => r.SeriesId == series.Id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && r.DueAtUtc > now, ct)) return false;
+        if (await db.Reminders.AnyAsync(r => r.SeriesId == series.Id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && !r.IsException && r.DueAtUtc > now, ct)) return false;
         var next = series.Next(now);
         // A completed calendar date or explicit occurrence exception survives editing the series.
         // Cancelled replacements created by a series edit are not individual exceptions.
@@ -64,9 +64,10 @@ public sealed class ReminderSeriesStore(AegisDbContext db, TimeProvider clock) :
         var now = clock.GetUtcNow();
         // Apply the bounded batch to work that is actually pending. Otherwise
         // the oldest series with future occurrences can permanently occupy it.
-        // Snoozed presentations (generation > 1) do not replace the series schedule.
+        // Snoozed presentations and individually changed occurrences do not
+        // replace the remaining normal series schedule.
         var ids = await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status == "active" &&
-            !db.Reminders.Any(r => r.SeriesId == s.Id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && r.DueAtUtc > now))
+            !db.Reminders.Any(r => r.SeriesId == s.Id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && !r.IsException && r.DueAtUtc > now))
             .OrderBy(s => s.UpdatedAt).ThenBy(s => s.Id).Select(s => s.Id).Take(100).ToArrayAsync(ct);
         foreach (var id in ids)
         {
