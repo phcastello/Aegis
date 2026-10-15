@@ -1,5 +1,5 @@
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
   <background android:drawable="@color/aegis_icon_background" />
   <foreground android:drawable="@drawable/ic_aegis_foreground" />
-  <monochrome android:drawable="@drawable/ic_node_notification" />
+  <monochrome android:drawable="@drawable/ic_aegis_monochrome" />
 </adaptive-icon>

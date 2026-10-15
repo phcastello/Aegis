@@ -14,7 +14,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
 import app.tauri.plugin.JSObject
 
-@TauriPlugin(permissions=[Permission(strings=[Manifest.permission.POST_NOTIFICATIONS],alias="notifications"),Permission(strings=[Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION],alias="location")])
+@TauriPlugin(permissions=[Permission(strings=[Manifest.permission.POST_NOTIFICATIONS],alias="notifications"),Permission(strings=[Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION],alias="location"),Permission(strings=[Manifest.permission.ACCESS_COARSE_LOCATION],alias="approximateLocation"),Permission(strings=[Manifest.permission.ACCESS_BACKGROUND_LOCATION],alias="backgroundLocation")])
 class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  @Command override fun requestPermissions(invoke:Invoke) {
   val prefs=NodeNativeNotifications.prefs(activity)
@@ -30,10 +30,10 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   if(background) {
    if(!NodeLocation.permissions(activity).getBoolean("foreground")) { invoke.reject("Permita localização em uso antes de habilitar lembretes por lugar.");return }
    if(Build.VERSION.SDK_INT>=30) activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${activity.packageName}")))
-   else if(Build.VERSION.SDK_INT==29) activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),708)
+   else if(Build.VERSION.SDK_INT==29) {requestPermissionForAlias("backgroundLocation",invoke,"locationPermissionCallback");return}
    invoke.resolve(JSObject(NodeLocation.permissions(activity).toString()));return
   }
-  requestPermissionForAlias("location",invoke,"locationPermissionCallback")
+  requestPermissionForAlias(if(args.optBoolean("precise",false)) "location" else "approximateLocation",invoke,"locationPermissionCallback")
  }
  @PermissionCallback private fun locationPermissionCallback(invoke:Invoke) {invoke.resolve(JSObject(NodeLocation.permissions(activity).toString()))}
  @Command fun currentLocation(invoke:Invoke) {
