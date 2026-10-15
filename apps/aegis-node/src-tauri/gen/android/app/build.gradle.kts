@@ -21,7 +21,9 @@ android {
     namespace = "com.aegis.node"
     testBuildType = providers.gradleProperty("aegisTestBuildType").getOrElse("debug")
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["usesCleartextTraffic"] = providers.gradleProperty("aegisFrameworkFixture").map { it.toBooleanStrict().toString() }.getOrElse("false")
+        // Explicit emulator instrumentation build only; ordinary distribution always compiles false.
+        buildConfigField("boolean", "AEGIS_FRAMEWORK_FIXTURE", providers.gradleProperty("aegisFrameworkFixture").map { it.toBooleanStrict().toString() }.getOrElse("false"))
         applicationId = "com.aegis.node"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24

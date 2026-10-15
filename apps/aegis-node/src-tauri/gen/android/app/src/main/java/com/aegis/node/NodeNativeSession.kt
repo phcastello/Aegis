@@ -36,7 +36,7 @@ object NodeNativeSession {
 
   fun validOrigin(origin: String, context: Context): Boolean = try {
     val u = java.net.URI(origin)
-    (u.scheme == "https" || (BuildConfig.DEBUG && u.scheme == "http")) && u.host != null && u.rawUserInfo == null && u.rawQuery == null && u.rawFragment == null && (u.path.isNullOrEmpty() || u.path == "/")
+    (u.scheme == "https" || (u.scheme == "http" && (BuildConfig.DEBUG || (BuildConfig.AEGIS_FRAMEWORK_FIXTURE && u.host == "127.0.0.1" && u.port == 18104)))) && u.host != null && u.rawUserInfo == null && u.rawQuery == null && u.rawFragment == null && (u.path.isNullOrEmpty() || u.path == "/")
   } catch (_: Exception) { false }
 
   class HttpFailure(val status: Int) : Exception()

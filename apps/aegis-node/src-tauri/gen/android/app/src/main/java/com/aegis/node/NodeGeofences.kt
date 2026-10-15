@@ -36,11 +36,12 @@ object NodeGeofences {
   val flags=PendingIntent.FLAG_UPDATE_CURRENT or if(Build.VERSION.SDK_INT>=31) PendingIntent.FLAG_MUTABLE else 0
   return PendingIntent.getBroadcast(context,0,Intent(context,NodeGeofenceReceiver::class.java).setAction("com.aegis.node.GEOFENCE"),flags)
  }
- fun clear(context:Context) {
-  if(prefs(context).getBoolean("hasRegions",false))try { LocationServices.getGeofencingClient(context).removeGeofences(pending(context)) }catch(_:Exception){}
+ fun clear(context:Context) { synchronized(manifestGate) {
+  val hadRegions=prefs(context).getBoolean("hasRegions",false)
   prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit()
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
- }
+  if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
+ } }
  private fun manifest(context:Context):JSONObject?=prefs(context).getString("manifest",null)?.let { JSONObject(it) }
  private fun stamp(text:String):Long=NodeNotificationPayload.expiryEpochSecond(text)*1000
  fun reconcile(context:Context) { synchronized(manifestGate) {
@@ -77,7 +78,9 @@ object NodeGeofences {
  }
  private fun install(context:Context,value:JSONObject) {
   prefs(context).edit().putBoolean("needsInstall",true).commit()
-  val state=NodeLocation.permissions(context); val rules=activeRules(value)
+  val state=NodeLocation.permissions(context); val rules=activeRules(value).filter { rule ->
+   prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision") || !prefs(context).getBoolean("completed:${rule.getString("id")}",false)
+  }
   val client=LocationServices.getGeofencingClient(context)
   if(rules.isEmpty()) {
    if(prefs(context).getBoolean("hasRegions",false))Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
@@ -156,6 +159,7 @@ object NodeGeofences {
   val rules=activeRules(value,now)
   var confirm=false
   var needsSync=false
+  var retireRegions=false
   for(placeId in rules.flatMap{it.getJSONArray("placeIds").strings()}.toSet()) {
    val saved=prefs(context).getString("state:$placeId",null)?.let{JSONObject(it)}
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
@@ -173,7 +177,10 @@ object NodeGeofences {
       if(manifest(context)?.optString("revision")!=value.getString("revision"))return
       needsSync=true
       NodeLocation.queueTransition(context,observation)
-      if(createOccurrence(context,rule,observation.capturedAt)) prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
+      if(createOccurrence(context,rule,observation.capturedAt)) {
+       prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
+       retireRegions=retireRegions||!rule.getBoolean("repeat")
+      }
      }
     }
    }
@@ -182,7 +189,18 @@ object NodeGeofences {
    val work=OneTimeWorkRequestBuilder<NodeGeoConfirmWorker>().setInitialDelay(30,TimeUnit.SECONDS).build()
    WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-confirm",ExistingWorkPolicy.KEEP,work)
   }
-  if(needsSync)NodeBackgroundWork.enqueue(context)
+  if(needsSync) {
+   if(retireRegions) background { synchronized(manifestGate) {
+    val current=manifest(context)
+    if(current?.optString("revision")==value.getString("revision") && prefs(context).getBoolean("hasRegions",false)) {
+     val consumers=activeRules(current).filter { !prefs(context).getBoolean("completed:${it.getString("id")}",false) }.flatMap { it.getJSONArray("placeIds").strings() }.toSet()
+     val keep=current.getJSONArray("places").objects().filter{it.getString("id") in consumers}.flatMap{it.getJSONArray("circles").objects().map{circle->circle.getString("id")}}.toSet()
+     val removed=current.getJSONArray("places").objects().flatMap{it.getJSONArray("circles").objects().map{circle->circle.getString("id")}}.toSet()-keep
+     if(removed.isNotEmpty())try{Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(removed.toList()),15,TimeUnit.SECONDS);if(keep.isEmpty())prefs(context).edit().putBoolean("hasRegions",false).commit()}catch(_:Exception){}
+    }
+   } }
+   NodeBackgroundWork.enqueue(context)
+  }
  }
  private fun createOccurrence(context:Context,rule:JSONObject,capturedAt:Long):Boolean {
   Store(context).use { store ->
@@ -258,7 +276,7 @@ class NodeGeofenceReceiver:BroadcastReceiver() {
     val event=GeofencingEvent.fromIntent(intent) ?: return@background
     if(event.hasError()) {NodeGeofences.restore(context);return@background}
     val location=event.triggeringLocation
-    if(location!=null) NodeGeofences.process(context,NodeLocation.engine(NodeLocation.observation(location)))
+    if(location!=null) {val observation=NodeLocation.observation(location);NodeGeofenceRuntime.observe(context,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,true)}
    }catch(error:Exception){notificationLog("geofence_event",error)}finally{pending.finish()}
   }
  }
@@ -266,7 +284,7 @@ class NodeGeofenceReceiver:BroadcastReceiver() {
 class NodeGeoConfirmWorker(context:Context,params:WorkerParameters):Worker(context,params) {
  override fun doWork():Result=try {
   val observation=NodeLocation.current(applicationContext,upload=false,fresh=true)
-  if(observation.optString("status")=="available")NodeGeofences.process(applicationContext,NodeLocation.engine(observation),allowConfirmation=false)
+  if(observation.optString("status")=="available")NodeGeofenceRuntime.observe(applicationContext,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,false)
   Result.success()
  }catch(_:Exception){Result.success()}
 }
@@ -274,6 +292,6 @@ class NodeGeofenceRestoreReceiver:BroadcastReceiver() {
  override fun onReceive(context:Context,intent:Intent) {
   if(intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED,Intent.ACTION_MY_PACKAGE_REPLACED))return
   val pending=goAsync()
-  NodeGeofences.background{try{NodeGeofences.restore(context)}finally{pending.finish()}}
+  NodeGeofences.background{try{NodeGeofenceRuntime.restore(context)}finally{pending.finish()}}
  }
 }

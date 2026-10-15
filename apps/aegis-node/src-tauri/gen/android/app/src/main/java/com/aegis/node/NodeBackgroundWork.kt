@@ -25,7 +25,7 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
   override fun doWork(): Result = try {
     val prefs = NodeNativeNotifications.prefs(applicationContext)
     val session = NodeNativeSession.read(applicationContext)
-    if (session == null) { NodeGeofences.clear(applicationContext); Result.success() }
+    if (session == null) { NodeGeofenceRuntime.deactivate(applicationContext); Result.success() }
     else {
       var retry=false
       // Independent channels: a location/provider error cannot strand temporal actions.
@@ -46,7 +46,7 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
     }
   } catch (error: NodeNativeSession.HttpFailure) {
     if (error.status == 401 || error.status == 403 || error.status == 404) {
-      NodeGeofences.clear(applicationContext)
+      NodeGeofenceRuntime.deactivate(applicationContext)
       if(error.status!=403)NodeNativeNotifications.prefs(applicationContext).edit().remove("nodeId").commit()
       Result.success()
     } else Result.retry()

@@ -34,15 +34,15 @@ class NodeNotificationLiveTest {
     check(done.await(10, TimeUnit.SECONDS)) { "webview_callback_timeout" }
     return output
   }
-  private fun invoke(webview: WebView, name: String, args: JSONObject = JSONObject()): JSONObject {
+  private fun invoke(webview: WebView, name: String, args: JSONObject = JSONObject(), timeout:Long=20000): JSONObject {
     evaluate(webview, "window.__aegisNotificationTest=null;window.__TAURI_INTERNALS__.invoke(${JSONObject.quote(name)},$args).then(value=>{window.__aegisNotificationTest={ok:true,value}}).catch(()=>{window.__aegisNotificationTest={ok:false}});null")
-    val end = SystemClock.elapsedRealtime() + 20000
+    val end = SystemClock.elapsedRealtime() + timeout
     while (SystemClock.elapsedRealtime() < end) {
       val raw = evaluate(webview, "window.__aegisNotificationTest")
       if (raw != "null") {
         val result = JSONObject(raw)
         check(result.getBoolean("ok")) { "native_invocation_failed" }
-        return result.getJSONObject("value")
+        return when(val value=result.get("value")){is JSONObject->value;is org.json.JSONArray->JSONObject().put("items",value);else->JSONObject()}
       }
       SystemClock.sleep(100)
     }
@@ -115,6 +115,7 @@ class NodeNotificationLiveTest {
         while (manager.activeNotifications.none { it.tag == commandId && it.id == 1 } && SystemClock.elapsedRealtime() < activeEnd) SystemClock.sleep(50)
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
+        exerciseGeofenceLiveFramework(context,id){name,args,timeout->invoke(webview,name,args,timeout)}
       } finally {
         checkpoint("live_cleanup_started")
         manager.cancel(commandId, 1)

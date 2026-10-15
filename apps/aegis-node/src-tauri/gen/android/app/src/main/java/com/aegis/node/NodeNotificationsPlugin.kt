@@ -23,7 +23,7 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   requestPermissionForAlias("notifications",invoke,"permissionCallback")
  }
  @PermissionCallback private fun permissionCallback(invoke:Invoke) {invoke.resolve()}
- @Command fun locationPermissions(invoke:Invoke) { invoke.resolve(JSObject(NodeLocation.permissions(activity).toString())) }
+ @Command fun locationPermissions(invoke:Invoke) { invoke.resolve(JSObject(NodeGeofenceRuntime.permissions(activity))) }
  @Command fun requestLocationPermission(invoke:Invoke) {
   val args=org.json.JSONObject(invoke.getArgs().toString())
   val background=args.optBoolean("background",false)
