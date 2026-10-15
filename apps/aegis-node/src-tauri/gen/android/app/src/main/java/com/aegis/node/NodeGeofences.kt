@@ -151,8 +151,10 @@ object NodeGeofences {
     val edit=prefs(context).edit()
     // Registration establishes a fresh baseline; missed/initial events are not transitions.
     for(placeId in placeIds)edit.putString("geometry:$placeId",geometry(value,placeId).toString()).remove("state:$placeId")
-    for(rule in rules) if(prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision")) {
-     edit.putLong("ruleRevision:${rule.getString("id")}",rule.getLong("revision")).putBoolean("armed:${rule.getString("id")}",false).remove("completed:${rule.getString("id")}")
+    for(rule in rules) {
+     val id=rule.getString("id")
+     edit.putBoolean("armed:$id",false)
+     if(prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision"))edit.putLong("ruleRevision:$id",rule.getLong("revision")).remove("completed:$id")
     }
     check(edit.putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
    }
@@ -207,21 +209,19 @@ object NodeGeofences {
    }
    if(!current)continue
    confirm=confirm||decision.needsConfirmation
-   for(rule in rules.filter{placeId in it.getJSONArray("placeIds").strings()}) {
+   for(rule in rules.filter{placeId in it.getJSONArray("placeIds").strings()}) synchronized(applyGate) {
     val id=rule.getString("id");val transition=rule.getString("transition")
-    if(prefs(context).getBoolean("completed:$id",false)) continue
+    if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision") || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return@synchronized
+    if(prefs(context).getBoolean("completed:$id",false)) return@synchronized
     val initial=if(transition=="exit") "inside" else "outside"
     if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {prefs(context).edit().putBoolean("armed:$id",true).commit();needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
-     synchronized(applyGate){
-      if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return
       needsSync=true
       NodeLocation.queueTransition(context,observation)
       if(createOccurrence(context,rule,observation.capturedAt)) {
        prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
        retireRegions=retireRegions||!rule.getBoolean("repeat")
       }
-     }
     }
    }
   }

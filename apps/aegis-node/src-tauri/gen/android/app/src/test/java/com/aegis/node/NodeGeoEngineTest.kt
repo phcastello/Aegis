@@ -29,6 +29,18 @@ class NodeGeoEngineTest {
   assertTrue(exitCandidate.needsConfirmation);assertNull(exitCandidate.transition)
   assertEquals("exit",NodeGeoEngine.observe(exitCandidate.state,"outside",activatedAt+3631000,activatedAt).transition)
  }
+ @Test fun restoredPresenceOutsideNeedsARealReentryBeforeAnExit() {
+  val registeredAt=200000L
+  val outside=NodeGeoEngine.observe(NodeGeoEngine.State(),"outside",registeredAt+1,registeredAt)
+  assertNull(outside.transition);assertEquals("outside",outside.state.confirmed)
+  val entering=NodeGeoEngine.observe(outside.state,"inside",registeredAt+1000,registeredAt)
+  assertNull(entering.transition)
+  val inside=NodeGeoEngine.observe(entering.state,"inside",registeredAt+32000,registeredAt)
+  assertEquals("enter",inside.transition)
+  val exiting=NodeGeoEngine.observe(inside.state,"outside",registeredAt+33000,registeredAt)
+  assertNull(exiting.transition)
+  assertEquals("exit",NodeGeoEngine.observe(exiting.state,"outside",registeredAt+64000,registeredAt).transition)
+ }
  @Test fun realExitNeedsTwoFreshObservationsSeparatedByThirtySeconds(){
   val initial=NodeGeoEngine.State(confirmed="inside",lastCapturedAt=50000)
   val candidate=NodeGeoEngine.observe(initial,"outside",100000)

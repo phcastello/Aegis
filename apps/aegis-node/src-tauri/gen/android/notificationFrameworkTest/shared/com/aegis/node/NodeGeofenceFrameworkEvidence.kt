@@ -55,9 +55,13 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
  val manager=context.getSystemService(NotificationManager::class.java)
  val occurrences=mutableListOf<String>()
  try {
+  // Restoring the same rule revision must discard its old armed presentation state.
+  prefs.edit().putLong("ruleRevision:$ruleId",rule.getLong("revision")).putBoolean("armed:$ruleId",true).putBoolean("needsInstall",true).commit()
   val registered=ipc("node_geofences","sync",timeout=90000)
   if(registered.getString("status") in setOf("installed","waiting_initial","active")) {
    assertFalse(prefs.getBoolean("needsInstall",true));assertTrue(prefs.getBoolean("hasRegions",false))
+   val initial=prefs.getString("state:$placeId",null)?.let{JSONObject(it).optString("confirmed")}
+   assertEquals(initial=="inside",prefs.getBoolean("armed:$ruleId",false))
    checkpoint("geofence_google_registration_task_succeeded")
   } else {
    assertEquals("recoverable_error",registered.getString("status"))
