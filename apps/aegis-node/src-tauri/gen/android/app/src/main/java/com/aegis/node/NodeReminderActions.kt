@@ -16,7 +16,9 @@ import java.util.concurrent.TimeUnit
 /** Native-only occurrence context, notification generations, and bounded durable outbox. */
 internal object NodeNotificationGate { val lock=Any() }
 object NodeReminderActions {
-  class Store(context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1) {
+  // SQLiteOpenHelper acquired AutoCloseable after older supported Android releases.
+  // Declare Closeable here so Kotlin use() is valid on API24+ and after R8.
+  class Store(context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1), java.io.Closeable {
     override fun onCreate(db: SQLiteDatabase) {
       db.execSQL("CREATE TABLE presentations (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, revision INTEGER NOT NULL, token TEXT, expires INTEGER NOT NULL, commandId TEXT NOT NULL,ruleId TEXT,ruleRevision INTEGER)")
       db.execSQL("CREATE TABLE withdrawals (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,expires INTEGER NOT NULL)")

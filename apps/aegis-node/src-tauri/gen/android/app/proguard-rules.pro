@@ -29,6 +29,7 @@
 -keepnames class com.aegis.node.NodeSyncWorker
 -keepnames class com.aegis.node.NodeLocationWorker
 -keepnames class com.aegis.node.NodeGeoConfirmWorker
+-keepnames class com.aegis.node.NodeGeofenceRestoreWorker
 -keepclassmembers class com.aegis.node.NodeNotificationsPlugin {
  @app.tauri.annotation.Command <methods>;
  @app.tauri.annotation.PermissionCallback <methods>;

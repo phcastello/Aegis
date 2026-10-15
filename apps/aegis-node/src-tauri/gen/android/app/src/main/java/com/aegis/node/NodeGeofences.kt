@@ -26,7 +26,7 @@ object NodeGeofences {
  private val applyGate=Any()
  private const val PREFS="aegis-geofences-v1"
  private fun prefs(context:Context)=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
- class Store(context:Context):SQLiteOpenHelper(context,"aegis-geofence-events-v1.db",null,1) {
+ class Store(context:Context):SQLiteOpenHelper(context,"aegis-geofence-events-v1.db",null,1), java.io.Closeable {
   override fun onCreate(db:SQLiteDatabase) {
    db.execSQL("CREATE TABLE events(eventId TEXT PRIMARY KEY,occurrenceId TEXT UNIQUE NOT NULL,ruleId TEXT NOT NULL,ruleRevision INTEGER NOT NULL,transition TEXT NOT NULL,occurredAt TEXT NOT NULL,postedAt TEXT,sequence INTEGER NOT NULL,payload TEXT NOT NULL,postResult TEXT NOT NULL DEFAULT 'pending')")
   }
@@ -38,7 +38,7 @@ object NodeGeofences {
  }
  fun clear(context:Context) { synchronized(manifestGate) {
   val hadRegions=prefs(context).getBoolean("hasRegions",false)
-  prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit()
+  synchronized(applyGate){check(prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
   if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
  } }
@@ -99,6 +99,16 @@ object NodeGeofences {
    prefs(context).edit().putString("status","recoverable_error").putString("error",error).putBoolean("needsInstall",true).commit();report(context,value);return
   }
   val placeIds=rules.flatMap { it.getJSONArray("placeIds").strings() }.toSet()
+  // A shared region lives until its final consumer expires, bounded by the manifest lease.
+  val regionUntil=mutableMapOf<String,Long>()
+  val leaseUntil=stamp(value.getString("leaseUntil"))
+  for(rule in rules) {
+   val until=minOf(leaseUntil,if(rule.isNull("endsAt"))leaseUntil else stamp(rule.getString("endsAt")))
+   for(placeId in rule.getJSONArray("placeIds").strings()) {
+    val place=value.getJSONArray("places").objects().firstOrNull{it.getString("id")==placeId} ?: error("Missing place")
+    for(circle in place.getJSONArray("circles").objects()) {val id=circle.getString("id");regionUntil[id]=maxOf(regionUntil[id]?:0,until)}
+   }
+  }
   val regions=linkedMapOf<String,Geofence>()
   for(placeId in placeIds) {
    val place=value.getJSONArray("places").objects().firstOrNull{it.getString("id")==placeId} ?: error("Missing place")
@@ -108,7 +118,7 @@ object NodeGeofences {
     regions[circleId]=Geofence.Builder().setRequestId(circleId)
      .setCircularRegion(circle.getDouble("latitude"),circle.getDouble("longitude"),circle.getDouble("radiusMeters").toFloat())
      .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
-     .setNotificationResponsiveness(120000).setExpirationDuration((stamp(value.getString("leaseUntil"))-System.currentTimeMillis()).coerceAtLeast(1)).build()
+     .setNotificationResponsiveness(120000).setExpirationDuration((regionUntil.getValue(circleId)-System.currentTimeMillis()).coerceAtLeast(1)).build()
    }
   }
   if(regions.isEmpty()||regions.size>100) {
@@ -153,6 +163,7 @@ object NodeGeofences {
   NodeNativeSession.call(context,"POST","/api/nodes/geofences/sync",JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules))
  }
  @Synchronized fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true) {
+  if(NodeNativeSession.read(context)==null)return
   val value=manifest(context) ?: return; val now=System.currentTimeMillis()
   if(prefs(context).getBoolean("needsInstall",true)||prefs(context).getString("installedRevision",null)!=value.getString("revision"))return
   if(stamp(value.getString("leaseUntil"))<=now || now-observation.capturedAt !in 0..300000) return
@@ -258,7 +269,12 @@ object NodeGeofences {
    }
   }
  }
+ fun scheduleRestore(context:Context) {
+  val work=OneTimeWorkRequestBuilder<NodeGeofenceRestoreWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
+  WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-restore",ExistingWorkPolicy.KEEP,work)
+ }
  fun restore(context:Context) { synchronized(manifestGate) {
+  if(NodeNativeSession.read(context)==null){clear(context);return}
   prefs(context).edit().putBoolean("needsInstall",true).commit()
   val current=manifest(context)
   if(current!=null && stamp(current.getString("leaseUntil"))>System.currentTimeMillis()) try{install(context,current)}catch(_:Exception){}
@@ -274,7 +290,7 @@ class NodeGeofenceReceiver:BroadcastReceiver() {
   NodeGeofences.background {
    try {
     val event=GeofencingEvent.fromIntent(intent) ?: return@background
-    if(event.hasError()) {NodeGeofences.restore(context);return@background}
+    if(event.hasError()) {NodeGeofences.scheduleRestore(context);return@background}
     val location=event.triggeringLocation
     if(location!=null) {val observation=NodeLocation.observation(location);NodeGeofenceRuntime.observe(context,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,true)}
    }catch(error:Exception){notificationLog("geofence_event",error)}finally{pending.finish()}
@@ -291,7 +307,17 @@ class NodeGeoConfirmWorker(context:Context,params:WorkerParameters):Worker(conte
 class NodeGeofenceRestoreReceiver:BroadcastReceiver() {
  override fun onReceive(context:Context,intent:Intent) {
   if(intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED,Intent.ACTION_MY_PACKAGE_REPLACED))return
-  val pending=goAsync()
-  NodeGeofences.background{try{NodeGeofenceRuntime.restore(context)}finally{pending.finish()}}
+  NodeGeofences.scheduleRestore(context)
+ }
+}
+
+/** Google registration/acquisition can outlive a BroadcastReceiver's execution budget. */
+class NodeGeofenceRestoreWorker(context:Context,params:WorkerParameters):Worker(context,params) {
+ override fun doWork():Result {
+  NodeGeofenceRuntime.restore(applicationContext)
+  val prefs=applicationContext.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
+  val definition=prefs.getString("manifest",null)?.let{JSONObject(it)} ?: return Result.success()
+  val valid=java.time.OffsetDateTime.parse(definition.getString("leaseUntil")).toInstant().toEpochMilli()>System.currentTimeMillis()
+  return if(valid && prefs.getString("error",null)=="native_registration_failed")Result.retry()else Result.success()
  }
 }
