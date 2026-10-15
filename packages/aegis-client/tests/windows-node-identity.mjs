@@ -9,6 +9,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
 import { installWindowsIpcObserver } from './windows-cdp-observer.mjs';
 import { pendingToastHistoryScript, parsePendingToastHistory } from './windows-toast-history.mjs';
+import { ownedWindowInspectionScript, parseOwnedWindowState } from './windows-owned-window.mjs';
 import WebSocket from '../../../scripts/node-transport-probe/node_modules/ws/wrapper.mjs';
 if (process.platform !== 'win32') throw Error('Requires a real Windows runner.');
 const work = mkdtempSync(join(tmpdir(), 'aegis-node-identity-'));
@@ -79,17 +80,20 @@ function activateReminderAction(actionId) {
   const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`Start-Process -FilePath '${uri}'`],{encoding:'utf8'});
   assert.equal(result.status,0,'The registered Windows URI handler must activate the installed native adapter.');
 }
-function nativeWindowState() {
-  assert.ok(Number.isSafeInteger(app.pid) && app.pid>0);
-  // Real Win32 visibility, rather than CDP/DOM visibility of a hidden WebView.
-  // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowvisible
-  const script=`$ErrorActionPreference='Stop'; Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AegisFixtureWindow { [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr window); }'; $application=Get-Process -Id ${app.pid}; $application.Refresh(); $handle=$application.MainWindowHandle; [pscustomobject]@{visible=($handle -ne [IntPtr]::Zero -and [AegisFixtureWindow]::IsWindowVisible($handle));mainWindowTitle=$application.MainWindowTitle} | ConvertTo-Json -Compress`;
-  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:15000});
-  assert.equal(result.status,0,'Inspect only the owned native process window.');return JSON.parse(result.stdout);
+function nativeWindowState(operation='inspect') {
+  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',ownedWindowInspectionScript(app.pid,operation)],{encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,'Inspect only the owned native product window.');return parseOwnedWindowState(result.stdout);
 }
 async function assertNativeWindowVisible(expected) {
-  let state;await waitUntil(()=>{state=nativeWindowState();return state.visible===expected;},10000);
-  if(expected)assert.equal(state.mainWindowTitle,'Aegis');return state;
+  let state;
+  try { await waitUntil(()=>{state=nativeWindowState();return state.windowCount===1 && state.visible===expected;},10000); }
+  catch(failure) { mkdirSync(artifacts,{recursive:true});writeFileSync(join(artifacts,'windows-native-window-visibility.json'),JSON.stringify({phase:'owned_product_window_visibility',expectedVisible:expected,observed:state},null,2)+'\n');throw failure; }
+  assert.equal(state.mainWindowTitle,'Aegis');return state;
+}
+async function hideNativeWindow() {
+  const state=nativeWindowState();assert.equal(state.windowCount,1);
+  if(state.visible)assert.equal(nativeWindowState('requestClose').windowCount,1);
+  await assertNativeWindowVisible(false);assert.equal(exited,undefined,'Window close must keep the resident process alive.');
 }
 
 async function open(args=[]) {
@@ -109,8 +113,7 @@ async function open(args=[]) {
   assert.ok(await page.evaluate(()=>(window.__aegisIpc.counts.node_status??0)>0 && (!window.__aegisIpc.fetchFailed||window.__aegisIpc.bridgeWrapped)), 'The real Windows native IPC observer must be proven before collecting diagnostics.');
 }
 async function close() {
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow()`], { encoding: 'utf8' });
-  assert.equal(result.status, 0); await new Promise(r=>setTimeout(r,500));assert.equal(exited,undefined,'Close must hide');
+  await hideNativeWindow();
   await invoke('node_exit').catch(()=>{}); await waitUntil(() => exited !== undefined, 15000); assert.equal(exited, 0);
   await browser.close().catch(() => {}); browser = undefined;
 }
@@ -224,7 +227,7 @@ try {
   writeFileSync(join(artifacts,'windows-native-cold-open.json'),JSON.stringify({body:{...coldBodyWindow,reminderId:acknowledgementOccurrence,ackReceipts:0},legacy:{...coldLegacyWindow,ackReceipts:0}},null,2)+'\n');
   console.log('Windows cold opaque body action + legacy URI: actual visible native window, focused occurrence, same native identity and no implicit ACK PASS.');
   const settingsClose=page.getByRole('button',{name:'Fechar configurações',exact:true});if(await settingsClose.count())await settingsClose.click();
-  const actionHide=spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});assert.equal(actionHide.status,0);assert.equal(actionHide.stdout.trim(),'True');
+  await hideNativeWindow();
   activateReminderAction(ackAction.id);
   await waitUntil(async()=>(await reminderReceipts(acknowledgementOccurrence)).some(item=>item.action==='acknowledge'&&item.applied),45000);
   await assertNativeWindowVisible(false);
@@ -259,8 +262,7 @@ try {
   assert.equal((await reminderCommand(pcId,withdrawalFirstOccurrence,'reminder.withdraw')).status,'success');
   assert.equal((await reminderCommand(pcId,withdrawalFirstOccurrence,'reminder.notify')).status,'expired','Withdrawal before notification must persist the generation high-water mark.');
   console.log('Windows native reminder.notify: real toast post, command replay, registered body/OK/snooze URI actions, durable outbox, authenticated ACK, stale-generation rejection, withdrawal ordering and high-water marks PASS.');
-  const hide = spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});
-  assert.equal(hide.status,0);await new Promise(r=>setTimeout(r,1000));assert.equal(exited,undefined);
+  await hideNativeWindow();
   assert.equal((await call('',undefined,peerCredential)).body.find(n=>n.id===pcId).availability,'online');
   const notification = await call('/notifications/test', {preferredNodeId:pcId,title:'Aegis CI',body:'Native fixture'},peerCredential);
   assert.equal(notification.status,200);assert.equal(notification.body.transport,'live_websocket');assert.equal(notification.body.status,'success');
@@ -281,7 +283,7 @@ try {
   const offlineOccurrence=randomUUID();
   assert.equal((await reminderCommand(pcId,offlineOccurrence,'reminder.notify')).status,'success');
   const offlineAction=nativeReminderMetadata(offlineOccurrence).actions.find(item=>item.action==='snooze');assert.ok(offlineAction);
-  const offlineHide=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8',timeout:15000});assert.equal(offlineHide.status,0);assert.equal(offlineHide.stdout.trim(),'True');
+  await hideNativeWindow();
   async function backendOffline(seconds) { const response=await fetch(origin+'/fixture/backend-offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seconds})});assert.equal(response.status,200); }
   await backendOffline(300);activateReminderAction(offlineAction.id);
   await waitUntil(()=>nativeReminderMetadata(offlineOccurrence).actions.some(item=>item.id===offlineAction.id&&item.queued===1),15000);
