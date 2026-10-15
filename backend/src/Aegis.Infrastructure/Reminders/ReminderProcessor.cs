@@ -87,7 +87,7 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IN
             NotificationDispatchResult result;
             metrics.ReminderDeliveryAttempts.Add(1);
             if (attempt.CommandExpiresAt <= clock.GetUtcNow()) result = new(new(recipient.NodeId!.Value, ""), "offline", null, "expired", attempt.CommandId);
-            else result = await dispatcher.DispatchToNodeAsync(recipient.NodeId!.Value, new(attempt.CommandId!.Value, capability, 1, attempt.CommandExpiresAt!.Value, input), ct);
+            else result = await dispatcher.DispatchToNodeAsync(recipient.NodeId!.Value, new(attempt.CommandId!.Value, capability, 1, attempt.CommandExpiresAt!.Value, input, IsReminder: true), ct);
             await store.LockedAsync(id, async r => {
                 var saved = await db.ReminderDeliveryAttempts.AsNoTracking().SingleAsync(a => a.Id == attempt.Id, ct);
                 var tracked = db.ChangeTracker.Entries<ReminderDeliveryAttempt>().FirstOrDefault(e => e.Entity.Id == saved.Id); if (tracked is not null) tracked.State = EntityState.Detached; db.Attach(saved);

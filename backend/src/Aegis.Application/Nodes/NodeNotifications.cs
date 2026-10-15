@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Aegis.Application.Nodes;
 
 public sealed record NotificationShowRequest(string Title, string Body, Guid? PreferredNodeId = null, int TtlSeconds = 60);
-public sealed record NodeNotificationCommand(Guid CommandId, string Capability, int CapabilityVersion, DateTimeOffset ExpiresAt, NotificationInput Input);
+public sealed record NodeNotificationCommand(Guid CommandId, string Capability, int CapabilityVersion, DateTimeOffset ExpiresAt, NotificationInput Input, [property: JsonIgnore] bool IsReminder = false);
 public sealed record NotificationInput(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Title,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Body,
@@ -96,7 +96,9 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
         // Revalidate administrative metadata and current capability/route immediately before I/O.
         // Never fallback after a possible send; reminders decide retry from persisted outcomes.
         var target = inventory.SingleOrDefault(n => n.Id == id);
-        if (target is null || !target.Enabled || target.RevokedAt is not null) return new(selection, "offline", null, "unavailable", command.CommandId);
+        if (target is null || !target.Enabled || target.RevokedAt is not null ||
+            (command.IsReminder || command.Capability == ReminderNotificationContract.NotifyCapability) && !target.ReceiveReminders)
+            return new(selection, "offline", null, "unavailable", command.CommandId);
         if (command.ExpiresAt <= clock.GetUtcNow()) return new(selection, "offline", null, "expired", command.CommandId);
         Commands.Add(1); string result, transport, availability; string? diagnostic = null;
         if (live.LiveCapabilities(id)?.Any(c => c.Name == command.Capability && c.Version >= command.CapabilityVersion) == true)
