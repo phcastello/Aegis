@@ -21,15 +21,18 @@ const port = Number(process.env.AEGIS_IDLE_CDP_PORT ?? '9462');
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536);
 const origin = 'http://127.0.0.1:18104';
 const work = mkdtempSync(join(tmpdir(), 'aegis-native-idle-'));
-const bootstrap = join(work, 'bootstrap.txt');
-const fixture = spawn('dotnet', ['run', '--project', join(repository, 'backend/tests/Aegis.NodeRuntimeFixture'), '--', bootstrap], {
+const externalFixture = process.env.AEGIS_IDLE_EXTERNAL_FIXTURE === '1';
+const reuseIdentity = process.env.AEGIS_IDLE_REUSE_IDENTITY === '1';
+const keepIdentity = process.env.AEGIS_IDLE_KEEP_IDENTITY === '1';
+const bootstrap = process.env.AEGIS_IDLE_BOOTSTRAP_FILE ?? join(work, 'bootstrap.txt');
+const fixture = externalFixture ? null : spawn('dotnet', ['run', '--project', join(repository, 'backend/tests/Aegis.NodeRuntimeFixture'), '--', bootstrap], {
   env: { ...process.env, AEGIS_IDLE_FIXTURE: label }, stdio: ['ignore', 'ignore', 'pipe']
 });
 let fixtureExit, app, appExit, browser, page, pairedId;
 let fixtureError = '';
-fixture.stderr.on('data', value => { fixtureError = (fixtureError + String(value)).slice(-4000); });
-fixture.on('exit', value => { fixtureExit = value; });
-fixture.on('error', () => { fixtureExit = -1; });
+fixture?.stderr.on('data', value => { fixtureError = (fixtureError + String(value)).slice(-4000); });
+fixture?.on('exit', value => { fixtureExit = value; });
+fixture?.on('error', () => { fixtureExit = -1; });
 const states = [];
 const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds));
 async function waitUntil(action, duration = 90000) {
@@ -96,9 +99,9 @@ async function rendererSnapshot() {
   }));
 }
 try {
-  await waitUntil(async () => { if (fixtureExit !== undefined) throw Error(`Disposable fixture exited (${fixtureExit}).`); try { return existsSync(bootstrap) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
+  await waitUntil(async () => { if (fixtureExit !== undefined) throw Error(`Disposable fixture exited (${fixtureExit}).`); try { return (reuseIdentity || existsSync(bootstrap)) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
   await fixtureMetrics();
-  app = spawn(exe, [], { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, WEBVIEW2_USER_DATA_FOLDER: join(work, 'webview') }, stdio: 'ignore' });
+  app = spawn(exe, [], { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, WEBVIEW2_USER_DATA_FOLDER: process.env.AEGIS_IDLE_WEBVIEW_PROFILE ?? join(work, 'webview') }, stdio: 'ignore' });
   app.on('exit', value => { appExit = value; }); app.on('error', () => { appExit = -1; });
   await waitUntil(async () => { if (appExit !== undefined) throw Error(`Native app exited (${appExit}).`); try { return (await fetch(`http://127.0.0.1:${port}/json/version`)).ok; } catch { return false; } }, 30000);
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
@@ -139,9 +142,22 @@ try {
   // Previous isolated steps may have left a revoked vault record. Native status
   // authenticates and discards any record from the preceding disposable API.
   const startingIdentity = await invoke('node_status');
-  assert.ok(['unpaired', 'revoked'].includes(startingIdentity.state), 'An idle run must pair afresh with this disposable API.');
-  const identity = await invoke('node_pair', { name: 'Aegis idle fixture', code: readFileSync(bootstrap, 'utf8') }); rmSync(bootstrap);
+  let identity;
+  if (reuseIdentity) {
+    assert.equal(startingIdentity.state, 'paired', 'Upgrade must retain the old native identity without a second pairing.');
+    assert.equal(startingIdentity.node.id, process.env.AEGIS_IDLE_EXPECT_NODE_ID);
+    identity = startingIdentity;
+  } else {
+    assert.ok(['unpaired', 'revoked'].includes(startingIdentity.state), 'An idle run must pair afresh with this disposable API.');
+    identity = await invoke('node_pair', { name: 'Aegis idle fixture', code: readFileSync(bootstrap, 'utf8') }); rmSync(bootstrap);
+  }
   assert.equal(identity.state, 'paired'); pairedId = identity.node.id;
+  const inventory = await invoke('node_list');
+  assert.deepEqual(inventory.map(node => node.id), [pairedId], 'The disposable upgrade database must contain exactly the original Node.');
+  if (process.env.AEGIS_IDLE_STORAGE_VALUE) {
+    const stored = await page.evaluate(() => localStorage.getItem('aegis.fixture.upgrade-sentinel'));
+    assert.equal(stored, process.env.AEGIS_IDLE_STORAGE_VALUE, 'The same WebView storage must survive both installer and runtime upgrades.');
+  }
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 30000);
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   const pageErrors = []; page.on('pageerror', error => { pageErrors.push(error.name); });
@@ -183,11 +199,20 @@ try {
   }
   assert.ok(states.reduce((sum,state) => sum + state.durationSeconds, 0) >= 600);
   mkdirSync(dirname(output), { recursive: true });
-  writeFileSync(output, JSON.stringify({ measuredAt: new Date().toISOString(), kind: 'real Windows application and WebView2, disposable loopback API', label, appVersion: runtime.version,
+  writeFileSync(output, JSON.stringify({ measuredAt: new Date().toISOString(), kind: 'real Windows application and WebView2, disposable loopback API', label, appVersion: runtime.version, nativeNodeId: pairedId, reusedIdentity: reuseIdentity, inventoryNodeCount: inventory.length, storageSentinelPreserved: Boolean(process.env.AEGIS_IDLE_STORAGE_VALUE),
     hardware: { platform: process.platform, osRelease: release(), cpuModel: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem(), webViewBrowser: browser.version() },
     configuration: { fixture: 'Aegis.NodeRuntimeFixture', heartbeatSeconds: label === 'before' ? 25 : 120, timeoutSeconds: label === 'before' ? 75 : 360, persistSeconds: label === 'before' ? 120 : 300, sameExecutableMode: 'debug with loopback API compiled in', durationRequestedSeconds: seconds },
     limits: ['CPU comes from the native app and its WebView2 descendant processes, not RDP or whole-machine CPU.', 'Fixture network bytes count HTTP bodies and WebSocket JSON payloads; no TCP framing, WebSocket framing, TLS, proxy, FCM or physical network bytes are measured.', 'Page network metrics exclude Rust native HTTP/WebSocket; those are counted separately by the fixture.', 'Each version runs four sequential states for at least 150 seconds each. Process accounting is sampled every 10 seconds; disappeared processes can make child CPU an underestimate.', 'Timers and IPC are observed through CDP injection in this CI process. This is a real Windows runtime measurement, not physical owner acceptance or an Android battery measurement.'], states }, null, 2) + '\n');
   console.log(output);
+  if (process.env.AEGIS_IDLE_UPGRADE_VERIFY === '1') {
+    const post = await invoke('node_test_notification', { id: pairedId });
+    assert.equal(post.status, 'success', 'The upgraded native identity must still receive and post a real notification.');
+    assert.equal(post.transport, 'live_websocket');
+    const recorded = JSON.parse(readFileSync(output, 'utf8'));
+    recorded.upgradeNotificationPost = {status:post.status,transport:post.transport,userReadConfirmed:false};
+    writeFileSync(output, JSON.stringify(recorded,null,2) + '\n');
+    console.log('Upgraded native identity: authenticated live notification posted by Windows PASS; no human-read assertion.');
+  }
   // Preserve the measured artifact even when an acceptance assertion fails.
   assert.deepEqual(pageErrors, [], 'The app must remain usable during idle measurement.');
   for (const sample of states) {
@@ -200,10 +225,10 @@ try {
     assert.ok((sample.fixtureCounters.node_transport_connections_total ?? 0) <= 1, `${sample.state}: stable networking must not cause a reconnect loop.`);
   }
 } finally {
-  if (page && appExit === undefined) { if (pairedId) await invoke('node_revoke', { id: pairedId }).catch(() => {}); await invoke('node_exit').catch(() => {}); }
+  if (page && appExit === undefined) { if (pairedId && !keepIdentity) await invoke('node_revoke', { id: pairedId }).catch(() => {}); await invoke('node_exit').catch(() => {}); await waitUntil(() => appExit !== undefined, 15000).catch(() => {}); }
   await browser?.close().catch(() => {});
   if (app && appExit === undefined) spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' });
-  if (fixtureExit === undefined) spawnSync('taskkill', ['/PID', String(fixture.pid), '/T', '/F'], { stdio: 'ignore' });
+  if (fixture && fixtureExit === undefined) spawnSync('taskkill', ['/PID', String(fixture.pid), '/T', '/F'], { stdio: 'ignore' });
   rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   // Full fixture diagnostics stay in CI, never in the measured application's UI.
   if (fixtureExit && fixtureError) { mkdirSync(dirname(output),{recursive:true}); writeFileSync(output.replace(/\.json$/i,'')+'.fixture.log',fixtureError); console.error('Disposable measurement fixture failed; inspect the fixture log artifact.'); }

@@ -139,20 +139,8 @@ jobs:
           projectPath: apps/aegis-node
           args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - if: matrix.android == 'false'
-        name: Install the actual Windows NSIS package in the isolated runner
-        shell: pwsh
-        run: |
-          $installer = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe')
-          if ($installer.Count -ne 1) { throw 'Expected one Windows installer' }
-          $destination = Join-Path $env:RUNNER_TEMP 'aegis-installed'
-          $process = Start-Process -FilePath $installer[0].FullName -ArgumentList @('/S', "/D=$destination") -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "NSIS failed with exit code $($process.ExitCode)" }
-          $executables = @(Get-ChildItem $destination -Filter '*.exe' | Where-Object Name -NotLike '*uninstall*')
-          if ($executables.Count -ne 1) { throw 'Installed executable missing or ambiguous' }
-          [IO.File]::AppendAllText($env:GITHUB_ENV, "AEGIS_INSTALLED_EXE=$($executables[0].FullName)`n", [Text.UTF8Encoding]::new($false))
-      - if: matrix.android == 'false'
-        name: Run real Windows WebView2 smoke test
-        run: node ../../packages/aegis-client/tests/windows-runtime.mjs "$AEGIS_INSTALLED_EXE"
+        name: Install and verify the immutable public accepted Windows NSIS package
+        run: node ../../packages/aegis-client/tests/windows-upgrade-idle.mjs install-before src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis "$RUNNER_TEMP/aegis-installed" "$RUNNER_TEMP/aegis-upgrade-plan.json"
       - if: matrix.android == 'false'
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -191,16 +179,18 @@ jobs:
           npm run tauri -- build --debug --no-bundle --target x86_64-pc-windows-msvc
           cp "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/debug/aegis-node.exe" "$RUNNER_TEMP/aegis-idle-before.exe"
       - if: matrix.android == 'false'
-        name: Measure Windows native and WebView idle before (at least ten minutes)
-        run: node ../../packages/aegis-client/tests/windows-idle.mjs "$RUNNER_TEMP/aegis-idle-before.exe" before ../../artifacts/v0.7.0-completion/windows-idle-before.json 600
+        name: Real NSIS upgrade, same native identity and equivalent Windows idle windows
+        run: node ../../packages/aegis-client/tests/windows-upgrade-idle.mjs compare "$AEGIS_UPGRADE_PLAN" "$RUNNER_TEMP/aegis-idle-before.exe" "$RUNNER_TEMP/aegis-idle-after.exe" ../../artifacts/v0.7.0-completion
       - if: matrix.android == 'false'
-        name: Measure Windows native and WebView idle after (at least ten minutes)
-        run: node ../../packages/aegis-client/tests/windows-idle.mjs "$RUNNER_TEMP/aegis-idle-after.exe" after ../../artifacts/v0.7.0-completion/windows-idle-after.json 600
+        name: Run real installed candidate Windows WebView2 smoke test
+        run: node ../../packages/aegis-client/tests/windows-runtime.mjs "$AEGIS_INSTALLED_EXE"
       - if: ${{ !cancelled() && matrix.android == 'false' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Aegis-Windows-Idle-Comparison
-          path: artifacts/v0.7.0-completion/windows-idle-*.json
+          path: |
+            artifacts/v0.7.0-completion/windows-idle-*.json
+            artifacts/v0.7.0-completion/windows-upgrade.json
           if-no-files-found: warn
           retention-days: 14
       - if: matrix.android == 'false'
