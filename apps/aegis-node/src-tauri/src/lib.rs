@@ -13,6 +13,7 @@ mod node_notification;
 mod node_transport;
 #[cfg(feature = "native-runtime")]
 mod node_vault;
+mod node_window_activation;
 mod platform;
 mod updates;
 #[cfg(all(feature = "native-runtime", windows))]
@@ -91,10 +92,7 @@ pub fn run() {
     // Register first so a second launch exits before secure-store initialization.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
-        if args
-            .iter()
-            .any(|a| a.starts_with("aegis-reminder://action/"))
-        {
+        if node_window_activation::background_launch(&args) {
             windows_notifications::activate(app, &args);
             return;
         }
@@ -148,8 +146,9 @@ pub fn run() {
             tauri::WebviewWindowBuilder::from_config(app, config)?
                 .visible(
                     !(cfg!(windows)
-                        && std::env::args()
-                            .any(|a| a == "--autostart" || a == "--reminder-action")),
+                        && node_window_activation::background_launch(
+                            &std::env::args().collect::<Vec<_>>(),
+                        )),
                 )
                 .on_navigation(move |url| {
                     url.origin().ascii_serialization() == "https://tauri.localhost"
@@ -169,8 +168,11 @@ pub fn run() {
             #[cfg(windows)]
             {
                 native_notifications::tray(app.handle())?;
-                windows_notifications::initialize(app.handle());
-                if std::env::args().any(|a| a == "--autostart" || a == "--reminder-action") {
+                let opened_window = windows_notifications::initialize(app.handle());
+                if node_window_activation::hide_after_activation(
+                    &std::env::args().collect::<Vec<_>>(),
+                    opened_window,
+                ) {
                     if let Some(window) = app.get_webview_window("main") {
                         window.hide()?;
                     }

@@ -473,31 +473,33 @@ fn withdraw_locked(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(
     }
     Ok(())
 }
-pub fn activate(app: &AppHandle, args: &[String]) {
+pub fn activate(app: &AppHandle, args: &[String]) -> bool {
     if args
         .iter()
         .any(|argument| argument == "aegis-reminder://open")
     {
         crate::native_notifications::open(app);
-        return;
+        return true;
     }
     let Ok(Some(scope)) = bind_scope(app) else {
-        return;
+        return false;
     };
     let Ok(_gate) = PRESENTATION_GATE.lock() else {
-        return;
+        return false;
     };
     let uri = args
         .iter()
         .find(|v| v.starts_with("aegis-reminder://action/"));
-    let Some(uri) = uri else { return };
+    let Some(uri) = uri else { return false };
     if uri.len() > 80 {
-        return;
+        return false;
     }
     let Ok(id) = uuid::Uuid::parse_str(uri.trim_start_matches("aegis-reminder://action/")) else {
-        return;
+        return false;
     };
-    let Ok(mut database) = db(app) else { return };
+    let Ok(mut database) = db(app) else {
+        return false;
+    };
     if database
         .query_row("SELECT value FROM metadata WHERE key='scopeId'", [], |r| {
             r.get::<_, String>(0)
@@ -506,10 +508,10 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         .as_ref()
         != Some(&scope)
     {
-        return;
+        return false;
     }
     let Ok(tx) = database.transaction() else {
-        return;
+        return false;
     };
     let action: Option<(String, u64, u64, String, i64)> = tx
         .query_row(
@@ -520,10 +522,10 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         .optional()
         .unwrap_or(None);
     let Some((reminder_id, revision, generation, action, created)) = action else {
-        return;
+        return false;
     };
     if chrono::Utc::now().timestamp() - created > 604800 {
-        return;
+        return false;
     }
     if action == "open" {
         *OPEN
@@ -532,7 +534,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
             .unwrap() = Some(reminder_id.clone());
         crate::native_notifications::open(app);
         let _ = app.emit("aegis-reminder-open", json!({"reminderId":reminder_id}));
-        return;
+        return true;
     }
     let valid = tx
         .query_row(
@@ -545,7 +547,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         .flatten()
         .is_some();
     if !valid {
-        return;
+        return false;
     }
     let count: i64 = tx
         .query_row("SELECT COUNT(*) FROM actions WHERE queued=1", [], |r| {
@@ -553,7 +555,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         })
         .unwrap_or(100);
     if count >= 100 {
-        return;
+        return false;
     }
     let already = tx
         .query_row(
@@ -573,11 +575,11 @@ pub fn activate(app: &AppHandle, args: &[String]) {
             )
             .is_err()
         {
-            return;
+            return false;
         }
     }
     if tx.commit().is_err() {
-        return;
+        return false;
     }
     drop(database);
     let _ = withdraw_locked(
@@ -587,6 +589,7 @@ pub fn activate(app: &AppHandle, args: &[String]) {
     );
     WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
         .notify_one();
+    false
 }
 async fn flush(app: &AppHandle) -> Result<bool, ()> {
     let scope = bind_scope(app)?;
@@ -698,11 +701,11 @@ async fn reconcile_presentations(app: &AppHandle, expected_scope: &str) -> Resul
     }
     Ok(())
 }
-pub fn initialize(app: &AppHandle) {
+pub fn initialize(app: &AppHandle) -> bool {
+    let opened_window = activate(app, &std::env::args().collect::<Vec<_>>());
     if !supported(app) {
-        return;
+        return opened_window;
     }
-    activate(app, &std::env::args().collect::<Vec<_>>());
     let app = app.clone();
     let wake = WAKE
         .get_or_init(|| Arc::new(tokio::sync::Notify::new()))
@@ -731,6 +734,7 @@ pub fn initialize(app: &AppHandle) {
             }
         }
     });
+    opened_window
 }
 
 pub fn pending(app: &AppHandle) -> u32 {
