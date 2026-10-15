@@ -61,11 +61,23 @@ public sealed class ReminderWithdrawalReconciler(AegisDbContext db, INodeRegistr
 {
     public async Task ReconcileAsync(CancellationToken ct)
     {
-        var pending = await (from recipient in db.Set<ReminderRecipient>() join reminder in db.Reminders on recipient.ReminderId equals reminder.Id
+        var candidates = from recipient in db.Set<ReminderRecipient>() join reminder in db.Reminders on recipient.ReminderId equals reminder.Id
             where recipient.NodeId != null && recipient.WithdrawnAt == null && (reminder.AcknowledgedAt != null || reminder.Generation != recipient.Generation || reminder.Status == ReminderStatus.Cancelled)
-            select recipient).OrderBy(r => r.UpdatedAt).Take(50).ToListAsync(ct);
-        if (pending.Count == 0) return;
+                && db.Nodes.Any(n => n.Id == recipient.NodeId && n.Enabled && n.RevokedAt == null)
+                && db.NodeCapabilities.Any(c => c.NodeId == recipient.NodeId && c.Name == ReminderNotificationContract.WithdrawCapability && c.Version >= 1)
+            select recipient;
+        // Legacy/disabled recipients remain reconcilable if their implementation
+        // or administrative state changes, without consuming the bounded batch.
+        if (!await candidates.AnyAsync(ct)) return;
         var inventory = await nodes.ListForDeliveryAsync(ct);
+        var eligibleIds = inventory.Where(n => n.Enabled && n.RevokedAt is null && n.Capabilities.Any(c => c.Name == ReminderNotificationContract.WithdrawCapability && c.Version >= 1)).Select(n => n.Id).ToArray();
+        var onlineIds = inventory.Where(n => eligibleIds.Contains(n.Id) && n.Availability == "online").Select(n => n.Id).ToArray();
+        var retryBefore = clock.GetUtcNow().AddMinutes(-5);
+        // A recently queued push waits five minutes, unless a live session is
+        // now usable. Apply this before Take so waiting rows do not hide work.
+        var pending = await candidates.Where(r => eligibleIds.Contains(r.NodeId!.Value) &&
+            (r.WithdrawalQueuedAt == null || r.WithdrawalQueuedAt <= retryBefore || onlineIds.Contains(r.NodeId.Value)))
+            .OrderBy(r => r.UpdatedAt).ThenBy(r => r.Id).Take(50).ToListAsync(ct);
         foreach (var recipient in pending)
         {
             var node = inventory.FirstOrDefault(n => n.Id == recipient.NodeId && n.Enabled && n.RevokedAt is null);
