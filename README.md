@@ -1,35 +1,43 @@
 # Aegis v0.7.0 — preview integrada
 
-Aegis é uma assistente pessoal com modelos acessados por API. A candidata em preparação é **0.7.0-unstable.12** para **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
+Aegis é uma assistente pessoal com modelos acessados por API. A candidata **0.7.0-unstable.13 está disponível** para **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
 
 Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana de uso cotidiano do Stage 07 sem lembretes perdidos relatados. Isso não comprova todos os casos extremos físicos. A conclusão acrescenta séries/ocorrências, entrega por dispositivo, OK/adiamento, lugares contextuais e execução geográfica nativa Android. O Web Client/PWA continua disponível; esta versão não distribui aplicativos Linux, iOS ou macOS.
 
 ## Download Aegis
 
-Open **[GitHub Releases](https://github.com/phcastello/Aegis/releases)** and choose an Aegis native preview (`node-v…`). Native releases are prereleases during v0.7.0 development. If a preview has no installers yet, its signing/publishing setup is still pending; see the Stage 02 report.
+**Candidata integrada: 0.7.0-unstable.13**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.13). A v0.7.0 estável ainda depende desse aceite.
 
-Arquivos oficiais: **Android: `Aegis-Android-arm64.apk`**; **Windows: `Aegis-Windows-x86_64-Setup.exe`**. Durante a validação da candidata, a última release publicada pode ser anterior à versão deste código; confira o número na página da release.
+| Plataforma | Download oficial |
+| --- | --- |
+| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.13/Aegis-Android-arm64.apk) |
+| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.13/Aegis-Windows-x86_64-Setup.exe) |
 
-### Windows
-
-1. Download **`Aegis-Windows-x86_64-Setup.exe`**.
-2. Run the installer.
-3. Open Aegis. Official builds use `https://aegis.phcastello.com` automatically.
-
-The development installer does not yet have commercial Windows code signing, so SmartScreen may warn about an unknown publisher. Verify that the download came from this repository's release; do not disable Windows protections. Tauri update signatures protect updates but are separate from Windows publisher certificates.
+O Web Client/PWA permanece disponível. Esta versão não distribui aplicativos Linux, iOS ou macOS. Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente.
 
 ### Android
 
-1. Open [Releases](https://github.com/phcastello/Aegis/releases) on your phone.
-2. Download **`Aegis-Android-arm64.apk`**.
-3. When Android asks, authorize APK installation for the browser used to download it.
-4. Install and open Aegis.
+1. No celular, baixe o APK oficial acima.
+2. Autorize a instalação pelo navegador quando o Android solicitar e confirme no instalador do sistema.
+3. Abra a Aegis. Se já usa uma versão release, instale a atualização por cima: **não desinstale a Aegis para atualizar**.
 
-During v0.7.0 development, distribution is directly by APK, outside the Play Store. If you installed the Stage 01 debug APK, uninstall it once before installing the first release APK because they use different signing certificates. Later release APKs retain the same signing identity.
+A distribuição Android é por APK, fora da Play Store. Em Configurações → Sobre, você pode verificar atualizações; a faixa de atualização também permite escolher Atualizar ou Agora não. Os novos APKs desse fluxo ficam no cache privado da Aegis, são verificados por pacote, versão e certificado e seguem para confirmação no instalador do Android. O updater oficial do Tauri não suporta Android; esse caminho usa o adaptador nativo da Aegis.
 
-Depois da primeira instalação, a faixa de atualização informa a versão e permite adiar a decisão; Sobre também oferece verificação manual. Windows usa o updater assinado do Tauri, com download e instalação/reinício consentidos separadamente. Android usa um adaptador nativo: novos APKs ficam no cache privado da Aegis, são conferidos por pacote/versão/certificado e entregues ao instalador do sistema, que pede a confirmação normal. O updater oficial do Tauri não suporta Android. APKs antigos baixados pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos; remova-os manualmente uma única vez, se desejar.
+**Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK `unstable.13` oficial e instale sobre a release existente uma vez, sem desinstalar. Pacote, certificado de distribuição e identidade do Node permanecem os mesmos. Previews seguintes usam `0.7.0-unstable.N`, independentemente dos Stages. O versionCode da candidata é 7000013; o estável 0.7.0 reserva 7000999.
 
-Previews usam `0.7.0-unstable.N`, independente dos Stages. O updater Android antigo de `stage.10` aceita apenas `stage.N`: instale uma preview `unstable.N` assinada pela página de releases uma vez. Package, certificado e identidade do Node permanecem os mesmos; não desinstale uma instalação release para atualizar. Android versionCode da candidata é 7000012; o estável 0.7.0 reserva 7000999, mantendo a ordem crescente.
+APKs debug antigos podem usar outro certificado e precisam de uma migração específica; não apague dados para contornar um conflito de assinatura. APKs baixados anteriormente pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos. Você pode removê-los manualmente, se desejar.
+
+### Windows
+
+1. Baixe e execute o instalador oficial acima.
+2. Instale sobre a versão atual e abra a Aegis. A atualização normal preserva o cofre nativo e a identidade do Node.
+3. Nas próximas atualizações, escolha Baixar atualização e depois confirme Instalar e reiniciar quando seu trabalho terminar. A instalação não acontece silenciosamente.
+
+O instalador não possui certificado comercial de editor Windows; o SmartScreen pode informar editor desconhecido. Confira a origem na release deste repositório e mantenha as proteções do Windows ativadas. A assinatura de atualização do Tauri é uma proteção separada do certificado de editor Windows.
+
+### Aceite ainda pendente
+
+O proprietário fará um único roteiro integrado de campo das geofences Android e verificará atualização no hardware de uso. CI, emulador e trajetórias sintéticas validam os caminhos implementados; não comprovam precisão ou latência física em casa/campus. [Checklist e limitações da candidata](docs/v0.7.0-completion.md).
 
 ### Pair this installation as a Node
 
@@ -42,17 +50,19 @@ docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll migrate
 docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll pairing-code
 ```
 
-O código expira após dez minutos. Use-o somente no dispositivo pretendido e não o inclua em logs compartilhados. A identidade sobrevive a reinícios e atualizações normais. Desativar o celular também pausa suas regras geográficas; reativá-lo mantém essas regras pausadas até retomada explícita em Lembretes. Em aparelho offline, a pausa fica pendente de sincronização ou expiração local. O [relatório do Stage 03](docs/v0.7.0-stage03-node-identity-pairing.md) documenta o bootstrap e a recuperação originais.
+O código expira após dez minutos. Use-o somente no dispositivo pretendido e não o inclua em logs compartilhados. A identidade sobrevive a reinícios e atualizações normais. Desativar o celular também pausa suas regras geográficas. Depois de reativá-lo por outro dispositivo habilitado, abra a Aegis no celular para reconectar e retome explicitamente as regras em Lembretes. Em aparelho offline, a pausa fica pendente de sincronização ou expiração local. O [relatório do Stage 03](docs/v0.7.0-stage03-node-identity-pairing.md) documenta o bootstrap e a recuperação originais.
 
 ### Lembretes e lugares
 
 Lembretes pessoais usam **todos os dispositivos elegíveis** por padrão; a opção de destino único mantém a prioridade configurada. Cada destinatário possui seu resultado de entrega. Sessão conhecida ou token FCM não prova que o aparelho está acordado, nem que o usuário leu. OK reconhece somente a ocorrência; Adiar muda somente aquela apresentação, preservando a próxima data da série. As ações são globais e cópias offline são reconciliadas quando voltam. Sem rede, a ação fica pendente: não há promessa de adiamento pontual antes da confirmação.
 
+As ações nativas e a retirada automática de cópias exigem clientes com as novas capabilities de lembretes. Um OK reconhecido pelo servidor encerra novas tentativas globalmente; uma cópia em cliente antigo sem suporte à retirada pode permanecer até ser dispensada manualmente.
+
 Séries diárias, semanais e mensais usam horário local e timezone IANA, com intervalo, dias selecionados e encerramento. Dia 31 pula meses sem esse dia; último dia é uma regra própria. Pausa/retomada não produz uma coleção de avisos vencidos. A janela de entrega temporal é de dez minutos; eventos geográficos antigos não geram distribuição após cinco minutos.
 
 Em Lugares, confirme o ponto e ajuste um ou vários círculos no mapa. Cômodos servem à localização fixa de Nodes e herdam contexto da propriedade; GPS não identifica entrada em cômodos. Escolha explicitamente o celular que informa a posição pessoal. Apelidos como “casa” podem representar várias residências e são resolvidos por contexto recente do celular; PC/RDP não muda a posição do usuário. Cada lembrete criado fixa seu lugar.
 
-Geofences Android precisam de localização em uso e, ao habilitar monitoramento, permissão de background. Recusar localização mantém chat e lembretes temporais. **Salvo** e **ativo no celular** são estados distintos. O Android pode notificar com o backend indisponível, usando a definição sincronizada; detecção depende dos serviços nativos, permissões e condições de localização. Force Stop, localização desligada ou falta total de conectividade podem impedir eventos. Uma regra offline tem validade renovável de até sete dias; cancelamento/removal não é instantâneo em aparelho offline. O teste de campo integrado permanece no checklist.
+Geofences Android dependem do Google Play Services, dos serviços de localização e das permissões disponíveis. Precisam de localização em uso e, ao habilitar monitoramento, permissão de background. Recusar localização mantém chat e lembretes temporais. **Salvo** e **ativo no celular** são estados distintos. O Android pode notificar com o backend indisponível, usando a definição sincronizada; detecção depende dos serviços nativos, permissões e condições de localização. Force Stop, localização desligada ou falta total de conectividade podem impedir eventos. Uma regra offline tem validade renovável de até sete dias; cancelamento/remoção não é instantâneo em aparelho offline. O teste de campo integrado permanece no checklist.
 
 ### Mapas, busca e privacidade
 
@@ -60,7 +70,7 @@ O editor carrega [Leaflet](https://leafletjs.com/) somente quando necessário. T
 
 Configuração opcional do operador: `PlaceMaps__TileUrl`, `PlaceMaps__Attribution`, `PlaceMaps__GeocoderProvider` (`photon` ou `nominatim-compatible`), `PlaceMaps__GeocoderUrl` e `PlaceMaps__GeocoderApiKey` (somente backend). URL vazia desabilita a busca; o mapa e a posição atual continuam disponíveis. Um endpoint Nominatim compatível deve ter contrato que permita este uso; o Nominatim público não é o padrão. Não são necessários cartão, compra de créditos ou chave privada no cliente.
 
-A busca transmite ao provedor somente o endereço digitado quando o usuário pede a consulta. Tiles revelam ao provedor a área visualizada. A Aegis guarda a última observação de posição, com idade/precisão/origem, e as áreas escolhidas; não guarda uma trilha contínua por padrão nem inclui coordenadas precisas em prompts/logs. Parâmetros contextuais testáveis ficam em `LocationContext__MaximumAgeSeconds` (900), `MaximumCityAccuracyMeters` (2000), `LocalResidenceMeters` (50000), `CandidateMarginMeters` (100000), `CandidateDistanceRatio` (3) e `RefreshTimeoutSeconds` (15), todos sob o prefixo `LocationContext__`.
+A busca usa POST autenticado até a API da Aegis, com o endereço no corpo da requisição, sem colocá-lo na URL registrada pelo proxy. Somente quando o usuário pede a consulta, o endereço digitado é enviado ao provedor configurado. Tiles revelam ao provedor a área visualizada. A Aegis guarda a última observação de posição, com idade/precisão/origem, e as áreas escolhidas; não guarda uma trilha contínua por padrão nem inclui coordenadas precisas em prompts/logs. Parâmetros contextuais testáveis ficam em `LocationContext__MaximumAgeSeconds` (900), `MaximumCityAccuracyMeters` (2000), `LocalResidenceMeters` (50000), `CandidateMarginMeters` (100000), `CandidateDistanceRatio` (3) e `RefreshTimeoutSeconds` (15), todos sob o prefixo `LocationContext__`.
 
 Version history:
 
