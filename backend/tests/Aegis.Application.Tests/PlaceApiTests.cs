@@ -87,6 +87,7 @@ public sealed class PlaceApiTests
             new HttpRequestMessage(HttpMethod.Get, "/api/nodes/places"),
             new HttpRequestMessage(HttpMethod.Post, "/api/nodes/places") { Content = JsonContent.Create(Place()) },
             new HttpRequestMessage(HttpMethod.Get, "/api/nodes/reminders"),
+            new HttpRequestMessage(HttpMethod.Post, "/api/nodes/reminders/reconcile") { Content = JsonContent.Create(new { items = new[] { new { reminderId = id, revision = 1, generation = 1 } } }) },
             new HttpRequestMessage(HttpMethod.Post, "/api/nodes/reminders") { Content = JsonContent.Create(new { text = "Synthetic", dueAt = "2026-10-15T13:00:00Z" }) },
             new HttpRequestMessage(HttpMethod.Post, $"/api/nodes/reminders/{id}/actions") { Content = JsonContent.Create(new ReminderActionRequest(Guid.NewGuid(), 1, 1, "acknowledge")) },
             new HttpRequestMessage(HttpMethod.Get, "/api/nodes/reminder-series"),
@@ -147,4 +148,42 @@ public sealed class PlaceApiTests
         Assert.Equal(phone.Id, host.Signals.LastNode); Assert.Equal("location.current", host.Signals.LastCapability);
         await using var db = host.Db(); Assert.Empty(db.Set<GeographicReminderRule>()); Assert.DoesNotContain(await db.Set<NodeLocationProfile>().ToArrayAsync(), p => p.NodeId == windows.Id && p.Latitude is not null);
     }
+    [Fact]
+    public async Task ReconnectInventoryWithdrawsAcknowledgedCancelledAndSupersededCopiesButKeepsUncertainPosts()
+    {
+        await using var host = await Host.Create(); var phone = await host.Pair(); host.Authenticate(phone.Credential);
+        var now = host.Clock.Now;
+        var active = new Reminder("Synthetic active", now.AddHours(1), "UTC", null, now);
+        var acknowledged = new Reminder("Synthetic acknowledged", now.AddHours(1), "UTC", null, now);
+        var snoozed = new Reminder("Synthetic snoozed", now.AddHours(1), "UTC", null, now);
+        var failed = new Reminder("Synthetic unknown outcome", now.AddHours(1), "UTC", null, now);
+        var cancelled = new Reminder("Synthetic cancelled", now.AddHours(2), "UTC", null, now);
+        await using (var seed = host.Db()) {
+            seed.Reminders.AddRange(active, acknowledged, snoozed, failed, cancelled); await seed.SaveChangesAsync();
+            host.Clock.Now += TimeSpan.FromHours(1);
+            foreach (var r in new[] { active, acknowledged, snoozed, failed }) { r.Claim(Guid.NewGuid(), host.Clock.Now); r.BeginTrigger(host.Clock.Now); r.Finish(null, r != failed, host.Clock.Now); }
+            acknowledged.Acknowledge(host.Clock.Now); snoozed.Snooze(host.Clock.Now, 10); cancelled.Cancel(host.Clock.Now); await seed.SaveChangesAsync();
+        }
+        var missing = Guid.NewGuid();
+        var request = new { items = new[] { active, acknowledged, snoozed, failed, cancelled }.Select(r => new { reminderId = r.Id, revision = 1, generation = 1 }).Append(new { reminderId = missing, revision = 1, generation = 1 }).ToArray() };
+        var response = await Read(await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", request));
+        var removed = response.GetProperty("withdraw").EnumerateArray().Select(v => v.GetProperty("reminderId").GetGuid()).ToHashSet();
+        Assert.Equal(4, removed.Count); Assert.Contains(acknowledged.Id, removed); Assert.Contains(cancelled.Id, removed); Assert.Contains(snoozed.Id, removed); Assert.Contains(missing, removed); Assert.DoesNotContain(active.Id, removed); Assert.DoesNotContain(failed.Id, removed);
+        Assert.All(response.GetProperty("withdraw").EnumerateArray(), p => Assert.Equal(1, p.GetProperty("generation").GetInt32()));
+        var ahead = await Read(await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = new[] { new { reminderId = acknowledged.Id, revision = 99, generation = 2 } } })); Assert.Empty(ahead.GetProperty("withdraw").EnumerateArray());
+        await using var db = host.Db(); Assert.Empty(db.Set<ReminderActionReceipt>()); Assert.Null((await db.Reminders.SingleAsync(r => r.Id == active.Id)).AcknowledgedAt);
+    }
+
+    [Fact]
+    public async Task ReconnectInventoryRejectsUnboundedDuplicateAndInvalidReferences()
+    {
+        await using var host = await Host.Create(); var phone = await host.Pair(); host.Authenticate(phone.Credential);
+        var many = Enumerable.Range(0, 101).Select(_ => new { reminderId = Guid.NewGuid(), revision = 1, generation = 1 }).ToArray();
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = many })).StatusCode);
+        var id = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = new[] { new { reminderId = id, revision = 1, generation = 1 }, new { reminderId = id, revision = 2, generation = 2 } } })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = new[] { new { reminderId = Guid.Empty, revision = 0, generation = 0 } } })).StatusCode);
+        var empty = await Read(await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = Array.Empty<object>() })); Assert.Empty(empty.GetProperty("withdraw").EnumerateArray());
+    }
+
 }
