@@ -72,7 +72,12 @@ class NodeNotificationFrameworkTest {
     assertEquals("duplicate", render(payload).getString("status"))
   }
   @Test fun missingChannelIsRecreatedBeforePosting() {
+    // Channel deletion posts a cancellation runnable in NotificationManagerService.
+    // Observe its completion before recreating the channel and testing a new post.
+    val previous=id()
+    assertEquals("success",render(command(previous,expiry())).getString("status"));active(previous)
     manager.deleteNotificationChannel(NODE_NOTIFICATION_CHANNEL)
+    awaitFrameworkNotificationWithdrawal(manager,previous)
     assertNull(manager.getNotificationChannel(NODE_NOTIFICATION_CHANNEL))
     val id = id()
     assertEquals("success", render(command(id, expiry())).getString("status"))

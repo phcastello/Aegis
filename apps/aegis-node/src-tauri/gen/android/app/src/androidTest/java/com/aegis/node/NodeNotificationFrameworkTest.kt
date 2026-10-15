@@ -82,7 +82,12 @@ class NodeNotificationFrameworkTest {
     assertTrue(manager.activeNotifications.none { it.tag == id })
   }
   @Test fun missingChannelIsRecreatedBeforePosting() {
+    // Drain the real asynchronous channel cancellation before creating a new record.
+    val previous=id()
+    assertEquals("success",NodeNativeNotifications.fromCommand(context,command(previous,Instant.now().plusSeconds(60).toString())).status)
+    expectActive(previous)
     manager.deleteNotificationChannel(NodeNativeNotifications.CHANNEL)
+    awaitFrameworkNotificationWithdrawal(manager,previous)
     assertNull(manager.getNotificationChannel(NodeNativeNotifications.CHANNEL))
     val id = id()
     val result = NodeNativeNotifications.show(context, id, Instant.now().plusSeconds(60).toString(), "Aegis framework test", "Fixture")

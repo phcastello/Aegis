@@ -84,7 +84,11 @@ internal fun awaitFrameworkReminder(manager:NotificationManager,id:String,genera
  return manager.activeNotifications.single{it.tag=="reminder:$id:$generation"}
 }
 internal fun awaitFrameworkReminderWithdrawal(manager:NotificationManager,id:String,generation:Int) {
+ awaitFrameworkNotificationWithdrawal(manager,"reminder:$id:$generation")
+}
+
+internal fun awaitFrameworkNotificationWithdrawal(manager:NotificationManager,tag:String) {
  val deadline=android.os.SystemClock.elapsedRealtime()+5000
- while(manager.activeNotifications.any{it.tag=="reminder:$id:$generation"} && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
- org.junit.Assert.assertTrue(manager.activeNotifications.none{it.tag=="reminder:$id:$generation"})
+ while(manager.activeNotifications.any{it.tag==tag} && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+ org.junit.Assert.assertTrue("The previous native presentation must be withdrawn before reuse",manager.activeNotifications.none{it.tag==tag})
 }
