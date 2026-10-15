@@ -29,6 +29,8 @@ async function pair(code, platform) {
   const node = { secret: receipt.credential, id: receipt.nodeId, attemptId, confirmed: false, capabilities: platform === 'windows' ? [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }] : [{ name: 'audio.input', version: 1 }] }; nodes.push(node);
   if (notifications) node.capabilities.push({name:"notification.show",version:1});
   const confirmed = await http('/pair/finalize', null, { attemptId, credential: node.secret }); node.id = confirmed.id; node.confirmed = true;
+  // Public diagnostics must never become recipients of the owner's personal reminders.
+  if (origin.startsWith('https:')) await http('/' + node.id + '/reminders', node.secret, { receiveReminders: false }, origin, 'PUT');
   console.log(`Paired disposable NodeId=${node.id} Platform=${platform}`); return node;
 }
 async function connect(node, socketOrigin = origin) {

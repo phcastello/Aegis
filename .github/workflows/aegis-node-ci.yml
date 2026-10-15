@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.ref }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   regression:
@@ -28,6 +28,7 @@ jobs:
     env:
       AEGIS_NODE_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
       AEGIS_REMINDER_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
+      AEGIS_MEMORY_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
@@ -293,3 +294,40 @@ jobs:
             adb uninstall com.aegis.node.test || true
             adb uninstall com.aegis.node || true
             node ../../scripts/node-transport-probe/android-native.mjs release
+
+      - name: Preserve candidate APK and generic instrumentation for idle comparison
+        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        run: |
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-after.apk"
+          cp src-tauri/gen/android/notificationFrameworkTest/build/outputs/apk/release/notificationFrameworkTest-release.apk "$RUNNER_TEMP/aegis-idle-test.apk"
+      - name: Build accepted Android baseline with the same isolated signing identity
+        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
+        run: |
+          git fetch origin 43650d1c2cf58a1fc188e2c33eae0af579eabcac --depth=1
+          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 43650d1c2cf58a1fc188e2c33eae0af579eabcac
+          npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/packages/aegis-client"
+          npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
+          cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
+          npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-before.apk"
+      - name: Equivalent Android idle windows before and after (ten minutes each)
+        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          working-directory: apps/aegis-node
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048
+          script: |
+            node ../../scripts/node-transport-probe/android-idle.mjs before "$RUNNER_TEMP/aegis-idle-before.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion/android-idle-before.json
+            node ../../scripts/node-transport-probe/android-idle.mjs after "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion/android-idle-after.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ !cancelled() && matrix.api == 35 }}
+        with:
+          name: Aegis-Android-Idle-Comparison
+          path: artifacts/v0.7.0-completion/android-idle-*.json
+          if-no-files-found: warn
+          retention-days: 14

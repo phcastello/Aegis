@@ -28,7 +28,7 @@ DO $$ BEGIN
    WHERE n."Enabled" OR n."RevokedAt" IS DISTINCT FROM p.revoked_at OR n."CreatedAt"<>p.created_at
      OR n."AppVersion"<>p.version OR c."RevokedAt" IS NULL)
  THEN RAISE EXCEPTION 'Inventory or credential revocation changed; stop for review'; END IF;
- IF EXISTS (SELECT 1 FROM reminder_delivery_attempts a JOIN verified_probes p ON p.id=a."NodeId")
+ IF EXISTS (SELECT 1 FROM reminder_node_delivery_attempts a JOIN verified_probes p ON p.id=a."NodeId")
  OR EXISTS (SELECT 1 FROM reminder_recipients a JOIN verified_probes p ON p.id=a."NodeId")
  OR EXISTS (SELECT 1 FROM geographic_reminder_rules a JOIN verified_probes p ON p.id=a."ObserverNodeId")
  OR EXISTS (SELECT 1 FROM geographic_reminder_events a JOIN verified_probes p ON p.id=a."ObserverNodeId")
