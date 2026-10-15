@@ -1,36 +1,52 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import ChatView from '@aegis/client/views/ChatView.vue';
+import SettingsShell, { type SettingsSection } from '@aegis/client/components/SettingsShell.vue';
+import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
+import AegisMark from '@aegis/client/components/AegisMark.vue';
 import UpdateNotice from './components/UpdateNotice.vue';
 import { nodeServices, transportServices, type IdentityStatus } from './services/nodes';
 import NodesPanel from './components/NodesPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
+import { useUpdates } from './composables/useUpdates';
+import { checkUpdate } from './services/updates';
 import type { RuntimeInfo } from './services/runtime';
-defineProps<{ runtime: RuntimeInfo }>();
-const aboutOpen = ref(false);
-const nodesOpen = ref(false);
-const identity = ref<IdentityStatus | null>(null);
-async function refreshIdentity() { try { identity.value = await nodeServices.status(); } catch { identity.value = { state: 'pairingError', node: null, error: 'Armazenamento seguro indisponível. Abra Dispositivos para verificar.' }; } }
-function foreground() { if (document.visibilityState === 'visible') { void transportServices.reconnect().catch(() => {}); void refreshIdentity(); } }
-onMounted(() => { void refreshIdentity(); document.addEventListener('visibilitychange', foreground); });
-onUnmounted(() => document.removeEventListener('visibilitychange', foreground));
-function closeNodes() { nodesOpen.value = false; void refreshIdentity(); }
+const RemindersPanel = defineAsyncComponent(() => import('./components/RemindersPanel.vue'));
+const PlacesPanel = defineAsyncComponent(() => import('./components/PlacesPanel.vue'));
+const props = defineProps<{ runtime: RuntimeInfo }>();
+const section = ref<SettingsSection | null>(null); const dirty = ref(false); const activity = ref(false);
+const shell = ref<InstanceType<typeof SettingsShell> | null>(null); const focusedReminderId = ref<string | null>(null);
+const identity = ref<IdentityStatus | null>(null); const updates = useUpdates(() => checkUpdate(props.runtime.platform));
+let stopReminderListener: UnlistenFn | null = null; let disposed = false;
+let lastIdentityCheck = 0; let foregroundTimer: ReturnType<typeof setTimeout> | null = null;
+async function refreshIdentity() { try { identity.value = await nodeServices.status(); lastIdentityCheck = Date.now(); } catch { identity.value = { state: 'pairingError', node: null, error: 'Armazenamento seguro indisponível. Abra Dispositivos para verificar.' }; } }
+function navigate(value: SettingsSection) { dirty.value = false; section.value = value; }
+function close() { section.value = null; dirty.value = false; void refreshIdentity(); }
+function foreground() {
+  if (document.visibilityState !== 'visible' || foregroundTimer !== null) return;
+  foregroundTimer = setTimeout(async () => { foregroundTimer = null; if (document.visibilityState !== 'visible') return; try { const current = await transportServices.status(); if (current.transportState === 'offline') await transportServices.reconnect(); } catch { /* Native lifecycle also reconciles independently. */ } if (Date.now() - lastIdentityCheck > 30000) void refreshIdentity(); }, 250);
+}
+function nativeBack() { if (section.value) shell.value?.requestClose(); }
+function showReminder(id: unknown) { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return; focusedReminderId.value = id; if (section.value) shell.value?.navigate('reminders'); else navigate('reminders'); }
+function openReminder(event: Event) { showReminder((event as CustomEvent<{reminderId?:unknown}>).detail?.reminderId); }
+async function subscribeReminderOpen() { try { const unlisten = await listen<{reminderId:string}>('aegis-reminder-open', event => showReminder(event.payload.reminderId)); if (disposed) unlisten(); else stopReminderListener = unlisten; } catch { /* Android DOM bridge remains available. */ } try { const pending = await invoke<{reminderId:string|null}>('node_consume_reminder_open'); if (!disposed) showReminder(pending.reminderId); } catch { /* Older runtimes have no stored deep link. */ } }
+watch(section, value => { void invoke('node_settings_open', { open: value !== null }).catch(() => undefined); });
+onMounted(() => { void subscribeReminderOpen(); void refreshIdentity(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); });
+onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
 </script>
-
 <template>
-  <ChatView>
-    <template #client-info><button class="native-about-button" aria-label="Dispositivos / Nodes" @click="nodesOpen = true">Dispositivos</button><button class="native-about-button" aria-label="Sobre a Aegis" @click="aboutOpen = !aboutOpen">ⓘ</button></template>
-    <template #notice><UpdateNotice :platform="runtime.platform" /><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este Node está desativado.' : identity.state === 'revoked' ? 'Identidade revogada: pareie este dispositivo novamente.' : 'Este dispositivo ainda não está pareado como Node.' }} <button @click="nodesOpen = true">Dispositivos</button></div></template>
+  <ChatView :app-version="runtime.version" @activity-changed="activity = $event">
+    <template #global-navigation><SettingsTrigger @click="navigate('devices')" /></template>
+    <template #notice><UpdateNotice :updates="updates" :work-active="activity" /><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>
-  <NodesPanel v-if="nodesOpen" :platform="runtime.platform" @close="closeNodes" />
-  <aside v-if="aboutOpen" class="native-about" aria-label="Sobre a Aegis">
-    <button @click="aboutOpen = false">Fechar</button>
-    <p>Aegis {{ runtime.version }}</p>
-    <DiagnosticsPanel />
-  </aside>
+  <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
+    <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />
+    <RemindersPanel v-else-if="section === 'reminders'" :platform="runtime.platform" :focused-reminder-id="focusedReminderId" @dirty="dirty = $event" />
+    <PlacesPanel v-else-if="section === 'places'" :platform="runtime.platform" @dirty="dirty = $event" />
+    <section v-else-if="section === 'updates'"><h2>Atualizações</h2><p class="settings-muted">Versão instalada: {{ runtime.version }}. O download e a instalação precisam de sua ação.</p><UpdateNotice :updates="updates" :work-active="activity" /><div class="settings-actions"><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">{{ updates.state.value === 'checking' ? 'Verificando…' : 'Verificar atualizações' }}</button></div><p v-if="updates.checkedMessage.value" role="status">{{ updates.checkedMessage.value }}</p><details v-if="runtime.platform === 'android'"><summary>Downloads antigos do navegador</summary><p>APKs baixados anteriormente pelo navegador continuam na pasta Downloads. Você pode removê-los uma vez pelo gerenciador de arquivos do Android. A Aegis não procura nem apaga arquivos pessoais nessa pasta.</p></details></section>
+    <section v-else-if="section === 'about'"><div class="about-brand"><div><AegisMark /></div><div><h2>Sobre a Aegis</h2><span class="settings-badge">{{ runtime.version }}</span></div></div><p class="settings-muted">Sua assistente pessoal, com modelos acessados por API.</p><dl><div><dt>Aplicativo</dt><dd>{{ runtime.platform === 'android' ? 'Android' : 'Windows' }}</dd></div><div><dt>Identidade do dispositivo</dt><dd>{{ identity?.state === 'paired' ? 'Pareada' : 'Verificar em Dispositivos' }}</dd></div></dl><div class="settings-actions"><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">{{ updates.state.value === 'checking' ? 'Verificando…' : 'Verificar atualizações' }}</button></div><p v-if="updates.checkedMessage.value" role="status">{{ updates.checkedMessage.value }}</p><UpdateNotice :updates="updates" :work-active="activity" /><details><summary>Diagnóstico técnico</summary><DiagnosticsPanel /></details></section>
+  </SettingsShell>
 </template>
-
-<style scoped>
-.native-node-notice { padding: .45rem .8rem; font-size: .8rem; color: #bbb; background: #1b1b1b; }
-.native-node-notice button { margin-left: .5rem; text-decoration: underline; }
-</style>
+<style scoped>.about-brand { display: flex; gap: 16px; align-items: center; }.about-brand > div:first-child { width: 52px; height: 52px; }.about-brand h2 { margin-bottom: 8px; }</style>

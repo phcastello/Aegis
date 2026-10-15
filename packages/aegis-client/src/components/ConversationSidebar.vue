@@ -6,6 +6,7 @@ import AegisIdentityCard from './AegisIdentityCard.vue';
 
 const props = defineProps<{
   conversations: ConversationSummary[];
+  appVersion?: string;
   activeConversationId?: string | null;
   disabled?: boolean;
   open?: boolean;
@@ -121,9 +122,9 @@ onBeforeUnmount(() => {
 <template>
   <div class="sidebar-backdrop" :class="{ 'sidebar-backdrop--visible': open }" @click="emit('close')"></div>
 
-  <aside id="conversation-sidebar" class="conversation-sidebar" :class="{ 'conversation-sidebar--open': open }" :inert="!open">
+  <aside id="conversation-sidebar" class="conversation-sidebar" :class="{ 'conversation-sidebar--open': open }" :inert="!open" :aria-hidden="!open">
     <div class="sidebar-header">
-      <AegisIdentityCard />
+      <AegisIdentityCard :version="appVersion" />
       <button
         id="sidebar-collapse-button"
         type="button"
@@ -227,5 +228,6 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <nav v-if="$slots['global-navigation']" class="sidebar-global-navigation" aria-label="Aegis"><slot name="global-navigation" /></nav>
   </aside>
 </template>

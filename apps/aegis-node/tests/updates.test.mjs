@@ -42,3 +42,25 @@ test('Windows updates accept only the exact HTTPS versioned installer from this 
     assert.throws(() => validateWindowsUpdate({ platforms: { 'windows-x86_64': { url: bad } } }, '0.7.0-stage.3'));
   assert.throws(() => validateWindowsUpdate({}, '0.7.0-stage.3'));
 });
+
+test('manual checks can recover after the automatic check without parallel requests or installation', async () => {
+  let calls = 0, release;
+  const state = useUpdates(async () => { calls++; if (calls === 1) return null; await new Promise(resolve => { release = resolve; }); return { version: '0.7.0-unstable.12', kind: 'apk', install: async () => assert.fail('checking must never install') }; });
+  await state.start(); assert.match(state.checkedMessage.value, /mais recente/);
+  const pending = state.start(true); await state.start(true); assert.equal(calls, 2);
+  release(); await pending; assert.equal(state.state.value, 'available'); assert.equal(state.update.value.version, '0.7.0-unstable.12');
+});
+
+test('Android install permission is a recoverable step and never reports installer opened early', async () => {
+  let calls = 0;
+  const state = useUpdates(async () => ({ version:'0.7.0-unstable.12',kind:'apk',install:async () => ({status:++calls===1?'permission_required':'installer_opened'}) }));
+  await state.start(); await state.install(); assert.equal(state.state.value,'permissionRequired');assert.equal(state.visible.value,true);
+  await state.install(); assert.equal(state.state.value,'opened');assert.equal(calls,2);
+});
+
+test('Windows download completes before a separate user action hands off the installer', async () => {
+  let downloads=0,installs=0;
+  const state=useUpdates(async()=>({version:'0.7.0-unstable.12',kind:'installer',prepare:async progress=>{downloads++;progress(4,4);},install:async()=>{installs++;}}));
+  await state.start();await state.install();assert.equal(downloads,1);assert.equal(installs,0);assert.equal(state.state.value,'ready');assert.equal(state.readyToInstall.value,true);
+  await state.install();assert.equal(downloads,1);assert.equal(installs,1);assert.equal(state.state.value,'opened');
+});

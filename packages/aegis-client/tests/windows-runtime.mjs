@@ -48,14 +48,16 @@ try {
   assert.equal(secondaryExit, 0, 'Second Windows launch must exit before creating another runtime.');
   assert.equal(exitCode, undefined, 'Original runtime must remain open.');
   console.log('Windows single-instance identity checkpoint protection PASS.');
-  await page.getByLabel('Sobre a Aegis').click();
-  await page.getByText(`Aegis ${version}`, { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Retry', exact: true }).waitFor();
+  await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
+  await page.getByRole('button',{name:'Sobre',exact:true}).click();
+  await page.getByText(version, { exact: true }).waitFor();
+  await page.getByText('Diagnóstico técnico',{exact:true}).click();
+  await page.getByRole('button', { name: 'Verificar conexão', exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('.diagnostics button')?.disabled);
-  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await page.getByRole('button', { name: 'Verificar conexão', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.diagnostics button')?.disabled);
   const labels = await page.locator('.diagnostics dd').allTextContents();
-  assert.equal(labels[0], 'Windows'); assert.ok(['Connected', 'Unavailable'].includes(labels[1]));
+  assert.equal(labels[0], 'Windows'); assert.ok(['Disponível', 'Indisponível'].includes(labels[1]));
   // No conversation content or screenshots of the production account are published.
   console.log(`Windows native runtime PASS: Vue renders; native platform Windows; version ${version}; health ${labels[1]}; Retry responds.`);
   const closed = spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${application.pid}).CloseMainWindow()`], { encoding: 'utf8' });

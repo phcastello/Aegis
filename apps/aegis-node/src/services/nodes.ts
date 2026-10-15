@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 export type NodeState = 'unpaired' | 'pairing' | 'paired' | 'disabled' | 'revoked' | 'pairingError';
 export interface NodeView {
-  id: string; name: string; platform: 'android' | 'windows'; enabled: boolean;
+  id: string; name: string; platform: 'android' | 'windows'; enabled: boolean; receiveReminders?: boolean;
   appVersion: string; protocolVersion: number; pairedAt: string;
   availability?: 'online' | 'backgroundReachable' | 'offline'; lastSeenAt?: string | null; lastHeartbeatAt?: string | null;
   capabilities?: { name: string; version: number }[]; targetPriority?: number;
@@ -21,6 +21,8 @@ export interface NodeServices {
   setPriority(id: string, priority: number): Promise<NodeView>;
   revoke(id: string): Promise<NodeView>;
   createPairingCode(): Promise<PairingCode>;
+  setReminders(id: string, receiveReminders: boolean): Promise<NodeView>;
+  remove(id: string): Promise<void>;
 }
 // Credentials and recovery keys are never IPC arguments/results.
 export const nodeServices: NodeServices = {
@@ -29,6 +31,8 @@ export const nodeServices: NodeServices = {
   setEnabled: (id, enabled) => invoke('node_set_enabled', { id, enabled }),
   resolve: (request) => invoke('node_resolve_target', { request }),
   setPriority: (id, priority) => invoke('node_set_target_priority', { id, priority }),
+  setReminders: (id, receiveReminders) => invoke('node_set_reminders', { id, receiveReminders }),
+  remove: id => invoke('node_remove', { id }),
   revoke: (id) => invoke('node_revoke', { id }), createPairingCode: () => invoke('node_create_pairing_code')
 };
 
@@ -38,7 +42,7 @@ export const transportServices = {
   reconnect: (): Promise<void> => invoke('node_transport_reconnect')
 };
 
-export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean }
+export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean; pendingActions?: number }
 export interface NotificationResult { node: {id:string;name:string}|null; reachability: string; transport: string|null; status:string; commandId:string|null; diagnosticCode?:string }
 export const notificationServices = {
  test: (id:string):Promise<NotificationResult> => invoke('node_test_notification',{id}),

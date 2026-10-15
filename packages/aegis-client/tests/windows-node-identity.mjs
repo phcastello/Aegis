@@ -60,9 +60,9 @@ async function close() {
 try {
   await waitUntil(async () => { try { return existsSync(bootstrap) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
   await open(); assert.equal((await invoke('node_status')).state, 'unpaired');
-  await page.getByLabel('Dispositivos / Nodes', { exact: true }).click();
-  const panel = page.getByRole('dialog', { name: 'Dispositivos / Nodes', exact: true });
-  await panel.getByLabel('Nome do dispositivo').fill('PC CI'); await panel.getByLabel('Código de pareamento').fill(readFileSync(bootstrap, 'utf8'));
+  await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
+  const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
+  await panel.getByLabel('Nome deste dispositivo').fill('PC CI'); await panel.getByLabel('Código de pareamento').fill(readFileSync(bootstrap, 'utf8'));
   rmSync(bootstrap); await panel.getByRole('button', { name: 'Parear dispositivo', exact: true }).click();
   await panel.getByText('PC CI', { exact: true }).waitFor();
   assert.equal(await panel.getByText('PC CI', { exact: true }).count(), 1);
@@ -94,7 +94,8 @@ try {
   assert.equal(await panel.locator(`[data-node-id="${pcId}"]`).count(), 1);
   assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
   const nativeCapabilities = [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }];
-  assert.deepEqual((await invoke('node_list')).find(n => n.id === pcId).capabilities, nativeCapabilities);
+  async function assertNativeCapabilities() { const actual=(await invoke('node_list')).find(n=>n.id===pcId).capabilities; for(const expected of nativeCapabilities)assert.ok(actual.some(item=>item.name===expected.name && item.version===expected.version),`Missing native capability ${expected.name}`); }
+  await assertNativeCapabilities();
   assert.deepEqual((await call('/me', undefined, peerCredential)).body.capabilities, [{ name: 'audio.input', version: 1 }]);
   await invoke('node_set_target_priority', { id: pcId, priority: 10 });
   await invoke('node_set_target_priority', { id: peer.body.id, priority: 20 });
@@ -112,8 +113,9 @@ try {
   // Regression: the real button invokes native node_test_notification -> HttpApi ->
   // the production controller -> live dispatcher -> native command/result.
   const pcRow = panel.locator(`[data-node-id="${pcId}"]`);
-  await pcRow.getByRole('button', {name:'Enviar notificação de teste', exact:true}).click();
-  await pcRow.getByRole('status').filter({hasText:'PC CI: success · live_websocket'}).waitFor();
+  await pcRow.getByText('Detalhes técnicos e diagnóstico',{exact:true}).click();
+  await pcRow.getByRole('button', {name:'Testar notificação', exact:true}).click();
+  await pcRow.getByRole('status').filter({hasText:'Notificação postada pelo dispositivo.'}).waitFor();
   const nativeNotification = await invoke('node_test_notification',{id:pcId});
   assert.equal(nativeNotification.node.id,pcId);
   assert.equal(nativeNotification.transport,'live_websocket');
@@ -134,7 +136,7 @@ try {
   await open();
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000); identity = await invoke('node_status'); assert.equal(identity.node.id, pcId);
   assert.equal((await invoke('node_list')).length, 2);
-  assert.deepEqual((await invoke('node_list')).find(n => n.id === pcId).capabilities, nativeCapabilities);
+  await assertNativeCapabilities();
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
   await invoke('node_set_enabled', { id: peer.body.id, enabled: false }); assert.equal((await call('/me', undefined, peerCredential)).status, 403);

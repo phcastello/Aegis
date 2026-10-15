@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AegisMark from './AegisMark.vue';
+defineProps<{ version?: string }>();
 </script>
 
 <template>
@@ -11,7 +12,7 @@ import AegisMark from './AegisMark.vue';
     <div class="identity-card__copy">
       <div class="identity-card__title">
         <h1>Aegis</h1>
-        <span>v0.6.1 · Yeah, I know.</span>
+        <span>{{ version ? `v${version}` : 'Assistente pessoal' }}</span>
       </div>
 
     </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
@@ -32,7 +32,8 @@ import type {
   SubmitMessageFeedbackRequest
 } from '../types/chat';
 
-const emit = defineEmits<{ notificationRequired: [] }>();
+defineProps<{ appVersion?: string }>();
+const emit = defineEmits<{ notificationRequired: []; activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
 
@@ -56,7 +57,7 @@ const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating }
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
 const feedbackErrorMessage = ref<string | null>(null);
 const isSavingFeedback = ref(false);
-const sidebarDrawerQuery = window.matchMedia('(max-width: 1380px)');
+const sidebarDrawerQuery = window.matchMedia('(max-width: 900px)');
 const isSidebarOpen = ref(!sidebarDrawerQuery.matches);
 const sidebarGestureSurface = ref<HTMLElement | null>(null);
 const sidebarGesture = useSidebarGesture(sidebarGestureSurface, isSidebarOpen, sidebarDrawerQuery);
@@ -91,6 +92,7 @@ const showErrorMessage = computed(() => !!errorMessage.value && ![
   toolStatusState.value === 'failed' ? toolStatusMessage.value : null
 ].includes(errorMessage.value));
 const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
+watch(() => hasActiveTurn.value || transcription.isBusy.value || voice.isBusy.value, active => emit('activityChanged', active));
 const canStartRecording = computed(() =>
   !hasActiveTurn.value &&
   !isRestoring.value &&
@@ -828,7 +830,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell">
-    <div ref="sidebarGestureSurface" class="hideout-shell" :class="{ 'hideout-shell--dragging': sidebarGesture.dragging.value }" :style="sidebarGesture.style.value">
+    <div ref="sidebarGestureSurface" class="hideout-shell" :class="{ 'hideout-shell--dragging': sidebarGesture.dragging.value, 'hideout-shell--sidebar-open': isSidebarOpen }" :style="sidebarGesture.style.value">
       <button
         v-if="!isSidebarOpen"
         id="sidebar-expand-button"
@@ -842,7 +844,9 @@ onBeforeUnmount(() => {
       >
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
       </button>
+      <div v-if="!isSidebarOpen && $slots['global-navigation']" class="global-navigation-floating"><slot name="global-navigation" /></div>
       <ConversationSidebar
+        :app-version="appVersion"
         :conversations="conversations"
         :active-conversation-id="conversationId"
         :disabled="isLoading || isRestoring"
@@ -857,7 +861,7 @@ onBeforeUnmount(() => {
         @request-delete-conversation="requestDeleteConversation"
         @load-more="loadConversationHistory(false)"
         @retry-history="loadConversationHistory(true)"
-      />
+      ><template #global-navigation><slot name="global-navigation" /></template></ConversationSidebar>
 
       <section class="chat-panel" aria-label="Conversa com a Aegis">
       <header class="chat-header">
@@ -870,7 +874,6 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="chat-voice-controls">
-          <slot name="client-info" />
           <ConversationInfo v-if="conversationId && !isRestoring" :conversation-id="conversationId" />
           <button
             type="button"
@@ -885,7 +888,7 @@ onBeforeUnmount(() => {
         <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>
       </header>
 
-      <slot name="notice" />
+      <div v-if="$slots.notice" class="chat-notices"><slot name="notice" /></div>
       <div class="messages" aria-live="polite">
         <div v-if="isRestoring" class="empty-state">
           <AegisMark />

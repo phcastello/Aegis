@@ -1,5 +1,9 @@
-.native-about-button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 8px; }
-.native-about { position: fixed; inset: 10% max(16px, calc((100vw - 460px) / 2)) auto; z-index: 100; max-height: 80dvh; overflow: auto; padding: 24px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 12px 48px #0008; }
-.native-about button, .update-notice button { border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 10px; color: var(--text); background: var(--surface-raised); cursor: pointer; }
-.update-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.update-notice span { flex: 1; }
+.native-node-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; font-size: .8rem; color: var(--muted); background: var(--surface-soft); border-bottom: 1px solid var(--line); }
+.native-node-notice button { color: var(--accent-strong); background: transparent; text-decoration: underline; min-height: 36px; cursor: pointer; }
+.update-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px max(20px, var(--conversation-inset)); border-bottom: 1px solid var(--line-strong); background: var(--surface-raised); font-size: .82rem; }
+.update-notice > div { flex: 1; min-width: 200px; display: grid; gap: 4px; }
+.update-notice strong { color: var(--accent-strong); font-size: .88rem; }
+.update-notice span { color: var(--muted); }
+.update-notice button { min-height: 44px; padding: 9px 13px; border-radius: var(--radius-sm); color: var(--accent-ink); background: var(--accent); cursor: pointer; }
+.update-notice button.update-dismiss { color: var(--muted); background: transparent; }
+@media (max-width: 620px) { .update-notice { padding: 12px; } }

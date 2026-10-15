@@ -1,23 +1,14 @@
 <script setup lang="ts">
 import { onMounted } from 'vue';
 import { useDiagnostics } from '../composables/useDiagnostics';
-
 const { runtime, checking, message, platformLabel, backendLabel, retry } = useDiagnostics();
 onMounted(() => { void retry(); });
 </script>
-
 <template>
-  <main class="diagnostics" :aria-busy="checking">
-    <h1>Aegis</h1>
-    <p class="subtitle">Diagnóstico do cliente</p>
-    <dl aria-live="polite">
-      <div><dt>Platform:</dt><dd>{{ platformLabel }}</dd></div>
-      <div><dt>Backend:</dt><dd>{{ backendLabel }}</dd></div>
-    </dl>
-    <p v-if="runtime?.backendUrl" class="backend-url">{{ runtime.backendUrl }}</p>
-    <p v-if="message" role="status" class="message">{{ message }}</p>
-    <button type="button" :disabled="checking" @click="retry">
-      {{ checking ? 'Checking…' : 'Retry' }}
-    </button>
-  </main>
+  <section class="diagnostics" :aria-busy="checking" aria-label="Diagnóstico técnico">
+    <dl aria-live="polite"><div><dt>Plataforma</dt><dd>{{ platformLabel === 'Unsupported' ? 'Não suportada' : platformLabel === 'Unknown' ? 'Não identificada' : platformLabel }}</dd></div><div><dt>Servidor</dt><dd>{{ checking ? 'Verificando…' : backendLabel === 'Connected' ? 'Disponível' : 'Indisponível' }}</dd></div></dl>
+    <small v-if="runtime?.backendUrl">{{ runtime.backendUrl }}</small>
+    <p v-if="message" role="status">{{ message }}</p>
+    <div class="settings-actions"><button type="button" :disabled="checking" @click="retry">{{ checking ? 'Verificando…' : 'Verificar conexão' }}</button></div>
+  </section>
 </template>
