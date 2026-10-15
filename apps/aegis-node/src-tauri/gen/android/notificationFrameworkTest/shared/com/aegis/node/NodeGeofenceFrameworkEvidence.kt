@@ -60,6 +60,20 @@ internal fun fixtureJson(path:String,body:JSONObject?=null):JSONObject {
   return if(result.startsWith("["))JSONObject().put("items",JSONArray(result))else JSONObject(result)
  }finally{connection.disconnect()}
 }
+private fun reminderDeliveryDiagnostic(response:JSONObject,receivedAt:Long):String {
+ val allowed=setOf(
+  "android_jni_unavailable","android_jni_call_failed","android_native_timeout",
+  "android_payload_parse_failed","android_expiry_parse_failed","android_invalid_command_id",
+  "android_invalid_notification_payload","android_permission_denied","android_permission_check_failed",
+  "android_channel_missing","android_pending_intent_failed","android_notification_build_failed",
+  "android_notification_post_failed","android_dedupe_read_failed","android_dedupe_persist_failed"
+ )
+ val code=response.optString("diagnosticCode").takeIf{it in allowed}?:"unavailable"
+ fun delta(field:String):String=runCatching {
+  (java.time.OffsetDateTime.parse(response.optString(field)).toInstant().toEpochMilli()-receivedAt).toString()
+ }.getOrDefault("unavailable")
+ return "diagnosticCode=$code remainingMs=${delta("commandExpiresAt")} serverClockDeltaMs=${delta("serverRespondedAt")}"
+}
 private fun awaitGeofenceReport(context:Context,pending:Boolean) {
  val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
  val deadline=android.os.SystemClock.elapsedRealtime()+25000
@@ -140,7 +154,8 @@ private fun exerciseWithdrawalReceiptFramework(context:Context,nodeId:String,pee
  }
  try {
   val posted=fixtureJson("reminder-command",JSONObject().put("nodeId",nodeId).put("reminderId",id).put("commandId",UUID.randomUUID().toString()))
-  assertEquals("success",posted.getString("status"));awaitFrameworkReminder(manager,id,1)
+  val receivedAt=System.currentTimeMillis()
+  assertEquals(reminderDeliveryDiagnostic(posted,receivedAt),"success",posted.getString("status"));awaitFrameworkReminder(manager,id,1)
   val acknowledged=fixtureNodeRequest("/reminders/$id/actions",peerCredential,JSONObject().put("actionId",UUID.randomUUID().toString()).put("expectedRevision",1).put("generation",1).put("action","acknowledge"))
   assertTrue(acknowledged.getBoolean("applied"))
   assertNull(withdrawnAt())

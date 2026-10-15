@@ -168,7 +168,9 @@ app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, 
         recipient.Result(result.Status, "live_websocket", false, now);
         db.Set<ReminderRecipient>().Add(recipient); await db.SaveChangesAsync(ct);
     }
-    return Results.Ok(new { status = result.Status, reminderId = request.ReminderId });
+    return Results.Ok(new { status = result.Status, reminderId = request.ReminderId,
+        diagnosticCode = NotificationContract.ValidDiagnostic(result.DiagnosticCode) ? result.DiagnosticCode : null,
+        commandExpiresAt = command.ExpiresAt, serverRespondedAt = DateTimeOffset.UtcNow });
 });
 app.MapGet("/fixture/reminder-actions", async (AegisDbContext db, CancellationToken ct) => await db.Set<ReminderActionReceipt>().AsNoTracking()
     .Select(r => new { actionId = r.Id, r.ReminderId, r.ExpectedRevision, r.Generation, r.Action, r.Applied }).ToArrayAsync(ct));
