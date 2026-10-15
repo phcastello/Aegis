@@ -473,9 +473,7 @@ async fn session(
             return e;
         }
     };
-    let server_now = chrono::DateTime::parse_from_rfc3339(&hello.sent_at)
-        .unwrap()
-        .timestamp();
+    let server_now = chrono::DateTime::parse_from_rfc3339(&hello.sent_at).unwrap();
     let clock_started = Instant::now();
     let payload = hello.payload.unwrap_or_default();
     let interval = payload["heartbeatSeconds"].as_u64().unwrap_or(0);
@@ -528,7 +526,8 @@ async fn session(
                                 if command.protocol_version != 1 || uuid::Uuid::parse_str(&command.message_id).is_err() || chrono::DateTime::parse_from_rfc3339(&command.sent_at).is_err() || commands.len() >= 4 { return retry(status,"command","protocol_error"); }
                                 let input = match serde_json::from_value::<crate::node_notification::NotificationCommand>(command.payload.unwrap_or_default()) { Ok(c) => c, Err(_) => return retry(status,"command","protocol_error") };
                                 let executor = config.notifications.clone();
-                                let now = server_now + clock_started.elapsed().as_secs() as i64;
+                                let sent_at=chrono::DateTime::parse_from_rfc3339(&command.sent_at).expect("validated command timestamp");
+                                let Some(now) = command_clock_seconds(&server_now, clock_started.elapsed(), &sent_at, config.connect_timeout) else {return retry(status,"command","protocol_error");};
                                 commands.spawn(async move {
                                     let id = input.command_id;
                                     let status = if let Some(executor) = executor { executor.execute(&input, now).await } else { crate::node_notification::NotificationResult::new(crate::node_notification::NotificationStatus::Unsupported) };
@@ -548,6 +547,31 @@ async fn session(
     }
 }
 
+// Keep both fractional components until the final conversion to whole seconds.
+// The authenticated command timestamp also bounds one-way delivery lag in the
+// hello-based estimate, without increasing the command's allowed lifetime.
+fn command_clock_seconds(
+    anchor: &chrono::DateTime<chrono::FixedOffset>,
+    elapsed: Duration,
+    sent_at: &chrono::DateTime<chrono::FixedOffset>,
+    handshake_timeout: Duration,
+) -> Option<i64> {
+    let nanoseconds = anchor.timestamp() as i128 * 1_000_000_000
+        + anchor.timestamp_subsec_nanos() as i128
+        + elapsed.as_nanos() as i128;
+    let estimated = nanoseconds
+        .div_euclid(1_000_000_000)
+        .clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+    let sent = sent_at.timestamp();
+    // The hello reply arrived within this handshake budget. A command cannot
+    // legitimately lead that estimate further, nor remain valid after a 300s lag.
+    let maximum_lead = handshake_timeout.as_secs().min(30) as i64 + 1;
+    if sent > estimated.saturating_add(maximum_lead) || sent < estimated.saturating_sub(300) {
+        return None;
+    }
+    Some(estimated.max(sent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +581,140 @@ mod tests {
         accept_hdr_async,
         tungstenite::handshake::server::{Request, Response},
     };
+    #[test]
+    fn fractional_server_clock_rounds_once_after_elapsed_time() {
+        for text in [
+            "2026-10-15T10:00:00.9000000Z",
+            "2026-10-15T07:00:00.9000000-03:00",
+        ] {
+            let anchor = chrono::DateTime::parse_from_rfc3339(text).unwrap();
+            assert_eq!(
+                command_clock_seconds(
+                    &anchor,
+                    Duration::from_millis(200),
+                    &anchor,
+                    Duration::from_secs(10)
+                )
+                .unwrap(),
+                anchor.timestamp() + 1
+            );
+            assert_eq!(
+                command_clock_seconds(
+                    &anchor,
+                    Duration::from_millis(5200),
+                    &anchor,
+                    Duration::from_secs(10)
+                )
+                .unwrap(),
+                anchor.timestamp() + 6
+            );
+        }
+        let nanosecond =
+            chrono::DateTime::parse_from_rfc3339("2026-10-15T10:00:00.999999999Z").unwrap();
+        assert_eq!(
+            command_clock_seconds(
+                &nanosecond,
+                Duration::from_nanos(1),
+                &nanosecond,
+                Duration::from_secs(10)
+            )
+            .unwrap(),
+            nanosecond.timestamp() + 1
+        );
+        let negative = chrono::DateTime::parse_from_rfc3339("1969-12-31T23:59:59.900Z").unwrap();
+        assert_eq!(
+            command_clock_seconds(
+                &negative,
+                Duration::from_millis(200),
+                &negative,
+                Duration::from_secs(10)
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn maximum_command_ttl_survives_fractional_hello_and_one_way_lag_without_relaxing_limit()
+    {
+        use crate::node_notification::{
+            NotificationCommand, NotificationExecutor, NotificationResult, NotificationSink,
+            NotificationStatus,
+        };
+        struct Sink;
+        impl NotificationSink for Sink {
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> std::pin::Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>>
+            {
+                Box::pin(async { NotificationResult::new(NotificationStatus::Success) })
+            }
+        }
+        let hello = chrono::DateTime::parse_from_rfc3339("2026-10-15T10:00:00.9000000Z").unwrap();
+        // Includes a one-way delay beyond the hello estimate's original anchor.
+        let sent_at = hello + chrono::Duration::milliseconds(1200);
+        let now = command_clock_seconds(
+            &hello,
+            Duration::from_millis(200),
+            &sent_at,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(now, sent_at.timestamp());
+        let mut command = NotificationCommand {
+            command_id: uuid::Uuid::new_v4(),
+            capability: "notification.show".into(),
+            capability_version: 1,
+            expires_at: (sent_at + chrono::Duration::seconds(300)).to_rfc3339(),
+            input: serde_json::json!({"title":"Aegis","body":"Fixture"}),
+        };
+        let executor = NotificationExecutor::new(Sink);
+        assert_eq!(
+            executor.execute(&command, now).await.status,
+            NotificationStatus::Success
+        );
+        assert_eq!(
+            executor.execute(&command, now).await.status,
+            NotificationStatus::Duplicate
+        );
+        command.command_id = uuid::Uuid::new_v4();
+        command.expires_at = (sent_at + chrono::Duration::seconds(301)).to_rfc3339();
+        assert_eq!(
+            executor.execute(&command, now).await.status,
+            NotificationStatus::Failed
+        );
+    }
+
+    #[test]
+    fn command_clock_rejects_timestamps_outside_handshake_and_delivery_budgets() {
+        let anchor = chrono::DateTime::parse_from_rfc3339("2026-10-15T10:00:00.9000000Z").unwrap();
+        let budget = Duration::from_secs(10);
+        assert!(command_clock_seconds(
+            &anchor,
+            Duration::ZERO,
+            &(anchor + chrono::Duration::seconds(11)),
+            budget
+        )
+        .is_some());
+        assert!(command_clock_seconds(
+            &anchor,
+            Duration::ZERO,
+            &(anchor + chrono::Duration::seconds(12)),
+            budget
+        )
+        .is_none());
+        assert!(command_clock_seconds(
+            &anchor,
+            Duration::ZERO,
+            &(anchor - chrono::Duration::seconds(301)),
+            budget
+        )
+        .is_none());
+        let malformed = chrono::DateTime::parse_from_rfc3339("9999-12-31T23:59:59Z").unwrap();
+        assert!(command_clock_seconds(&anchor, Duration::ZERO, &malformed, budget).is_none());
+    }
+
     struct Source {
         revoked: AtomicBool,
         available: AtomicBool,
