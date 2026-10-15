@@ -1,8 +1,8 @@
 //! Real Windows toast actions use a registered URI activation and a native durable outbox.
 //! URIs contain an opaque local ActionId only. Credentials and interaction tokens stay native.
 use crate::node_notification::{
-    NotificationCommand, NotificationResult, NotificationStatus, ReminderNotificationInput,
-    ReminderWithdrawInput,
+    AndroidDiagnosticCode as Diagnostic, NotificationCommand, NotificationResult,
+    NotificationStatus, ReminderNotificationInput, ReminderWithdrawInput,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
@@ -11,11 +11,55 @@ use tauri::{AppHandle, Emitter, Manager};
 use windows::{
     core::HSTRING,
     Data::Xml::Dom::XmlDocument,
+    Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
     UI::Notifications::{ToastNotification, ToastNotificationManager},
 };
 static PRESENTATION_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static WAKE: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
+// Every synchronous WinRT operation owns its thread's initialization. This guard
+// deliberately cannot cross an await or move to another executor thread.
+struct Apartment {
+    uninitialize: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Apartment {
+    fn enter() -> Result<Self, ()> {
+        match unsafe { RoInitialize(RO_INIT_MULTITHREADED) } {
+            Ok(()) => Ok(Self {
+                uninitialize: true,
+                _thread: std::marker::PhantomData,
+            }),
+            // The Tauri UI thread already owns its STA; leave its lifetime intact.
+            Err(error) if error.code().0 == 0x80010106_u32 as i32 => Ok(Self {
+                uninitialize: false,
+                _thread: std::marker::PhantomData,
+            }),
+            Err(error) => {
+                log_hresult("initialize", &error);
+                Err(())
+            }
+        }
+    }
+}
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        if self.uninitialize {
+            unsafe { RoUninitialize() }
+        }
+    }
+}
+fn log_hresult(phase: &str, error: &windows::core::Error) {
+    eprintln!(
+        "AegisNodeNotification phase=windows_{phase} hresult={:08X}",
+        error.code().0 as u32
+    );
+}
+fn winrt<T>(phase: &str, result: windows::core::Result<T>) -> Result<T, ()> {
+    result.map_err(|error| {
+        log_hresult(phase, &error);
+    })
+}
 fn db(app: &AppHandle) -> Result<Connection, ()> {
     let dir = app.path().app_local_data_dir().map_err(|_| ())?;
     std::fs::create_dir_all(&dir).map_err(|_| ())?;
@@ -31,6 +75,7 @@ fn db(app: &AppHandle) -> Result<Connection, ()> {
     Ok(db)
 }
 fn bind_scope(app: &AppHandle) -> Result<Option<String>, ()> {
+    let _apartment = Apartment::enter()?;
     let scope = crate::node_vault::scope_id().map_err(|_| ())?;
     let _gate = PRESENTATION_GATE.lock().map_err(|_| ())?;
     let mut database = db(app)?;
@@ -113,13 +158,24 @@ pub fn supported(app: &AppHandle) -> bool {
     register().is_ok() && db(app).is_ok()
 }
 pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResult {
+    let Ok(_apartment) = Apartment::enter() else {
+        return NotificationResult::diagnostic(
+            NotificationStatus::Failed,
+            Diagnostic::WindowsWinrtInitializeFailed,
+        );
+    };
     if bind_scope(app).ok().flatten().is_none() {
-        return NotificationResult::new(NotificationStatus::Failed);
+        return NotificationResult::diagnostic(
+            NotificationStatus::Failed,
+            Diagnostic::WindowsIdentityUnavailable,
+        );
     }
+    let mut diagnostic = Diagnostic::WindowsStoreFailed;
     let result = (|| -> Result<NotificationStatus, ()> {
         if command.capability == "reminder.withdraw" {
             let input: ReminderWithdrawInput =
                 serde_json::from_value(command.input.clone()).map_err(|_| ())?;
+            diagnostic = Diagnostic::WindowsNotificationPostFailed;
             withdraw(app, input.reminder_id, input.generation)?;
             return Ok(NotificationStatus::Success);
         }
@@ -210,28 +266,37 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
         } else {
             return Ok(NotificationStatus::Unsupported);
         };
-        let doc = XmlDocument::new().map_err(|_| ())?;
+        diagnostic = Diagnostic::WindowsToastXmlFailed;
+        let doc = winrt("xml_create", XmlDocument::new())?;
         let launch = if launch.is_empty() {
             String::new()
         } else {
             format!(" activationType=\"protocol\" launch=\"{launch}\"")
         };
-        doc.LoadXml(&HSTRING::from(format!("<toast{launch}><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual>{buttons}</toast>",xml(&title),xml(&body)))).map_err(|_|())?;
-        let toast = ToastNotification::CreateToastNotification(&doc).map_err(|_| ())?;
-        toast.SetTag(&HSTRING::from(tag)).map_err(|_| ())?;
-        toast
-            .SetGroup(&HSTRING::from(toast_group))
-            .map_err(|_| ())?;
-        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
-            app.config().identifier.as_str(),
-        ))
-        .map_err(|_| ())?;
-        if notifier.Setting().map_err(|_| ())?
+        winrt("xml_load", doc.LoadXml(&HSTRING::from(format!("<toast{launch}><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual>{buttons}</toast>",xml(&title),xml(&body)))))?;
+        diagnostic = Diagnostic::WindowsToastBuildFailed;
+        let toast = winrt(
+            "toast_create",
+            ToastNotification::CreateToastNotification(&doc),
+        )?;
+        winrt("toast_tag", toast.SetTag(&HSTRING::from(tag)))?;
+        winrt("toast_group", toast.SetGroup(&HSTRING::from(toast_group)))?;
+        diagnostic = Diagnostic::WindowsNotifierFailed;
+        let notifier = winrt(
+            "notifier",
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+                app.config().identifier.as_str(),
+            )),
+        )?;
+        diagnostic = Diagnostic::WindowsPermissionCheckFailed;
+        if winrt("setting", notifier.Setting())?
             != windows::UI::Notifications::NotificationSetting::Enabled
         {
             return Ok(NotificationStatus::PermissionDenied);
         }
-        notifier.Show(&toast).map_err(|_| ())?;
+        diagnostic = Diagnostic::WindowsNotificationPostFailed;
+        winrt("post", notifier.Show(&toast))?;
+        diagnostic = Diagnostic::WindowsStoreFailed;
         database
             .execute(
                 "INSERT OR REPLACE INTO commands(id,expires) VALUES(?,?)",
@@ -240,13 +305,17 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
             .map_err(|_| ())?;
         Ok(NotificationStatus::Success)
     })();
-    NotificationResult::new(result.unwrap_or(NotificationStatus::Failed))
+    match result {
+        Ok(status) => NotificationResult::new(status),
+        Err(()) => NotificationResult::diagnostic(NotificationStatus::Failed, diagnostic),
+    }
 }
 fn withdraw(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(), ()> {
     let _presentation = PRESENTATION_GATE.lock().map_err(|_| ())?;
     withdraw_locked(app, id, generation)
 }
 fn withdraw_locked(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(), ()> {
+    let _apartment = Apartment::enter()?;
     let database = db(app)?;
     database.execute("INSERT INTO withdrawals(id,generation,expires) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET generation=MAX(generation,excluded.generation),expires=MAX(expires,excluded.expires)",params![id.to_string(),generation,chrono::Utc::now().timestamp()+604800]).map_err(|_|())?;
     ToastNotificationManager::History()
@@ -556,6 +625,9 @@ pub fn consume_open() -> Option<String> {
 }
 
 pub fn granted(app: &AppHandle) -> bool {
+    let Ok(_apartment) = Apartment::enter() else {
+        return false;
+    };
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
         app.config().identifier.as_str(),
     ))
@@ -648,4 +720,27 @@ pub fn enqueue_ui(
 pub fn request_sync() {
     WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
         .notify_one();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn winrt_operations_initialize_and_balance_on_a_native_worker_thread() {
+        std::thread::spawn(|| {
+            let first = Apartment::enter().unwrap();
+            {
+                let _nested = Apartment::enter().unwrap();
+                let xml = XmlDocument::new().unwrap();
+                xml.LoadXml(&HSTRING::from("<toast><visual/></toast>"))
+                    .unwrap();
+            }
+            drop(first);
+            let _reinitialized = Apartment::enter().unwrap();
+            assert!(XmlDocument::new().is_ok());
+        })
+        .join()
+        .unwrap();
+    }
 }

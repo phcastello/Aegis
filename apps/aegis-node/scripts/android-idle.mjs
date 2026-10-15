@@ -34,7 +34,7 @@ const processSnapshot=()=>{
  return {available:processes.length>0,reason:processes.length>0?null:'proc_access_unavailable',processes};
 };
 const snapshot=async()=>{
- const capturedAt=Date.now();let metrics;try{const response=await fetch('http://127.0.0.1:18104/fixture/idle');assert(response.ok);metrics=await response.json();}catch{metrics=null;}
+ const capturedAt=Date.now();let metrics;try{const response=await fetch('http://127.0.0.1:18104/fixture/idle',{signal:AbortSignal.timeout(3000)});assert(response.ok);metrics=await response.json();}catch{metrics=null;}
  return {capturedAt,metrics,cpu:processSnapshot()};
 };
 const phases=new Map();const checkpoints=[];let chain=Promise.resolve();let logBuffer='';
@@ -43,8 +43,9 @@ logs.stdout.setEncoding('utf8');logs.stdout.on('data',chunk=>{logBuffer+=chunk;c
 const code=readFileSync(bootstrap,'utf8').trim();assert(/^\d{6,12}$|^[A-Z0-9-]{4,32}$/i.test(code),'Pairing code shape invalid');
 const instrumentation=spawn(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','class','com.aegis.node.NodeIdleFrameworkTest','-e','waitForActivitiesToComplete','false','-e','idleMode',mode,'-e','phaseDurationMs','150000','-e','pairingCode',code,'-e','expectedNodeId',expectedNodeId??'', '-e','expectedVersion',expectedVersion,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],{stdio:['ignore','pipe','pipe']});
 let results='';instrumentation.stdout.setEncoding('utf8');instrumentation.stdout.on('data',chunk=>{results+=chunk;});instrumentation.stderr.on('data',()=>{});
-let exitCode;
-try{exitCode=await new Promise((res,rej)=>{instrumentation.once('error',rej);instrumentation.once('exit',res);});await wait(200);await chain;}finally{logs.kill('SIGTERM');command(['shell','am','force-stop','com.aegis.node']);}
+let exitCode;let instrumentationTimedOut=false;
+const deadline=setTimeout(()=>{instrumentationTimedOut=true;instrumentation.kill('SIGTERM');},15*60*1000);
+try{exitCode=await new Promise((res,rej)=>{instrumentation.once('error',rej);instrumentation.once('exit',res);});await wait(200);await chain;}finally{clearTimeout(deadline);logs.kill('SIGTERM');command(['shell','am','force-stop','com.aegis.node']);}
 const cpuDelta=(start,end,kind,seconds)=>{
  if(!start.available||!end.available)return {cpuSeconds:null,percentOneCore:null,reason:'proc_access_or_process_unavailable'};
  const first=start.processes.filter(p=>p.kind===kind);const last=end.processes.filter(p=>p.kind===kind);if(!first.length&&!last.length)return {cpuSeconds:null,percentOneCore:null,reason:'process_not_observed'};
@@ -59,7 +60,9 @@ const report={schema:2,mode,nodeId,expectedNodeId,expectedVersion,machine,scope:
 // and native invocation errors are deliberately discarded by the instrumentation.
 // Preserve a bounded failure result before asserting so setup failures are diagnosable.
 report.checkpoints=checkpoints;
+report.instrumentationTimedOut=instrumentationTimedOut;
+report.measurementsComplete=windows.length===4&&windows.every(window=>window.start.metrics!==null&&window.end.metrics!==null&&window.cpu.app.cpuSeconds!==null)&&windows.some(window=>window.phase!=='background'&&window.cpu.webview.cpuSeconds!==null);
 if(!report.instrumentationPassed){report.instrumentationOutput=results.slice(-24000);process.stdout.write(report.instrumentationOutput);try{report.crashTypes=safeAndroidCrashTypes(command(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','*:S']));}catch{report.crashTypesUnavailable=true;}}
 writeFileSync(output,JSON.stringify(report,null,2)+'\n');
-assert(report.instrumentationPassed,'Idle framework instrumentation failed; inspect safe checkpoints');assert.equal(windows.length,4,'Four idle windows required');assert(/^[a-f0-9-]{36}$/.test(nodeId??''),'Disposable identity must be reported');assert(windows.every(w=>w.start.event.nodeId===nodeId&&w.end.event.nodeId===nodeId),'Identity must remain stable');if(mode==='after')assert.equal(nodeId,expectedNodeId,'APK upgrade must preserve the Node identity');assert(windows.every(w=>w.androidDurationMs>=150000),'Each window must measure at least150s');assert(report.totalMeasuredSeconds>=600,'At least10min equivalent measurement required');
+assert(report.instrumentationPassed,'Idle framework instrumentation failed; inspect safe checkpoints');assert.equal(windows.length,4,'Four idle windows required');assert(/^[a-f0-9-]{36}$/.test(nodeId??''),'Disposable identity must be reported');assert(windows.every(w=>w.start.event.nodeId===nodeId&&w.end.event.nodeId===nodeId),'Identity must remain stable');if(mode==='after')assert.equal(nodeId,expectedNodeId,'APK upgrade must preserve the Node identity');assert(windows.every(w=>w.androidDurationMs>=150000),'Each window must measure at least150s');assert(report.totalMeasuredSeconds>=600,'At least10min equivalent measurement required');assert(windows.every(window=>window.start.metrics!==null&&window.end.metrics!==null),'Fixture traffic counters must be measured at every boundary');assert(windows.every(window=>window.cpu.app.cpuSeconds!==null),'App CPU must be measured in every idle window');assert(windows.some(window=>window.phase!=='background'&&window.cpu.webview.cpuSeconds!==null),'At least one foreground WebView CPU measurement is required');
 console.log(`Android idle ${mode}: ${report.totalMeasuredSeconds.toFixed(1)}s, report ${output}`);

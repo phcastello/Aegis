@@ -36,6 +36,14 @@ pub enum AndroidDiagnosticCode {
     AndroidNotificationPostFailed,
     AndroidDedupeReadFailed,
     AndroidDedupePersistFailed,
+    WindowsIdentityUnavailable,
+    WindowsStoreFailed,
+    WindowsWinrtInitializeFailed,
+    WindowsToastXmlFailed,
+    WindowsToastBuildFailed,
+    WindowsNotifierFailed,
+    WindowsPermissionCheckFailed,
+    WindowsNotificationPostFailed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -320,6 +328,32 @@ mod tests {
             serde_json::to_string(&NotificationResult::new(NotificationStatus::Success)).unwrap(),
             r#"{"status":"success"}"#
         );
+    }
+    #[test]
+    fn windows_result_diagnostics_remain_a_closed_bounded_vocabulary() {
+        for code in [
+            "windows_identity_unavailable",
+            "windows_store_failed",
+            "windows_winrt_initialize_failed",
+            "windows_toast_xml_failed",
+            "windows_toast_build_failed",
+            "windows_notifier_failed",
+            "windows_permission_check_failed",
+            "windows_notification_post_failed",
+        ] {
+            let result: NotificationResult = serde_json::from_value(
+                serde_json::json!({"status":"failed","diagnosticCode":code}),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(result).unwrap()["diagnosticCode"],
+                code
+            );
+        }
+        assert!(serde_json::from_value::<NotificationResult>(
+            serde_json::json!({"status":"failed","diagnosticCode":"windows_private_error_message"})
+        )
+        .is_err());
     }
     #[tokio::test]
     async fn renderer_diagnostic_survives_executor_without_reserving_failed_id() {
