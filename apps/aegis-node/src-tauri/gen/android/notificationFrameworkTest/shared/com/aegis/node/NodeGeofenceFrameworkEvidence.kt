@@ -67,6 +67,18 @@ internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserv
   // explicit status interaction restoring the native operational binding.
   assertEquals("paired",invoke("node_status",JSONObject(),20000).getString("state"))
   assertFrameworkIdentityBinding(context,nodeId)
+  val onlineDeadline=android.os.SystemClock.elapsedRealtime()+30000
+  while(invoke("node_transport_status",JSONObject(),20000).getString("transportState")!="online"&&android.os.SystemClock.elapsedRealtime()<onlineDeadline)android.os.SystemClock.sleep(100)
+  assertEquals("online",invoke("node_transport_status",JSONObject(),20000).getString("transportState"))
+  val delivered=invoke("node_test_notification",JSONObject().put("id",nodeId),20000)
+  val commandId=delivered.getString("commandId")
+  val manager=context.getSystemService(NotificationManager::class.java)
+  try {
+   assertEquals("live_websocket",delivered.getString("transport"));assertEquals("success",delivered.getString("status"))
+   val postDeadline=android.os.SystemClock.elapsedRealtime()+5000
+   while(manager.activeNotifications.none{it.tag==commandId&&it.id==1}&&android.os.SystemClock.elapsedRealtime()<postDeadline)android.os.SystemClock.sleep(50)
+   assertTrue(manager.activeNotifications.any{it.tag==commandId&&it.id==1})
+  }finally{manager.cancel(commandId,1)}
   assertEquals("installed",invoke("node_geofences",JSONObject().put("operation","sync"),20000).getString("status"))
   android.util.Log.i("AegisNodeNativeTest","phase=native_identity_reenabled errorType=Checkpoint")
   exercise(replacementCode)
