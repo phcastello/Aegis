@@ -79,21 +79,25 @@ public sealed class NodePushRegistrations(AegisDbContext db, IDataProtectionProv
 public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations registrations, INodeFcmCredentials credentials,
     IHttpClientFactory clients, IOptions<NodeFcmOptions> options, TimeProvider clock, ILogger<NodeFcmTransport> logger) : INodePushNotifications, INodePushDomainSignals
 {
+    // This JSON is sent directly as application/json, never embedded in HTML.
+    // Share the UTF-8 encoding policy between the payload budget and HTTP body;
+    // quotes, backslashes and control characters still require JSON escaping.
+    private static readonly JsonSerializerOptions TransportJson = new(JsonSerializerDefaults.Web) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private static readonly Meter Meter = new("Aegis.NodePush", "1");
     private static readonly Counter<long> Failures = Meter.CreateCounter<long>("node_push_failures_total");
     public Task<string> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct)
     {
         var data = new Dictionary<string, string> { ["nodeId"] = id.ToString(), ["type"] = command.Capability, ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O") };
         if (command.Capability == NotificationContract.Capability) { data["title"] = command.Input.Title!; data["body"] = command.Input.Body!; }
-        else data["input"] = JsonSerializer.Serialize(command.Input, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        else data["input"] = JsonSerializer.Serialize(command.Input, TransportJson);
         return SendDataAsync(id, command.CommandId, command.ExpiresAt, data, ct);
     }
     public Task<string> SendDomainAsync(Guid id, NodeDomainCommand command, CancellationToken ct) => SendDataAsync(id, command.CommandId, command.ExpiresAt,
         new() { ["nodeId"] = id.ToString(), ["type"] = "domain.sync", ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O"), ["capability"] = command.Capability,
-            ["input"] = JsonSerializer.Serialize(command.Input, new JsonSerializerOptions(JsonSerializerDefaults.Web)) }, ct);
+            ["input"] = JsonSerializer.Serialize(command.Input, TransportJson) }, ct);
     private async Task<string> SendDataAsync(Guid id, Guid commandId, DateTimeOffset expiresAt, Dictionary<string, string> data, CancellationToken ct)
     {
-        if (JsonSerializer.SerializeToUtf8Bytes(data, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }).Length > 3900) return "failed";
+        if (JsonSerializer.SerializeToUtf8Bytes(data, TransportJson).Length > 3900) return "failed";
         if (expiresAt <= clock.GetUtcNow()) return "expired";
         if (!await registrations.HasRouteAsync(id, ct)) return "unavailable";
         var registration = await db.NodePushRegistrations.AsNoTracking().SingleOrDefaultAsync(r => r.NodeId == id, ct);
@@ -104,7 +108,7 @@ public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations re
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await credentials.AccessTokenAsync(deadline.Token));
             request.Content = JsonContent.Create(new { message = new { token = registrations.Unprotect(registration),
                 data,
-                android = new { priority = "HIGH", ttl = Math.Clamp((int)Math.Ceiling((expiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } });
+                android = new { priority = "HIGH", ttl = Math.Clamp((int)Math.Ceiling((expiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } }, options: TransportJson);
             if (!await registrations.HasRouteAsync(id, deadline.Token)) return "unavailable";
             using var response = await clients.CreateClient("node-fcm").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if (response.IsSuccessStatusCode) { logger.LogInformation("Node notification accepted NodeId={NodeId} CommandId={CommandId} Transport=fcm", id, commandId); return "accepted"; }
