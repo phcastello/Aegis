@@ -4,6 +4,7 @@ import {spawn,spawnSync} from 'node:child_process';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
+import {idleInstrumentationArguments} from './android-idle-arguments.mjs';
 const [mode,apk,testApk,bootstrap,output]=process.argv.slice(2);
 assert(['before','after'].includes(mode)&&apk&&testApk&&bootstrap&&output,'mode APK TEST_APK bootstrap outputJSON required');
 assert(existsSync(apk)&&existsSync(testApk),'Both APK artifacts must exist before measuring');
@@ -41,7 +42,7 @@ const phases=new Map();const checkpoints=[];let chain=Promise.resolve();let logB
 const logs=spawn(adb,['-s',serial,'logcat','-v','raw','-s','AegisIdleTest:I','*:S'],{stdio:['ignore','pipe','ignore']});
 logs.stdout.setEncoding('utf8');logs.stdout.on('data',chunk=>{logBuffer+=chunk;const lines=logBuffer.split('\n');logBuffer=lines.pop();for(const line of lines){let event;try{event=JSON.parse(line);}catch{continue;}if(event.mode!==mode)continue;if(event.event==='checkpoint'&&/^[a-z_]{1,40}$/.test(event.phase)){checkpoints.push(event);console.log(`Android idle ${mode} setup ${event.phase}`);continue;}if(!['start','end'].includes(event.event)||!['foreground_closed','devices_visible','diagnostics_visible','background'].includes(event.phase))continue;chain=chain.then(async()=>{const value=await snapshot();const phase=phases.get(event.phase)??{};phase[event.event]={event,...value};phases.set(event.phase,phase);console.log(`Android idle ${mode} ${event.phase} ${event.event}`);});}});
 const code=readFileSync(bootstrap,'utf8').trim();assert(/^\d{6,12}$|^[A-Z0-9-]{4,32}$/i.test(code),'Pairing code shape invalid');
-const instrumentation=spawn(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','class','com.aegis.node.NodeIdleFrameworkTest','-e','waitForActivitiesToComplete','false','-e','idleMode',mode,'-e','phaseDurationMs','150000','-e','pairingCode',code,'-e','expectedNodeId',expectedNodeId??'', '-e','expectedVersion',expectedVersion,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],{stdio:['ignore','pipe','pipe']});
+const instrumentation=spawn(adb,['-s',serial,...idleInstrumentationArguments({mode,pairingCode:code,expectedNodeId,expectedVersion})],{stdio:['ignore','pipe','pipe']});
 let results='';instrumentation.stdout.setEncoding('utf8');instrumentation.stdout.on('data',chunk=>{results+=chunk;});instrumentation.stderr.on('data',()=>{});
 let exitCode;let instrumentationTimedOut=false;
 const deadline=setTimeout(()=>{instrumentationTimedOut=true;instrumentation.kill('SIGTERM');},15*60*1000);
