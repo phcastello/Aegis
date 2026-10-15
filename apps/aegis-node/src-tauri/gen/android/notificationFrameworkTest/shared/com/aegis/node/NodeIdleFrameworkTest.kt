@@ -15,6 +15,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.io.File
+import java.util.UUID
 
 /** Same external instrumentation drives accepted and candidate APKs; no domain fixture hooks. */
 @RunWith(AndroidJUnit4::class)
@@ -69,7 +71,17 @@ class NodeIdleFrameworkTest {
    fun phase(name:String) {
     // All setup and DOM inspection precede the measured interval. No JS polling while idle.
     val ui=if(name=="background")JSONObject().put("visible",false) else JSONObject(evaluate(view,"(()=>{const a=document.getAnimations();return {visible:document.visibilityState==='visible',runningAnimations:a.filter(x=>x.playState==='running').length,visibleRunningAnimations:a.filter(x=>x.playState==='running'&&x.effect?.target?.getClientRects().length).length,domElements:document.getElementsByTagName('*').length}})()"))
-    fun mark(event:String){android.util.Log.i("AegisIdleTest",JSONObject().put("event",event).put("mode",mode).put("nodeId",nodeId).put("phase",name).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).put("durationMs",duration).put("pushConfigured",configured).put("api",Build.VERSION.SDK_INT).put("hardware",Build.HARDWARE).put("model",Build.MODEL).put("ui",ui).toString())}
+    fun mark(event:String){
+     // AndroidJUnitRunner can finish the target before the host drains this last
+     // log line. Keep it in the measured background state until CPU is captured.
+     val nonce=if(name=="background"&&event=="end")UUID.randomUUID().toString() else null
+     val marker=nonce?.let{File(instrumentation.targetContext.cacheDir,"aegis-idle-snapshot-$it.ack")}
+     marker?.writeText("pending")
+     try {
+      android.util.Log.i("AegisIdleTest",JSONObject().put("event",event).put("mode",mode).put("nodeId",nodeId).put("phase",name).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).put("durationMs",duration).put("pushConfigured",configured).put("api",Build.VERSION.SDK_INT).put("hardware",Build.HARDWARE).put("model",Build.MODEL).put("ui",ui).apply{nonce?.let{put("snapshotNonce",it)}}.toString())
+      if(marker!=null){val deadline=SystemClock.elapsedRealtime()+15000;while(marker.exists()&&SystemClock.elapsedRealtime()<deadline)Thread.sleep(25);check(!marker.exists()){ "idle_final_snapshot_timeout" }}
+     } finally {marker?.delete()}
+    }
     mark("start");Thread.sleep(duration);mark("end")
    }
    closePanels();SystemClock.sleep(1000);phase("foreground_closed")
