@@ -9,15 +9,20 @@ use serde_json::json;
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::{
-    core::HSTRING,
+    core::{Interface, HSTRING},
     Data::Xml::Dom::XmlDocument,
+    Foundation::{DateTime, IReference, PropertyValue},
     Win32::System::Com::CoIncrementMTAUsage,
     Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
-    UI::Notifications::{ToastNotification, ToastNotificationManager},
+    UI::Notifications::{
+        NotificationSetting, ToastNotification, ToastNotificationManager, ToastNotifier,
+    },
 };
 static PRESENTATION_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static WAKE: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
+static IDENTITY_BOOTSTRAPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+const TOAST_ACTIVATOR_CLSID: &str = "{D8B06B09-79F3-42D2-9B58-542E8694CE97}";
 // windows-core caches agile activation factories for the process lifetime. Keep
 // their MTA alive when the last temporary worker's balanced RoUninitialize runs.
 // The process owns this one cookie, as windows-core's automatic MTA fallback does;
@@ -158,8 +163,31 @@ fn xml(text: &str) -> String {
 fn group(id: uuid::Uuid) -> String {
     id.simple().to_string()
 }
-fn register() -> Result<(), ()> {
+fn register_toast_identity(aumid: &str, icon: &std::path::Path) -> Result<(), ()> {
+    let root = windows_registry::CURRENT_USER
+        .create(format!("Software\\Classes\\AppUserModelId\\{aumid}"))
+        .map_err(|_| ())?;
+    root.set_string("DisplayName", "Aegis").map_err(|_| ())?;
+    root.set_string("IconUri", icon.to_string_lossy().as_ref())
+        .map_err(|_| ())?;
+    root.set_string("IconBackgroundColor", "FF142033")
+        .map_err(|_| ())?;
+    // Protocol-only desktop toasts use the documented stub CLSID option. No COM
+    // server is installed: activation goes through the explicit local URI handler.
+    root.set_string("CustomActivator", TOAST_ACTIVATOR_CLSID)
+        .map_err(|_| ())?;
+    Ok(())
+}
+fn register(app: &AppHandle) -> Result<(), ()> {
     let exe = std::env::current_exe().map_err(|_| ())?;
+    let directory = app.path().app_local_data_dir().map_err(|_| ())?;
+    std::fs::create_dir_all(&directory).map_err(|_| ())?;
+    let icon = directory.join("notification-icon.png");
+    const ICON: &[u8] = include_bytes!("../icons/128x128.png");
+    if std::fs::read(&icon).ok().as_deref() != Some(ICON) {
+        std::fs::write(&icon, ICON).map_err(|_| ())?;
+    }
+    register_toast_identity(app.config().identifier.as_str(), &icon)?;
     let root = windows_registry::CURRENT_USER
         .create("Software\\Classes\\aegis-reminder")
         .map_err(|_| ())?;
@@ -175,7 +203,80 @@ fn register() -> Result<(), ()> {
     Ok(())
 }
 pub fn supported(app: &AppHandle) -> bool {
-    register().is_ok() && db(app).is_ok()
+    register(app).is_ok() && db(app).is_ok()
+}
+// The Microsoft desktop compatibility implementation preregisters identity-less
+// apps before asking Setting: the API otherwise reports ERROR_NOT_FOUND until
+// their first toast. This silent, expiring registration card is never a reminder,
+// never enters delivery/ACK history, and is removed immediately after SDK handoff.
+fn notification_setting(notifier: &ToastNotifier, aumid: &str) -> Result<NotificationSetting, ()> {
+    match notifier.Setting() {
+        Ok(setting) => return Ok(setting),
+        Err(error) if error.code().0 == 0x80070490_u32 as i32 => {}
+        Err(error) => {
+            log_hresult("setting", &error);
+            return Err(());
+        }
+    }
+    let mut attempted = IDENTITY_BOOTSTRAPS.lock().map_err(|_| ())?;
+    if attempted.iter().any(|id| id == aumid) {
+        return winrt("setting", notifier.Setting());
+    }
+    attempted.push(aumid.to_owned());
+    let document = winrt("registration_xml", XmlDocument::new())?;
+    winrt("registration_xml",document.LoadXml(&HSTRING::from("<toast activationType=\"protocol\" launch=\"aegis-reminder://open\"><visual><binding template=\"ToastGeneric\"><text>Aegis</text><text>Preparando notificações.</text></binding></visual><audio silent=\"true\"/></toast>")))?;
+    let toast = winrt(
+        "registration_build",
+        ToastNotification::CreateToastNotification(&document),
+    )?;
+    winrt("registration_silent", toast.SetSuppressPopup(true))?;
+    winrt(
+        "registration_tag",
+        toast.SetTag(&HSTRING::from("identity-registration")),
+    )?;
+    winrt(
+        "registration_group",
+        toast.SetGroup(&HSTRING::from("aegis-system")),
+    )?;
+    let expiration = DateTime {
+        UniversalTime: (chrono::Utc::now().timestamp_millis() + 15_000 + 11_644_473_600_000)
+            * 10_000,
+    };
+    let boxed: IReference<DateTime> = winrt(
+        "registration_expiry",
+        PropertyValue::CreateDateTime(expiration),
+    )?
+    .cast()
+    .map_err(|error| {
+        log_hresult("registration_expiry", &error);
+    })?;
+    winrt("registration_expiry", toast.SetExpirationTime(&boxed))?;
+    winrt("registration_post", notifier.Show(&toast))?;
+    winrt("registration_remove", ToastNotificationManager::History())?
+        .RemoveGroupedTagWithId(
+            &HSTRING::from("identity-registration"),
+            &HSTRING::from("aegis-system"),
+            &HSTRING::from(aumid),
+        )
+        .map_err(|error| {
+            log_hresult("registration_remove", &error);
+        })?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match notifier.Setting() {
+            Ok(setting) => return Ok(setting),
+            Err(error)
+                if error.code().0 == 0x80070490_u32 as i32
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            Err(error) => {
+                log_hresult("setting", &error);
+                return Err(());
+            }
+        }
+    }
 }
 pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResult {
     let Ok(_apartment) = Apartment::enter() else {
@@ -278,7 +379,7 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
                     .unwrap_or("Aegis")
                     .to_string(),
                 command.input["body"].as_str().unwrap_or("").to_string(),
-                String::new(),
+                "aegis-reminder://open".into(),
                 String::new(),
                 command.command_id.simple().to_string(),
                 "notification".into(),
@@ -309,7 +410,7 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
             )),
         )?;
         diagnostic = Diagnostic::WindowsPermissionCheckFailed;
-        if winrt("setting", notifier.Setting())?
+        if notification_setting(&notifier, app.config().identifier.as_str())?
             != windows::UI::Notifications::NotificationSetting::Enabled
         {
             return Ok(NotificationStatus::PermissionDenied);
@@ -373,6 +474,13 @@ fn withdraw_locked(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(
     Ok(())
 }
 pub fn activate(app: &AppHandle, args: &[String]) {
+    if args
+        .iter()
+        .any(|argument| argument == "aegis-reminder://open")
+    {
+        crate::native_notifications::open(app);
+        return;
+    }
     let Ok(Some(scope)) = bind_scope(app) else {
         return;
     };
@@ -648,11 +756,15 @@ pub fn granted(app: &AppHandle) -> bool {
     let Ok(_apartment) = Apartment::enter() else {
         return false;
     };
+    if register(app).is_err() {
+        return false;
+    }
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
         app.config().identifier.as_str(),
     ))
-    .and_then(|n| n.Setting())
-    .is_ok_and(|s| s == windows::UI::Notifications::NotificationSetting::Enabled)
+    .ok()
+    .and_then(|notifier| notification_setting(&notifier, app.config().identifier.as_str()).ok())
+    .is_some_and(|s| s == NotificationSetting::Enabled)
 }
 
 pub fn enqueue_ui(
@@ -745,6 +857,72 @@ pub fn request_sync() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_unpacked_identity_has_real_notification_setting_and_no_registration_card() {
+        let _apartment = Apartment::enter().unwrap();
+        struct Fixture {
+            aumid: String,
+            directory: std::path::PathBuf,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = ToastNotificationManager::History()
+                    .and_then(|history| history.ClearWithId(&HSTRING::from(&self.aumid)));
+                let _ = windows_registry::CURRENT_USER
+                    .remove_tree(format!("Software\\Classes\\AppUserModelId\\{}", self.aumid));
+                let _ = std::fs::remove_dir_all(&self.directory);
+            }
+        }
+        let fixture = Fixture {
+            aumid: format!("com.aegis.node.test.{}", uuid::Uuid::new_v4()),
+            directory: std::env::temp_dir()
+                .join(format!("aegis-toast-test-{}", uuid::Uuid::new_v4())),
+        };
+        std::fs::create_dir_all(&fixture.directory).unwrap();
+        let icon = fixture.directory.join("icon.png");
+        std::fs::write(&icon, include_bytes!("../icons/128x128.png")).unwrap();
+        register_toast_identity(&fixture.aumid, &icon).unwrap();
+        let registered = windows_registry::CURRENT_USER
+            .open(format!(
+                "Software\\Classes\\AppUserModelId\\{}",
+                fixture.aumid
+            ))
+            .unwrap();
+        assert_eq!(registered.get_string("DisplayName").unwrap(), "Aegis");
+        assert_eq!(
+            registered.get_string("CustomActivator").unwrap(),
+            TOAST_ACTIVATOR_CLSID
+        );
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(&fixture.aumid))
+                .unwrap();
+        assert_eq!(
+            notification_setting(&notifier, &fixture.aumid).unwrap(),
+            NotificationSetting::Enabled
+        );
+        assert_eq!(notifier.Setting().unwrap(), NotificationSetting::Enabled);
+        let history = ToastNotificationManager::History().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while history
+            .GetHistoryWithId(&HSTRING::from(&fixture.aumid))
+            .unwrap()
+            .Size()
+            .unwrap()
+            > 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(
+            history
+                .GetHistoryWithId(&HSTRING::from(&fixture.aumid))
+                .unwrap()
+                .Size()
+                .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn winrt_operations_initialize_and_balance_on_a_native_worker_thread() {
