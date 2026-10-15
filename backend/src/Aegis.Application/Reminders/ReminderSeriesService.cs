@@ -42,8 +42,9 @@ public sealed record ReminderActionResult(bool Applied, bool Replayed, bool Conf
 public interface IReminderActionStore { Task<ReminderActionResult> ApplyAsync(Guid reminderId, ReminderActionRequest request, CancellationToken ct); }
 public interface IReminderActionTokens
 {
-    string Create(Reminder reminder, DateTimeOffset expiresAt);
+    string Create(Reminder reminder, DateTimeOffset expiresAt, Guid recipientNodeId);
     bool Validate(string token, Guid reminderId, int revision, int generation);
+    bool TryValidateRecipient(string token, Guid reminderId, int revision, int generation, out Guid recipientNodeId);
 }
 public sealed class ReminderActionService(IReminderActionStore store)
 {

@@ -186,4 +186,48 @@ public sealed class PlaceApiTests
         var empty = await Read(await host.Client.PostAsJsonAsync("/api/nodes/reminders/reconcile", new { items = Array.Empty<object>() })); Assert.Empty(empty.GetProperty("withdraw").EnumerateArray());
     }
 
+    private static async Task<(Guid ReminderId, string Token)> ScopedPresentation(Host host, Guid recipientId)
+    {
+        var reminder = new Reminder("Synthetic scoped action", host.Clock.Now.AddMinutes(1), "UTC", null, host.Clock.Now);
+        await using (var db = host.Db()) {
+            db.Reminders.Add(reminder); await db.SaveChangesAsync(); host.Clock.Now += TimeSpan.FromMinutes(1);
+            reminder.Claim(Guid.NewGuid(), host.Clock.Now); reminder.BeginTrigger(host.Clock.Now); reminder.Finish(null, true, host.Clock.Now); await db.SaveChangesAsync();
+        }
+        await using var scope = host.App.Services.CreateAsyncScope();
+        var token = scope.ServiceProvider.GetRequiredService<IReminderActionTokens>().Create(reminder, host.Clock.Now.AddHours(1), recipientId);
+        return (reminder.Id, token);
+    }
+
+    [Fact]
+    public async Task RestrictedProofAuthorizesOnlyItsSignedOccurrenceRevisionGenerationAndActiveRecipient()
+    {
+        await using var host = await Host.Create(); var recipient = await host.Pair(); var presentation = await ScopedPresentation(host, recipient.Id);
+        // No permanent Node credential crosses this background request.
+        Assert.False(host.Client.DefaultRequestHeaders.Contains("Authorization"));
+        var wrongRevision = await host.Client.PostAsJsonAsync($"/api/reminder-actions/{presentation.ReminderId}", new { token = presentation.Token, actionId = Guid.NewGuid(), expectedRevision = 2, generation = 1, action = "acknowledge" }); Assert.Equal(HttpStatusCode.NotFound, wrongRevision.StatusCode);
+        var wrongOccurrence = await host.Client.PostAsJsonAsync($"/api/reminder-actions/{Guid.NewGuid()}", new { token = presentation.Token, actionId = Guid.NewGuid(), expectedRevision = 1, generation = 1, action = "acknowledge" }); Assert.Equal(HttpStatusCode.NotFound, wrongOccurrence.StatusCode);
+        var applied = await Read(await host.Client.PostAsJsonAsync($"/api/reminder-actions/{presentation.ReminderId}", new { token = presentation.Token, actionId = Guid.NewGuid(), expectedRevision = 1, generation = 1, action = "acknowledge" })); Assert.True(applied.GetProperty("applied").GetBoolean());
+        await using var db = host.Db(); Assert.NotNull((await db.Reminders.SingleAsync()).AcknowledgedAt); Assert.Single(await db.Set<ReminderActionReceipt>().ToArrayAsync());
+    }
+
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("revoke")]
+    [InlineData("remove")]
+    public async Task RestrictedProofStopsAuthorizingActionsWhenItsRecipientIsDisabledRevokedOrRemoved(string operation)
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); var recipient = await host.Pair();
+        var presentation = await ScopedPresentation(host, recipient.Id);
+        await using (var db = host.Db()) {
+            var registry = new NodeRegistry(db, host.Clock);
+            if (operation == "disable") await registry.SetEnabledAsync(actor.Id, recipient.Id, false);
+            else if (operation == "revoke") await registry.RevokeAsync(actor.Id, recipient.Id);
+            else await registry.RemoveAsync(actor.Id, recipient.Id);
+        }
+        // The encrypted proof is intact and unexpired; current recipient administration is decisive.
+        var response = await host.Client.PostAsJsonAsync($"/api/reminder-actions/{presentation.ReminderId}", new { token = presentation.Token, actionId = Guid.NewGuid(), expectedRevision = 1, generation = 1, action = "snooze", snoozeMinutes = 10 });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await using var final = host.Db(); var reminder = await final.Reminders.SingleAsync(); Assert.Equal(1, reminder.Generation); Assert.Null(reminder.AcknowledgedAt); Assert.Empty(final.Set<ReminderActionReceipt>());
+    }
+
 }

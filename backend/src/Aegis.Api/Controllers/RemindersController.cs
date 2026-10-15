@@ -85,12 +85,13 @@ public sealed class ReminderSeriesController(ReminderSeriesService series) : Con
 
 // Scoped cryptographic proof is required; no anonymous acknowledgement is accepted.
 [ApiController, Route("api/reminder-actions"), RequestSizeLimit(8192)]
-public sealed class ScopedReminderActionsController(IReminderActionTokens tokens, ReminderActionService actions) : ControllerBase
+public sealed class ScopedReminderActionsController(IReminderActionTokens tokens, ReminderActionService actions, AegisDbContext db) : ControllerBase
 {
     public sealed record InteractionRequest(string Token, Guid ActionId, int ExpectedRevision, int Generation, string Action, int SnoozeMinutes = 10);
     [HttpPost("{id:guid}")] public async Task<IActionResult> Action(Guid id, InteractionRequest request, CancellationToken ct)
     {
-        if (!tokens.Validate(request.Token, id, request.ExpectedRevision, request.Generation)) return NotFound();
+        if (!tokens.TryValidateRecipient(request.Token, id, request.ExpectedRevision, request.Generation, out var recipientNodeId) ||
+            !await db.Nodes.AsNoTracking().AnyAsync(n => n.Id == recipientNodeId && n.Enabled && n.RevokedAt == null, ct)) return NotFound();
         try { return Ok(await actions.ApplyAsync(id, new(request.ActionId, request.ExpectedRevision, request.Generation, request.Action, request.SnoozeMinutes), ct)); }
         catch (ReminderException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest(new { code = "invalid_action" }); }

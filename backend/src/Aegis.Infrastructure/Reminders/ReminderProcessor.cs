@@ -87,7 +87,7 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IN
             var recipient = prepared.Recipient; var attempt = prepared.Attempt;
             var input = new NotificationInput("Aegis", occurrence.Text); var capability = NotificationContract.Capability;
             if (actionTokens is not null && inventory.Any(n => n.Id == recipient.NodeId && n.Capabilities.Any(c => c.Name == ReminderNotificationContract.NotifyCapability && c.Version >= 1)))
-            { capability = ReminderNotificationContract.NotifyCapability; input = new("Aegis", occurrence.Text, id, occurrence.Revision, generation, actionTokens.Create(occurrence, clock.GetUtcNow().AddDays(7))); }
+            { capability = ReminderNotificationContract.NotifyCapability; input = new("Aegis", occurrence.Text, id, occurrence.Revision, generation, actionTokens.Create(occurrence, clock.GetUtcNow().AddDays(7), recipient.NodeId!.Value)); }
             // A command may have expired while waiting for recovery. Never mint a fresh one after ambiguous send.
             NotificationDispatchResult result;
             metrics.ReminderDeliveryAttempts.Add(1);

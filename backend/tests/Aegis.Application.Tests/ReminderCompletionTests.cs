@@ -112,7 +112,10 @@ public sealed class ReminderCompletionTests
         using var f = new Fixture(); var reminder = await f.Create(); f.Clock.Advance(TimeSpan.FromHours(1)); await f.Processor.ProcessNextAsync();
         reminder = await f.Db.Reminders.SingleAsync(); reminder.Open(f.Clock.GetUtcNow()); Assert.Null(reminder.AcknowledgedAt);
         var tokens = new ReminderActionTokens(new EphemeralDataProtectionProvider(), f.Clock);
-        var token = tokens.Create(reminder, f.Clock.GetUtcNow().AddMinutes(1)); Assert.True(tokens.Validate(token, reminder.Id, 1, 1));
+        var recipientId = f.Db.Nodes.Single().Id;
+        var token = tokens.Create(reminder, f.Clock.GetUtcNow().AddMinutes(1), recipientId); Assert.True(tokens.Validate(token, reminder.Id, 1, 1));
+        Assert.True(tokens.TryValidateRecipient(token, reminder.Id, 1, 1, out var boundRecipient)); Assert.Equal(recipientId, boundRecipient);
+        Assert.Throws<ArgumentException>(() => tokens.Create(reminder, f.Clock.GetUtcNow().AddMinutes(1), Guid.Empty));
         Assert.False(tokens.Validate(token, Guid.NewGuid(), 1, 1)); Assert.False(tokens.Validate(token, reminder.Id, 2, 1)); Assert.False(tokens.Validate(token, reminder.Id, 1, 2));
         f.Clock.Advance(TimeSpan.FromMinutes(2)); Assert.False(tokens.Validate(token, reminder.Id, 1, 1));
     }

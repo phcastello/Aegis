@@ -10,13 +10,24 @@ namespace Aegis.Infrastructure.Reminders;
 
 public sealed class ReminderActionTokens(IDataProtectionProvider provider, TimeProvider clock) : IReminderActionTokens
 {
-    private readonly IDataProtector protector = provider.CreateProtector("Aegis.ReminderAction.v1");
-    private sealed record Claims(Guid ReminderId, int Revision, int Generation, DateTimeOffset ExpiresAt);
-    public string Create(Reminder reminder, DateTimeOffset expiresAt) => protector.Protect(JsonSerializer.Serialize(new Claims(reminder.Id, reminder.Revision, reminder.Generation, expiresAt)));
-    public bool Validate(string token, Guid reminderId, int revision, int generation)
+    private readonly IDataProtector protector = provider.CreateProtector("Aegis.ReminderAction.v2");
+    private sealed record Claims(Guid ReminderId, int Revision, int Generation, Guid RecipientNodeId, DateTimeOffset ExpiresAt);
+    public string Create(Reminder reminder, DateTimeOffset expiresAt, Guid recipientNodeId)
     {
+        if (recipientNodeId == Guid.Empty || expiresAt <= clock.GetUtcNow() || expiresAt > clock.GetUtcNow().AddDays(7)) throw new ArgumentException("Escopo de interação inválido.");
+        return protector.Protect(JsonSerializer.Serialize(new Claims(reminder.Id, reminder.Revision, reminder.Generation, recipientNodeId, expiresAt)));
+    }
+    public bool Validate(string token, Guid reminderId, int revision, int generation) => TryValidateRecipient(token, reminderId, revision, generation, out _);
+    public bool TryValidateRecipient(string token, Guid reminderId, int revision, int generation, out Guid recipientNodeId)
+    {
+        recipientNodeId = Guid.Empty;
         if (string.IsNullOrWhiteSpace(token) || token.Length > 4096) return false;
-        try { var c = JsonSerializer.Deserialize<Claims>(protector.Unprotect(token)); return c is not null && c.ReminderId == reminderId && c.Revision == revision && c.Generation == generation && c.ExpiresAt > clock.GetUtcNow(); }
+        try
+        {
+            var c = JsonSerializer.Deserialize<Claims>(protector.Unprotect(token));
+            if (c is null || c.ReminderId != reminderId || c.Revision != revision || c.Generation != generation || c.RecipientNodeId == Guid.Empty || c.ExpiresAt <= clock.GetUtcNow()) return false;
+            recipientNodeId = c.RecipientNodeId; return true;
+        }
         catch (Exception e) when (e is CryptographicException or JsonException or FormatException) { return false; }
     }
 }
