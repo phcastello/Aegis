@@ -71,7 +71,7 @@ try {
    if (host === 'native') await context.addInitScript((runtimeVersion) => {
      window.openedUrls = []; window.nativeCalls = []; window.reminderPayloads=[]; window.placePayloads=[];
      const reminders=[],series=[],places=[],geofences=[];
-     window.reminderListRequests=[];
+     window.reminderListRequests=[];window.extraFocusedReminders=[];
      window.enableReminderPaging=()=>{
        for(let index=1;index<=101;index++)series.push({seriesId:crypto.randomUUID(),text:`Série paginada ${index}`,timeZoneId:'America/Sao_Paulo',rule:{frequency:'daily',interval:1,localTime:'08:00',startDate:'2026-01-01'},status:'active',revision:1,deliveryPolicy:'allEligible',nextDueAt:'2026-10-20T11:00:00Z'});
        for(let index=1;index<=201;index++)reminders.push({reminderId:crypto.randomUUID(),text:`Ocorrência paginada ${index}`,dueAt:'2026-10-20T11:00:00Z',timeZoneId:'America/Sao_Paulo',status:'Scheduled',seriesId:null,revision:1,generation:1,deliveryPolicy:'allEligible'});
@@ -88,10 +88,10 @@ try {
        if(args!==undefined)args=JSON.parse(JSON.stringify(args));
        if(command === 'node_settings_open') return;
        if(command === 'node_reminders') { if(args.operation === 'list') {
-         const query=args.payload??{};window.reminderListRequests.push(query);
+         const query=args.payload??{};window.reminderListRequests.push(query);if(window.reminderListDelay)await new Promise(resolve=>setTimeout(resolve,window.reminderListDelay));
          if(query.offset>0 || query.seriesOffset>0) {await new Promise(resolve=>setTimeout(resolve,350));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
          const offset=query.offset??0,seriesOffset=query.seriesOffset??0;
-         return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:query.focusId===window.oldReminder?.reminderId?window.oldReminder:null});
+         return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:[window.oldReminder,...window.extraFocusedReminders].find(item=>item?.reminderId===query.focusId)??null});
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
@@ -266,6 +266,28 @@ try {
      assert.equal(await oldReminder.count(),1);assert.equal(await deliveryWarning.count(),0,'A full refresh resets the delivery truncation warning');assert.equal(await page.evaluate(()=>document.activeElement.id===`reminder-${window.oldReminder.reminderId}`),true,'A notification body focuses its old authenticated occurrence outside the page');
      assert.equal(await panel.getByLabel('Mostrar histórico e cancelados').isChecked(),true);
      const focusedRequest=await page.evaluate(()=>window.reminderListRequests.at(-1));assert.equal(focusedRequest.offset,0);assert.equal(focusedRequest.seriesOffset,0);assert.match(focusedRequest.focusId,/^[0-9a-f-]{36}$/i);
+     const focusRace=await page.evaluate(()=>{
+       window.reminderListDelay=600;
+       const first={...window.oldReminder,reminderId:crypto.randomUUID(),text:'Foco intermediário durante página'};
+       const latest={...window.oldReminder,reminderId:crypto.randomUUID(),text:'Último foco durante página'};
+       window.extraFocusedReminders.push(first,latest);return {first:first.reminderId,latest:latest.reminderId,requestCount:window.reminderListRequests.length};
+     });
+     await occurrencesMore.click();assert.equal(await occurrencesMore.isDisabled(),true);
+     await page.evaluate(id=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:id}})),focusRace.first);
+     await page.evaluate(id=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:id}})),focusRace.latest);
+     await panel.getByRole('heading',{name:'Último foco durante página',exact:true}).waitFor();
+     assert.equal(await page.evaluate(id=>document.activeElement.id===`reminder-${id}`,focusRace.latest),true,'The latest notification must be fetched and focused after a busy page completes');
+     const focusRaceRequests=await page.evaluate(count=>window.reminderListRequests.slice(count),focusRace.requestCount);
+     assert.equal(focusRaceRequests.length,2,'The busy page and one coalesced focus reload are the only requests');
+     assert.equal(focusRaceRequests.filter(query=>query.focusId===focusRace.first).length,0,'The superseded focus must not trigger another reload');
+     assert.equal(focusRaceRequests.at(-1).focusId,focusRace.latest);
+     await page.evaluate(()=>window.reminderListDelay=0);
+     await panel.getByRole('button',{name:'Novo lembrete',exact:true}).click();await panel.getByLabel('O que lembrar').fill('Formulário ainda não salvo');
+     const dirtyFocus=await page.evaluate(()=>{const item={...window.oldReminder,reminderId:crypto.randomUUID(),text:'Foco aguardando formulário'};window.extraFocusedReminders.push(item);return {id:item.reminderId,requests:window.reminderListRequests.length};});
+     await page.evaluate(id=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:id}})),dirtyFocus.id);
+     await page.waitForTimeout(200);assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Formulário ainda não salvo');assert.equal(await page.evaluate(()=>window.reminderListRequests.length),dirtyFocus.requests,'A notification must preserve the unsaved form');
+     await panel.getByRole('button',{name:'Cancelar',exact:true}).click();await panel.getByRole('heading',{name:'Foco aguardando formulário',exact:true}).waitFor();
+     assert.equal(await page.evaluate(id=>document.activeElement.id===`reminder-${id}`,dirtyFocus.id),true);
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));
      await panel.waitFor({state:'hidden'});
      const listCalls=await page.evaluate(()=>window.nativeCalls.filter(command=>command==='node_list').length);

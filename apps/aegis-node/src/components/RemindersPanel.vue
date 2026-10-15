@@ -13,6 +13,7 @@ const places = ref<Place[]>([]); const nodes = ref<NodeView[]>([]); const locati
 const permissions = ref<LocationPermissions | null>(null);
 useLocationPermissionRefresh(props.platform,permissions); 
 const busy = ref(false); const error = ref<string | null>(null); const notice = ref<string | null>(null); const loaded = ref(false); const showHistory = ref(false);
+let focusReloadPending = false;
 const editor = ref<'one' | 'series' | 'geographic' | null>(null);
 const editingReminder = ref<Reminder | null>(null); const editingSeries = ref<ReminderSeries | null>(null); const editingGeofence = ref<Geofence | null>(null);
 const text = ref(''); const due = ref(''); const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo');
@@ -47,7 +48,8 @@ async function loadMore(kind:'occurrences'|'series') {
   finally { pageLoading.value=null;busy.value=false; }
 }
 async function load() {
-  const result = await remindersApi<ReminderPage>('list',{offset:0,seriesOffset:0,...(props.focusedReminderId?{focusId:props.focusedReminderId}:{})});
+  const focusId=props.focusedReminderId;focusReloadPending=false;
+  const result = await remindersApi<ReminderPage>('list',{offset:0,seriesOffset:0,...(focusId?{focusId}:{})});
   deliveries.value=result.deliveries??[];reminders.value=mergeRows(result.reminders,result.focusedReminder?[result.focusedReminder]:[],item=>item.reminderId);series.value=withNextOccurrence(result.series);
   hasMoreDeliveries.value=result.hasMoreDeliveries===true;hasMore.value=result.hasMore===true;nextOffset.value=result.nextOffset??0;seriesHasMore.value=result.seriesHasMore===true;nextSeriesOffset.value=result.nextSeriesOffset??0;pageError.value=null;
   const geo = await geofencesApi<Geofence[] | { geofences: Geofence[] }>('list'); geofences.value = collection(geo, 'geofences');
@@ -56,7 +58,7 @@ async function load() {
   if (!observer.value) observer.value = location.value.sourceNodeId ?? '';
   if (props.platform === 'android') { try { permissions.value = await locationApi<LocationPermissions>('permissions'); } catch { permissions.value = null; } }
   loaded.value = true;
-  if (props.focusedReminderId) { showHistory.value = true; await nextTick(); const target = document.getElementById(`reminder-${props.focusedReminderId}`); if (target) target.focus({ preventScroll: false }); else notice.value = 'Este lembrete ainda não aparece na lista. Se o celular estava offline, aguarde a sincronização e atualize.'; }
+  if (focusId && focusId===props.focusedReminderId && !editor.value) { showHistory.value = true; await nextTick(); if(focusId!==props.focusedReminderId || editor.value)return; const target = document.getElementById(`reminder-${focusId}`); if (target) target.focus({ preventScroll: false }); else notice.value = 'Este lembrete ainda não aparece na lista. Se o celular estava offline, aguarde a sincronização e atualize.'; }
 }
 async function operation(action: () => Promise<unknown>, message?: string, refreshAfter = true) {
   if (busy.value) return; busy.value = true; error.value = null; notice.value = null;
@@ -65,7 +67,9 @@ async function operation(action: () => Promise<unknown>, message?: string, refre
   finally { busy.value = false; }
 }
 onMounted(() => { void operation(load, undefined, false); });
-watch(() => props.focusedReminderId, () => { void operation(load, undefined, false); });
+function flushFocusReload() { if(!focusReloadPending || busy.value || editor.value)return;focusReloadPending=false;void operation(load,undefined,false); }
+watch(() => props.focusedReminderId, () => { focusReloadPending=true;flushFocusReload(); });
+watch([busy,editor],flushFocusReload);
 function openEditor(kind: 'one' | 'series' | 'geographic') {
   editingReminder.value = null; editingSeries.value = null; editingGeofence.value = null;
   timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
