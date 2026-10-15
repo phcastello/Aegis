@@ -105,7 +105,10 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   // has no remaining region consumer and must not replay its occurrence after restoration.
   definition.put("repeat",false)
   manifest.put("rules",JSONArray().put(definition))
-  prefs.edit().putString("manifest",manifest.toString()).putBoolean("completed:$ruleId",true).commit()
+  prefs.edit().putString("manifest",manifest.toString()).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
+  position(0.0,117000);position(0.01,115000);position(0.01,84000)
+  assertTrue(prefs.getBoolean("completed:$ruleId",false))
+  assertEquals(3,events().size);occurrences.addAll(events().filter{it !in occurrences})
   geoRuntime(context).getMethod("restore",Context::class.java).invoke(null,context)
   assertFalse(prefs.getBoolean("hasRegions",true))
   assertEquals(occurrences,events())
