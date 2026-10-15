@@ -9,6 +9,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { installWindowsIpcObserver } from './windows-cdp-observer.mjs';
+import { reloadReadyWindowsPage } from './windows-webview-ready.mjs';
+import { ownedWindowInspectionScript, parseOwnedWindowState } from './windows-owned-window.mjs';
 
 if (process.platform !== 'win32') throw Error('This measurement requires a real Windows runner and WebView2.');
 const [executable, label, outputArgument, secondsArgument = '600'] = process.argv.slice(2);
@@ -106,32 +108,40 @@ try {
   app.on('exit', value => { appExit = value; }); app.on('error', () => { appExit = -1; });
   await waitUntil(async () => { if (appExit !== undefined) throw Error(`Native app exited (${appExit}).`); try { return (await fetch(`http://127.0.0.1:${port}/json/version`, {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } }, 30000);
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  await waitUntil(() => { page = browser.contexts().flatMap(context => context.pages())[0]; return Boolean(page); }, 30000);
-  await page.route(origin + '/api/**', async route => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.startsWith('/api/chat/')) return route.fulfill({ json: { items: [], hasMore: false } });
-    if (path.startsWith('/api/voice/') || path === '/api/email/status') return route.fulfill({ json: { enabled: false, available: false, configured: false, isConnected: false } });
-    return route.continue(); // Rust's native Node HTTP/WebSocket requests are never intercepted.
-  });
-  await page.addInitScript(installWindowsIpcObserver);
-  await page.addInitScript(() => {
-    localStorage.setItem('aegis.voice.autoSpeak', 'false');
-    const state = window.__aegisIdle = { intervals: new Map(), timeouts: new Map() };
-    const originalInterval = window.setInterval.bind(window), originalClearInterval = window.clearInterval.bind(window);
-    const originalTimeout = window.setTimeout.bind(window), originalClearTimeout = window.clearTimeout.bind(window);
-    window.setInterval = (callback, delay, ...args) => { const id = originalInterval(callback, delay, ...args); state.intervals.set(id, { delay: Number(delay) || 0 }); return id; };
-    window.clearInterval = id => { state.intervals.delete(id); originalClearInterval(id); };
-    window.setTimeout = (callback, delay, ...args) => {
-      const duration = Math.max(0, Number(delay) || 0);
-      let id;
-      const handler = typeof callback === 'function' ? (...values) => { state.timeouts.delete(id); callback(...values); } : callback;
-      id = originalTimeout(handler, delay, ...args); state.timeouts.set(id, { delay: duration, deadline: performance.now() + duration }); return id;
-    };
-    window.clearTimeout = id => { state.timeouts.delete(id); originalClearTimeout(id); };
-
-  });
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
+  const instrumentedPages = new Set();
+  const measurementPage = async timeout => {
+    await waitUntil(() => {
+      if (appExit !== undefined) throw Error(`Native app exited (${appExit}).`);
+      page = browser.contexts().flatMap(context => context.pages()).find(candidate => !candidate.isClosed() && /^(?:https?:\/\/tauri\.localhost(?:\/|$)|tauri:\/\/localhost(?:\/|$))/.test(candidate.url()));
+      return Boolean(page);
+    }, Math.min(timeout, 30000));
+    if (instrumentedPages.has(page)) return page;
+    await page.route(origin + '/api/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.startsWith('/api/chat/')) return route.fulfill({ json: { items: [], hasMore: false } });
+      if (path.startsWith('/api/voice/') || path === '/api/email/status') return route.fulfill({ json: { enabled: false, available: false, configured: false, isConnected: false } });
+      return route.continue(); // Rust's native Node HTTP/WebSocket requests are never intercepted.
+    });
+    await page.addInitScript(installWindowsIpcObserver);
+    await page.addInitScript(() => {
+      localStorage.setItem('aegis.voice.autoSpeak', 'false');
+      const state = window.__aegisIdle = { intervals: new Map(), timeouts: new Map() };
+      const originalInterval = window.setInterval.bind(window), originalClearInterval = window.clearInterval.bind(window);
+      const originalTimeout = window.setTimeout.bind(window), originalClearTimeout = window.clearTimeout.bind(window);
+      window.setInterval = (callback, delay, ...args) => { const id = originalInterval(callback, delay, ...args); state.intervals.set(id, { delay: Number(delay) || 0 }); return id; };
+      window.clearInterval = id => { state.intervals.delete(id); originalClearInterval(id); };
+      window.setTimeout = (callback, delay, ...args) => {
+        const duration = Math.max(0, Number(delay) || 0);
+        let id;
+        const handler = typeof callback === 'function' ? (...values) => { state.timeouts.delete(id); callback(...values); } : callback;
+        id = originalTimeout(handler, delay, ...args); state.timeouts.set(id, { delay: duration, deadline: performance.now() + duration }); return id;
+      };
+      window.clearTimeout = id => { state.timeouts.delete(id); originalClearTimeout(id); };
+    });
+    instrumentedPages.add(page);
+    return page;
+  };
+  page = await reloadReadyWindowsPage(measurementPage, () => appExit === undefined);
   const runtime = await invoke('runtime_info'); assert.equal(runtime.platform, 'windows'); assert.equal(runtime.backendUrl, origin);
   const expectedVersion = label === 'before' ? '0.7.0-unstable.11' : JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
   assert.equal(runtime.version, expectedVersion, 'The immutable accepted baseline and candidate must not accidentally run the same executable.');
@@ -155,7 +165,7 @@ try {
     assert.equal(stored, process.env.AEGIS_IDLE_STORAGE_VALUE, 'The same WebView storage must survive both installer and runtime upgrades.');
   }
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 30000);
-  await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
+  page = await reloadReadyWindowsPage(measurementPage, () => appExit === undefined);
   await page.evaluate(()=>{window.__aegisIpc.counts={};});
   await invoke('node_status');
   assert.ok(await page.evaluate(()=>(window.__aegisIpc.counts.node_status??0)>0), 'The real native IPC observer must be working before reporting polling counts.');
@@ -166,9 +176,21 @@ try {
   cdp.on('Network.loadingFinished', event => { if (webRequests.delete(event.requestId)) pageResponseBytes += event.encodedDataLength; });
   const metric = async name => (await cdp.send('Performance.getMetrics')).metrics.find(value => value.name === name)?.value ?? null;
   for (const state of ['window_open', 'devices_open', 'devices_closed', 'tray']) {
+    let trayWindowState;
     if (state === 'devices_open') await openDevices();
     if (state === 'devices_closed') await closeDevices();
-    if (state === 'tray') { assert.equal(powershell(`(Get-Process -Id ${app.pid}).CloseMainWindow()`), 'True'); assert.equal(appExit, undefined, 'Closing the window must keep the tray runtime alive.'); }
+    if (state === 'tray') {
+      const visibleWindow = parseOwnedWindowState(powershell(ownedWindowInspectionScript(app.pid)));
+      assert.equal(visibleWindow.windowCount, 1, 'Tray measurement requires the unique owned Aegis product window.');
+      assert.equal(visibleWindow.visible, true, 'The product window must be visible before the tray close request.');
+      assert.equal(parseOwnedWindowState(powershell(ownedWindowInspectionScript(app.pid, 'requestClose'))).windowCount, 1);
+      await waitUntil(() => {
+        if (appExit !== undefined) throw Error('Closing the window must keep the tray runtime alive.');
+        trayWindowState = parseOwnedWindowState(powershell(ownedWindowInspectionScript(app.pid)));
+        return trayWindowState.windowCount === 1 && trayWindowState.visible === false;
+      }, 10000);
+      assert.equal(appExit, undefined, 'Closing the window must keep the tray runtime alive.');
+    }
     await sleep(2500); // Exclude opening/closing work; both versions use the same settling window.
     await page.evaluate(() => { window.__aegisIpc.counts = {}; });
     const beforeFixture = await fixtureMetrics(), beforeRenderer = await rendererSnapshot(), beforeTask = await metric('TaskDuration');
@@ -189,7 +211,7 @@ try {
     const counts = difference(beforeFixture, await fixtureMetrics());
     const jsonPayloadBytes = (counts.node_transport_payload_bytes_received_total ?? 0) + (counts.node_transport_payload_bytes_sent_total ?? 0);
     const httpBodyBytes = (counts.http_request_body_bytes ?? 0) + (counts.http_response_body_bytes ?? 0);
-    states.push({ state, durationSeconds, nativeTransportState, fixtureCounters: counts, jsonPayloadBytesPerMinute: jsonPayloadBytes * 60 / durationSeconds, httpBodyBytesPerMinute: httpBodyBytes * 60 / durationSeconds,
+    states.push({ state, durationSeconds, nativeTransportState, ...(trayWindowState ? { nativeWindow: trayWindowState } : {}), fixtureCounters: counts, jsonPayloadBytesPerMinute: jsonPayloadBytes * 60 / durationSeconds, httpBodyBytesPerMinute: httpBodyBytes * 60 / durationSeconds,
       requestsPerMinute: (counts.http_requests ?? 0) * 60 / durationSeconds, heartbeatsPerMinute: (counts.node_transport_heartbeats_total ?? 0) * 60 / durationSeconds,
       cpu: { ...cpu, appPercentOfOneCore: 100 * cpu.appSeconds / durationSeconds, webViewPercentOfOneCore: 100 * cpu.webViewSeconds / durationSeconds, processSampleSeconds: 10, childProcessesAtStart: initialProcesses.filter(row => row.id !== app.pid).length, childProcessesAtEnd: previousProcesses.filter(row => row.id !== app.pid).length },
       rendererTaskSeconds: beforeTask === null || afterTask === null ? null : afterTask - beforeTask,

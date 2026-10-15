@@ -81,6 +81,7 @@ try {
      const now = new Date().toISOString();
      const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: runtimeVersion, protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
      const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
+     window.setPeerPlatform = platform => { other.platform = platform; };
      let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
        window.nativeCalls.push(command);
@@ -200,6 +201,14 @@ try {
      assert.doesNotMatch(await pc.getByRole('alertdialog').innerText(), /regras geográficas deste celular/);
      await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
      await pc.getByRole('button', { name: 'Reativar', exact: true }).click();
+     assert.doesNotMatch(await pc.innerText(), /Abra a Aegis nele para reconectar/);
+     // Exercise the Android peer branch separately from the Windows peer above.
+     await page.evaluate(() => window.setPeerPlatform('android'));
+     await panel.getByRole('button', {name:'Atualizar lista',exact:true}).click();
+     await pc.getByRole('button', {name:'Desativar',exact:true}).click();
+     await pc.getByRole('button', {name:'Confirmar',exact:true}).click();
+     await pc.getByRole('button', {name:'Reativar',exact:true}).click();
+     await pc.getByRole('status').filter({hasText:'Dispositivo reativado. Abra a Aegis nele para reconectar. Retome as regras geográficas em Lembretes.'}).waitFor();
      await pc.getByRole('button', { name: 'Remover dispositivo', exact: true }).click(); await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
      await pc.waitFor({state:'detached'});
      await panel.getByRole('button',{name:'Lembretes',exact:true}).click();
