@@ -194,7 +194,18 @@ impl NodeRuntime {
 #[tauri::command]
 pub async fn node_status(runtime: tauri::State<'_, NodeRuntime>) -> Result<IdentityStatus, String> {
     let guard = runtime.identity.lock().await;
-    guard.as_ref().map_err(Clone::clone)?.status().await
+    let identity = guard.as_ref().map_err(Clone::clone)?;
+    #[cfg(target_os = "android")]
+    let before = identity.cached_operational_node_id()?;
+    let result = identity.status().await;
+    #[cfg(target_os = "android")]
+    let binding_changed = before != identity.cached_operational_node_id()?;
+    drop(guard); // sync_push acquires the same identity lock before calling JNI.
+    #[cfg(target_os = "android")]
+    if binding_changed {
+        runtime.sync_push().await;
+    }
+    result
 }
 #[tauri::command]
 pub async fn node_pair(
@@ -236,11 +247,20 @@ pub async fn node_set_enabled(
     enabled: bool,
 ) -> Result<NodeView, String> {
     let guard = runtime.identity.lock().await;
-    guard
-        .as_ref()
-        .map_err(Clone::clone)?
+    let identity = guard.as_ref().map_err(Clone::clone)?;
+    #[cfg(target_os = "android")]
+    let before = identity.cached_operational_node_id()?;
+    let result = identity
         .modify(id, if enabled { "enable" } else { "disable" }, None)
-        .await
+        .await;
+    #[cfg(target_os = "android")]
+    let binding_changed = before != identity.cached_operational_node_id()?;
+    drop(guard);
+    #[cfg(target_os = "android")]
+    if binding_changed {
+        runtime.sync_push().await;
+    }
+    result
 }
 #[tauri::command]
 pub async fn node_resolve_target(
@@ -269,11 +289,18 @@ pub async fn node_revoke(
     id: String,
 ) -> Result<NodeView, String> {
     let guard = runtime.identity.lock().await;
-    guard
-        .as_ref()
-        .map_err(Clone::clone)?
-        .modify(id, "revoke", None)
-        .await
+    let identity = guard.as_ref().map_err(Clone::clone)?;
+    #[cfg(target_os = "android")]
+    let before = identity.cached_operational_node_id()?;
+    let result = identity.modify(id, "revoke", None).await;
+    #[cfg(target_os = "android")]
+    let binding_changed = before != identity.cached_operational_node_id()?;
+    drop(guard);
+    #[cfg(target_os = "android")]
+    if binding_changed {
+        runtime.sync_push().await;
+    }
+    result
 }
 #[tauri::command]
 pub async fn node_create_pairing_code(

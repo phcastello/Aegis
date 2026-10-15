@@ -34,6 +34,11 @@ fn default_receive_reminders() -> bool {
 fn offline() -> String {
     "offline".into()
 }
+#[cfg(any(target_os = "android", test))]
+fn operational_node_id(node: Option<&NodeView>) -> Option<&str> {
+    node.filter(|node| node.enabled && node.revoked_at.is_none())
+        .map(|node| node.id.as_str())
+}
 #[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityStatus {
@@ -262,6 +267,12 @@ impl<V: Vault, A: Api> Identity<V, A> {
                 record.node
             },
         )
+    }
+    // Binding changes depend on administrative identity, not display metadata,
+    // capabilities or whether a transport session happens to be connected.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn cached_operational_node_id(&self) -> Result<Option<String>, String> {
+        Ok(operational_node_id(self.cached_node()?.as_ref()).map(str::to_owned))
     }
     pub async fn pair(&self, name: String, code: String) -> Result<IdentityStatus, String> {
         let mut record = self.load()?;
@@ -593,6 +604,7 @@ mod tests {
         node: Option<NodeView>,
         pairs: u32,
         finalize: u32,
+        me: u32,
         error: Option<ApiError>,
         lose_finalize: bool,
     }
@@ -644,6 +656,23 @@ mod tests {
         record.credential = None;
         assert_eq!(record.scope_id("https://fixture.example").unwrap(), None);
     }
+    #[test]
+    fn operational_binding_ignores_metadata_and_requires_an_enabled_nonrevoked_node() {
+        let mut current = node();
+        let id = current.id.clone();
+        assert_eq!(operational_node_id(Some(&current)), Some(id.as_str()));
+        current.name = "Renamed device".into();
+        current.availability = "online".into();
+        current.receive_reminders = false;
+        assert_eq!(operational_node_id(Some(&current)), Some(id.as_str()));
+        current.enabled = false;
+        assert_eq!(operational_node_id(Some(&current)), None);
+        current.enabled = true;
+        assert_eq!(operational_node_id(Some(&current)), Some(id.as_str()));
+        current.revoked_at = Some("2026-10-15T00:00:00Z".into());
+        assert_eq!(operational_node_id(Some(&current)), None);
+        assert_eq!(operational_node_id(None), None);
+    }
     impl Api for FakeApi {
         async fn pair(&self, _: &Pending) -> Result<Receipt, ApiError> {
             let mut state = self.0.lock().unwrap();
@@ -672,7 +701,8 @@ mod tests {
             Ok(state.node.clone().unwrap())
         }
         async fn me(&self, _: &str) -> Result<NodeView, ApiError> {
-            let state = self.0.lock().unwrap();
+            let mut state = self.0.lock().unwrap();
+            state.me += 1;
             if let Some(error) = &state.error {
                 return Err(error.clone());
             }
@@ -692,8 +722,24 @@ mod tests {
             let node = state.node.as_mut().unwrap();
             if action == "rename" {
                 node.name = name.unwrap().into();
+            } else if action == "disable" {
+                node.enabled = false;
+            } else if action == "revoke" {
+                node.revoked_at = Some("2026-10-15T00:00:00Z".into());
             }
-            Ok(node.clone())
+            let result = node.clone();
+            state.error = match action {
+                "disable" => Some(ApiError {
+                    code: "node_disabled".into(),
+                    message: "disabled".into(),
+                }),
+                "revoke" => Some(ApiError {
+                    code: "node_revoked".into(),
+                    message: "revoked".into(),
+                }),
+                _ => state.error.take(),
+            };
+            Ok(result)
         }
         async fn create_code(&self, _: &str) -> Result<PairingCode, ApiError> {
             Ok(PairingCode {
@@ -891,6 +937,81 @@ mod tests {
             .credential
             .is_none());
         assert_eq!(client(vault, api).status().await.unwrap().state, "revoked");
+    }
+    #[tokio::test]
+    async fn authenticated_status_restores_binding_after_remote_reenable_without_repairing() {
+        let vault = MemoryVault::default();
+        let api = FakeApi::default();
+        let identity = client(vault, api.clone());
+        identity.pair("PC".into(), "code".into()).await.unwrap();
+        let id = identity.cached_operational_node_id().unwrap().unwrap();
+        let me_before = api.0.lock().unwrap().me;
+
+        // Healthy and metadata-only status calls do not change native binding.
+        let before = identity.cached_operational_node_id().unwrap();
+        api.0.lock().unwrap().node.as_mut().unwrap().name = "Renamed".into();
+        assert_eq!(identity.status().await.unwrap().state, "paired");
+        assert_eq!(before, identity.cached_operational_node_id().unwrap());
+        assert_eq!(api.0.lock().unwrap().me, me_before + 1);
+
+        api.0.lock().unwrap().error = Some(ApiError {
+            code: "node_disabled".into(),
+            message: "disabled".into(),
+        });
+        assert_eq!(identity.status().await.unwrap().state, "disabled");
+        assert_eq!(identity.cached_operational_node_id().unwrap(), None);
+        assert_eq!(identity.status().await.unwrap().state, "disabled");
+        assert_eq!(identity.cached_operational_node_id().unwrap(), None);
+        assert!(identity.transport_credential().unwrap().is_some());
+
+        api.0.lock().unwrap().error = None; // Another active Node reenabled this identity.
+        assert_eq!(identity.status().await.unwrap().state, "paired");
+        assert_eq!(identity.cached_operational_node_id().unwrap(), Some(id));
+        assert_eq!(api.0.lock().unwrap().pairs, 1);
+        assert_eq!(api.0.lock().unwrap().me, me_before + 4);
+
+        api.0.lock().unwrap().error = Some(ApiError {
+            code: "node_revoked".into(),
+            message: "revoked".into(),
+        });
+        assert_eq!(identity.status().await.unwrap().state, "revoked");
+        assert_eq!(identity.cached_operational_node_id().unwrap(), None);
+        assert!(identity.transport_credential().unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn self_disable_and_revoke_change_binding_before_the_operation_returns() {
+        let api = FakeApi::default();
+        let identity = client(MemoryVault::default(), api.clone());
+        identity.pair("PC".into(), "code".into()).await.unwrap();
+        let id = identity.cached_operational_node_id().unwrap().unwrap();
+        assert!(
+            !identity
+                .modify(id.clone(), "disable", None)
+                .await
+                .unwrap()
+                .enabled
+        );
+        assert_eq!(identity.cached_operational_node_id().unwrap(), None);
+        assert!(identity.transport_credential().unwrap().is_some());
+
+        {
+            let mut server = api.0.lock().unwrap();
+            server.error = None;
+            server.node.as_mut().unwrap().enabled = true;
+        }
+        assert_eq!(identity.status().await.unwrap().state, "paired");
+        assert_eq!(
+            identity.cached_operational_node_id().unwrap(),
+            Some(id.clone())
+        );
+        assert!(identity
+            .modify(id, "revoke", None)
+            .await
+            .unwrap()
+            .revoked_at
+            .is_some());
+        assert_eq!(identity.cached_operational_node_id().unwrap(), None);
+        assert!(identity.transport_credential().unwrap().is_none());
     }
     #[tokio::test]
     async fn invalid_pair_code_can_be_replaced_after_definitive_rejection() {
