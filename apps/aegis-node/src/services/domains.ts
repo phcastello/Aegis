@@ -9,9 +9,9 @@ export interface Place { id: string; name: string; type: 'property' | 'room' | '
 export interface LocationObservation { latitude: number; longitude: number; accuracyMeters: number; capturedAt: string; receivedAt?: string; source?: string; ageSeconds?: number; syncPending?: boolean; placeId?: string | null; nodeId?: string }
 export interface NodeLocation { nodeId: string; mode: 'none' | 'fixed' | 'dynamic'; fixedPlaceId: string | null }
 export interface LocationSettings { sourceNodeId: string | null; nodes: NodeLocation[]; latest: LocationObservation | null }
-export interface LocationPermissions { supported: boolean; foreground?: boolean; precise?: boolean; background?: boolean; servicesEnabled?: boolean; pendingActions?: number; code?: string }
-export interface Geofence { id: string; text: string; revision: number; placeIds: string[]; observerNodeId: string; transition: 'enter' | 'exit'; repeat: boolean; timeZoneId?: string; startsAt?: string | null; endsAt?: string | null; status: string; syncStatus: string }
-export interface MapConfig { tileUrl: string | null; attribution: string; geocodingConfigured: boolean }
+export interface LocationPermissions { supported: boolean; providerAvailable?: boolean; foreground?: boolean; precise?: boolean; background?: boolean; servicesEnabled?: boolean; pendingActions?: number; code?: string }
+export interface Geofence { id: string; text: string; revision: number; placeIds: string[]; observerNodeId: string; transition: 'enter' | 'exit'; repeat: boolean; timeZoneId?: string; startsAt?: string | null; endsAt?: string | null; status: string; syncStatus: string; leaseUntil?: string; syncedAt?: string | null; errorCode?: string | null }
+export interface MapConfig { tileUrl: string | null; attribution: string; geocodingConfigured: boolean; geocoderProvider?: string }
 export interface SearchResult { name: string; latitude: number; longitude: number }
 type Operation<T extends string> = <R>(operation: T, payload?: object, id?: string) => Promise<R>;
 function domain<T extends string>(command: string): Operation<T> { return (operation, payload, id) => invoke(command, { operation, ...(id ? { id } : {}), ...(payload ? { payload } : {}) }); }
@@ -27,3 +27,5 @@ export function recurrenceLabel(rule: RecurrenceRule): string {
   return `${period} às ${rule.localTime}${rule.untilDate ? `, até ${rule.untilDate.split('-').reverse().join('/')}` : rule.count ? `, ${rule.count} ocorrências` : ''}`;
 }
 export const geofenceLabels: Record<string, string> = { pending: 'Pendente de sincronização', pending_sync: 'Pendente de sincronização', waiting_initial: 'Aguardando condição inicial', recoverable_error: 'Precisa de atenção', removed: 'Retirado do celular', pendingSync: 'Pendente de sincronização', installed: 'Instalado no celular', awaitingInitial: 'Aguardando condição inicial', active: 'Ativo no celular', paused: 'Pausado', completed: 'Concluído', cancelled: 'Cancelado', recoverableError: 'Precisa de atenção', error: 'Precisa de atenção', synced: 'Sincronizado', pendingRemoval: 'Cancelamento pendente no celular' };
+
+export function domainError(value: unknown, fallback: string): string { const message = typeof value === 'string' ? value : value instanceof Error ? value.message : null; return message && message.length <= 300 && !/[\r\n\x00-\x1f]/.test(message) ? message : fallback; }

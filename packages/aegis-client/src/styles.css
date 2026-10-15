@@ -1751,3 +1751,5 @@ button:disabled {
   .global-navigation-floating .global-settings-trigger { width: 42px; height: 42px; min-height: 42px; padding: 10px; background: transparent; }
   .hideout-shell:not(.hideout-shell--sidebar-open) .chat-header { padding-left: max(112px, var(--conversation-inset)); }
 }
+
+.settings-content > section > .settings-error { position: sticky; top: 0; z-index: 3; background: var(--surface); }

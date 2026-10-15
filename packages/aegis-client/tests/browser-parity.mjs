@@ -1,6 +1,7 @@
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import {mkdirSync} from 'node:fs';
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
 let cancellations = 0, feedback = 0, deletions = 0;
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -57,6 +58,8 @@ for (const url of ['http://127.0.0.1:18092', 'http://127.0.0.1:1420']) {
   }
 }
 await new Promise(resolve => server.listen(18093, '127.0.0.1', resolve));
+if(process.env.PARITY_SCREENSHOT_DIR)mkdirSync(process.env.PARITY_SCREENSHOT_DIR,{recursive:true});
+let activePage=null,activeHost='unknown';
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 try {
  for (const host of ['web', 'native']) {
@@ -105,7 +108,7 @@ try {
        throw new Error('Unexpected IPC: ' + command);
      } };
    });
-   const page = await context.newPage(); const errors = [];
+   const page = await context.newPage(); activePage=page;activeHost=host;const errors = [];
    page.on('pageerror', e => { errors.push(e.message); console.log('PAGEERROR', host, e.message); });
    page.on('console', m => { if (m.type() === 'error') console.log('CONSOLEERROR', host, m.text()); });
    await page.goto(host === 'web' ? 'http://127.0.0.1:18093' : 'http://127.0.0.1:1420');
@@ -134,7 +137,7 @@ try {
      await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
      const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
      await panel.getByRole('button', {name:'Sobre',exact:true}).click();
-     await panel.getByText('Android', { exact: true }).waitFor();
+     await panel.getByText('Android', { exact: true }).first().waitFor();
      await panel.getByText('Diagnóstico técnico', {exact:true}).click();
      await panel.getByText('Disponível', { exact: true }).waitFor();
      await panel.getByRole('button', {name:'Dispositivos',exact:true}).click();
@@ -180,9 +183,12 @@ try {
      await panel.getByLabel('O que lembrar').fill('Recorrência sintética');
      await panel.getByRole('button',{name:'Lugares',exact:true}).click();
      await panel.getByRole('alertdialog',{name:'Descartar alterações?'}).waitFor();
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-unsaved-mobile.png`});
      await panel.getByRole('button',{name:'Continuar editando',exact:true}).click();
      assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Recorrência sintética');
-     await panel.getByLabel('Repetição',{exact:true}).selectOption('weekly');
+     await panel.getByRole('button',{name:'Sobre',exact:true}).click();await panel.getByRole('alertdialog',{name:'Descartar alterações?'}).waitFor();await page.keyboard.press('Escape');await panel.getByRole('alertdialog',{name:'Descartar alterações?'}).waitFor({state:'hidden'});
+     assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Recorrência sintética');
+     await panel.getByRole('combobox',{name:/Repetição/}).selectOption('weekly');
      await panel.getByLabel('Intervalo',{exact:true}).fill('2');
      await panel.getByLabel('Qua',{exact:true}).check();
      await panel.getByRole('button',{name:'Salvar',exact:true}).click();
@@ -197,6 +203,7 @@ try {
      await panel.locator('.place-map').click({position:{x:140,y:140}});
      await panel.getByLabel('Raio em metros',{exact:true}).fill('250');
      await panel.getByLabel('Conferi o ponto e a área. A cobertura representa este lugar.').check();
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-place-map-mobile.png`});
      await panel.getByRole('button',{name:'Salvar lugar',exact:true}).click();
      await panel.getByText('Lugar sintético',{exact:true}).waitFor();
      const place=await page.evaluate(()=>window.placePayloads.at(-1));assert.equal(place.circles.length,1);assert.equal(place.circles[0].radiusMeters,250);assert.deepEqual(place.aliases,['referência sintética']);
@@ -224,12 +231,20 @@ try {
    await page.getByLabel('Renomear conversa').fill('Renomeada'); await page.getByLabel('Renomear conversa').press('Enter');
    await page.getByRole('button', { name: 'Renomeada', exact: true }).waitFor();
    await page.getByRole('button', { name: 'Nova conversa', exact: true }).click();
+   if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${host}-chat-mobile.png`});
    await page.setViewportSize({ width: 1600, height: 900 });
    const panelBounds=await page.locator('.chat-panel').boundingBox();const composerBounds=await page.locator('.composer-field').boundingBox();
    assert.ok(Math.abs(composerBounds.x+composerBounds.width/2-(panelBounds.x+panelBounds.width/2))<2,'Composer must center inside usable chat area');
    assert.ok(panelBounds.x>200,'Desktop sidebar must occupy a real layout column');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    if (process.env.PARITY_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.PARITY_SCREENSHOT_DIR}/${host}-parity.png` });
+   if(host==='native') {
+     const trigger=page.getByRole('button',{name:'Configurações da Aegis',exact:true});await trigger.click();const settings=page.getByRole('dialog',{name:'Configurações',exact:true});await settings.waitFor();
+     if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-settings-desktop.png`});
+     await page.keyboard.press('Shift+Tab');assert.equal(await page.evaluate(()=>Boolean(document.activeElement.closest('dialog'))),true,'Modal focus must remain inside settings');
+     await page.keyboard.press('Escape');await settings.waitFor({state:'hidden'});assert.equal(await trigger.evaluate(element=>document.activeElement===element),true,'Escape must restore launcher focus');
+     await trigger.click();await settings.waitFor();await page.mouse.click(12,450);await settings.waitFor({state:'hidden'});assert.equal(await trigger.evaluate(element=>document.activeElement===element),true,'Backdrop must restore launcher focus');
+   }
    await page.getByLabel('Ações de Renomeada').click();
    await page.getByRole('button', { name: 'Apagar', exact: true }).click();
    await page.getByRole('dialog', { name: 'Apagar conversa' }).getByRole('button', { name: 'Apagar', exact: true }).click();
@@ -240,4 +255,5 @@ try {
    await context.close(); fixture.title = 'Conversa de teste'; deletions = 0;
  }
  assert.equal(feedback, 4); assert.equal(cancellations, 2);
+} catch(error) { if(process.env.PARITY_SCREENSHOT_DIR&&activePage&&!activePage.isClosed())await activePage.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${activeHost}-failure.png`}).catch(()=>{});throw error;
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

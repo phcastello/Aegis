@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
-import { remindersApi, placesApi, locationApi, geofencesApi, recurrenceLabel, geofenceLabels, localInput } from '../.test-build/services/domains.js';
+import { remindersApi, placesApi, locationApi, geofencesApi, recurrenceLabel, geofenceLabels, localInput, domainError } from '../.test-build/services/domains.js';
 afterEach(() => clearMocks());
 test('domain adapters use native domain commands and keep credential retrieval outside the WebView', async () => {
   globalThis.window = {}; const calls = [];
@@ -22,4 +22,9 @@ test('recurrence summaries make intervals and calendar choices visible', () => {
   assert.match(recurrenceLabel({...base,frequency:'monthly',monthDay:31,untilDate:'2027-01-01'}),/dia 31.*01\/01\/2027/);
   assert.equal(geofenceLabels.pending_sync,'Pendente de sincronização');assert.equal(geofenceLabels.waiting_initial,'Aguardando condição inicial');
   assert.equal(localInput('invalid'),'');
+});
+
+test('native validation messages stay useful without rendering malformed error objects or stacks', () => {
+ assert.equal(domainError('O lugar mudou. Atualize a tela.','Falha'),'O lugar mudou. Atualize a tela.');
+ assert.equal(domainError({credential:'private'},'Falha'),'Falha');assert.equal(domainError('Trace\n at internal','Falha'),'Falha');assert.equal(domainError('x'.repeat(301),'Falha'),'Falha');
 });

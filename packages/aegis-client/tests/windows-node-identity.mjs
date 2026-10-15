@@ -39,6 +39,30 @@ async function call(path, body, credential, method) {
   return { status: response.status, body: await response.json() };
 }
 async function invoke(command, args) { return page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args }); }
+async function reminderCommand(nodeId, reminderId, capability, revision = 1, generation = 1, commandId = randomUUID()) {
+  const response = await fetch(origin + '/fixture/reminder-command', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({nodeId,reminderId,capability,revision,generation,commandId}) });
+  assert.equal(response.status,200); return { ...await response.json(), commandId };
+}
+async function reminderReceipts(reminderId) {
+  const response=await fetch(origin+'/fixture/reminder-actions');assert.equal(response.status,200);
+  return (await response.json()).filter(item=>item.reminderId===reminderId);
+}
+function nativeReminderMetadata(reminderId) {
+  assert.match(reminderId,/^[0-9a-f-]{36}$/i);assert.ok(process.env.LOCALAPPDATA);
+  const database=join(process.env.LOCALAPPDATA,'com.aegis.node','native-reminder-actions-v1.sqlite');
+  // Read-only queries are restricted to the freshly generated fixture occurrence.
+  // The native token/credential columns are never selected or printed.
+  const python="import sqlite3,json,sys,pathlib\ndb=sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri()+'?mode=ro',uri=True)\ndb.row_factory=sqlite3.Row\nr=sys.argv[2]\na=[dict(x) for x in db.execute('SELECT id,revision,generation,action,queued FROM actions WHERE reminderId=?',(r,))]\np=db.execute('SELECT revision,generation FROM presentations WHERE id=?',(r,)).fetchone()\nw=db.execute('SELECT generation FROM withdrawals WHERE id=?',(r,)).fetchone()\nprint(json.dumps({'actions':a,'presentation':dict(p) if p else None,'withdrawal':dict(w) if w else None}))\n";
+  const result=spawnSync(process.env.PYTHON ?? 'python',['-c',python,database,reminderId],{encoding:'utf8'});
+  assert.equal(result.status,0,'Read-only native SQLite fixture metadata requires Python sqlite3.');return JSON.parse(result.stdout);
+}
+function activateReminderAction(actionId) {
+  assert.match(actionId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  const uri='aegis-reminder://action/'+actionId;
+  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`Start-Process -FilePath '${uri}'`],{encoding:'utf8'});
+  assert.equal(result.status,0,'The registered Windows URI handler must activate the installed native adapter.');
+}
+
 async function open() {
   exited = undefined;
   app = spawn(exe, [], { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9461', WEBVIEW2_USER_DATA_FOLDER: join(work, 'webview') }, stdio: 'inherit' });
@@ -121,6 +145,53 @@ try {
   assert.equal(nativeNotification.transport,'live_websocket');
   assert.equal(nativeNotification.status,'success');
   console.log('Windows real button -> native HttpApi POST /api/nodes/notifications/test -> production controller -> WebSocket notification.show -> native OS call -> command_result success PASS.');
+  // These are real native toasts, the OS-registered URI handler, native SQLite,
+  // and the production authenticated reminder action controller in an isolated API.
+  // OS post acceptance does not assert that a human saw or read a toast.
+  const acknowledgementOccurrence=randomUUID();
+  const ackCommand=await reminderCommand(pcId,acknowledgementOccurrence,'reminder.notify');assert.equal(ackCommand.status,'success');
+  assert.equal((await reminderCommand(pcId,acknowledgementOccurrence,'reminder.notify',1,1,ackCommand.commandId)).status,'duplicate');
+  let ackMetadata=nativeReminderMetadata(acknowledgementOccurrence);assert.equal(ackMetadata.presentation.generation,1);
+  const openAction=ackMetadata.actions.find(item=>item.action==='open');const ackAction=ackMetadata.actions.find(item=>item.action==='acknowledge');
+  assert.ok(openAction&&ackAction);activateReminderAction(openAction.id);
+  await waitUntil(async()=>(await invoke('node_consume_reminder_open')).reminderId===acknowledgementOccurrence,10000);
+  await page.getByRole('heading',{name:'Lembretes',exact:true}).waitFor();
+  await page.locator('#reminder-'+acknowledgementOccurrence).waitFor();
+  assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,0,'Opening the body must not acknowledge the occurrence.');
+  const settingsClose=page.getByRole('button',{name:'Fechar configurações',exact:true});if(await settingsClose.count())await settingsClose.click();
+  const actionHide=spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});assert.equal(actionHide.status,0);assert.equal(actionHide.stdout.trim(),'True');
+  activateReminderAction(ackAction.id);
+  await waitUntil(async()=>(await reminderReceipts(acknowledgementOccurrence)).some(item=>item.action==='acknowledge'&&item.applied),45000);
+  await waitUntil(()=>nativeReminderMetadata(acknowledgementOccurrence).actions.every(item=>item.queued===0),10000);
+  assert.equal(exited,undefined,'A background action must preserve the resident app.');
+  activateReminderAction(ackAction.id);await new Promise(resolve=>setTimeout(resolve,700));
+  assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,1,'An old ActionId must not create a second acknowledgement.');
+  const snoozeOccurrence=randomUUID();
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify')).status,'success');
+  const firstPresentation=nativeReminderMetadata(snoozeOccurrence);const snoozeAction=firstPresentation.actions.find(item=>item.action==='snooze');const oldAck=firstPresentation.actions.find(item=>item.action==='acknowledge');
+  assert.ok(snoozeAction&&oldAck);activateReminderAction(snoozeAction.id);
+  await waitUntil(async()=>(await reminderReceipts(snoozeOccurrence)).some(item=>item.action==='snooze'&&item.applied),45000);
+  const occurrences=(await invoke('node_reminders',{operation:'list'})).reminders;const snoozed=occurrences.find(item=>item.reminderId===snoozeOccurrence);
+  assert.equal(snoozed.generation,2);assert.equal(snoozed.revision,2);assert.equal(snoozed.status,'Scheduled');
+  assert.ok(new Date(snoozed.dueAt)>new Date(),'Snooze must schedule a future generation.');
+  // Present generation 2 through the real renderer to test ordering; this fixture
+  // command is not a claim that the backend scheduler fired a future occurrence.
+  const secondGenerationCommand=await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',2,2);assert.equal(secondGenerationCommand.status,'success');
+  assert.equal(nativeReminderMetadata(snoozeOccurrence).presentation.generation,2);
+  activateReminderAction(oldAck.id);await new Promise(resolve=>setTimeout(resolve,700));
+  assert.equal((await reminderReceipts(snoozeOccurrence)).length,1,'An action from the previous generation must not acknowledge generation 2.');
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.withdraw',1,1)).status,'success');
+  assert.equal(nativeReminderMetadata(snoozeOccurrence).presentation.generation,2,'Withdrawing an older generation must retain the newer presentation.');
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',1,1)).status,'expired','A delayed old generation must not post again.');
+  const secondMetadata=nativeReminderMetadata(snoozeOccurrence);activateReminderAction(secondMetadata.actions.find(item=>item.generation===2&&item.action==='open').id);
+  await waitUntil(async()=>(await invoke('node_consume_reminder_open')).reminderId===snoozeOccurrence,10000);
+  const latestClose=page.getByRole('button',{name:'Fechar configurações',exact:true});if(await latestClose.count())await latestClose.click();
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.withdraw',2,2)).status,'success');
+  assert.equal(nativeReminderMetadata(snoozeOccurrence).presentation,null);
+  const withdrawalFirstOccurrence=randomUUID();
+  assert.equal((await reminderCommand(pcId,withdrawalFirstOccurrence,'reminder.withdraw')).status,'success');
+  assert.equal((await reminderCommand(pcId,withdrawalFirstOccurrence,'reminder.notify')).status,'expired','Withdrawal before notification must persist the generation high-water mark.');
+  console.log('Windows native reminder.notify: real toast post, command replay, registered body/OK/snooze URI actions, durable outbox, authenticated ACK, stale-generation rejection, withdrawal ordering and high-water marks PASS.');
   const hide = spawnSync('powershell.exe',['-NoProfile','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8'});
   assert.equal(hide.status,0);await new Promise(r=>setTimeout(r,1000));assert.equal(exited,undefined);
   assert.equal((await call('',undefined,peerCredential)).body.find(n=>n.id===pcId).availability,'online');
@@ -137,6 +208,8 @@ try {
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 15000); identity = await invoke('node_status'); assert.equal(identity.node.id, pcId);
   assert.equal((await invoke('node_list')).length, 2);
   await assertNativeCapabilities();
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',1,1)).status,'expired','Withdrawal high-water mark must survive a real process restart.');
+  assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',2,2,secondGenerationCommand.commandId)).status,'duplicate','Native command dedupe must survive restart without reposting.');
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
   await invoke('node_set_enabled', { id: peer.body.id, enabled: false }); assert.equal((await call('/me', undefined, peerCredential)).status, 403);

@@ -33,7 +33,8 @@ onMounted(async () => {
   try {
     library = await import('leaflet'); await import('leaflet/dist/leaflet.css');
     if (disposed || !container.value) return;
-    map = library.map(container.value, { zoomControl: true, scrollWheelZoom: false, attributionControl: true });
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    map = library.map(container.value, { zoomAnimation: !reducedMotion, fadeAnimation: !reducedMotion, markerZoomAnimation: !reducedMotion, zoomControl: true, scrollWheelZoom: false, attributionControl: true });
     const first = props.modelValue[0]; const center = props.center ?? first;
     map.setView(center ? [center.latitude, center.longitude] : [0, 0], center ? 16 : 2);
     if (validTileUrl(props.config.tileUrl)) {
