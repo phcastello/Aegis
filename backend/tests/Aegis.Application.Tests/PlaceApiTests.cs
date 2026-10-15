@@ -93,6 +93,89 @@ public sealed class PlaceApiTests
     { Assert.Equal(expected, response.StatusCode); return (await response.Content.ReadFromJsonAsync<JsonElement>()); }
 
     [Fact]
+    public async Task WithdrawalReceiptsRequireNativeAuthenticationAndOnlyCloseTheAuthenticatedRecipientsRequiredCopies()
+    {
+        const string path = "/api/nodes/reminders/withdrawals/receipts";
+        await using var host = await Host.Create();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await host.Client.PostAsJsonAsync(path, new { items = Array.Empty<object>() })).StatusCode);
+        var actor = await host.Pair("windows"); var other = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        Guid acknowledgedId, currentId, unrelatedId;
+        await using (var db = host.Db())
+        {
+            var now = host.Clock.Now;
+            Reminder Create(bool ack) {
+                var reminder = new Reminder("Synthetic receipt scope", now, "UTC", null, now.AddMinutes(-1));
+                reminder.Claim(Guid.NewGuid(), now); reminder.BeginTrigger(now); reminder.Finish(null, true, now); if (ack) reminder.Acknowledge(now);
+                db.Reminders.Add(reminder); return reminder;
+            }
+            var acknowledged = Create(true); acknowledgedId = acknowledged.Id;
+            var current = Create(false); currentId = current.Id;
+            var unrelated = Create(true); unrelatedId = unrelated.Id;
+            var accepted = ReminderRecipient.LocalPosted(acknowledged.Id, 1, actor.Id, now); accepted.BeginWithdrawal(now); accepted.QueueWithdrawal(now);
+            db.Set<ReminderRecipient>().AddRange(accepted, ReminderRecipient.LocalPosted(current.Id, 1, actor.Id, now), ReminderRecipient.LocalPosted(unrelated.Id, 1, other.Id, now));
+            await db.SaveChangesAsync(); Assert.Null(accepted.WithdrawnAt);
+        }
+        var items = new[] { new { reminderId = acknowledgedId, generation = 1 }, new { reminderId = currentId, generation = 1 }, new { reminderId = unrelatedId, generation = 1 }, new { reminderId = Guid.NewGuid(), generation = 1 } };
+        var response = await Read(await host.Client.PostAsJsonAsync(path, new { items }));
+        Assert.Equal(acknowledgedId, Assert.Single(response.GetProperty("received").EnumerateArray()).GetProperty("reminderId").GetGuid());
+        DateTimeOffset? withdrawn;
+        await using (var db = host.Db())
+        {
+            var recipients = await db.Set<ReminderRecipient>().AsNoTracking().ToArrayAsync();
+            withdrawn = recipients.Single(r => r.ReminderId == acknowledgedId).WithdrawnAt; Assert.NotNull(withdrawn);
+            Assert.Null(recipients.Single(r => r.ReminderId == currentId).WithdrawnAt); Assert.Null(recipients.Single(r => r.ReminderId == unrelatedId).WithdrawnAt);
+        }
+        host.Clock.Now = host.Clock.Now.AddMinutes(10); // Retry after a lost HTTP response remains idempotent.
+        var replay = await Read(await host.Client.PostAsJsonAsync(path, new { items })); Assert.Single(replay.GetProperty("received").EnumerateArray());
+        await using (var db = host.Db()) Assert.Equal(withdrawn, (await db.Set<ReminderRecipient>().AsNoTracking().SingleAsync(r => r.ReminderId == acknowledgedId)).WithdrawnAt);
+    }
+
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("paused")]
+    [InlineData("older_generation")]
+    public async Task WithdrawalReceiptsCloseCancelledPausedAndSupersededCopies(string state)
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential); Guid id;
+        await using (var db = host.Db())
+        {
+            var now = host.Clock.Now; var reminder = new Reminder("Synthetic withdrawn state", now.AddMinutes(1), "UTC", null, now);
+            if (state == "cancelled") reminder.Cancel(now);
+            else if (state == "paused") reminder.PauseFutureForSeries(now);
+            else { host.Clock.Now = now.AddMinutes(1); reminder.Claim(Guid.NewGuid(), host.Clock.Now); reminder.BeginTrigger(host.Clock.Now); reminder.Finish(null, true, host.Clock.Now); reminder.Snooze(host.Clock.Now, 10); }
+            id = reminder.Id; db.Reminders.Add(reminder); db.Set<ReminderRecipient>().Add(ReminderRecipient.LocalPosted(id, 1, actor.Id, now)); await db.SaveChangesAsync();
+        }
+        var result = await Read(await host.Client.PostAsJsonAsync("/api/nodes/reminders/withdrawals/receipts", new { items = new[] { new { reminderId = id, generation = 1 } } }));
+        Assert.Equal(id, Assert.Single(result.GetProperty("received").EnumerateArray()).GetProperty("reminderId").GetGuid());
+        await using var verify = host.Db(); Assert.NotNull((await verify.Set<ReminderRecipient>().SingleAsync()).WithdrawnAt);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"items\":null}")]
+    [InlineData("{\"items\":[{\"reminderId\":\"00000000-0000-0000-0000-000000000000\",\"generation\":1}]}")]
+    [InlineData("{\"items\":[{\"reminderId\":\"72bd2a5d-b51b-4491-94b4-1f6854ad9306\",\"generation\":0}]}")]
+    [InlineData("{\"items\":[],\"nodeId\":\"72bd2a5d-b51b-4491-94b4-1f6854ad9306\"}")]
+    public async Task WithdrawalReceiptsRejectMalformedOrClientSelectedScope(string json)
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsync("/api/nodes/reminders/withdrawals/receipts", content)).StatusCode);
+        await using var db = host.Db(); Assert.Empty(db.Set<ReminderRecipient>());
+    }
+
+    [Fact]
+    public async Task WithdrawalReceiptBatchIsBoundedAndRejectsDuplicates()
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        const string path = "/api/nodes/reminders/withdrawals/receipts";
+        var items = Enumerable.Range(0, 100).Select(_ => new { reminderId = Guid.NewGuid(), generation = 1 }).ToArray();
+        Assert.Empty((await Read(await host.Client.PostAsJsonAsync(path, new { items }))).GetProperty("received").EnumerateArray());
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsJsonAsync(path, new { items = items.Append(new { reminderId = Guid.NewGuid(), generation = 1 }) })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.PostAsJsonAsync(path, new { items = new[] { items[0], items[0] } })).StatusCode);
+    }
+
+    [Fact]
     public async Task AddressSearchUsesAuthenticatedPostBodyWithoutQueryAndPreservesPacingAndSafeProviderErrors()
     {
         using var geocoder = new Geocoder(); await using var host = await Host.Create(geocoder);

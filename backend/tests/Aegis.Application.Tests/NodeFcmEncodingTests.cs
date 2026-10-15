@@ -27,12 +27,13 @@ public sealed class NodeFcmEncodingTests
     private sealed class Handler : HttpMessageHandler
     {
         public readonly List<byte[]> Bodies = [];
+        public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Assert.Equal("https://fcm.googleapis.com/v1/projects/synthetic-project/messages:send", request.RequestUri!.AbsoluteUri);
             Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Bodies.Add(await request.Content.ReadAsByteArrayAsync(ct));
-            return new(HttpStatusCode.OK) { Content = new StringContent("{}") };
+            return new(Status) { Content = new StringContent("{}") };
         }
     }
     private sealed class Clients(HttpClient client) : IHttpClientFactory { public HttpClient CreateClient(string name) { Assert.Equal("node-fcm", name); return client; } }
@@ -68,6 +69,43 @@ public sealed class NodeFcmEncodingTests
         ["nodeId"] = node.ToString(), ["type"] = command.Capability, ["version"] = "1", ["commandId"] = command.CommandId.ToString(), ["expiresAt"] = command.ExpiresAt.ToString("O"),
         ["input"] = JsonSerializer.Serialize(command.Input, Json)
     };
+
+    [Theory]
+    [InlineData("notification.show", "HIGH")]
+    [InlineData("reminder.notify", "HIGH")]
+    [InlineData("reminder.withdraw", "NORMAL")]
+    public async Task OnlyVisibleNotificationsRequestHighPriority(string capability, string expected)
+    {
+        await using var f = new Fixture(); await f.Initialize();
+        var command = capability == "reminder.withdraw"
+            ? new NodeNotificationCommand(Guid.NewGuid(), capability, 1, DateTimeOffset.UtcNow.AddMinutes(5), new(null, null, Guid.NewGuid(), Generation: 1))
+            : Command("Synthetic priority", capability == "reminder.notify");
+        Assert.Equal("accepted", await f.Transport.SendAsync(f.NodeId, command, default));
+        using var json = JsonDocument.Parse(Assert.Single(f.Handler.Bodies));
+        Assert.Equal(expected, json.RootElement.GetProperty("message").GetProperty("android").GetProperty("priority").GetString());
+    }
+
+    [Fact]
+    public async Task DomainSynchronizationUsesNormalPriority()
+    {
+        await using var f = new Fixture(); await f.Initialize();
+        var command = new NodeDomainCommand(Guid.NewGuid(), "geofence.monitor", 1, DateTimeOffset.UtcNow.AddMinutes(5), new { revision = 1 });
+        Assert.Equal("accepted", await f.Transport.SendDomainAsync(f.NodeId, command, default));
+        using var json = JsonDocument.Parse(Assert.Single(f.Handler.Bodies));
+        var message = json.RootElement.GetProperty("message");
+        Assert.Equal("domain.sync", message.GetProperty("data").GetProperty("type").GetString());
+        Assert.Equal("NORMAL", message.GetProperty("android").GetProperty("priority").GetString());
+    }
+
+    [Fact]
+    public async Task WithdrawalProvider503IsNotReportedAsAccepted()
+    {
+        await using var f = new Fixture(); await f.Initialize(); f.Handler.Status = HttpStatusCode.ServiceUnavailable;
+        var command = new NodeNotificationCommand(Guid.NewGuid(), "reminder.withdraw", 1, DateTimeOffset.UtcNow.AddMinutes(5), new(null, null, Guid.NewGuid(), Generation: 1));
+        Assert.Equal("failed", await f.Transport.SendAsync(f.NodeId, command, default));
+        using var json = JsonDocument.Parse(Assert.Single(f.Handler.Bodies));
+        Assert.Equal("NORMAL", json.RootElement.GetProperty("message").GetProperty("android").GetProperty("priority").GetString());
+    }
 
     [Theory]
     [InlineData(false)]

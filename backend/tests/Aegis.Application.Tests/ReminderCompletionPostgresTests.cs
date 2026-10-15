@@ -13,6 +13,10 @@ namespace Aegis.Application.Tests;
 // Every test creates its own disposable schema; no production identity or reminder is used.
 public sealed class ReminderCompletionPostgresTests
 {
+    public sealed class PostgresTheoryAttribute : TheoryAttribute
+    {
+        public PostgresTheoryAttribute() { if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AEGIS_REMINDER_TEST_DATABASE"))) Skip = "Set AEGIS_REMINDER_TEST_DATABASE to a disposable PostgreSQL database."; }
+    }
     private static AegisDbContext Db(string schema) => new(new DbContextOptionsBuilder<AegisDbContext>()
         .UseNpgsql(Environment.GetEnvironmentVariable("AEGIS_REMINDER_TEST_DATABASE") + ";Search Path=" + schema,
             o => o.MigrationsHistoryTable("__EFMigrationsHistory", schema)).Options);
@@ -94,6 +98,59 @@ public sealed class ReminderCompletionPostgresTests
             Assert.Equal(DateTimeOffset.Parse("2026-09-29T14:00Z"), (await restarted.Reminders.SingleAsync(r => r.SeriesId == series.Id && !r.IsException && r.Status == ReminderStatus.Scheduled)).DueAtUtc);
             Assert.Equal(3, await restarted.Reminders.CountAsync());
             Assert.Equal(movedDueAt, (await restarted.Reminders.AsNoTracking().SingleAsync(r => r.Id == movedId)).DueAtUtc);
+        }
+        finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
+    }
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EditingSeriesAfterAnIndividualOverridePreservesTheOverrideAcrossRestart(bool changeSchedule)
+    {
+        var schema = "series_override_edit_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock(); clock.Advance(TimeSpan.FromHours(-5));
+        try
+        {
+            await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\""); await setup.Database.MigrateAsync();
+            var series = new ReminderSeries("original", "UTC", new() { StartDate = "2026-09-27", LocalTime = "09:00" }, null, clock.GetUtcNow());
+            await new ReminderSeriesStore(setup, clock).AddAsync(series, default);
+            var exception = await setup.Reminders.SingleAsync(); var due = DateTimeOffset.Parse("2026-09-27T11:00Z");
+            exception.Update(null, due, clock.GetUtcNow()); await setup.SaveChangesAsync(); var exceptionRevision = exception.Revision;
+            await using (var edit = Db(schema)) await new ReminderSeriesStore(edit, clock).ChangeAsync(series.Id, series.Revision, "update", "novo texto", changeSchedule ? new() { StartDate = "2026-09-27", LocalTime = "10:00" } : null, null, default);
+            await using var first = Db(schema); await using var second = Db(schema);
+            await Task.WhenAll(new ReminderSeriesStore(first, clock).MaterializePendingAsync(default), new ReminderSeriesStore(second, clock).MaterializePendingAsync(default));
+            await using var restarted = Db(schema);
+            var preserved = await restarted.Reminders.SingleAsync(r => r.Id == exception.Id);
+            Assert.Equal(due, preserved.DueAtUtc); Assert.Equal("original", preserved.Text); Assert.True(preserved.IsException); Assert.Equal(exceptionRevision, preserved.Revision);
+            var next = await restarted.Reminders.SingleAsync(r => !r.IsException && r.Status == ReminderStatus.Scheduled);
+            Assert.Equal(DateTimeOffset.Parse(changeSchedule ? "2026-09-28T10:00Z" : "2026-09-28T09:00Z"), next.DueAtUtc); Assert.Equal("novo texto", next.Text);
+            Assert.Equal(2, await restarted.Reminders.CountAsync());
+        }
+        finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
+    }
+    [ReminderPostgresTests.PostgresFact]
+    public async Task PausedExceptionsSurviveRestartAndOnlyFutureOnesResume()
+    {
+        var schema = "series_override_pause_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock(); var now = clock.GetUtcNow();
+        try
+        {
+            await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\""); await setup.Database.MigrateAsync();
+            var series = new ReminderSeries("original", "UTC", new() { StartDate = "2026-09-27", LocalTime = "14:00" }, null, now);
+            await new ReminderSeriesStore(setup, clock).AddAsync(series, default);
+            var elapsed = await setup.Reminders.SingleAsync(); elapsed.Update("expired override", now.AddHours(2), now);
+            var future = Reminder.ForSeries(series, new(now.AddDays(3).AddHours(1), "2026-09-30T14:00", 4), now); future.Update("future override", now.AddDays(3).AddHours(2), now);
+            setup.Reminders.Add(future); await setup.SaveChangesAsync();
+            var paused = await new ReminderSeriesStore(setup, clock).ChangeAsync(series.Id, series.Revision, "pause", null, null, null, default);
+            clock.Advance(TimeSpan.FromDays(2));
+            await using (var resume = Db(schema))
+            {
+                var rows = await resume.Reminders.ToArrayAsync(); Assert.All(rows, r => Assert.Equal(ReminderStatus.Paused, r.Status)); Assert.All(rows, r => Assert.False(r.CanClaim(clock.GetUtcNow())));
+                await new ReminderSeriesStore(resume, clock).ChangeAsync(series.Id, paused.Revision, "resume", null, null, null, default);
+            }
+            await using var restarted = Db(schema); await new ReminderSeriesStore(restarted, clock).MaterializePendingAsync(default);
+            var expired = await restarted.Reminders.SingleAsync(r => r.Id == elapsed.Id); Assert.Equal(ReminderStatus.Cancelled, expired.Status); Assert.True(expired.IsException);
+            var preserved = await restarted.Reminders.SingleAsync(r => r.Id == future.Id); Assert.Equal(ReminderStatus.Scheduled, preserved.Status); Assert.True(preserved.IsException);
+            Assert.Equal("future override", preserved.Text); Assert.Equal(now.AddDays(3).AddHours(2), preserved.DueAtUtc);
+            Assert.Single(await restarted.Reminders.Where(r => !r.IsException && r.Status == ReminderStatus.Scheduled).ToArrayAsync());
+            Assert.DoesNotContain(await restarted.Reminders.ToArrayAsync(), r => r.Status == ReminderStatus.Scheduled && r.DueAtUtc <= clock.GetUtcNow());
         }
         finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
     }

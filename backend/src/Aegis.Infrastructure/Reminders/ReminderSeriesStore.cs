@@ -36,17 +36,34 @@ public sealed class ReminderSeriesStore(AegisDbContext db, TimeProvider clock) :
     {
         await using var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
         var series = await LoadLocked(id, ct); series.CheckRevision(revision); var now = clock.GetUtcNow();
-        var future = await db.Reminders.Where(r => r.SeriesId == id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && r.TriggeredAt == null).OrderBy(r => r.DueAtUtc).ToListAsync(ct);
+        var future = await db.Reminders.Where(r => r.SeriesId == id &&
+            (r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Paused) && r.TriggeredAt == null)
+            .OrderBy(r => r.DueAtUtc).ThenBy(r => r.Id).ToListAsync(ct);
         if (operation == "skip")
         {
-            if (future.Count == 0) throw new ArgumentException("Não há próxima ocorrência para pular.");
-            future[0].CancelFutureForSeries(now, exception: true); series.MarkSkipped(now);
+            var next = future.FirstOrDefault(r => r.Status == ReminderStatus.Scheduled && r.Generation == 1);
+            if (next is null) throw new ArgumentException("Não há próxima ocorrência para pular.");
+            next.CancelFutureForSeries(now, exception: true); series.MarkSkipped(now);
         }
         else
         {
-            if (operation == "update") series.Change(revision, text, rule, policy, now);
-            else series.SetState(revision, operation switch { "pause" => "paused", "resume" => "active", "cancel" => "cancelled", _ => throw new ArgumentException("Operação inválida.") }, now);
-            foreach (var occurrence in future) occurrence.CancelFutureForSeries(now);
+            if (operation == "update")
+            {
+                series.Change(revision, text, rule, policy, now);
+                // An individual override is a persisted occurrence snapshot. A
+                // series edit replaces defaults without rewriting that snapshot.
+                foreach (var occurrence in future.Where(r => !r.IsException && r.Generation == 1)) occurrence.CancelFutureForSeries(now);
+            }
+            else
+            {
+                series.SetState(revision, operation switch { "pause" => "paused", "resume" => "active", "cancel" => "cancelled", _ => throw new ArgumentException("Operação inválida.") }, now);
+                foreach (var occurrence in future)
+                {
+                    if (operation == "pause") occurrence.PauseFutureForSeries(now);
+                    else if (operation == "resume") occurrence.ResumeFutureForSeries(now);
+                    else occurrence.CancelFutureForSeries(now);
+                }
+            }
         }
         await db.SaveChangesAsync(ct); await Materialize(series, ct); await db.SaveChangesAsync(ct);
         if (tx is not null) await tx.CommitAsync(ct); return series;

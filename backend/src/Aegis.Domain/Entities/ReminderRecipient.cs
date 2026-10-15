@@ -18,6 +18,10 @@ public sealed class ReminderRecipient : AuditableEntity
     public DateTimeOffset? PostedAt { get; private set; }
     public DateTimeOffset? WithdrawnAt { get; private set; }
     public DateTimeOffset? WithdrawalQueuedAt { get; private set; }
+    public int WithdrawalAttempts { get; private set; }
+    public Guid? WithdrawalCommandId { get; private set; }
+    public DateTimeOffset? WithdrawalCommandExpiresAt { get; private set; }
+    public DateTimeOffset? WithdrawalNextAttemptAt { get; private set; }
     public string? Transport { get; private set; }
     public static ReminderRecipient LocalPosted(Guid reminderId, int generation, Guid nodeId, DateTimeOffset postedAt)
     {
@@ -65,7 +69,19 @@ public sealed class ReminderRecipient : AuditableEntity
         Touch(now);
     }
     public void QueueWithdrawal(DateTimeOffset now) { WithdrawalQueuedAt = now; Touch(now); }
-    public void Withdraw(DateTimeOffset now) { WithdrawnAt = now; if (Status == "pending") Status = "withdrawn"; Touch(now); }
+    public bool CanBeginWithdrawal(DateTimeOffset now) => WithdrawnAt is null && WithdrawalAttempts < 4 &&
+        (WithdrawalCommandExpiresAt is null || WithdrawalCommandExpiresAt > now) && (WithdrawalNextAttemptAt is null || WithdrawalNextAttemptAt <= now);
+    public void BeginWithdrawal(DateTimeOffset now)
+    {
+        if (!CanBeginWithdrawal(now)) throw new InvalidOperationException("Withdrawal budget is exhausted or not due.");
+        WithdrawalCommandId ??= Guid.NewGuid(); WithdrawalCommandExpiresAt ??= now.AddSeconds(300);
+        WithdrawalAttempts++;
+        WithdrawalNextAttemptAt = WithdrawalAttempts < 4
+            ? WithdrawalCommandExpiresAt.Value.AddSeconds(-300 + new[] { 0, 30, 90, 210 }[WithdrawalAttempts])
+            : null;
+        Touch(now);
+    }
+    public void Withdraw(DateTimeOffset now) { if (WithdrawnAt is not null) return; WithdrawnAt = now; if (Status == "pending") Status = "withdrawn"; Touch(now); }
 }
 
 public sealed class ReminderActionReceipt : AuditableEntity

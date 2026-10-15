@@ -61,8 +61,12 @@ public sealed class ReminderWithdrawalReconciler(AegisDbContext db, INodeRegistr
 {
     public async Task ReconcileAsync(CancellationToken ct)
     {
+        var now = clock.GetUtcNow();
         var candidates = from recipient in db.Set<ReminderRecipient>() join reminder in db.Reminders on recipient.ReminderId equals reminder.Id
-            where recipient.NodeId != null && recipient.WithdrawnAt == null && (reminder.AcknowledgedAt != null || reminder.Generation != recipient.Generation || reminder.Status == ReminderStatus.Cancelled)
+            where recipient.NodeId != null && recipient.WithdrawnAt == null && recipient.WithdrawalAttempts < 4 &&
+                (recipient.WithdrawalCommandExpiresAt == null || recipient.WithdrawalCommandExpiresAt > now) &&
+                (recipient.WithdrawalNextAttemptAt == null || recipient.WithdrawalNextAttemptAt <= now) &&
+                (reminder.AcknowledgedAt != null || reminder.Generation > recipient.Generation || reminder.Status == ReminderStatus.Cancelled || reminder.Status == ReminderStatus.Paused)
                 && db.Nodes.Any(n => n.Id == recipient.NodeId && n.Enabled && n.RevokedAt == null)
                 && db.NodeCapabilities.Any(c => c.NodeId == recipient.NodeId && c.Name == ReminderNotificationContract.WithdrawCapability && c.Version >= 1)
             select recipient;
@@ -71,22 +75,45 @@ public sealed class ReminderWithdrawalReconciler(AegisDbContext db, INodeRegistr
         if (!await candidates.AnyAsync(ct)) return;
         var inventory = await nodes.ListForDeliveryAsync(ct);
         var eligibleIds = inventory.Where(n => n.Enabled && n.RevokedAt is null && n.Capabilities.Any(c => c.Name == ReminderNotificationContract.WithdrawCapability && c.Version >= 1)).Select(n => n.Id).ToArray();
-        var onlineIds = inventory.Where(n => eligibleIds.Contains(n.Id) && n.Availability == "online").Select(n => n.Id).ToArray();
-        var retryBefore = clock.GetUtcNow().AddMinutes(-5);
-        // A recently queued push waits five minutes, unless a live session is
-        // now usable. Apply this before Take so waiting rows do not hide work.
-        var pending = await candidates.Where(r => eligibleIds.Contains(r.NodeId!.Value) &&
-            (r.WithdrawalQueuedAt == null || r.WithdrawalQueuedAt <= retryBefore || onlineIds.Contains(r.NodeId.Value)))
-            .OrderBy(r => r.UpdatedAt).ThenBy(r => r.Id).Take(50).ToListAsync(ct);
-        foreach (var recipient in pending)
+        var pending = await candidates.Where(r => eligibleIds.Contains(r.NodeId!.Value))
+            .OrderBy(r => r.UpdatedAt).ThenBy(r => r.Id).Select(r => r.Id).Take(50).ToArrayAsync(ct);
+        foreach (var id in pending)
         {
-            var node = inventory.FirstOrDefault(n => n.Id == recipient.NodeId && n.Enabled && n.RevokedAt is null);
-            if (node is null || !node.Capabilities.Any(c => c.Name == ReminderNotificationContract.WithdrawCapability && c.Version >= 1)) continue;
-            if (recipient.WithdrawalQueuedAt > clock.GetUtcNow().AddMinutes(-5) && node.Availability != "online") continue;
-            var result = await dispatcher.DispatchToNodeAsync(node.Id, new(Guid.NewGuid(), ReminderNotificationContract.WithdrawCapability, 1, clock.GetUtcNow().AddMinutes(5), new(null, null, recipient.ReminderId, Generation: recipient.Generation)), ct);
-            if (result.Status is "success" or "duplicate" && result.Transport == "live_websocket") recipient.Withdraw(clock.GetUtcNow());
-            else recipient.QueueWithdrawal(clock.GetUtcNow());
+            Guid nodeId; NodeNotificationCommand command;
+            await using (var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null)
+            {
+                var recipient = await LoadLocked(id, ct); if (recipient?.NodeId is not { } target || !recipient.CanBeginWithdrawal(clock.GetUtcNow())) continue;
+                var reminder = await db.Reminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == recipient.ReminderId, ct);
+                if (reminder is null || !RequiresWithdrawal(reminder, recipient.Generation)) continue;
+                recipient.BeginWithdrawal(clock.GetUtcNow());
+                command = new(recipient.WithdrawalCommandId!.Value, ReminderNotificationContract.WithdrawCapability, 1, recipient.WithdrawalCommandExpiresAt!.Value,
+                    new(null, null, recipient.ReminderId, Generation: recipient.Generation)); nodeId = target;
+                // Persist identity, lifetime and cumulative budget before native I/O.
+                await db.SaveChangesAsync(ct); if (tx is not null) await tx.CommitAsync(ct);
+            }
+            var result = await dispatcher.DispatchToNodeAsync(nodeId, command, ct);
+            await using (var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null)
+            {
+                var recipient = await LoadLocked(id, ct);
+                if (recipient is not null && recipient.WithdrawnAt is null && recipient.WithdrawalCommandId == command.CommandId)
+                {
+                    if (result.Status is "success" or "duplicate" && result.Transport == "live_websocket") recipient.Withdraw(clock.GetUtcNow());
+                    else if (result.Status == "accepted") recipient.QueueWithdrawal(clock.GetUtcNow());
+                    await db.SaveChangesAsync(ct);
+                }
+                if (tx is not null) await tx.CommitAsync(ct);
+            }
         }
-        await db.SaveChangesAsync(ct);
+    }
+    public static bool RequiresWithdrawal(Reminder reminder, int generation) => reminder.AcknowledgedAt is not null || reminder.Generation > generation ||
+        reminder.Status is ReminderStatus.Cancelled or ReminderStatus.Paused;
+    private async Task<ReminderRecipient?> LoadLocked(Guid id, CancellationToken ct)
+    {
+        var recipient = db.Database.IsNpgsql()
+            ? (await db.Set<ReminderRecipient>().FromSqlInterpolated($"SELECT * FROM reminder_recipients WHERE \"Id\" = {id} FOR UPDATE SKIP LOCKED").AsNoTracking().ToListAsync(ct)).SingleOrDefault()
+            : await db.Set<ReminderRecipient>().AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct);
+        if (recipient is null) return null;
+        var previous = db.ChangeTracker.Entries<ReminderRecipient>().FirstOrDefault(e => e.Entity.Id == id); if (previous is not null) previous.State = EntityState.Detached;
+        db.Attach(recipient); return recipient;
     }
 }

@@ -1869,6 +1869,20 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("WithdrawalAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<DateTimeOffset?>("WithdrawalCommandExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("WithdrawalCommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("WithdrawalNextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset?>("WithdrawalQueuedAt")
                         .HasColumnType("timestamp with time zone");
 

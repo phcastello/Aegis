@@ -27,7 +27,7 @@ public sealed class RemindersReconcileController(AegisDbContext db) : Controller
             if (!states.TryGetValue(local.ReminderId, out var current)) return true;
             // A response from an older backend snapshot must not erase a newer native presentation.
             if (current.Generation < local.Generation) return false;
-            if (current.Generation > local.Generation || current.AcknowledgedAt is not null || current.Status == ReminderStatus.Cancelled) return true;
+            if (current.Generation > local.Generation || current.AcknowledgedAt is not null || current.Status is ReminderStatus.Cancelled or ReminderStatus.Paused) return true;
             // A future occurrence edited before delivery supersedes an old packet for that same generation.
             return current.Revision > local.Revision && current.Status == ReminderStatus.Scheduled && current.TriggeredAt is null;
         }).Select(p => new { p.ReminderId, p.Generation }).ToArray();

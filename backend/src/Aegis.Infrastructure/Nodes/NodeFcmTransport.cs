@@ -108,7 +108,7 @@ public sealed class NodeFcmTransport(AegisDbContext db, NodePushRegistrations re
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await credentials.AccessTokenAsync(deadline.Token));
             request.Content = JsonContent.Create(new { message = new { token = registrations.Unprotect(registration),
                 data,
-                android = new { priority = "HIGH", ttl = Math.Clamp((int)Math.Ceiling((expiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } }, options: TransportJson);
+                android = new { priority = data["type"] is NotificationContract.Capability or ReminderNotificationContract.NotifyCapability ? "HIGH" : "NORMAL", ttl = Math.Clamp((int)Math.Ceiling((expiresAt - clock.GetUtcNow()).TotalSeconds), 1, 300) + "s", restricted_package_name = "com.aegis.node" } } }, options: TransportJson);
             if (!await registrations.HasRouteAsync(id, deadline.Token)) return "unavailable";
             using var response = await clients.CreateClient("node-fcm").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if (response.IsSuccessStatusCode) { logger.LogInformation("Node notification accepted NodeId={NodeId} CommandId={CommandId} Transport=fcm", id, commandId); return "accepted"; }

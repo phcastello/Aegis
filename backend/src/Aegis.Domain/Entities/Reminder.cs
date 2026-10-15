@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Aegis.Domain.Entities;
 
-public enum ReminderStatus { Scheduled, Processing, Triggered, Cancelled, Failed }
+public enum ReminderStatus { Scheduled, Processing, Triggered, Cancelled, Failed, Paused }
 
 public sealed class Reminder : AuditableEntity
 {
@@ -68,7 +68,7 @@ public sealed class Reminder : AuditableEntity
     }
     private void RequireFuture(DateTimeOffset now)
     {
-        if (Status != ReminderStatus.Scheduled || TriggeredAt is not null || DueAtUtc <= now)
+        if (Status is not (ReminderStatus.Scheduled or ReminderStatus.Paused) || TriggeredAt is not null || DueAtUtc <= now)
             throw new ArgumentException("Esse lembrete já começou a disparar ou não está mais agendado no futuro.");
     }
     public static void ValidateText(string text)
@@ -154,7 +154,28 @@ public sealed class Reminder : AuditableEntity
     }
     public void CancelFutureForSeries(DateTimeOffset now, bool exception = false)
     {
-        if (TriggeredAt is null && Status == ReminderStatus.Scheduled) { Status = ReminderStatus.Cancelled; CancelledAt = now; IsException = exception; Revision++; Touch(now); }
+        if (TriggeredAt is null && Status is (ReminderStatus.Scheduled or ReminderStatus.Paused))
+        {
+            Status = ReminderStatus.Cancelled; CancelledAt = now;
+            // Cancelling a series must retain an explicit occurrence tombstone.
+            IsException |= exception; Revision++; Touch(now);
+        }
+    }
+    public void PauseFutureForSeries(DateTimeOffset now)
+    {
+        if (TriggeredAt is null && Status == ReminderStatus.Scheduled)
+        {
+            Status = ReminderStatus.Paused; Revision++; Touch(now);
+        }
+    }
+    public void ResumeFutureForSeries(DateTimeOffset now)
+    {
+        if (Status != ReminderStatus.Paused || TriggeredAt is not null) return;
+        // Explicit overrides and snoozes keep their identity and deadline. Normal
+        // calendar rows are replaced using the resumed series revision instead.
+        if (DueAtUtc > now && (IsException || Generation > 1)) Status = ReminderStatus.Scheduled;
+        else { Status = ReminderStatus.Cancelled; CancelledAt = now; }
+        Revision++; Touch(now);
     }
 
 }

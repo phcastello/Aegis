@@ -23,6 +23,7 @@ public static class ReminderCompletionModelConfiguration
         });
         model.Entity<ReminderRecipient>(e => {
             e.ToTable("reminder_recipients"); e.HasKey(x => x.Id); e.Property(x => x.Status).HasMaxLength(20); e.Property(x => x.Transport).HasMaxLength(30);
+            e.Property(x => x.WithdrawalAttempts).HasDefaultValue(0);
             e.HasIndex(x => new { x.ReminderId, x.Generation, x.NodeId }).IsUnique();
             e.HasOne<Reminder>().WithMany().HasForeignKey(x => x.ReminderId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<AegisNode>().WithMany().HasForeignKey(x => x.NodeId).OnDelete(DeleteBehavior.SetNull);

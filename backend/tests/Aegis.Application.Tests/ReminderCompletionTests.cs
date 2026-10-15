@@ -139,6 +139,103 @@ public sealed class ReminderCompletionTests
         Assert.Equal(At("2026-09-29T15:00Z"), f.Db.Reminders.Single(r => r.Status == ReminderStatus.Scheduled).DueAtUtc);
         Assert.Equal("teste", f.Db.Reminders.Single(r => r.Status == ReminderStatus.Triggered).Text);
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SeriesEditsPreserveTheExplicitOccurrenceSnapshotAndItsOriginalDate(bool changeSchedule)
+    {
+        using var f = new Fixture(); f.Clock.Advance(TimeSpan.FromHours(-5));
+        var series = await f.Series.CreateAsync(null, "texto original", "UTC", Daily(time: "09:00"), "allEligible", default);
+        var exception = Assert.Single(f.Db.Reminders); var id = exception.Id;
+        exception.Update(null, At("2026-09-27T11:00Z"), f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync();
+        var revision = exception.Revision;
+        await f.Series.ChangeAsync(null, series.Id, series.Revision, "update", "texto da série alterado", changeSchedule ? Daily(time: "10:00") : null, null, default);
+        var preserved = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == id);
+        Assert.True(preserved.IsException); Assert.Equal(ReminderStatus.Scheduled, preserved.Status);
+        Assert.Equal(At("2026-09-27T11:00Z"), preserved.DueAtUtc); Assert.Equal("texto original", preserved.Text); Assert.Equal(revision, preserved.Revision);
+        var next = Assert.Single(await f.Db.Reminders.Where(r => !r.IsException && r.Status == ReminderStatus.Scheduled).ToArrayAsync());
+        Assert.Equal(At(changeSchedule ? "2026-09-28T10:00Z" : "2026-09-28T09:00Z"), next.DueAtUtc);
+        Assert.Equal("texto da série alterado", next.Text);
+        Assert.DoesNotContain(f.Db.Reminders, r => r.Id != id && r.Status == ReminderStatus.Scheduled && r.DueAtUtc.Date == At("2026-09-27T00:00Z").Date);
+    }
+    [Fact]
+    public async Task PauseResumeKeepsFutureExceptionsAndExpiresMissedOnesWithoutCatchUp()
+    {
+        using var f = new Fixture(); f.Clock.Advance(TimeSpan.FromHours(-5)); var now = f.Clock.GetUtcNow();
+        var series = await f.Series.CreateAsync(null, "padrão original", "UTC", Daily(time: "09:00"), "allEligible", default);
+        var elapsed = Assert.Single(f.Db.Reminders); elapsed.Update("exceção vencida na pausa", At("2026-09-27T11:00Z"), now);
+        var future = Reminder.ForSeries(series, new(At("2026-09-29T09:00Z"), "2026-09-29T09:00", 3), now);
+        future.Update("exceção futura", At("2026-09-29T11:00Z"), now); f.Db.Reminders.Add(future); await f.Db.SaveChangesAsync();
+        series = await f.Series.ChangeAsync(null, series.Id, series.Revision, "pause", null, null, null, default);
+        Assert.All(f.Db.Reminders, r => Assert.Equal(ReminderStatus.Paused, r.Status));
+        Assert.All(f.Db.Reminders, r => Assert.False(r.CanClaim(now.AddDays(2))));
+        var pausedRevision = future.Revision;
+        series = await f.Series.ChangeAsync(null, series.Id, series.Revision, "update", "novo padrão", null, null, default);
+        Assert.Equal(pausedRevision, future.Revision); Assert.Equal("exceção futura", future.Text);
+        f.Clock.Advance(TimeSpan.FromDays(2)); Assert.False(await f.Processor.ProcessNextAsync());
+        await f.Series.ChangeAsync(null, series.Id, series.Revision, "resume", null, null, null, default);
+        var expired = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == elapsed.Id);
+        Assert.Equal(ReminderStatus.Cancelled, expired.Status); Assert.True(expired.IsException);
+        var preserved = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == future.Id);
+        Assert.Equal(ReminderStatus.Scheduled, preserved.Status); Assert.True(preserved.IsException);
+        Assert.Equal("exceção futura", preserved.Text); Assert.Equal(At("2026-09-29T11:00Z"), preserved.DueAtUtc);
+        var normal = Assert.Single(await f.Db.Reminders.Where(r => !r.IsException && r.Status == ReminderStatus.Scheduled).ToArrayAsync());
+        Assert.Equal(At("2026-09-30T09:00Z"), normal.DueAtUtc); Assert.Equal("novo padrão", normal.Text);
+        Assert.DoesNotContain(f.Db.Reminders, r => r.Status == ReminderStatus.Scheduled && r.DueAtUtc <= f.Clock.GetUtcNow());
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExplicitSeriesCancellationCancelsScheduledOrPausedOverridesWithoutErasingTheirTombstone(bool pauseFirst)
+    {
+        using var f = new Fixture(); var series = await f.Series.CreateAsync(null, "original", "UTC", Daily(time: "14:00"), "allEligible", default);
+        var occurrence = Assert.Single(f.Db.Reminders); occurrence.Update("exceção", f.Clock.GetUtcNow().AddHours(2), f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync();
+        if (pauseFirst) series = await f.Series.ChangeAsync(null, series.Id, series.Revision, "pause", null, null, null, default);
+        await f.Series.ChangeAsync(null, series.Id, series.Revision, "cancel", null, null, null, default);
+        var stored = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == occurrence.Id);
+        Assert.Equal(ReminderStatus.Cancelled, stored.Status); Assert.True(stored.IsException); Assert.Equal("exceção", stored.Text);
+        await f.SeriesStore.MaterializePendingAsync(default); Assert.Single(f.Db.Reminders);
+    }
+    [Fact]
+    public async Task PausingSeriesDoesNotAcknowledgeOrWithdrawAnAlreadyTriggeredOccurrence()
+    {
+        using var f = new Fixture(); var series = await f.Series.CreateAsync(null, "original", "UTC", Daily(time: "14:00"), "allEligible", default);
+        f.Clock.Advance(TimeSpan.FromHours(1)); Assert.True(await f.Processor.ProcessNextAsync());
+        var triggered = await f.Db.Reminders.AsNoTracking().SingleAsync(); var revision = triggered.Revision;
+        await f.SeriesStore.MaterializePendingAsync(default);
+        await f.Series.ChangeAsync(null, series.Id, series.Revision, "pause", null, null, null, default);
+        var stored = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == triggered.Id);
+        Assert.Equal(ReminderStatus.Triggered, stored.Status); Assert.Equal(revision, stored.Revision); Assert.Null(stored.AcknowledgedAt);
+        Assert.Single(f.Db.Reminders.Where(r => r.Status == ReminderStatus.Paused));
+    }
+    [Fact]
+    public async Task IndividualCancellationDuringPauseKeepsTheSlotSkippedAfterResumeAndEdit()
+    {
+        using var f = new Fixture(); f.Clock.Advance(TimeSpan.FromHours(-5));
+        var series = await f.Series.CreateAsync(null, "original", "UTC", Daily(time: "09:00"), "allEligible", default);
+        var occurrence = Assert.Single(f.Db.Reminders);
+        series = await f.Series.ChangeAsync(null, series.Id, series.Revision, "pause", null, null, null, default);
+        occurrence.Cancel(f.Clock.GetUtcNow()); await f.Db.SaveChangesAsync();
+        series = await f.Series.ChangeAsync(null, series.Id, series.Revision, "resume", null, null, null, default);
+        await f.Series.ChangeAsync(null, series.Id, series.Revision, "update", "novo texto", Daily(time: "10:00"), null, default);
+        var tombstone = await f.Db.Reminders.AsNoTracking().SingleAsync(r => r.Id == occurrence.Id);
+        Assert.Equal(ReminderStatus.Cancelled, tombstone.Status); Assert.True(tombstone.IsException);
+        var next = Assert.Single(await f.Db.Reminders.Where(r => r.Status == ReminderStatus.Scheduled).ToArrayAsync());
+        Assert.Equal(At("2026-09-28T10:00Z"), next.DueAtUtc);
+    }
+    [Fact]
+    public void PauseResumePreservesFutureSnoozeAndExpiresAnElapsedOne()
+    {
+        var now = At("2026-09-27T13:00Z"); var series = new ReminderSeries("original", "UTC", Daily(time: "14:00"), null, now);
+        var occurrence = Reminder.ForSeries(series, new(now.AddHours(1), "2026-09-27T14:00", 1), now);
+        var fired = now.AddHours(1); occurrence.Claim(Guid.NewGuid(), fired); occurrence.BeginTrigger(fired); occurrence.Finish(null, true, fired);
+        occurrence.Snooze(fired, 60); var due = occurrence.DueAtUtc;
+        occurrence.PauseFutureForSeries(fired); Assert.Equal(ReminderStatus.Paused, occurrence.Status); Assert.False(occurrence.CanClaim(due));
+        occurrence.ResumeFutureForSeries(fired.AddMinutes(30)); Assert.Equal(ReminderStatus.Scheduled, occurrence.Status);
+        Assert.Equal(due, occurrence.DueAtUtc); Assert.Equal(2, occurrence.Generation); Assert.False(occurrence.IsException);
+        occurrence.PauseFutureForSeries(fired.AddMinutes(30)); occurrence.ResumeFutureForSeries(due.AddMinutes(1));
+        Assert.Equal(ReminderStatus.Cancelled, occurrence.Status); Assert.False(occurrence.CanClaim(due.AddMinutes(1)));
+    }
     [Fact] public async Task GlobalAcknowledgementWithdrawsOtherReachablePresentation()
     {
         using var f = new Fixture(); var node = f.Db.Nodes.Single();

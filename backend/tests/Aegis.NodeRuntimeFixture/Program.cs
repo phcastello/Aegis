@@ -22,9 +22,12 @@ if (args.Length != 1) return 2;
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], EnvironmentName = "Development" });
 var idleMode = Environment.GetEnvironmentVariable("AEGIS_IDLE_FIXTURE");
 var metrics = new FixtureMetrics();
+var withdrawalPump = new FixtureWithdrawalPumpState();
 using var reminderCommandGate = new SemaphoreSlim(1, 1);
 var reminderCommands = new Dictionary<(Guid NodeId, Guid CommandId), (FixtureReminderCommand Request, NodeNotificationCommand Command)>();
 var backendOffline = new FixtureOfflineState(0, false);
+var geofenceSyncFailure = "none";
+var dropWithdrawalReceiptResponse = 0;
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
 listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => metrics.Add(instrument.Name, measurement)); listener.Start();
@@ -46,6 +49,9 @@ builder.Services.AddScoped<ReminderStore>(); builder.Services.AddScoped<IReminde
 builder.Services.AddScoped<IReminderSeriesStore, ReminderSeriesStore>();
 builder.Services.AddScoped<IReminderActionStore, ReminderActionStore>(); builder.Services.AddScoped<ReminderActionService>();
 builder.Services.AddScoped<IReminderActionTokens, ReminderActionTokens>();
+builder.Services.AddSingleton(metrics); builder.Services.AddSingleton(withdrawalPump);
+builder.Services.AddScoped<ReminderWithdrawalReconciler>(p => new(p.GetRequiredService<AegisDbContext>(), p.GetRequiredService<INodeRegistry>(), new FixtureWithdrawalDispatcher(metrics), TimeProvider.System));
+builder.Services.AddHostedService<FixtureWithdrawalPump>();
 builder.Services.AddScoped<IPlaceService, PlaceService>();
 builder.Services.AddOptions<LocationContextOptions>();
 builder.Services.AddOptions<PlaceMapOptions>().Configure(o => o.GeocoderUrl = "");
@@ -57,9 +63,22 @@ app.Use(async (context, next) => {
     var offline = Volatile.Read(ref backendOffline);
     if (Environment.TickCount64 < offline.Until && (!offline.AllowPairing || !PairingLifecycle(context.Request))) { context.Response.StatusCode = 503; return; }
     metrics.Add("http_requests", 1); metrics.Add("http_request_body_bytes", context.Request.ContentLength ?? 0);
+    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/geofences/sync") {
+        metrics.Add("geofence_sync_requests", 1);
+        var failure = Volatile.Read(ref geofenceSyncFailure);
+        if (failure == "503") { context.Response.StatusCode = 503; return; }
+        if (failure == "disconnect") { context.Abort(); return; }
+    }
+    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts") metrics.Add("withdrawal_receipt_requests", 1);
     if (context.WebSockets.IsWebSocketRequest) { await next(); return; }
     var original = context.Response.Body; await using var copy = new MemoryStream(); context.Response.Body = copy;
-    try { await next(); metrics.Add("http_response_body_bytes", copy.Length); copy.Position = 0; await copy.CopyToAsync(original); }
+    try {
+        await next();
+        if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts" && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref dropWithdrawalReceiptResponse, 0, 1) == 1) {
+            metrics.Add("withdrawal_receipt_responses_dropped", 1); context.Abort(); return;
+        }
+        metrics.Add("http_response_body_bytes", copy.Length); copy.Position = 0; await copy.CopyToAsync(original);
+    }
     finally { context.Response.Body = original; }
 });
 app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
@@ -70,6 +89,7 @@ app.MapGet("/fixture/idle", () => metrics.Snapshot());
 app.MapPost("/fixture/idle-policy", (FixtureIdlePolicy request, IOptions<NodeTransportOptions> options) => {
     if (request.Mode != "after") return Results.BadRequest();
     options.Value.TimeoutSeconds = 360; options.Value.PersistSeconds = 300; options.Value.HeartbeatSeconds = 120;
+    Volatile.Write(ref idleMode, "after");
     return Results.Ok(new { mode = "after" });
 });
 app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
@@ -77,6 +97,26 @@ app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
     Volatile.Write(ref backendOffline, new FixtureOfflineState(Environment.TickCount64 + request.Seconds * 1000L, request.AllowPairing));
     return Results.Ok(new { seconds = request.Seconds, allowPairing = request.AllowPairing });
 });
+app.MapPost("/fixture/geofence-sync-failure", (FixtureGeofenceSyncFailure request) => {
+    if (request.Mode is not ("503" or "disconnect" or "none")) return Results.BadRequest();
+    Volatile.Write(ref geofenceSyncFailure, request.Mode);
+    return Results.Ok(new { mode = request.Mode });
+});
+app.MapPost("/fixture/withdrawal-receipt-failure", (FixtureWithdrawalReceiptFailure request) => {
+    if (request.Mode is not ("disconnect_after_apply" or "none")) return Results.BadRequest();
+    Interlocked.Exchange(ref dropWithdrawalReceiptResponse, request.Mode == "none" ? 0 : 1);
+    return Results.Ok(new { mode = request.Mode });
+});
+// Explicitly opt in only after functional assertions and the native receipt.
+// The real reconciler runs at its production five-second interval; only its
+// downstream transport is simulated, without contacting FCM or a live socket.
+app.MapPost("/fixture/withdrawal-pump", (FixtureWithdrawalPumpRequest request) => {
+    if (request.Enabled && Volatile.Read(ref idleMode) != "after") return Results.BadRequest();
+    withdrawalPump.Set(request.Enabled);
+    return Results.Ok(new { enabled = request.Enabled, pollSeconds = 5, transport = "simulated_fcm" });
+});
+app.MapGet("/fixture/reminder-recipients", async (AegisDbContext db, CancellationToken ct) => await db.Set<ReminderRecipient>().AsNoTracking()
+    .Select(r => new { r.ReminderId, r.Generation, r.NodeId, r.WithdrawnAt, r.WithdrawalQueuedAt, r.WithdrawalAttempts, r.WithdrawalCommandId, r.WithdrawalCommandExpiresAt, r.WithdrawalNextAttemptAt }).ToArrayAsync(ct));
 app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, AegisDbContext db, INodeLiveNotifications socket, IReminderActionTokens tokens, CancellationToken ct) => {
     if (request.NodeId == Guid.Empty || request.CommandId == Guid.Empty) return Results.BadRequest();
     if (!await db.Nodes.AnyAsync(n => n.Id == request.NodeId && n.Enabled && n.RevokedAt == null, ct)) return Results.NotFound();
@@ -115,6 +155,14 @@ app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, 
     }
     finally { reminderCommandGate.Release(); }
     var result = await socket.SendAsync(request.NodeId, command, ct);
+    if (request.Capability == "reminder.notify" && (result.Status is "success" or "duplicate") &&
+        !await db.Set<ReminderRecipient>().AnyAsync(r => r.ReminderId == request.ReminderId && r.Generation == request.Generation && r.NodeId == request.NodeId, ct)) {
+        var now = DateTimeOffset.UtcNow;
+        var recipient = new ReminderRecipient(request.ReminderId, request.Generation, request.NodeId, now);
+        recipient.Begin(now, command.CommandId, command.ExpiresAt);
+        recipient.Result(result.Status, "live_websocket", false, now);
+        db.Set<ReminderRecipient>().Add(recipient); await db.SaveChangesAsync(ct);
+    }
     return Results.Ok(new { status = result.Status, reminderId = request.ReminderId });
 });
 app.MapGet("/fixture/reminder-actions", async (AegisDbContext db, CancellationToken ct) => await db.Set<ReminderActionReceipt>().AsNoTracking()
@@ -156,7 +204,7 @@ static bool PairingLifecycle(HttpRequest request)
 sealed class NodeControllersOnly : ControllerFeatureProvider
 {
     protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController) || type.AsType() == typeof(NodeTransportController) ||
-        type.AsType() == typeof(RemindersController) || type.AsType() == typeof(RemindersReconcileController) || type.AsType() == typeof(ScopedReminderActionsController) ||
+        type.AsType() == typeof(RemindersController) || type.AsType() == typeof(RemindersReconcileController) || type.AsType() == typeof(ReminderWithdrawalReceiptsController) || type.AsType() == typeof(ScopedReminderActionsController) ||
         type.AsType() == typeof(PlacesController) || type.AsType() == typeof(LocationController) || type.AsType() == typeof(GeofencesController);
 }
 sealed class FixtureMetrics
@@ -175,3 +223,59 @@ sealed record FixtureOffline(int Seconds, bool AllowPairing = false);
 sealed record FixtureOfflineState(long Until, bool AllowPairing);
 
 sealed record FixtureIdlePolicy(string Mode);
+
+sealed record FixtureGeofenceSyncFailure(string Mode);
+
+sealed record FixtureWithdrawalReceiptFailure(string Mode);
+
+sealed record FixtureWithdrawalPumpRequest(bool Enabled);
+
+sealed class FixtureWithdrawalPumpState
+{
+    private readonly SemaphoreSlim signal = new(0, 1);
+    private int enabled;
+    public bool Enabled => Volatile.Read(ref enabled) != 0;
+    public void Set(bool value)
+    {
+        Interlocked.Exchange(ref enabled, value ? 1 : 0);
+        if (value && signal.CurrentCount == 0) { try { signal.Release(); } catch (SemaphoreFullException) { } }
+    }
+    public Task WaitAsync(CancellationToken ct) => signal.WaitAsync(ct);
+}
+
+sealed class FixtureWithdrawalPump(IServiceScopeFactory scopes, FixtureWithdrawalPumpState state, FixtureMetrics metrics) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await state.WaitAsync(stoppingToken);
+                while (state.Enabled && !stoppingToken.IsCancellationRequested)
+                {
+                    metrics.Add("withdrawal_reconcile_cycles", 1);
+                    try
+                    {
+                        await using var scope = scopes.CreateAsyncScope();
+                        await scope.ServiceProvider.GetRequiredService<ReminderWithdrawalReconciler>().ReconcileAsync(stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+                    catch { metrics.Add("withdrawal_reconcile_failures", 1); }
+                    await Task.Delay(TimeSpan.FromSeconds(5), TimeProvider.System, stoppingToken);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+    }
+}
+
+sealed class FixtureWithdrawalDispatcher(FixtureMetrics metrics) : INodeNotificationDispatcher
+{
+    public Task<NotificationDispatchResult> DispatchToNodeAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct = default)
+    {
+        metrics.Add("withdrawal_reconcile_dispatches", 1);
+        return Task.FromResult(new NotificationDispatchResult(new(nodeId, "Synthetic fixture recipient"), "backgroundReachable", "fcm", "accepted", command.CommandId));
+    }
+    public Task<NotificationDispatchResult> DispatchAsync(Guid actor, NotificationShowRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+}
