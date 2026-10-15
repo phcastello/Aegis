@@ -32,6 +32,39 @@ public sealed class ReminderCompletionPostgresTests
         finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
     }
     [ReminderPostgresTests.PostgresFact]
+    public async Task FutureOccurrencesCannotStarveTheHundredAndFirstSeries()
+    {
+        var schema = "recurrence_batch_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock();
+        try
+        {
+            await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\""); await setup.Database.MigrateAsync();
+            var now = clock.GetUtcNow();
+            for (var i = 0; i < 100; i++)
+            {
+                var older = new ReminderSeries("Synthetic future series", "UTC", new() { StartDate = "2026-09-28", LocalTime = "14:00" }, null, now.AddDays(-1));
+                var next = older.Next(now)!; older.Materialized(next, now.AddDays(-1));
+                setup.Set<ReminderSeries>().Add(older); setup.Reminders.Add(Reminder.ForSeries(older, next, now.AddDays(-1)));
+            }
+            var pending = new ReminderSeries("Synthetic pending series", "UTC", new() { StartDate = "2026-09-27", LocalTime = "14:00" }, null, now);
+            await new ReminderSeriesStore(setup, clock).AddAsync(pending, default);
+            clock.Advance(TimeSpan.FromHours(1));
+            var original = await setup.Reminders.SingleAsync(r => r.SeriesId == pending.Id);
+            original.Claim(Guid.NewGuid(), clock.GetUtcNow()); original.BeginTrigger(clock.GetUtcNow()); original.Finish(null, true, clock.GetUtcNow());
+            original.Snooze(clock.GetUtcNow(), 10); await setup.SaveChangesAsync();
+
+            await using var restarted = Db(schema); await new ReminderSeriesStore(restarted, clock).MaterializePendingAsync(default);
+            var upcoming = await restarted.Reminders.Where(r => r.SeriesId == pending.Id && r.Generation == 1 && r.Status == ReminderStatus.Scheduled).SingleAsync();
+            Assert.Equal(DateTimeOffset.Parse("2026-09-28T14:00Z"), upcoming.DueAtUtc);
+            Assert.Equal(102, await restarted.Reminders.CountAsync());
+            Assert.Single(await restarted.Reminders.Where(r => r.SeriesId == pending.Id && r.Generation == 2).ToArrayAsync());
+
+            upcoming.Cancel(clock.GetUtcNow()); await restarted.SaveChangesAsync();
+            await new ReminderSeriesStore(restarted, clock).MaterializePendingAsync(default);
+            Assert.Equal(DateTimeOffset.Parse("2026-09-29T14:00Z"), (await restarted.Reminders.SingleAsync(r => r.SeriesId == pending.Id && r.Generation == 1 && r.Status == ReminderStatus.Scheduled)).DueAtUtc);
+        }
+        finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
+    }
+    [ReminderPostgresTests.PostgresFact]
     public async Task ConcurrentActionsOnSameRevisionHaveOneWinnerAndReplayRemainsIdempotent()
     {
         var schema = "actions_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock();

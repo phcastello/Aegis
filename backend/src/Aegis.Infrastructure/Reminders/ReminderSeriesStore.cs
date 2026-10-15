@@ -61,7 +61,13 @@ public sealed class ReminderSeriesStore(AegisDbContext db, TimeProvider clock) :
     }
     public async Task MaterializePendingAsync(CancellationToken ct)
     {
-        var ids = await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status == "active").OrderBy(s => s.UpdatedAt).Select(s => s.Id).Take(100).ToArrayAsync(ct);
+        var now = clock.GetUtcNow();
+        // Apply the bounded batch to work that is actually pending. Otherwise
+        // the oldest series with future occurrences can permanently occupy it.
+        // Snoozed presentations (generation > 1) do not replace the series schedule.
+        var ids = await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status == "active" &&
+            !db.Reminders.Any(r => r.SeriesId == s.Id && r.Status == ReminderStatus.Scheduled && r.Generation == 1 && r.DueAtUtc > now))
+            .OrderBy(s => s.UpdatedAt).ThenBy(s => s.Id).Select(s => s.Id).Take(100).ToArrayAsync(ct);
         foreach (var id in ids)
         {
             await using var tx = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
