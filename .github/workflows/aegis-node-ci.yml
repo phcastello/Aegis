@@ -57,6 +57,11 @@ jobs:
         run: |
           npm ci --prefix scripts/node-transport-probe
           AEGIS_PROBE_NOTIFICATIONS=true node scripts/node-transport-probe/proxy-chain.mjs
+      - name: Immutable native fixture command replay and bounded cache
+        timeout-minutes: 2
+        run: |
+          dotnet build backend/tests/Aegis.NodeRuntimeFixture/Aegis.NodeRuntimeFixture.csproj
+          node backend/tests/Aegis.NodeRuntimeFixture/reminder-command-replay.mjs
       - working-directory: packages/aegis-client
         run: npm ci
       - working-directory: frontend/aegis-pwa
