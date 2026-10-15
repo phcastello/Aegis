@@ -38,22 +38,31 @@ class NodeIdleFrameworkTest {
   val duration=args.getString("phaseDurationMs")?.toLong()?:150000L;require(duration>=150000L && duration<=600000L)
   val code=if(mode=="before")args.getString("pairingCode")?:error("idle_bootstrap_missing") else null
   val expected=if(mode=="after")args.getString("expectedNodeId")?:error("idle_expected_identity_missing") else null
+  fun checkpoint(phase:String,version:String?=null) {android.util.Log.i("AegisIdleTest",JSONObject().put("event","checkpoint").put("mode",mode).put("phase",phase).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).apply{version?.let{put("runtimeVersion",it)}}.toString())}
+  checkpoint("activity_launch")
   ActivityScenario.launch(notificationActivityClass()).let {scenario->
+   checkpoint("activity_ready")
    var target:WebView?=null;val end=SystemClock.elapsedRealtime()+30000
    while(target==null && SystemClock.elapsedRealtime()<end){scenario.onActivity{target=webview(it.window.decorView)};if(target==null)SystemClock.sleep(100)}
    val view=target?:error("idle_webview_missing")
+   checkpoint("webview_ready")
    while(evaluate(view,"Boolean(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke)")!="true"&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100)
    val runtime=invoke(view,"runtime_info")
+   checkpoint("runtime_info",runtime.optString("version"))
    assertEquals("http://127.0.0.1:18104",runtime.getString("backendUrl"))
    assertEquals("The APK and Rust runtime must be the expected candidate",args.getString("expectedVersion")?:error("idle_expected_version_missing"),runtime.getString("version"))
+   checkpoint("identity_start")
    val paired=if(mode=="before")invoke(view,"node_pair",JSONObject().put("name","Android idle $mode").put("code",code)) else invoke(view,"node_status")
    assertEquals("paired",paired.getString("state"))
    val nodeId=paired.getJSONObject("node").getString("id")
    if(mode=="after")assertEquals("The upgrade must preserve the installation NodeId and native vault",expected,nodeId)
+   checkpoint("identity_ready")
    val online=SystemClock.elapsedRealtime()+30000
    while(invoke(view,"node_transport_status").optString("transportState")!="online"&&SystemClock.elapsedRealtime()<online)SystemClock.sleep(100)
    assertEquals("online",invoke(view,"node_transport_status").getString("transportState"))
+   checkpoint("transport_online")
    val configured=invoke(view,"node_notification_settings").optBoolean("pushConfigured")
+   checkpoint("notification_settings_ready")
    fun closePanels() {
     repeat(3){evaluate(view,"(()=>{const b=document.querySelector('[aria-label=\"Fechar configurações\"]')||[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Fechar'&&b.getClientRects().length);b?.click();return Boolean(b)})()");SystemClock.sleep(100)}
    }
