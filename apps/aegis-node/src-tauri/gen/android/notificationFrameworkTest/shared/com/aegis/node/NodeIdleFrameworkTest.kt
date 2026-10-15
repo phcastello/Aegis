@@ -43,7 +43,9 @@ class NodeIdleFrameworkTest {
    while(target==null && SystemClock.elapsedRealtime()<end){scenario.onActivity{target=webview(it.window.decorView)};if(target==null)SystemClock.sleep(100)}
    val view=target?:error("idle_webview_missing")
    while(evaluate(view,"Boolean(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke)")!="true"&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100)
-   assertEquals("http://127.0.0.1:18104",invoke(view,"runtime_info").getString("backendUrl"))
+   val runtime=invoke(view,"runtime_info")
+   assertEquals("http://127.0.0.1:18104",runtime.getString("backendUrl"))
+   assertEquals("The APK and Rust runtime must be the expected candidate",args.getString("expectedVersion")?:error("idle_expected_version_missing"),runtime.getString("version"))
    val paired=if(mode=="before")invoke(view,"node_pair",JSONObject().put("name","Android idle $mode").put("code",code)) else invoke(view,"node_status")
    assertEquals("paired",paired.getString("state"))
    val nodeId=paired.getJSONObject("node").getString("id")
