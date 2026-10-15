@@ -22,6 +22,8 @@ if (args.Length != 1) return 2;
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], EnvironmentName = "Development" });
 var idleMode = Environment.GetEnvironmentVariable("AEGIS_IDLE_FIXTURE");
 var metrics = new FixtureMetrics();
+using var reminderCommandGate = new SemaphoreSlim(1, 1);
+var reminderCommands = new Dictionary<(Guid NodeId, Guid CommandId), (FixtureReminderCommand Request, NodeNotificationCommand Command)>();
 long backendOfflineUntil = 0;
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
@@ -75,25 +77,43 @@ app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
     return Results.Ok(new { seconds = request.Seconds });
 });
 app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, AegisDbContext db, INodeLiveNotifications socket, IReminderActionTokens tokens, CancellationToken ct) => {
-    if (request.NodeId == Guid.Empty || request.ReminderId == Guid.Empty || request.CommandId == Guid.Empty || request.Generation < 1 || request.Revision < 1 ||
-        request.Capability is not (ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability)) return Results.BadRequest();
+    if (request.NodeId == Guid.Empty || request.CommandId == Guid.Empty) return Results.BadRequest();
     if (!await db.Nodes.AnyAsync(n => n.Id == request.NodeId && n.Enabled && n.RevokedAt == null, ct)) return Results.NotFound();
-    var now = DateTimeOffset.UtcNow;
-    NotificationInput input;
-    if (request.Capability == ReminderNotificationContract.WithdrawCapability) input = new(null, null, request.ReminderId, Generation: request.Generation);
-    else {
-        var reminder = await db.Reminders.SingleOrDefaultAsync(r => r.Id == request.ReminderId, ct);
-        if (reminder is null) {
-            reminder = new Reminder("Lembrete sintético do CI", now.AddSeconds(-1), "UTC", null, now.AddSeconds(-2));
-            // Test fixture selects the occurrence ID before attaching the entity. No
-            // test setter/hook is introduced into the production domain or native app.
-            typeof(AuditableEntity).GetProperty(nameof(AuditableEntity.Id))!.SetValue(reminder, request.ReminderId);
-            reminder.Claim(Guid.NewGuid(), now); reminder.BeginTrigger(now); reminder.Finish(null, true, now);
-            db.Reminders.Add(reminder); await db.SaveChangesAsync(ct);
+    NodeNotificationCommand command;
+    await reminderCommandGate.WaitAsync(ct);
+    try {
+        var key = (request.NodeId, request.CommandId);
+        if (reminderCommands.TryGetValue(key, out var cached)) {
+            if (cached.Request != request) return Results.Conflict(new { code = "fixture_command_id_conflict" });
+            command = cached.Command;
         }
-        input = new("Aegis", "Lembrete sintético do CI", request.ReminderId, request.Revision, request.Generation, tokens.Create(reminder, now.AddDays(7), request.NodeId));
+        else {
+            if (request.ReminderId == Guid.Empty || request.Generation < 1 || request.Revision < 1 ||
+                request.Capability is not (ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability)) return Results.BadRequest();
+            // Keep original envelopes for the entire isolated fixture lifetime.
+            // Capacity rejects new identities; no expired command is evicted or reminted.
+            if (reminderCommands.Count >= 1000) return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            var now = DateTimeOffset.UtcNow;
+            NotificationInput input;
+            if (request.Capability == ReminderNotificationContract.WithdrawCapability) input = new(null, null, request.ReminderId, Generation: request.Generation);
+            else {
+                var reminder = await db.Reminders.SingleOrDefaultAsync(r => r.Id == request.ReminderId, ct);
+                if (reminder is null) {
+                    reminder = new Reminder("Lembrete sintético do CI", now.AddSeconds(-1), "UTC", null, now.AddSeconds(-2));
+                    // Test fixture selects the occurrence ID before attaching the entity. No
+                    // test setter/hook is introduced into the production domain or native app.
+                    typeof(AuditableEntity).GetProperty(nameof(AuditableEntity.Id))!.SetValue(reminder, request.ReminderId);
+                    reminder.Claim(Guid.NewGuid(), now); reminder.BeginTrigger(now); reminder.Finish(null, true, now);
+                    db.Reminders.Add(reminder); await db.SaveChangesAsync(ct);
+                }
+                input = new("Aegis", "Lembrete sintético do CI", request.ReminderId, request.Revision, request.Generation, tokens.Create(reminder, now.AddDays(7), request.NodeId));
+            }
+            command = new(request.CommandId, request.Capability, 1, now.AddMinutes(5), input);
+            reminderCommands.Add(key, (request, command));
+        }
     }
-    var result = await socket.SendAsync(request.NodeId, new(request.CommandId, request.Capability, 1, now.AddMinutes(5), input), ct);
+    finally { reminderCommandGate.Release(); }
+    var result = await socket.SendAsync(request.NodeId, command, ct);
     return Results.Ok(new { status = result.Status, reminderId = request.ReminderId });
 });
 app.MapGet("/fixture/reminder-actions", async (AegisDbContext db, CancellationToken ct) => await db.Set<ReminderActionReceipt>().AsNoTracking()
