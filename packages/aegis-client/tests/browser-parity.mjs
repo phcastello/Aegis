@@ -1,7 +1,10 @@
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {mkdirSync} from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+const appVersion = JSON.parse(readFileSync(new URL('../../../apps/aegis-node/package.json', import.meta.url), 'utf8')).version;
+assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, appVersion);
+assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
 let cancellations = 0, feedback = 0, deletions = 0;
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -65,12 +68,12 @@ try {
  for (const host of ['web', 'native']) {
    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
    await context.addInitScript(() => localStorage.setItem('aegis.voice.autoSpeak', 'false')); // Audio/device acceptance is separate.
-   if (host === 'native') await context.addInitScript(() => {
+   if (host === 'native') await context.addInitScript((runtimeVersion) => {
      window.openedUrls = []; window.nativeCalls = []; window.reminderPayloads=[]; window.placePayloads=[];
      const reminders=[],series=[],places=[],geofences=[];
      const location={sourceNodeId:'native-current',nodes:[],latest:null};
      const now = new Date().toISOString();
-     const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-unstable.12', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
+     const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: runtimeVersion, protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
      const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
      let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
@@ -85,7 +88,7 @@ try {
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
-       if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-unstable.12' };
+       if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: runtimeVersion };
        if (command === 'check_backend') return { status: 'connected', message: null };
        if (command === 'node_transport_status') return { transportState: 'online', lastError: null };
        if (command === 'node_transport_reconnect') return;
@@ -109,12 +112,13 @@ try {
        if (command === 'plugin:opener|open_url') { window.openedUrls.push(args.url); return; }
        throw new Error('Unexpected IPC: ' + command);
      } };
-   });
+   }, appVersion);
    const page = await context.newPage(); activePage=page;activeHost=host;const errors = [];
    page.on('pageerror', e => { errors.push(e.message); console.log('PAGEERROR', host, e.message); });
    page.on('console', m => { if (m.type() === 'error') console.log('CONSOLEERROR', host, m.text()); });
    await page.goto(host === 'web' ? 'http://127.0.0.1:18093' : 'http://127.0.0.1:1420');
    await page.getByLabel('Abrir histórico').click();
+   await page.locator('#conversation-sidebar').getByText(`v${appVersion}`, { exact: true }).waitFor();
    await page.getByRole('button', { name: 'Conversa de teste', exact: true }).click();
    await page.getByText('Histórico preservado.', { exact: true }).waitFor();
    await page.locator('textarea').fill('teste'); await page.getByLabel('Enviar mensagem').click();
@@ -139,6 +143,7 @@ try {
      await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
      const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
      await panel.getByRole('button', {name:'Sobre',exact:true}).click();
+     await panel.getByText(appVersion, { exact: true }).waitFor();
      await panel.getByText('Android', { exact: true }).first().waitFor();
      await panel.getByText('Diagnóstico técnico', {exact:true}).click();
      await panel.getByText('Disponível', { exact: true }).waitFor();
