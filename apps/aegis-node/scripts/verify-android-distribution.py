@@ -43,8 +43,15 @@ def tool(arguments):
 
 
 def verify_certificate(output):
-    digests = re.findall(r"^Signer #\d+ certificate SHA-256 digest:\s*([0-9a-fA-F:]+)\s*$", output, re.MULTILINE)
-    require([value.replace(":", "").lower() for value in digests] == [CERTIFICATE], "signing_identity_mismatch")
+    lines = output.splitlines()
+    counts = [match[1] for line in lines if (match := re.fullmatch(r"Number of signers: ([0-9]+)", line))]
+    require(counts == ["1"], "signing_identity_mismatch")
+    # Build-Tools 37 names the verified scheme; older tools number the signer.
+    # Rotated/multiple application signers remain unsupported and fail closed.
+    certificates = [line for line in lines if " certificate SHA-256 digest:" in line and not line.startswith("Source Stamp Signer certificate SHA-256 digest:")]
+    require(len(certificates) == 1, "signing_identity_mismatch")
+    match = re.fullmatch(r"(?:Signer #1|(?:V1|V2|V3\.0) Signer:) certificate SHA-256 digest: ([0-9a-fA-F]{64})", certificates[0])
+    require(match is not None and match[1].lower() == CERTIFICATE, "signing_identity_mismatch")
 
 
 def verify_manifest(source, version, version_code):

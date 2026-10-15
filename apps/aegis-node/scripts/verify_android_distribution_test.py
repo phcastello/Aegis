@@ -26,11 +26,30 @@ class DistributionTests(unittest.TestCase):
                 guard.verify_manifest(source, "0.7.0-unstable.12", 7000012)
 
     def test_certificate_is_pinned_and_multiple_signers_are_rejected(self):
+        header = "Number of signers: 1\n"
         line = "Signer #1 certificate SHA-256 digest: " + guard.CERTIFICATE + "\n"
-        guard.verify_certificate(line)
-        for output in ["", line.replace(guard.CERTIFICATE, "a" * 64), line + line.replace("#1", "#2")]:
+        guard.verify_certificate(header + line)
+        for output in ["", line, header + line.replace(guard.CERTIFICATE, "a" * 64), header + line + line.replace("#1", "#2"), header.replace("1", "2") + line, header + header + line]:
             with self.assertRaises(guard.VerificationError):
                 guard.verify_certificate(output)
+
+    def test_build_tools_37_scheme_labels_preserve_the_same_single_signer_pin(self):
+        for label in ("V1 Signer:", "V2 Signer:", "V3.0 Signer:"):
+            output = "Number of signers: 1\r\n" + label + " certificate SHA-256 digest: " + guard.CERTIFICATE + "\r\n"
+            with self.subTest(label=label):
+                guard.verify_certificate(output)
+                for invalid in (output.replace(guard.CERTIFICATE, "a" * 64), output.replace("signers: 1", "signers: 2"), output + output.splitlines()[1] + "\n", output.replace(label, "Unknown Signer:")):
+                    with self.assertRaises(guard.VerificationError): guard.verify_certificate(invalid)
+
+    def test_modern_multi_signer_and_mixed_or_rotation_layouts_are_rejected(self):
+        pin = guard.CERTIFICATE
+        for output in (
+            f"Number of signers: 2\nV2 Signer #1: certificate SHA-256 digest: {pin}\nV2 Signer #2: certificate SHA-256 digest: {pin}\n",
+            f"Number of signers: 1\nSigner #1 certificate SHA-256 digest: {pin}\nV2 Signer: certificate SHA-256 digest: {pin}\n",
+            f"Number of signers: 1\nV3.1 Signer (minSdkVersion=33): certificate SHA-256 digest: {pin}\n",
+            f"Number of signers: 1\nV2 Signer: certificate SHA-256 digest: {pin}\nUnknown Signer: certificate SHA-256 digest: {'a' * 64}\n",
+        ):
+            with self.subTest(output=output), self.assertRaises(guard.VerificationError): guard.verify_certificate(output)
 
     def test_generated_build_config_is_explicitly_production(self):
         source = "package com.aegis.node; public static final boolean AEGIS_FRAMEWORK_FIXTURE = false; public static final boolean DEBUG = false;"
@@ -81,7 +100,7 @@ class DistributionTests(unittest.TestCase):
             (root / "firebase.json").write_text(json.dumps(configuration))
             (root / "BuildConfig.java").write_text("package com.aegis.node; public static final boolean AEGIS_FRAMEWORK_FIXTURE = false; public static final boolean DEBUG = false;")
             arguments = ["--apk", str(apk), "--apksigner", "apksigner", "--apkanalyzer", "apkanalyzer", "--package-json", str(root / "package.json"), "--tauri-config", str(root / "tauri.json"), "--firebase-config", str(root / "firebase.json"), "--build-config", str(root / "BuildConfig.java")]
-            outputs = ["Signer #1 certificate SHA-256 digest: " + guard.CERTIFICATE, self.manifest()] + list(guard.firebase_expected(configuration).values())
+            outputs = ["Number of signers: 1\nSigner #1 certificate SHA-256 digest: " + guard.CERTIFICATE, self.manifest()] + list(guard.firebase_expected(configuration).values())
             with patch.object(guard, "tool", side_effect=outputs), contextlib.redirect_stdout(io.StringIO()): self.assertEqual(0, guard.main(arguments))
             errors = io.StringIO()
             with patch.object(guard, "tool", side_effect=outputs[:-1] + ["other-key"]), contextlib.redirect_stderr(errors): self.assertEqual(1, guard.main(arguments))
