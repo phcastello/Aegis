@@ -137,7 +137,12 @@ try {
   // Regression: the real button invokes native node_test_notification -> HttpApi ->
   // the production controller -> live dispatcher -> native command/result.
   const pcRow = panel.locator(`[data-node-id="${pcId}"]`);
+  // Pairing lists the device before its asynchronous hello has advertised native
+  // capabilities. The panel deliberately has no polling: refresh as the user
+  // would after the direct IPC operations exercised above.
+  await panel.getByRole('button',{name:'Atualizar lista',exact:true}).click();
   await pcRow.getByText('Detalhes técnicos e diagnóstico',{exact:true}).click();
+  await pcRow.getByText(/Capacidades implementadas:.*notification\.show@1/).waitFor();
   await pcRow.getByRole('button', {name:'Testar notificação', exact:true}).click();
   await pcRow.getByRole('status').filter({hasText:'Notificação postada pelo dispositivo.'}).waitFor();
   const nativeNotification = await invoke('node_test_notification',{id:pcId});
