@@ -91,7 +91,7 @@ try {
          const query=args.payload??{};window.reminderListRequests.push(query);
          if(query.offset>0 || query.seriesOffset>0) {await new Promise(resolve=>setTimeout(resolve,350));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
          const offset=query.offset??0,seriesOffset=query.seriesOffset??0;
-         return structuredClone({reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:query.focusId===window.oldReminder?.reminderId?window.oldReminder:null});
+         return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:query.focusId===window.oldReminder?.reminderId?window.oldReminder:null});
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
@@ -250,19 +250,20 @@ try {
      await panel.getByRole('heading',{name:'Série paginada 1',exact:true}).waitFor();
      assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),0);
      const seriesMore=panel.getByRole('button',{name:'Carregar mais séries',exact:true});
-     const pageRequests=await page.evaluate(()=>window.reminderListRequests.length);
+     const pageRequests=await page.evaluate(()=>{window.reminderDeliveryTruncated=true;return window.reminderListRequests.length;});
      await seriesMore.click();assert.equal(await seriesMore.isDisabled(),true);
      await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).waitFor();
      assert.equal(await seriesMore.count(),0);assert.equal(await page.evaluate(()=>window.reminderListRequests.length),pageRequests+1,'One click fetches exactly one series page');
+     const deliveryWarning=panel.getByText('Parte dos detalhes de entrega não foi carregada. Isso não altera o estado dos lembretes.',{exact:true});await deliveryWarning.waitFor();await page.evaluate(()=>window.reminderDeliveryTruncated=false);
      const occurrencesMore=panel.getByRole('button',{name:'Carregar mais ocorrências',exact:true});
      await page.evaluate(()=>window.reminderPageFailure=true);await occurrencesMore.click();assert.equal(await occurrencesMore.isDisabled(),true);
      await panel.getByRole('alert').filter({hasText:'Falha sintética de página.'}).waitFor();
      assert.equal(await panel.getByRole('heading',{name:'Ocorrência paginada 1',exact:true}).count(),1,'A failed page preserves existing occurrences');
      assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),1,'A failed occurrence page preserves loaded series');
-     await occurrencesMore.click();await panel.getByRole('heading',{name:'Ocorrência paginada 201',exact:true}).waitFor();assert.equal(await occurrencesMore.count(),0);
+     await occurrencesMore.click();await panel.getByRole('heading',{name:'Ocorrência paginada 201',exact:true}).waitFor();assert.equal(await occurrencesMore.count(),0);assert.equal(await deliveryWarning.isVisible(),true,'A later complete page must preserve the previous truncation warning');
      await page.evaluate(()=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:window.oldReminder.reminderId}})));
      const oldReminder=panel.getByRole('heading',{name:'Ocorrência antiga focalizada',exact:true});await oldReminder.waitFor();
-     assert.equal(await oldReminder.count(),1);assert.equal(await page.evaluate(()=>document.activeElement.id===`reminder-${window.oldReminder.reminderId}`),true,'A notification body focuses its old authenticated occurrence outside the page');
+     assert.equal(await oldReminder.count(),1);assert.equal(await deliveryWarning.count(),0,'A full refresh resets the delivery truncation warning');assert.equal(await page.evaluate(()=>document.activeElement.id===`reminder-${window.oldReminder.reminderId}`),true,'A notification body focuses its old authenticated occurrence outside the page');
      assert.equal(await panel.getByLabel('Mostrar histórico e cancelados').isChecked(),true);
      const focusedRequest=await page.evaluate(()=>window.reminderListRequests.at(-1));assert.equal(focusedRequest.offset,0);assert.equal(focusedRequest.seriesOffset,0);assert.match(focusedRequest.focusId,/^[0-9a-f-]{36}$/i);
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));

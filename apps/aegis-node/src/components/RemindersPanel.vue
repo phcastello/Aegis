@@ -7,7 +7,7 @@ import { useLocationPermissionRefresh } from '../composables/useLocationPermissi
 const props = defineProps<{ platform: Platform; focusedReminderId?: string | null }>();
 const emit = defineEmits<{ dirty: [value: boolean] }>();
 const reminders = ref<Reminder[]>([]); const deliveries = ref<ReminderDelivery[]>([]); const series = ref<ReminderSeries[]>([]); const geofences = ref<Geofence[]>([]);
-const hasMore = ref(false); const nextOffset = ref(0); const seriesHasMore = ref(false); const nextSeriesOffset = ref(0);
+const hasMoreDeliveries = ref(false); const hasMore = ref(false); const nextOffset = ref(0); const seriesHasMore = ref(false); const nextSeriesOffset = ref(0);
 const pageLoading = ref<'occurrences' | 'series' | null>(null); const pageError = ref<{ kind: 'occurrences' | 'series'; message: string } | null>(null);
 const places = ref<Place[]>([]); const nodes = ref<NodeView[]>([]); const location = ref<LocationSettings | null>(null);
 const permissions = ref<LocationPermissions | null>(null);
@@ -41,6 +41,7 @@ async function loadMore(kind:'occurrences'|'series') {
     if(kind==='occurrences') { reminders.value=mergeRows(reminders.value,result.reminders,item=>item.reminderId);hasMore.value=result.hasMore===true;nextOffset.value=result.nextOffset ?? 0; }
     else { series.value=mergeRows(series.value,result.series,item=>item.seriesId);seriesHasMore.value=result.seriesHasMore===true;nextSeriesOffset.value=result.nextSeriesOffset ?? 0; }
     deliveries.value=mergeRows(deliveries.value,result.deliveries??[],item=>`${item.reminderId}:${item.generation}:${item.nodeId??'removed'}`);
+    hasMoreDeliveries.value=hasMoreDeliveries.value || result.hasMoreDeliveries===true;
     series.value=withNextOccurrence(series.value);
   } catch(failure) { pageError.value={kind,message:domainError(failure,'Não foi possível carregar esta página. Os lembretes já exibidos foram preservados; tente novamente.')}; }
   finally { pageLoading.value=null;busy.value=false; }
@@ -48,7 +49,7 @@ async function loadMore(kind:'occurrences'|'series') {
 async function load() {
   const result = await remindersApi<ReminderPage>('list',{offset:0,seriesOffset:0,...(props.focusedReminderId?{focusId:props.focusedReminderId}:{})});
   deliveries.value=result.deliveries??[];reminders.value=mergeRows(result.reminders,result.focusedReminder?[result.focusedReminder]:[],item=>item.reminderId);series.value=withNextOccurrence(result.series);
-  hasMore.value=result.hasMore===true;nextOffset.value=result.nextOffset??0;seriesHasMore.value=result.seriesHasMore===true;nextSeriesOffset.value=result.nextSeriesOffset??0;pageError.value=null;
+  hasMoreDeliveries.value=result.hasMoreDeliveries===true;hasMore.value=result.hasMore===true;nextOffset.value=result.nextOffset??0;seriesHasMore.value=result.seriesHasMore===true;nextSeriesOffset.value=result.nextSeriesOffset??0;pageError.value=null;
   const geo = await geofencesApi<Geofence[] | { geofences: Geofence[] }>('list'); geofences.value = collection(geo, 'geofences');
   const placeResult = await placesApi<Place[] | { places: Place[] }>('list'); places.value = collection(placeResult, 'places');
   nodes.value = await nodeServices.list(); location.value = await locationApi<LocationSettings>('settings');
@@ -126,6 +127,7 @@ async function requestLocation(background: boolean) { await operation(async () =
     </form>
     <p v-if="busy && !loaded" class="settings-muted" role="status">Carregando lembretes…</p>
     <div v-if="loaded && !editor" class="settings-row"><label for="reminder-history"><input id="reminder-history" v-model="showHistory" type="checkbox" />Mostrar histórico e cancelados</label></div>
+    <p v-if="hasMoreDeliveries" class="settings-muted" role="status">Parte dos detalhes de entrega não foi carregada. Isso não altera o estado dos lembretes.</p>
     <div v-if="loaded && !activeReminders.length && !activeSeries.length && !activeGeofences.length && !editor" class="settings-empty">Seus próximos lembretes aparecerão aqui. Crie um pela interface ou peça no chat.</div>
     <article v-for="item in activeSeries" :key="item.seriesId" class="settings-card"><div class="settings-card-header"><h3>{{ item.text }}</h3><span class="settings-badge">{{ statusLabel(item.status) }} · Série</span></div><p>{{ recurrenceLabel(item.rule) }}</p><small>{{ item.timeZoneId }} · Próximo: {{ dateLabel(item.nextDueAt) }}</small><small>Entrega: {{ item.deliveryPolicy === 'bestAvailable' ? 'um dispositivo elegível' : 'todos os dispositivos elegíveis' }}</small><div v-if="!['cancelled','completed'].includes(item.status.toLowerCase())" class="settings-actions"><button :disabled="busy || editor !== null" @click="editSeries(item)">Editar série</button><button :disabled="busy" @click="operation(() => remindersApi(item.status.toLowerCase() === 'paused' ? 'seriesResume' : 'seriesPause', {expectedRevision:item.revision}, item.seriesId))">{{ item.status.toLowerCase() === 'paused' ? 'Retomar' : 'Pausar' }}</button><button :disabled="busy" @click="operation(() => remindersApi('seriesSkip', {expectedRevision:item.revision}, item.seriesId))">Pular próxima</button><button class="settings-danger" :disabled="busy" @click="operation(() => remindersApi('seriesCancel', {expectedRevision:item.revision}, item.seriesId))">Cancelar série</button></div></article>
     <div v-if="seriesHasMore" class="settings-actions"><button :disabled="busy || !!editor" :aria-busy="pageLoading === 'series'" @click="loadMore('series')">Carregar mais séries</button></div><p v-if="pageError?.kind === 'series'" class="settings-error" role="alert">{{ pageError.message }}</p>
