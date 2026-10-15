@@ -23,6 +23,7 @@ object NodeGeofences {
  private val executor=Executors.newSingleThreadExecutor()
  fun background(block:()->Unit){executor.execute(block)}
  private val manifestGate=Any()
+ private val applyGate=Any()
  private const val PREFS="aegis-geofences-v1"
  private fun prefs(context:Context)=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
  class Store(context:Context):SQLiteOpenHelper(context,"aegis-geofence-events-v1.db",null,1) {
@@ -50,7 +51,7 @@ object NodeGeofences {
   require(expiry>now && expiry<=now+TimeUnit.DAYS.toMillis(7)+60000)
   val old=manifest(context)
   if(old!=null && stamp(current.getString("generatedAt"))<stamp(old.getString("generatedAt")))return
-  check(prefs(context).edit().putString("manifest",current.toString()).commit())
+  synchronized(applyGate){check(prefs(context).edit().putString("manifest",current.toString()).commit())}
   val revision=current.getString("revision")
   val rules=current.getJSONArray("rules")
   NodeReminderActions.reconcileRules(context,rules.objects())
@@ -75,6 +76,7 @@ object NodeGeofences {
   return place.getJSONArray("circles").objects().map { NodeGeoEngine.Circle(it.getDouble("latitude"),it.getDouble("longitude"),it.getDouble("radiusMeters")) }
  }
  private fun install(context:Context,value:JSONObject) {
+  prefs(context).edit().putBoolean("needsInstall",true).commit()
   val state=NodeLocation.permissions(context); val rules=activeRules(value)
   val client=LocationServices.getGeofencingClient(context)
   if(rules.isEmpty()) {
@@ -113,7 +115,6 @@ object NodeGeofences {
    Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
    val request=GeofencingRequest.Builder().setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT).addGeofences(regions.values.toList()).build()
    Tasks.await(client.addGeofences(request,pending(context)),20,TimeUnit.SECONDS)
-   prefs(context).edit().putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit()
    // Revision changes reset only changed rules. Place geometry revisions reset their presence baseline.
    for(placeId in placeIds) {
     val hash=geometry(value,placeId).toString()
@@ -123,6 +124,7 @@ object NodeGeofences {
    for(rule in rules) if(prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision")) {
     prefs(context).edit().putLong("ruleRevision:${rule.getString("id")}",rule.getLong("revision")).putBoolean("armed:${rule.getString("id")}",false).remove("completed:${rule.getString("id")}").commit()
    }
+   prefs(context).edit().putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit()
    val observation=NodeLocation.current(context,upload=true)
    if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation))
    report(context,value)
@@ -149,25 +151,30 @@ object NodeGeofences {
  }
  @Synchronized fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true) {
   val value=manifest(context) ?: return; val now=System.currentTimeMillis()
+  if(prefs(context).getBoolean("needsInstall",true)||prefs(context).getString("installedRevision",null)!=value.getString("revision"))return
   if(stamp(value.getString("leaseUntil"))<=now || now-observation.capturedAt !in 0..300000) return
   val rules=activeRules(value,now)
   var confirm=false
+  var needsSync=false
   for(placeId in rules.flatMap{it.getJSONArray("placeIds").strings()}.toSet()) {
    val saved=prefs(context).getString("state:$placeId",null)?.let{JSONObject(it)}
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
    val decision=NodeGeoEngine.observe(old,NodeGeoEngine.classify(geometry(value,placeId),observation,now),observation.capturedAt)
    val state=decision.state
-   check(prefs(context).edit().putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString()).commit())
+   if(state!=old)check(prefs(context).edit().putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString()).commit())
    confirm=confirm||decision.needsConfirmation
    for(rule in rules.filter{placeId in it.getJSONArray("placeIds").strings()}) {
     val id=rule.getString("id");val transition=rule.getString("transition")
     if(prefs(context).getBoolean("completed:$id",false)) continue
     val initial=if(transition=="exit") "inside" else "outside"
-    if(state.confirmed==initial) prefs(context).edit().putBoolean("armed:$id",true).commit()
+    if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {prefs(context).edit().putBoolean("armed:$id",true).commit();needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
-     if(manifest(context)?.optString("revision")!=value.getString("revision"))return
-     NodeLocation.queueTransition(context,observation)
-     if(createOccurrence(context,rule,observation.capturedAt)) prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
+     synchronized(applyGate){
+      if(manifest(context)?.optString("revision")!=value.getString("revision"))return
+      needsSync=true
+      NodeLocation.queueTransition(context,observation)
+      if(createOccurrence(context,rule,observation.capturedAt)) prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
+     }
     }
    }
   }
@@ -175,7 +182,7 @@ object NodeGeofences {
    val work=OneTimeWorkRequestBuilder<NodeGeoConfirmWorker>().setInitialDelay(30,TimeUnit.SECONDS).build()
    WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-confirm",ExistingWorkPolicy.KEEP,work)
   }
-  NodeBackgroundWork.enqueue(context)
+  if(needsSync)NodeBackgroundWork.enqueue(context)
  }
  private fun createOccurrence(context:Context,rule:JSONObject,capturedAt:Long):Boolean {
   Store(context).use { store ->

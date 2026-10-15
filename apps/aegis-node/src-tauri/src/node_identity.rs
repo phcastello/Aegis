@@ -406,6 +406,11 @@ impl HttpApi {
         }
         let mut response = request.send().await.map_err(|_| unavailable())?;
         let success = response.status().is_success();
+        let transient = response.status().is_server_error()
+            || matches!(
+                response.status(),
+                reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::TOO_MANY_REQUESTS
+            );
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
             if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
@@ -414,6 +419,9 @@ impl HttpApi {
             bytes.extend_from_slice(&chunk);
         }
         if !success {
+            if transient {
+                return Err(unavailable());
+            }
             let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
             return Err(ApiError {
                 code: json["code"]

@@ -316,6 +316,16 @@ pub fn activate(app: &AppHandle, args: &[String]) {
         .notify_one();
 }
 async fn flush(app: &AppHandle) -> Result<bool, ()> {
+    if !app
+        .state::<crate::node_commands::NodeRuntime>()
+        .has_identity()
+        .await
+    {
+        db(app)?
+            .execute("DELETE FROM actions WHERE queued=1", [])
+            .map_err(|_| ())?;
+        return Ok(false);
+    }
     let rows = {
         let database = db(app)?;
         let now = chrono::Utc::now().timestamp();
@@ -355,7 +365,35 @@ async fn flush(app: &AppHandle) -> Result<bool, ()> {
             .execute("DELETE FROM actions WHERE id=?", params![id])
             .map_err(|_| ())?;
     }
+    reconcile_presentations(app).await?;
     Ok(false)
+}
+async fn reconcile_presentations(app: &AppHandle) -> Result<(), ()> {
+    let rows = {
+        let database = db(app)?;
+        let mut query = database
+            .prepare("SELECT id,revision,generation FROM presentations WHERE expires>?")
+            .map_err(|_| ())?;
+        let rows=query.query_map(params![chrono::Utc::now().timestamp()],|r|Ok(json!({"reminderId":r.get::<_,String>(0)?,"revision":r.get::<_,u64>(1)?,"generation":r.get::<_,u64>(2)?}))).map_err(|_|())?.collect::<Result<Vec<_>,_>>().map_err(|_|())?;
+        rows
+    };
+    for batch in rows.chunks(100) {
+        let result = app
+            .state::<crate::node_commands::NodeRuntime>()
+            .domain_call(
+                reqwest::Method::POST,
+                "/reminders/reconcile".into(),
+                json!({"items":batch}),
+            )
+            .await
+            .map_err(|_| ())?;
+        for item in result["withdraw"].as_array().ok_or(())? {
+            let id =
+                uuid::Uuid::parse_str(item["reminderId"].as_str().ok_or(())?).map_err(|_| ())?;
+            withdraw(app, id, item["generation"].as_u64().ok_or(())?)?;
+        }
+    }
+    Ok(())
 }
 pub fn initialize(app: &AppHandle) {
     if !supported(app) {
@@ -369,7 +407,18 @@ pub fn initialize(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut retry = 30u64;
         loop {
-            let pending = flush(&app).await.is_err();
+            let mut pending = flush(&app).await.is_err();
+            if pending
+                && !app
+                    .state::<crate::node_commands::NodeRuntime>()
+                    .has_identity()
+                    .await
+            {
+                if let Ok(database) = db(&app) {
+                    let _ = database.execute("DELETE FROM actions WHERE queued=1", []);
+                }
+                pending = false;
+            }
             if pending {
                 tokio::select! {_=wake.notified()=>{},_=tokio::time::sleep(std::time::Duration::from_secs(retry))=>{}};
                 retry = (retry * 2).min(300);
@@ -463,4 +512,9 @@ pub fn enqueue_ui(app: &AppHandle, id: &str, body: &serde_json::Value) -> Result
     WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
         .notify_one();
     Ok(())
+}
+
+pub fn request_sync() {
+    WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
+        .notify_one();
 }

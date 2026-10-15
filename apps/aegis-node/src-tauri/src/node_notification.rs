@@ -69,6 +69,7 @@ impl NotificationResult {
     }
 }
 pub trait NotificationSink: Send + Sync {
+    fn connected(&self) {}
     fn show<'a>(
         &'a self,
         command: &'a NotificationCommand,
@@ -84,6 +85,9 @@ impl NotificationExecutor {
             sink: Box::new(sink),
             recent: Mutex::new(VecDeque::new()),
         }
+    }
+    pub fn connected(&self) {
+        self.sink.connected();
     }
     pub async fn execute(&self, c: &NotificationCommand, now: i64) -> NotificationResult {
         let started = tokio::time::Instant::now();

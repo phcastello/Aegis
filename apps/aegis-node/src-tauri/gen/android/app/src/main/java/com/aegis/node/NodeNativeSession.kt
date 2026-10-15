@@ -56,7 +56,7 @@ object NodeNativeSession {
       }
       val code = connection.responseCode
       if (code !in 200..299) throw HttpFailure(code)
-      val bytes = connection.inputStream.use { it.readBytesBounded(262144) }
+      val bytes = connection.inputStream.use { it.readBytesBounded(if(path=="/api/nodes/geofences/manifest")1048576 else 262144) }
       return if (bytes.isEmpty()) JSONObject() else JSONObject(String(bytes, Charsets.UTF_8))
     } finally { connection.disconnect() }
   }

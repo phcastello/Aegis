@@ -39,7 +39,7 @@ object NodeLocation {
       if(age>120000) return state.put("status","stale")
       val value=observation(result).apply { if(requestId!=null) put("requestId",requestId) }
       val prefs=NodeNativeNotifications.prefs(context)
-      check(prefs.edit().putString("lastObservation",value.toString()).putLong("observationMonotonic",result.elapsedRealtimeNanos).putBoolean("observationPending",upload).commit())
+      check(prefs.edit().putString("lastObservation",value.toString()).putLong("observationMonotonic",result.elapsedRealtimeNanos).putLong("observationReceivedAt",System.currentTimeMillis()).putBoolean("observationPending",upload).commit())
       if(upload) try { flush(context) } catch(_:Exception) { value.put("syncPending",true);NodeBackgroundWork.enqueue(context) }
       return value.put("status","available").put("ageSeconds",age/1000)
     } finally { cancel.cancel() }
@@ -48,7 +48,7 @@ object NodeLocation {
     val value=JSONObject().put("latitude",observation.latitude).put("longitude",observation.longitude).put("accuracyMeters",observation.accuracyMeters).put("capturedAt",Instant.ofEpochMilli(observation.capturedAt).toString()).put("source","fused")
     val prefs=NodeNativeNotifications.prefs(context)
     val existing=prefs.getString("lastObservation",null)?.let{JSONObject(it)}
-    if(existing==null || engine(existing).capturedAt<=observation.capturedAt) check(prefs.edit().putString("lastObservation",value.toString()).putBoolean("observationPending",true).commit())
+    if(existing==null || engine(existing).capturedAt<observation.capturedAt) check(prefs.edit().putString("lastObservation",value.toString()).putBoolean("observationPending",true).commit())
     NodeBackgroundWork.enqueue(context)
   }
   fun flush(context:Context) {
@@ -61,5 +61,5 @@ object NodeLocation {
   }
   fun observation(location: Location): JSONObject = JSONObject().put("latitude",location.latitude).put("longitude",location.longitude)
     .put("accuracyMeters",location.accuracy.toDouble()).put("capturedAt",Instant.ofEpochMilli(location.time).toString()).put("source","fused")
-  fun engine(value: JSONObject): NodeGeoEngine.Observation = NodeGeoEngine.Observation(value.getDouble("latitude"),value.getDouble("longitude"),value.getDouble("accuracyMeters"),NodeNotificationPayload.expiryEpochSecond(value.getString("capturedAt"))*1000)
+  fun engine(value: JSONObject): NodeGeoEngine.Observation = NodeGeoEngine.Observation(value.getDouble("latitude"),value.getDouble("longitude"),value.getDouble("accuracyMeters"),java.time.OffsetDateTime.parse(value.getString("capturedAt")).toInstant().toEpochMilli())
 }

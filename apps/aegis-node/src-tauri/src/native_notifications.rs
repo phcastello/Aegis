@@ -54,6 +54,20 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 }
 struct NativeSink(AppHandle);
 impl NotificationSink for NativeSink {
+    fn connected(&self) {
+        #[cfg(windows)]
+        crate::windows_notifications::request_sync();
+        #[cfg(target_os = "android")]
+        {
+            let handle = self.0.clone();
+            tauri::async_runtime::spawn(async move {
+                handle
+                    .state::<crate::node_commands::NodeRuntime>()
+                    .sync_push()
+                    .await;
+            });
+        }
+    }
     fn show<'a>(
         &'a self,
         command: &'a NotificationCommand,

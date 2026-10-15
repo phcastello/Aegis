@@ -40,6 +40,7 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
       try{NodeLocation.flush(applicationContext)}catch(_:Exception){retry=true}
       try{NodeGeofences.flushEvents(applicationContext)}catch(_:Exception){retry=true}
       try{NodeReminderActions.flush(applicationContext)}catch(_:Exception){retry=true}
+      try{NodeReminderActions.reconcilePresentations(applicationContext)}catch(_:Exception){retry=true}
       try{NodeGeofences.reconcile(applicationContext)}catch(error:NodeNativeSession.HttpFailure){if(error.status in setOf(401,403,404))throw error else retry=true}catch(_:Exception){retry=true}
       if(retry)Result.retry()else Result.success()
     }

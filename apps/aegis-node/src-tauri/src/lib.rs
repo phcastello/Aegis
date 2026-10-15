@@ -197,7 +197,10 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 let runtime = window.state::<node_commands::NodeRuntime>();
-                if runtime.transport.state().transport_state != "online" {
+                if matches!(
+                    runtime.transport.state().transport_state,
+                    "offline" | "reconnecting"
+                ) {
                     runtime.transport.reconnect();
                 }
             }

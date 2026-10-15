@@ -486,6 +486,9 @@ async fn session(
     }
     *online_since = Some(Instant::now());
     state(status, "online", None);
+    if let Some(executor) = &config.notifications {
+        executor.connected();
+    }
     let mut next_heartbeat = Instant::now() + Duration::from_secs(interval);
     let mut ack_deadline = Instant::now() + Duration::from_secs(deadline);
     let mut pending: Option<String> = None;

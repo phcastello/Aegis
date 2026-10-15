@@ -129,13 +129,25 @@ object NodeReminderActions {
   }
   fun reconcileRules(context:Context,rules:List<JSONObject>) {
     val current=rules.filter{it.optString("status")=="active"}.associate{it.getString("id") to it.getLong("revision")}
+    val pendingEvents=NodeGeofences.pendingOccurrences(context)
     val obsolete=mutableListOf<Pair<String,Long>>()
     Store(context).use{store->store.readableDatabase.rawQuery("SELECT id,generation,ruleId,ruleRevision FROM presentations WHERE ruleId IS NOT NULL",null).use{
-      while(it.moveToNext())if(current[it.getString(2)]!=it.getLong(3))obsolete.add(it.getString(0) to it.getLong(1))
+      while(it.moveToNext())if(it.getString(0) in pendingEvents && current[it.getString(2)]!=it.getLong(3))obsolete.add(it.getString(0) to it.getLong(1))
     }}
     for((id,generation)in obsolete){withdraw(context,id,generation);discardAction(context,id)}
   }
   fun discardAction(context:Context,id:String) {Store(context).use{it.writableDatabase.delete("actions","reminderId=?",arrayOf(id))}}
+  fun reconcilePresentations(context:Context) {
+    val pendingEvents=NodeGeofences.pendingOccurrences(context)
+    val items=mutableListOf<JSONObject>()
+    Store(context).use{store->store.readableDatabase.rawQuery("SELECT id,revision,generation FROM presentations WHERE expires>?",arrayOf(System.currentTimeMillis().toString())).use{
+      while(it.moveToNext())if(it.getString(0) !in pendingEvents)items.add(JSONObject().put("reminderId",it.getString(0)).put("revision",it.getLong(1)).put("generation",it.getLong(2)))
+    }}
+    for(batch in items.chunked(100)) {
+      val response=NodeNativeSession.call(context,"POST","/api/nodes/reminders/reconcile",JSONObject().put("items",org.json.JSONArray(batch)))
+      for(item in response.getJSONArray("withdraw").objects())withdraw(context,item.getString("reminderId"),item.getLong("generation"))
+    }
+  }
   fun flush(context: Context) {
     Store(context).use { store ->
       val db=store.writableDatabase
