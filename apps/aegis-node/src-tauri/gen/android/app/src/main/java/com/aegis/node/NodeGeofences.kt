@@ -135,20 +135,28 @@ object NodeGeofences {
    prefs(context).edit().putString("status","recoverable_error").putString("error",if(regions.isEmpty()) "geometry_required" else "region_limit_exceeded").putBoolean("needsInstall",true).commit();report(context,value);return
   }
   try {
+   // A cached location from before activation cannot establish initial presence.
+   // Persist before registering: Google's initial event may itself carry old data.
+   val activatedAt=System.currentTimeMillis()
+   synchronized(applyGate) {
+    val edit=prefs(context).edit()
+    for(placeId in placeIds)edit.putLong("notBefore:$placeId",activatedAt)
+    check(edit.commit())
+   }
    Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
    val request=GeofencingRequest.Builder().setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT).addGeofences(regions.values.toList()).build()
    Tasks.await(client.addGeofences(request,pending(context)),20,TimeUnit.SECONDS)
-   // Revision changes reset only changed rules. Place geometry revisions reset their presence baseline.
-   for(placeId in placeIds) {
-    val hash=geometry(value,placeId).toString()
-    // Registration establishes a fresh baseline; missed/initial native events are not transitions.
-    prefs(context).edit().putString("geometry:$placeId",hash).remove("state:$placeId").commit()
+   synchronized(applyGate) {
+    if(NodeNativeSession.read(context)?.nodeId!=value.getString("observerNodeId") || manifest(context)?.optString("revision")!=value.getString("revision"))return
+    val edit=prefs(context).edit()
+    // Registration establishes a fresh baseline; missed/initial events are not transitions.
+    for(placeId in placeIds)edit.putString("geometry:$placeId",geometry(value,placeId).toString()).remove("state:$placeId")
+    for(rule in rules) if(prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision")) {
+     edit.putLong("ruleRevision:${rule.getString("id")}",rule.getLong("revision")).putBoolean("armed:${rule.getString("id")}",false).remove("completed:${rule.getString("id")}")
+    }
+    check(edit.putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
    }
-   for(rule in rules) if(prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision")) {
-    prefs(context).edit().putLong("ruleRevision:${rule.getString("id")}",rule.getLong("revision")).putBoolean("armed:${rule.getString("id")}",false).remove("completed:${rule.getString("id")}").commit()
-   }
-   prefs(context).edit().putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit()
-   val observation=NodeLocation.current(context,upload=true)
+   val observation=NodeLocation.current(context,upload=true,fresh=true)
    if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation))
    report(context,value)
   } catch(error:Exception) {
@@ -184,11 +192,20 @@ object NodeGeofences {
   var needsSync=false
   var retireRegions=false
   for(placeId in rules.flatMap{it.getJSONArray("placeIds").strings()}.toSet()) {
+   val notBefore=prefs(context).getLong("notBefore:$placeId",0)
+   if(observation.capturedAt<notBefore)continue
    val saved=prefs(context).getString("state:$placeId",null)?.let{JSONObject(it)}
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
-   val decision=NodeGeoEngine.observe(old,NodeGeoEngine.classify(geometry(value,placeId),observation,now),observation.capturedAt)
+   val decision=NodeGeoEngine.observe(old,NodeGeoEngine.classify(geometry(value,placeId),observation,now),observation.capturedAt,notBefore)
    val state=decision.state
-   if(state!=old)check(prefs(context).edit().putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString()).commit())
+   val current=synchronized(applyGate) {
+    if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)false
+    else {
+     if(state!=old)check(prefs(context).edit().putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString()).commit())
+     true
+    }
+   }
+   if(!current)continue
    confirm=confirm||decision.needsConfirmation
    for(rule in rules.filter{placeId in it.getJSONArray("placeIds").strings()}) {
     val id=rule.getString("id");val transition=rule.getString("transition")
@@ -197,7 +214,7 @@ object NodeGeofences {
     if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {prefs(context).edit().putBoolean("armed:$id",true).commit();needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
      synchronized(applyGate){
-      if(manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return
+      if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return
       needsSync=true
       NodeLocation.queueTransition(context,observation)
       if(createOccurrence(context,rule,observation.capturedAt)) {

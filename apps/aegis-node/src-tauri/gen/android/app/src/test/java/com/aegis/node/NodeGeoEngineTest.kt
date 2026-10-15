@@ -14,6 +14,21 @@ class NodeGeoEngineTest {
  }
  @Test fun borderIsUncertain(){assertEquals("unknown",NodeGeoEngine.classify(listOf(first),point(0.0018),100000))}
  @Test fun initialOutsideIsBaselineWithoutExit(){val d=NodeGeoEngine.observe(NodeGeoEngine.State(),"outside",100000);assertNull(d.transition);assertEquals("outside",d.state.confirmed);assertFalse(d.needsConfirmation)}
+ @Test fun preActivationCacheCannotArmAnExitAndQuietPresenceDoesNotExpire() {
+  val activatedAt=100000L
+  val cached=NodeGeoEngine.observe(NodeGeoEngine.State(),"inside",activatedAt-90000,activatedAt)
+  assertEquals("unknown",cached.state.confirmed);assertFalse(cached.needsConfirmation)
+  val outside=NodeGeoEngine.observe(cached.state,"outside",activatedAt+1,activatedAt)
+  assertEquals("outside",outside.state.confirmed);assertNull(outside.transition)
+  assertNull(NodeGeoEngine.observe(outside.state,"outside",activatedAt+31000,activatedAt).transition)
+  val enterCandidate=NodeGeoEngine.observe(outside.state,"inside",activatedAt+32000,activatedAt)
+  val entered=NodeGeoEngine.observe(enterCandidate.state,"inside",activatedAt+63000,activatedAt)
+  assertEquals("enter",entered.transition)
+  // The cutoff rejects older captures; it does not expire hours of valid presence.
+  val exitCandidate=NodeGeoEngine.observe(entered.state,"outside",activatedAt+3600000,activatedAt)
+  assertTrue(exitCandidate.needsConfirmation);assertNull(exitCandidate.transition)
+  assertEquals("exit",NodeGeoEngine.observe(exitCandidate.state,"outside",activatedAt+3631000,activatedAt).transition)
+ }
  @Test fun realExitNeedsTwoFreshObservationsSeparatedByThirtySeconds(){
   val initial=NodeGeoEngine.State(confirmed="inside",lastCapturedAt=50000)
   val candidate=NodeGeoEngine.observe(initial,"outside",100000)

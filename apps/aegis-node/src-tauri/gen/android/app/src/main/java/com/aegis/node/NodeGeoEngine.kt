@@ -21,7 +21,8 @@ object NodeGeoEngine {
     if(circles.all { distance(o.latitude,o.longitude,it.latitude,it.longitude) >= it.radiusMeters+margin }) return "outside"
     return "unknown"
   }
-  fun observe(previous: State,classification: String,capturedAt: Long): Decision {
+  fun observe(previous: State,classification: String,capturedAt: Long,notBefore:Long=0): Decision {
+    if(capturedAt<notBefore) return Decision(previous)
     if(capturedAt<=previous.lastCapturedAt) return Decision(previous)
     if(classification=="unknown") return Decision(previous.copy(candidate="unknown",candidateAt=0,lastCapturedAt=capturedAt),needsConfirmation=true)
     if(previous.confirmed=="unknown" && classification!="unknown") return Decision(State(classification,"unknown",0,capturedAt))

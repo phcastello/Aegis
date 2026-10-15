@@ -75,12 +75,17 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   val now=System.currentTimeMillis()
   val definition=JSONObject().put("id",ruleId).put("revision",resumed.getInt("revision")).put("placeIds",JSONArray().put(placeId)).put("text","Synthetic geographic fixture").put("transition","exit").put("repeat",true).put("status","active").put("startsAt",JSONObject.NULL).put("endsAt",JSONObject.NULL).put("leaseUntil",geoStamp(now+3600000)).put("timeZoneId","UTC").put("deliveryPolicy","allEligible")
   val manifest=JSONObject().put("revision","instrumented-${UUID.randomUUID()}").put("generatedAt",geoStamp(now)).put("leaseUntil",geoStamp(now+3600000)).put("observerNodeId",nodeId).put("places",JSONArray().put(place)).put("rules",JSONArray().put(definition))
-  prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
+  prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
   val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
   fun position(longitude:Double,ago:Long,accuracy:Double=5.0)=observe.invoke(null,context,0.0,longitude,accuracy,now-ago,false)
   fun events():List<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-geofence-events-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT occurrenceId FROM events WHERE ruleId=? ORDER BY sequence",arrayOf(ruleId)).use{rows->val ids=mutableListOf<String>();while(rows.moveToNext())ids.add(rows.getString(0));ids}}
+  // A cached inside sample predating registration cannot arm a newly created EXIT.
+  position(0.0,119500);assertFalse(prefs.getBoolean("armed:$ruleId",false))
+  assertFalse(prefs.contains("state:$placeId"));assertTrue(events().isEmpty())
   // Already outside does not constitute an exit; poor precision does not establish presence.
   position(0.01,119000);assertFalse(prefs.getBoolean("armed:$ruleId",false))
+  assertEquals("outside",JSONObject(prefs.getString("state:$placeId",null)!!).getString("confirmed"));assertTrue(events().isEmpty())
+  checkpoint("geofence_pre_activation_cache_ignored")
   position(0.0,118000,1000.0);assertFalse(prefs.getBoolean("armed:$ruleId",false))
   prefs.edit().remove("state:$placeId").commit()
   position(0.0,117000)
