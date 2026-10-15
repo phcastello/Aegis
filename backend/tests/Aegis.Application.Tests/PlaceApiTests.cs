@@ -230,4 +230,61 @@ public sealed class PlaceApiTests
         await using var final = host.Db(); var reminder = await final.Reminders.SingleAsync(); Assert.Equal(1, reminder.Generation); Assert.Null(reminder.AcknowledgedAt); Assert.Empty(final.Set<ReminderActionReceipt>());
     }
 
+    [Fact]
+    public async Task ReminderPagesKeepLegacyArraysExposeTheHundredAndFirstSeriesAndAuthenticateFocus()
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); var now = host.Clock.Now;
+        Guid focusId; Guid lastSeriesId; DateTimeOffset lastSeriesDue;
+        await using (var db = host.Db())
+        {
+            for (var i = 0; i < 201; i++) db.Reminders.Add(new("Synthetic upcoming " + i, now.AddMinutes(i + 1), "UTC", null, now));
+            var history = new Reminder("Synthetic old focus", now.AddDays(-1), "UTC", null, now.AddDays(-2));
+            history.Claim(Guid.NewGuid(), now.AddDays(-1)); history.BeginTrigger(now.AddDays(-1)); history.Finish(null, true, now.AddDays(-1)); history.Acknowledge(now.AddDays(-1));
+            db.Reminders.Add(history); focusId = history.Id;
+            for (var i = 0; i < 101; i++) db.Set<ReminderSeries>().Add(new("Synthetic series " + i, "UTC", new() { StartDate = "2030-01-01", LocalTime = "14:00" }, null, now));
+            await db.SaveChangesAsync();
+            var last = await db.Set<ReminderSeries>().OrderBy(s => s.CreatedAt).ThenBy(s => s.Id).LastAsync();
+            var instant = last.Next(now)!; lastSeriesDue = instant.DueAt; lastSeriesId = last.Id;
+            db.Reminders.Add(Reminder.ForSeries(last, instant, now)); last.Materialized(instant, now); await db.SaveChangesAsync();
+        }
+        var unauthenticated = await host.Client.GetAsync($"/api/nodes/reminders?focusId={focusId}");
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode); Assert.DoesNotContain("Synthetic old focus", await unauthenticated.Content.ReadAsStringAsync());
+        host.Authenticate(actor.Credential);
+        var first = await Read(await host.Client.GetAsync("/api/nodes/reminders"));
+        Assert.Equal(200, first.GetProperty("reminders").GetArrayLength()); Assert.Equal(100, first.GetProperty("series").GetArrayLength());
+        Assert.Equal(JsonValueKind.Array, first.GetProperty("deliveries").ValueKind); Assert.Equal(JsonValueKind.Null, first.GetProperty("focusedReminder").ValueKind);
+        Assert.True(first.GetProperty("hasMore").GetBoolean()); Assert.Equal(200, first.GetProperty("nextOffset").GetInt32());
+        Assert.True(first.GetProperty("seriesHasMore").GetBoolean()); Assert.Equal(100, first.GetProperty("nextSeriesOffset").GetInt32());
+        var again = await Read(await host.Client.GetAsync("/api/nodes/reminders"));
+        Assert.Equal(first.GetProperty("reminders").GetRawText(), again.GetProperty("reminders").GetRawText()); Assert.Equal(first.GetProperty("series").GetRawText(), again.GetProperty("series").GetRawText());
+        var focused = await Read(await host.Client.GetAsync($"/api/nodes/reminders?focusId={focusId}"));
+        Assert.Equal(focusId, focused.GetProperty("focusedReminder").GetProperty("reminderId").GetGuid());
+        Assert.DoesNotContain(focused.GetProperty("reminders").EnumerateArray(), r => r.GetProperty("reminderId").GetGuid() == focusId);
+        var second = await Read(await host.Client.GetAsync("/api/nodes/reminders?offset=200&seriesOffset=100"));
+        Assert.False(second.GetProperty("hasMore").GetBoolean()); Assert.Equal(JsonValueKind.Null, second.GetProperty("nextOffset").ValueKind);
+        Assert.Equal(3, second.GetProperty("reminders").GetArrayLength()); Assert.False(second.GetProperty("seriesHasMore").GetBoolean());
+        var lastSeries = Assert.Single(second.GetProperty("series").EnumerateArray()); Assert.Equal(lastSeriesId, lastSeries.GetProperty("seriesId").GetGuid());
+        Assert.Equal(lastSeriesDue, lastSeries.GetProperty("nextDueAt").GetDateTimeOffset());
+        var firstIds = first.GetProperty("reminders").EnumerateArray().Select(r => r.GetProperty("reminderId").GetGuid()).ToHashSet();
+        Assert.DoesNotContain(second.GetProperty("reminders").EnumerateArray(), r => firstIds.Contains(r.GetProperty("reminderId").GetGuid()));
+        var changed = await Read(await host.Client.PatchAsJsonAsync($"/api/nodes/reminder-series/{lastSeriesId}", new { expectedRevision = 1, text = "Synthetic edited later page" }));
+        Assert.Equal("Synthetic edited later page", changed.GetProperty("text").GetString());
+        var dedicated = await Read(await host.Client.GetAsync("/api/nodes/reminder-series?offset=100"));
+        Assert.Single(dedicated.GetProperty("series").EnumerateArray()); Assert.False(dedicated.GetProperty("hasMore").GetBoolean()); Assert.Equal(JsonValueKind.Null, dedicated.GetProperty("nextOffset").ValueKind);
+    }
+
+    [Theory]
+    [InlineData("/api/nodes/reminders?offset=-1")]
+    [InlineData("/api/nodes/reminders?offset=1000001")]
+    [InlineData("/api/nodes/reminders?seriesOffset=-1")]
+    [InlineData("/api/nodes/reminders?seriesOffset=1000001")]
+    [InlineData("/api/nodes/reminders?focusId=not-a-uuid")]
+    [InlineData("/api/nodes/reminders?focusId=00000000-0000-0000-0000-000000000000")]
+    [InlineData("/api/nodes/reminder-series?offset=-1")]
+    [InlineData("/api/nodes/reminder-series?offset=1000001")]
+    public async Task ReminderPaginationRejectsInvalidOffsetsAndFocusReferences(string path)
+    {
+        await using var host = await Host.Create(); var actor = await host.Pair("windows"); host.Authenticate(actor.Credential);
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Client.GetAsync(path)).StatusCode);
+    }
 }

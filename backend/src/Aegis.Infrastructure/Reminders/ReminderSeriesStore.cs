@@ -13,7 +13,18 @@ public sealed class ReminderSeriesStore(AegisDbContext db, TimeProvider clock) :
         db.Set<ReminderSeries>().Add(series); await Materialize(series, ct); await db.SaveChangesAsync(ct);
         if (tx is not null) await tx.CommitAsync(ct);
     }
-    public async Task<IReadOnlyList<ReminderSeries>> ListAsync(CancellationToken ct) => await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status != "cancelled").OrderBy(s => s.CreatedAt).Take(100).ToArrayAsync(ct);
+    public async Task<IReadOnlyList<ReminderSeries>> ListAsync(CancellationToken ct) => (await PageAsync(0, ct)).Series;
+    public async Task<ReminderSeriesPage> PageAsync(int offset, CancellationToken ct)
+    {
+        if (offset is < 0 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(offset));
+        var rows = await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status != "cancelled")
+            .OrderBy(s => s.CreatedAt).ThenBy(s => s.Id).Skip(offset).Take(101).ToArrayAsync(ct);
+        var hasMore = rows.Length > 100; var page = rows.Take(100).ToArray(); var ids = page.Select(s => s.Id).ToArray();
+        var upcoming = await db.Reminders.AsNoTracking().Where(r => r.SeriesId != null && ids.Contains(r.SeriesId.Value) && r.AcknowledgedAt == null &&
+                r.TriggeredAt == null && (r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Processing))
+            .GroupBy(r => r.SeriesId!.Value).Select(g => new { Id = g.Key, DueAt = g.Min(r => r.DueAtUtc) }).ToDictionaryAsync(r => r.Id, r => r.DueAt, ct);
+        return new(page, hasMore, hasMore ? offset + 100 : null, upcoming);
+    }
     private async Task<ReminderSeries> LoadLocked(Guid id, CancellationToken ct)
     {
         var item = db.Database.IsNpgsql() ? (await db.Set<ReminderSeries>().FromSqlInterpolated($"SELECT * FROM reminder_series WHERE \"Id\" = {id} FOR UPDATE").AsNoTracking().ToListAsync(ct)).SingleOrDefault() : await db.Set<ReminderSeries>().AsNoTracking().SingleOrDefaultAsync(s => s.Id == id, ct);

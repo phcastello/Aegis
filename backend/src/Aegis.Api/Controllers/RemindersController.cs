@@ -9,16 +9,31 @@ using Microsoft.EntityFrameworkCore;
 namespace Aegis.Api.Controllers;
 
 [ApiController, Route("api/nodes/reminders"), Authorize(Policy = "NodeManagement"), ServiceFilter(typeof(NodeApiFilter)), RequestSizeLimit(8192)]
-public sealed class RemindersController(AegisDbContext db, ReminderStore store, ReminderActionService actions, TimeProvider clock) : ControllerBase
+public sealed class RemindersController(AegisDbContext db, ReminderStore store, ReminderActionService actions, TimeProvider clock, IReminderSeriesStore seriesStore) : ControllerBase
 {
     public sealed record CreateRequest(string Text, string DueAt, string TimeZoneId = "America/Sao_Paulo", string DeliveryPolicy = "allEligible");
     public sealed record UpdateRequest(int ExpectedRevision, string? Text = null, string? DueAt = null, string? TimeZoneId = null);
-    [HttpGet] public async Task<IActionResult> List(CancellationToken ct) => Ok(new {
-        reminders = (await db.Reminders.AsNoTracking().OrderByDescending(r => r.DueAtUtc).Take(200).ToArrayAsync(ct)).OrderBy(r => r.DueAtUtc).Select(ReminderService.View),
-        series = (await db.Set<ReminderSeries>().AsNoTracking().Where(s => s.Status != "cancelled").Take(100).ToArrayAsync(ct)).Select(ReminderSeriesService.View),
-        deliveries = await db.Set<ReminderRecipient>().AsNoTracking().OrderByDescending(r => r.UpdatedAt).Take(500)
-            .Select(r => new { r.ReminderId, r.Generation, r.NodeId, r.Status, r.ProviderAcceptedAt, r.PostedAt, r.WithdrawnAt }).ToArrayAsync(ct)
-    });
+    [HttpGet] public async Task<IActionResult> List(CancellationToken ct, [FromQuery] int offset = 0, [FromQuery] int seriesOffset = 0, [FromQuery] Guid? focusId = null)
+    {
+        if (offset is < 0 or > 1_000_000 || seriesOffset is < 0 or > 1_000_000 || focusId == Guid.Empty) return BadRequest(new { code = "invalid_page", error = "Página ou referência inválida." });
+        var rows = await db.Reminders.AsNoTracking()
+            .OrderBy(r => r.AcknowledgedAt == null && (r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Processing) ? 0 : 1)
+            .ThenBy(r => r.AcknowledgedAt == null && (r.Status == ReminderStatus.Scheduled || r.Status == ReminderStatus.Processing) ? (DateTimeOffset?)r.DueAtUtc : null)
+            .ThenByDescending(r => r.DueAtUtc).ThenBy(r => r.Id).Skip(offset).Take(201).ToArrayAsync(ct);
+        var hasMore = rows.Length > 200; var reminders = rows.Take(200).ToArray(); var seriesPage = await seriesStore.PageAsync(seriesOffset, ct);
+        var focused = focusId is { } id && !reminders.Any(r => r.Id == id) ? await db.Reminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct) : null;
+        var includedIds = reminders.Select(r => r.Id).Concat(focused is null ? [] : new[] { focused.Id }).ToArray();
+        var deliveries = await db.Set<ReminderRecipient>().AsNoTracking().Where(r => includedIds.Contains(r.ReminderId)).OrderByDescending(r => r.UpdatedAt).ThenBy(r => r.Id).Take(501)
+            .Select(r => new { r.ReminderId, r.Generation, r.NodeId, r.Status, r.ProviderAcceptedAt, r.PostedAt, r.WithdrawnAt }).ToArrayAsync(ct);
+        return Ok(new {
+            reminders = reminders.Select(ReminderService.View),
+            series = seriesPage.Series.Select(s => ReminderSeriesService.View(s, seriesPage.NextDueAt.TryGetValue(s.Id, out var due) ? due : null)),
+            deliveries = deliveries.Take(500), hasMoreDeliveries = deliveries.Length > 500,
+            hasMore, nextOffset = hasMore ? (int?)(offset + 200) : null,
+            seriesHasMore = seriesPage.HasMore, nextSeriesOffset = seriesPage.NextOffset,
+            focusedReminder = focused is null ? null : ReminderService.View(focused)
+        });
+    }
     [HttpPost] public async Task<IActionResult> Create(CreateRequest request, CancellationToken ct)
     {
         try
@@ -62,7 +77,11 @@ public sealed class ReminderSeriesController(ReminderSeriesService series) : Con
     public sealed record CreateRequest(string Text, string TimeZoneId, ReminderRecurrenceRule Rule, string DeliveryPolicy = "allEligible");
     public sealed record ChangeRequest(int ExpectedRevision, string? Text = null, ReminderRecurrenceRule? Rule = null, string? DeliveryPolicy = null);
     public sealed record RevisionRequest(int ExpectedRevision);
-    [HttpGet] public async Task<IActionResult> List(CancellationToken ct) => Ok(new { series = (await series.ListAsync(null, ct)).Select(ReminderSeriesService.View) });
+    [HttpGet] public async Task<IActionResult> List(CancellationToken ct, [FromQuery] int offset = 0)
+    {
+        if (offset is < 0 or > 1_000_000) return BadRequest(new { code = "invalid_page", error = "Página inválida." });
+        return Ok(ReminderSeriesService.PageView(await series.PageAsync(null, offset, ct)));
+    }
     [HttpPost] public Task<IActionResult> Create(CreateRequest r, CancellationToken ct) => Safely(async () => ReminderSeriesService.View(await series.CreateAsync(null, r.Text, r.TimeZoneId, r.Rule, r.DeliveryPolicy, ct)));
     [HttpPatch("{id:guid}")] public Task<IActionResult> Update(Guid id, ChangeRequest r, CancellationToken ct) => Change(id, r.ExpectedRevision, "update", r.Text, r.Rule, r.DeliveryPolicy, ct);
     [HttpPost("{id:guid}/pause")] public Task<IActionResult> Pause(Guid id, RevisionRequest r, CancellationToken ct) => Change(id, r.ExpectedRevision, "pause", null, null, null, ct);

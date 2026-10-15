@@ -37,9 +37,11 @@ public sealed class ReminderSeriesCreateTool(ReminderSeriesService service) : Re
 public sealed class ReminderSeriesListTool(ReminderSeriesService service) : ReminderSeriesToolBase
 {
     public override string Name => "reminder_series_list";
-    public override string Description => "Lista séries recorrentes reais e registra IDs/revisões observados por30min. Use antes de mudar/pausar/retomar/pular/cancelar uma série não observada. Lembretes únicos e ocorrências são reminder_list. Não invente ID; esclareça múltiplos alvos.";
-    public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{},"additionalProperties":false}""");
-    protected override async Task<AegisToolResult> Run(JsonElement arguments, ToolExecutionContext context, CancellationToken ct) => Ok(new { series = (await service.ListAsync(context.ConversationId, ct)).Select(ReminderSeriesService.View) });
+    public override string Description => "Lista uma página de até100 séries recorrentes reais e registra somente seus IDs/revisões observados por30min. Se hasMore=true, consulte novamente com offset=nextOffset antes de afirmar que não há outra série/alvo; primeira página usa offset0. Use antes de mudar/pausar/retomar/pular/cancelar uma série não observada. Lembretes únicos e ocorrências são reminder_list. Não invente ID; esclareça múltiplos alvos.";
+    public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"offset":{"type":"integer","minimum":0,"maximum":1000000}},"additionalProperties":false}""");
+    private sealed record Args(int Offset = 0);
+    protected override async Task<AegisToolResult> Run(JsonElement arguments, ToolExecutionContext context, CancellationToken ct)
+    { var args = arguments.Deserialize<Args>(ReminderRecurrenceRule.JsonOptions)!; return Ok(ReminderSeriesService.PageView(await service.PageAsync(context.ConversationId, args.Offset, ct))); }
 }
 public sealed class ReminderSeriesChangeTool(ReminderSeriesService service) : ReminderSeriesToolBase
 {

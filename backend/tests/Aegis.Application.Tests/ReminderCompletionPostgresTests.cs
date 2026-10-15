@@ -94,6 +94,47 @@ public sealed class ReminderCompletionPostgresTests
         finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
     }
     [ReminderPostgresTests.PostgresFact]
+    public async Task SeriesPagesObserveOnlyTheirIdsAndTheHundredAndFirstSeriesCanBeChangedThroughTools()
+    {
+        var schema = "recurrence_pages_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock();
+        try
+        {
+            await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\""); await setup.Database.MigrateAsync();
+            var conversation = new Conversation(); setup.Conversations.Add(conversation);
+            for (var i = 0; i < 101; i++) setup.Set<ReminderSeries>().Add(new("Synthetic paged series " + i, "UTC", new() { StartDate = "2026-09-28", LocalTime = "14:00" }, null, clock.GetUtcNow()));
+            await setup.SaveChangesAsync();
+            var store = new ReminderSeriesStore(setup, clock); var reminders = new ReminderStore(setup); var service = new ReminderSeriesService(store, reminders, clock);
+            var first = await store.PageAsync(0, default); Assert.Equal(100, first.Series.Count); Assert.True(first.HasMore); Assert.Equal(100, first.NextOffset);
+            var lastPage = await store.PageAsync(100, default); var last = Assert.Single(lastPage.Series); Assert.False(lastPage.HasMore); Assert.Null(lastPage.NextOffset);
+            Assert.DoesNotContain(first.Series, s => s.Id == last.Id);
+            var instant = last.Next(clock.GetUtcNow())!; setup.Reminders.Add(Reminder.ForSeries(last, instant, clock.GetUtcNow())); await setup.SaveChangesAsync();
+            var context = new Aegis.Application.Tools.ToolExecutionContext(conversation.Id, Guid.NewGuid(), "Synthetic paged request");
+            var list = new ReminderSeriesListTool(service); var change = new ReminderSeriesChangeTool(service);
+            var pageOne = await list.ExecuteAsync(System.Text.Json.JsonSerializer.SerializeToElement(new { }), context); Assert.True(pageOne.Success);
+            Assert.False(await store.WasObservedAsync(conversation.Id, last.Id, clock.GetUtcNow(), default));
+            var arguments = System.Text.Json.JsonSerializer.SerializeToElement(new { seriesId = last.Id, expectedRevision = 1, operation = "update", text = "Synthetic changed observed series" });
+            Assert.False((await change.ExecuteAsync(arguments, context)).Success);
+            var pageTwo = await list.ExecuteAsync(System.Text.Json.JsonSerializer.SerializeToElement(new { offset = 100 }), context); Assert.True(pageTwo.Success);
+            var payload = System.Text.Json.JsonDocument.Parse(pageTwo.Content).RootElement;
+            Assert.Equal(last.Id, Assert.Single(payload.GetProperty("series").EnumerateArray()).GetProperty("seriesId").GetGuid());
+            Assert.Equal(instant.DueAt, payload.GetProperty("series")[0].GetProperty("nextDueAt").GetDateTimeOffset());
+            Assert.False(payload.GetProperty("hasMore").GetBoolean()); Assert.Equal(System.Text.Json.JsonValueKind.Null, payload.GetProperty("nextOffset").ValueKind);
+            Assert.True((await change.ExecuteAsync(arguments, context)).Success);
+            Assert.Equal("Synthetic changed observed series", (await setup.Set<ReminderSeries>().AsNoTracking().SingleAsync(s => s.Id == last.Id)).Text);
+            Assert.False((await list.ExecuteAsync(System.Text.Json.JsonSerializer.SerializeToElement(new { offset = -1 }), context)).Success);
+            Assert.False((await list.ExecuteAsync(System.Text.Json.JsonSerializer.SerializeToElement(new { offset = 1_000_001 }), context)).Success);
+            Assert.Equal(first.Series.Select(s => s.Id), (await store.PageAsync(0, default)).Series.Select(s => s.Id));
+
+            var actions = new ReminderActionService(new ReminderActionStore(setup, reminders, clock));
+            var controller = new Aegis.Api.Controllers.RemindersController(setup, reminders, actions, clock, store);
+            var result = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(await controller.List(default, offset: 0, seriesOffset: 100));
+            var snapshot = System.Text.Json.JsonSerializer.SerializeToElement(result.Value, ReminderRecurrenceRule.JsonOptions);
+            Assert.Equal(last.Id, Assert.Single(snapshot.GetProperty("series").EnumerateArray()).GetProperty("seriesId").GetGuid());
+            Assert.NotEqual(System.Text.Json.JsonValueKind.Null, snapshot.GetProperty("series")[0].GetProperty("nextDueAt").ValueKind);
+        }
+        finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
+    }
+    [ReminderPostgresTests.PostgresFact]
     public async Task ConcurrentActionsOnSameRevisionHaveOneWinnerAndReplayRemainsIdempotent()
     {
         var schema = "actions_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock();

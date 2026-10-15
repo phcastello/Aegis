@@ -1,10 +1,13 @@
 using Aegis.Domain.Entities;
 namespace Aegis.Application.Reminders;
 
+public sealed record ReminderSeriesPage(IReadOnlyList<ReminderSeries> Series, bool HasMore, int? NextOffset, IReadOnlyDictionary<Guid, DateTimeOffset> NextDueAt);
+
 public interface IReminderSeriesStore
 {
     Task AddAsync(ReminderSeries series, CancellationToken ct);
     Task<IReadOnlyList<ReminderSeries>> ListAsync(CancellationToken ct);
+    Task<ReminderSeriesPage> PageAsync(int offset, CancellationToken ct);
     Task<ReminderSeries> ChangeAsync(Guid id, int revision, string operation, string? text, ReminderRecurrenceRule? rule, string? policy, CancellationToken ct);
     Task RememberAsync(Guid conversationId, IReadOnlyList<ReminderSeries> series, DateTimeOffset now, CancellationToken ct);
     Task<bool> WasObservedAsync(Guid conversationId, Guid seriesId, DateTimeOffset now, CancellationToken ct);
@@ -20,11 +23,12 @@ public sealed class ReminderSeriesService(IReminderSeriesStore store, IReminderS
         if (conversationId is { } cid) await store.RememberAsync(cid, [series], clock.GetUtcNow(), ct);
         return series;
     }
-    public async Task<IReadOnlyList<ReminderSeries>> ListAsync(Guid? conversationId, CancellationToken ct)
+    public async Task<IReadOnlyList<ReminderSeries>> ListAsync(Guid? conversationId, CancellationToken ct) => (await PageAsync(conversationId, 0, ct)).Series;
+    public async Task<ReminderSeriesPage> PageAsync(Guid? conversationId, int offset, CancellationToken ct)
     {
-        var items = await store.ListAsync(ct);
-        if (conversationId is { } cid) await store.RememberAsync(cid, items, clock.GetUtcNow(), ct);
-        return items;
+        var page = await store.PageAsync(offset, ct);
+        if (conversationId is { } cid) await store.RememberAsync(cid, page.Series, clock.GetUtcNow(), ct);
+        return page;
     }
     public async Task<ReminderSeries> ChangeAsync(Guid? conversationId, Guid id, int revision, string operation, string? text, ReminderRecurrenceRule? rule, string? policy, CancellationToken ct)
     {
@@ -34,7 +38,9 @@ public sealed class ReminderSeriesService(IReminderSeriesStore store, IReminderS
         if (conversationId is { } cid2) await store.RememberAsync(cid2, [item], clock.GetUtcNow(), ct);
         return item;
     }
-    public static object View(ReminderSeries s) => new { seriesId = s.Id, s.Text, s.TimeZoneId, rule = s.Rule(), s.Status, s.Revision, s.DeliveryPolicy, s.GeneratedCount };
+    public static object View(ReminderSeries s) => View(s, null);
+    public static object View(ReminderSeries s, DateTimeOffset? nextDueAt) => new { seriesId = s.Id, s.Text, s.TimeZoneId, rule = s.Rule(), s.Status, s.Revision, s.DeliveryPolicy, s.GeneratedCount, nextDueAt };
+    public static object PageView(ReminderSeriesPage page) => new { series = page.Series.Select(s => View(s, page.NextDueAt.TryGetValue(s.Id, out var due) ? due : null)), page.HasMore, page.NextOffset };
 }
 
 public sealed record ReminderActionRequest(Guid ActionId, int ExpectedRevision, int Generation, string Action, int SnoozeMinutes = 10);
