@@ -43,9 +43,16 @@ public sealed class PlaceMaps(IHttpClientFactory clients, IOptions<PlaceMapOptio
             using var json = JsonDocument.Parse(buffer.AsMemory(0, length), new JsonDocumentOptions { MaxDepth = 16 });
             var results = new List<MapSearchResult>();
             if (photon) {
-                foreach (var entry in json.RootElement.GetProperty("features").EnumerateArray().Take(5)) {
-                    var coordinates = entry.GetProperty("geometry").GetProperty("coordinates"); var lat = coordinates[1].GetDouble(); var lon = coordinates[0].GetDouble();
-                    var properties = entry.GetProperty("properties");
+                if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("features", out var features) || features.ValueKind != JsonValueKind.Array) throw new JsonException();
+                foreach (var entry in features.EnumerateArray().Take(5)) {
+                    // Providers are external input: skip a malformed feature without
+                    // discarding valid alternatives or treating a non-point as a point.
+                    if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("geometry", out var geometry) || geometry.ValueKind != JsonValueKind.Object ||
+                        !geometry.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "Point" ||
+                        !geometry.TryGetProperty("coordinates", out var coordinates) || coordinates.ValueKind != JsonValueKind.Array || coordinates.GetArrayLength() < 2 ||
+                        coordinates[0].ValueKind != JsonValueKind.Number || !coordinates[0].TryGetDouble(out var lon) ||
+                        coordinates[1].ValueKind != JsonValueKind.Number || !coordinates[1].TryGetDouble(out var lat) ||
+                        !entry.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object) continue;
                     var name = string.Join(", ", new[] { "name", "street", "housenumber", "district", "city", "state", "country" }
                         .Select(key => properties.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct());
                     if (string.IsNullOrWhiteSpace(name) || name.Length > 500 || !double.IsFinite(lat) || lat is < -90 or > 90 || !double.IsFinite(lon) || lon is < -180 or > 180) continue;

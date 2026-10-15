@@ -65,6 +65,7 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
             }
             foreach (var rule in await Rules.Where(r => r.Status == "active" || r.Status == "paused").ToArrayAsync(ct)) {
                 if (!rule.PlaceIds.Any(changedPlaces.Contains)) continue;
+                if (rule.PlaceIds.Any(placeId => all[placeId].Type == "room")) throw new NodeException("indoor_location_unsupported", "GPS não identifica entrada em cômodos. Cancele ou altere a regra antes de transformar seu lugar em cômodo.", 409);
                 foreach (var placeId in rule.PlaceIds) if (PlaceGeometry.EffectiveCircles(all[placeId], all).Count == 0) throw new NodeException("place_in_use", "Uma regra ativa precisa da área deste lugar. Pause/cancele ou defina outra área antes.", 409);
                 rule.InvalidateGeometry(Now); affected.Add(rule.ObserverNodeId);
             }
@@ -181,14 +182,9 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
     public async Task<GeographicRuleView> SaveRuleAsync(Guid? id, GeographicRuleWrite request, Guid? conversationId = null, CancellationToken ct = default)
     {
         var result = await Locked(async () => {
-            var observer = await db.Nodes.SingleOrDefaultAsync(n => n.Id == request.ObserverNodeId && n.Enabled && n.RevokedAt == null && n.Platform == NodePlatform.Android, ct);
-            var settings = await Profiles.SingleOrDefaultAsync(p => p.NodeId == request.ObserverNodeId, ct);
-            if (observer is null || !observer.ReceiveReminders || settings?.Mode != "dynamic") throw new NodeException("location_source_required", "Escolha e configure o celular com localização dinâmica e recebimento de lembretes ativado.", 409);
-            if (!await db.NodeCapabilities.AnyAsync(c => c.NodeId == observer.Id && c.Name == "geofence.monitor" && c.Version >= 1, ct)) throw new NodeException("geofence_unsupported", "Atualize/abra o celular para registrar suporte a lembretes por lugar.", 409);
+            await RequireRuleObserver(request.ObserverNodeId, ct);
             var places = await Places.AsNoTracking().ToDictionaryAsync(p => p.Id, ct);
-            if (request.PlaceIds is null || request.PlaceIds.Any(p => !places.ContainsKey(p))) throw new NodeException("place_not_found", "Resolva o lugar antes de criar o lembrete.");
-            if (request.PlaceIds.Any(p => places[p].Type == "room")) throw new NodeException("indoor_location_unsupported", "GPS não identifica entrada em cômodos. Escolha a propriedade ou área externa.");
-            if (request.PlaceIds.Any(p => PlaceGeometry.EffectiveCircles(places[p], places).Count == 0)) throw new NodeException("place_area_required", "Confirme a área do lugar no mapa antes de ativar o lembrete.");
+            RequireRulePlaces(request.PlaceIds, places);
             GeographicReminderRule rule;
             if (id is { } target) {
                 rule = await Rules.SingleOrDefaultAsync(r => r.Id == target, ct) ?? throw new NodeException("geofence_not_found", "Lembrete por lugar não encontrado.", 404);
@@ -197,10 +193,7 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
                 if (rule.ObserverNodeId != request.ObserverNodeId) throw new NodeException("observer_change_requires_new_rule", "Cancele a regra e crie outra no novo celular para evitar cópias offline.", 409);
                 rule.Change(request.Text, request.PlaceIds, request.ObserverNodeId, request.Transition, request.Repeat, request.StartsAt, request.EndsAt, request.TimeZoneId, Now);
             } else { rule = new(request.Text, request.PlaceIds, request.ObserverNodeId, request.Transition, request.Repeat, request.StartsAt, request.EndsAt, request.TimeZoneId, Now, conversationId); Rules.Add(rule); }
-            var active = (await Rules.Where(r => r.ObserverNodeId == observer.Id && r.Status == "active").ToArrayAsync(ct)).Append(rule).DistinctBy(r => r.Id);
-            if (active.Count() > 100) throw new NodeException("geofence_rule_limit", "Limite de 100 lembretes geográficos ativos por celular.", 409);
-            var regionCount = active.SelectMany(r => r.PlaceIds).Distinct().SelectMany(p => PlaceGeometry.EffectiveCircles(places[p], places)).DistinctBy(c => c.Id).Count();
-            if (regionCount > 100) throw new NodeException("geofence_region_limit", "As regras deste celular ultrapassam 100 regiões. Reduza áreas ou pause regras.", 409);
+            await RequireRuleCapacity(rule, places, ct);
             return View(rule);
         }, ct);
         await Signal(result.ObserverNodeId, "geofence.monitor", new { operation = "sync" }, ct); return result;
@@ -210,9 +203,37 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
         var result = await Locked(async () => {
             var rule = await Rules.SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw new NodeException("geofence_not_found", "Lembrete por lugar não encontrado.", 404);
             if (revision != rule.Revision) throw new NodeException("revision_conflict", "O lembrete mudou. Recarregue antes de alterar.", 409);
+            if (action == "resume") {
+                if (rule.Status is "cancelled" or "completed") throw new NodeException("rule_finished", "Esta regra já foi encerrada.", 409);
+                if (rule.EndsAt <= Now) throw new NodeException("rule_expired", "A validade deste lembrete terminou. Crie outro ou edite a validade antes de retomar.", 409);
+                await RequireRuleObserver(rule.ObserverNodeId, ct);
+                var places = await Places.AsNoTracking().ToDictionaryAsync(p => p.Id, ct);
+                RequireRulePlaces(rule.PlaceIds, places);
+                await RequireRuleCapacity(rule, places, ct);
+            }
             rule.SetStatus(action, Now); return View(rule);
         }, ct);
         await Signal(result.ObserverNodeId, "geofence.monitor", new { operation = "sync" }, ct); return result;
+    }
+    private async Task RequireRuleObserver(Guid observerId, CancellationToken ct)
+    {
+        var observer = await db.Nodes.SingleOrDefaultAsync(n => n.Id == observerId && n.Enabled && n.RevokedAt == null && n.Platform == NodePlatform.Android, ct);
+        var settings = await Profiles.SingleOrDefaultAsync(p => p.NodeId == observerId, ct);
+        if (observer is null || !observer.ReceiveReminders || settings?.Mode != "dynamic") throw new NodeException("location_source_required", "Escolha e configure o celular com localização dinâmica e recebimento de lembretes ativado.", 409);
+        if (!await db.NodeCapabilities.AnyAsync(c => c.NodeId == observerId && c.Name == "geofence.monitor" && c.Version >= 1, ct)) throw new NodeException("geofence_unsupported", "Atualize/abra o celular para registrar suporte a lembretes por lugar.", 409);
+    }
+    private static void RequireRulePlaces(IReadOnlyList<Guid>? ids, IReadOnlyDictionary<Guid, Place> places)
+    {
+        if (ids is null || ids.Any(p => !places.ContainsKey(p))) throw new NodeException("place_not_found", "Resolva o lugar antes de criar o lembrete.");
+        if (ids.Any(p => places[p].Type == "room")) throw new NodeException("indoor_location_unsupported", "GPS não identifica entrada em cômodos. Escolha a propriedade ou área externa.");
+        if (ids.Any(p => PlaceGeometry.EffectiveCircles(places[p], places).Count == 0)) throw new NodeException("place_area_required", "Confirme a área do lugar no mapa antes de ativar o lembrete.");
+    }
+    private async Task RequireRuleCapacity(GeographicReminderRule rule, IReadOnlyDictionary<Guid, Place> places, CancellationToken ct)
+    {
+        var active = (await Rules.Where(r => r.ObserverNodeId == rule.ObserverNodeId && r.Status == "active").ToArrayAsync(ct)).Append(rule).DistinctBy(r => r.Id).ToArray();
+        if (active.Length > 100) throw new NodeException("geofence_rule_limit", "Limite de 100 lembretes geográficos ativos por celular.", 409);
+        var regionCount = active.SelectMany(r => r.PlaceIds).Distinct().SelectMany(p => PlaceGeometry.EffectiveCircles(places[p], places)).DistinctBy(c => c.Id).Count();
+        if (regionCount > 100) throw new NodeException("geofence_region_limit", "As regras deste celular ultrapassam 100 regiões. Reduza áreas ou pause regras.", 409);
     }
     private static string ManifestRevision(IEnumerable<GeographicReminderRule> rules, IEnumerable<Place> places) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         string.Join(';', rules.OrderBy(r => r.Id).Select(r => $"{r.Id}:{r.Revision}:{r.Status}")) + "/" + string.Join(';', places.OrderBy(p => p.Id).Select(p => $"{p.Id}:{p.Revision}"))))).ToLowerInvariant();
