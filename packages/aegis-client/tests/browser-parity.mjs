@@ -155,6 +155,10 @@ try {
      assert.equal(await panel.locator('[data-node-id="native-current"]').count(), 1);
      assert.equal(await panel.getByText('· Este dispositivo', { exact: true }).count(), 1);
      assert.equal(await panel.locator('[data-node-id]').count(), 2);
+     const phone = panel.locator('[data-node-id="native-current"]');
+     await phone.getByRole('button', { name:'Desativar',exact:true }).click();
+     await phone.getByRole('alertdialog').getByText('As regras geográficas deste celular também serão pausadas; retome explicitamente em Lembretes após reativar.', {exact:true}).waitFor();
+     await phone.getByRole('button', { name:'Cancelar',exact:true }).click();
      await panel.getByRole('button', { name: 'Adicionar dispositivo', exact: true }).click();
      await panel.getByText('ABCD-EFGH-JKMP-QRST-VWXY-1234', { exact: true }).waitFor();
      const pc = panel.locator('[data-node-id="native-other"]');
@@ -181,7 +185,9 @@ try {
      await pc.getByText('10', { exact: true }).waitFor();
      await pc.getByRole('button', { name: 'Renomear', exact: true }).click(); await pc.getByLabel('Novo nome').fill('PC Pedro'); await pc.getByRole('button', { name: 'Salvar nome', exact: true }).click();
      await pc.getByText('PC Pedro', { exact: true }).waitFor();
-     await pc.getByRole('button', { name: 'Desativar', exact: true }).click(); await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
+     await pc.getByRole('button', { name: 'Desativar', exact: true }).click();
+     assert.doesNotMatch(await pc.getByRole('alertdialog').innerText(), /regras geográficas deste celular/);
+     await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
      await pc.getByRole('button', { name: 'Reativar', exact: true }).click();
      await pc.getByRole('button', { name: 'Remover dispositivo', exact: true }).click(); await pc.getByRole('button', { name: 'Confirmar', exact: true }).click();
      await pc.waitFor({state:'detached'});
