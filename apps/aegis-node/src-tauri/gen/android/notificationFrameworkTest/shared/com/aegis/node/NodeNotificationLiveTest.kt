@@ -50,6 +50,7 @@ class NodeNotificationLiveTest {
   }
   @Test fun liveSelfNotificationPostsThroughProductionJni() {
     val code = InstrumentationRegistry.getArguments().getString("pairingCode") ?: error("fixture_bootstrap_missing")
+    val replacementCode = InstrumentationRegistry.getArguments().getString("replacementCode") ?: error("fixture_replacement_missing")
     checkpoint("live_activity_launch")
     // Destroying Tauri's last Activity exits the native process. Keep it alive until
     // AndroidJUnitRunner reports results; the emulator harness force-stops it afterwards.
@@ -115,7 +116,7 @@ class NodeNotificationLiveTest {
         while (manager.activeNotifications.none { it.tag == commandId && it.id == 1 } && SystemClock.elapsedRealtime() < activeEnd) SystemClock.sleep(50)
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
-        exerciseGeofenceLiveFramework(context,id){name,args,timeout->invoke(webview,name,args,timeout)}
+        exerciseGeofenceLiveFramework(context,id,replacementCode){name,args,timeout->invoke(webview,name,args,timeout)}
       } finally {
         checkpoint("live_cleanup_started")
         manager.cancel(commandId, 1)

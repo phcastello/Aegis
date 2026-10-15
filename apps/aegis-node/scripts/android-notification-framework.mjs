@@ -70,7 +70,7 @@ try {
     run(['reverse', 'tcp:18104', 'tcp:18104']);
     // MonitoringInstrumentation otherwise destroys the last Tauri Activity before
     // publishing the JUnit result, causing Tao to exit the instrumented process.
-    instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim()]);
+    instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim(),'-e','replacementCode',readFileSync(bootstrap+'.replacement','utf8').trim()]);
   }
 } finally {
   permission(true);

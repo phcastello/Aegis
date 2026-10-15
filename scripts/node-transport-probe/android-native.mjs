@@ -16,7 +16,7 @@ try {
   const end = Date.now()+120000;
   while (true) {
     assert(api.exitCode === null, 'Isolated backend exited');
-    try {if (existsSync(code) && (await fetch('http://127.0.0.1:18104/api/health')).ok) break;} catch {}
+    try {if (existsSync(code) && existsSync(code+'.replacement') && (await fetch('http://127.0.0.1:18104/api/health')).ok) break;} catch {}
     assert(Date.now()<end,'Isolated backend readiness timeout');
     await new Promise(r=>setTimeout(r,100));
   }

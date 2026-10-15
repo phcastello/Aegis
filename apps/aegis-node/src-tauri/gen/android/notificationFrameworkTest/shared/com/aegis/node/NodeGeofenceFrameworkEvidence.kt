@@ -33,7 +33,7 @@ private fun fixtureOffline(seconds:Int,allowPairing:Boolean=false) {
 }
 
 /** Authenticated Kotlin HTTP and real Google Task are separate from seeded deterministic state tests. */
-internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:(String,JSONObject,Long)->JSONObject):String {
+internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,invoke:(String,JSONObject,Long)->JSONObject):String {
  fun ipc(name:String,operation:String,payload:JSONObject?=null,id:String?=null,timeout:Long=20000):JSONObject=invoke(name,JSONObject().put("operation",operation).apply{if(payload!=null)put("payload",payload);if(id!=null)put("id",id)},timeout)
  fun checkpoint(phase:String)=android.util.Log.i("AegisNodeNativeTest","phase=$phase errorType=Checkpoint")
  // This empty-manifest round trip must read the actual Rust keyring credential in Kotlin.
@@ -130,15 +130,20 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,invoke:
   // authenticated pairing lifecycle. An empty outbox must result from the new
   // identity binding, never a background worker flushing it before revocation.
   fixtureOffline(120,allowPairing=true)
-  // Create the code while the existing credential is still authorized. Use the
-  // real native vault/pairing path; a fake scope must not override its authority.
-  val nextCode=invoke("node_create_pairing_code",JSONObject(),20000).getString("code")
+  // Use the fixture's independent one-time reserve. A code issued by the old
+  // Node is correctly invalid after its issuer is revoked.
   assertEquals(occurrences,events())
   invoke("node_revoke",JSONObject().put("id",nodeId),20000)
-  val replacement=invoke("node_pair",JSONObject().put("name","Android replacement fixture").put("code",nextCode),30000)
+  assertEquals(occurrences,events())
+  val replacement=invoke("node_pair",JSONObject().put("name","Android replacement fixture").put("code",replacementCode),30000)
   assertEquals("paired",replacement.getString("state"))
   val nextId=replacement.getJSONObject("node").getString("id")
   assertNotEquals(nodeId,nextId)
+  assertEquals(nextId,prefs.getString("scopeNodeId",null))
+  assertEquals(nextId,context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
+  SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->
+   db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{row->assertTrue(row.moveToFirst());assertEquals(nextId,row.getString(0))}
+  }
   assertTrue(events().isEmpty())
   for(id in occurrences)awaitFrameworkReminderWithdrawal(manager,id,1)
   checkpoint("native_identity_scope_reset")
