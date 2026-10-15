@@ -107,6 +107,35 @@ try {
   await connect(node); await command(original);
   check(JSON.stringify(received.at(-1).payload) === envelope, 'capacity_evicted_or_reminted_original');
   console.log('PASS fixture exact notify/withdraw replay, concurrent creation, conflict409, lock released before native I/O, bounded1000/capacity429 and original retention');
+
+  // Lifecycle exceptions retain the real controllers and their normal authorization.
+  // All domain routes remain inaccessible while this isolated backend is offline.
+  await request('/fixture/backend-offline', { seconds: 300 });
+  await request('/api/nodes/me', undefined, 503, node.credential);
+  await request('/api/nodes/pairing-codes', {}, 503, node.credential);
+  await request('/fixture/backend-offline', { seconds: 300, allowPairing: true });
+  await request('/api/nodes/me', undefined, 401);
+  await request('/api/nodes/pairing-codes', {}, 401);
+  await request('/api/nodes/' + node.nodeId + '/revoke', {}, 401);
+  await request('/api/nodes/me', undefined, 200, node.credential);
+  for (const [path, body] of [
+    ['/api/nodes', undefined], ['/api/nodes/me', {}], ['/api/nodes/pair', undefined],
+    ['/api/nodes/not-a-uuid/revoke', {}], ['/api/nodes/revoke', {}], ['/api/nodes/geofences/manifest', undefined],
+    ['/api/nodes/geofences/events', {}], ['/api/nodes/geofences/sync', {}],
+    ['/api/nodes/reminders/' + original.reminderId + '/actions', {}],
+    ['/api/reminder-actions/' + original.reminderId, {}],
+  ]) await request(path, body, 503, node.credential);
+  const nextCode = await request('/api/nodes/pairing-codes', {}, 200, node.credential);
+  const nextAttempt = randomUUID();
+  const next = await request('/api/nodes/pair', { code: nextCode.code, attemptId: nextAttempt, recoveryKey: randomBytes(32).toString('base64url'), name: 'Synthetic offline lifecycle proof', platform: 'android', appVersion: '0.7.0-unstable.12', protocolVersion: 1 });
+  await request('/api/nodes/pair/finalize', { attemptId: nextAttempt, credential: next.credential });
+  await request('/api/nodes/me', undefined, 200, next.credential);
+  await request('/api/nodes/' + node.nodeId + '/revoke', {}, 200, next.credential);
+  await request('/api/nodes/me', undefined, 401, node.credential);
+  await request('/api/nodes/geofences/events', {}, 503, next.credential);
+  await request('/fixture/backend-offline', { seconds: 0 });
+  await request('/api/nodes/me', undefined, 200, next.credential);
+  console.log('PASS fixture offline lifecycle exact method/path allowlist, default503, normal authorization, real pairing/finalization/revocation and domain503');
 } finally {
   clearInterval(heartbeat); socket?.terminate();
   try {

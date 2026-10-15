@@ -24,7 +24,7 @@ var idleMode = Environment.GetEnvironmentVariable("AEGIS_IDLE_FIXTURE");
 var metrics = new FixtureMetrics();
 using var reminderCommandGate = new SemaphoreSlim(1, 1);
 var reminderCommands = new Dictionary<(Guid NodeId, Guid CommandId), (FixtureReminderCommand Request, NodeNotificationCommand Command)>();
-long backendOfflineUntil = 0;
+var backendOffline = new FixtureOfflineState(0, false);
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
 listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => metrics.Add(instrument.Name, measurement)); listener.Start();
@@ -54,7 +54,8 @@ builder.Services.AddHttpClient();
 var app = builder.Build(); app.UseWebSockets();
 app.Use(async (context, next) => {
     if (context.Request.Path.StartsWithSegments("/fixture")) { await next(); return; }
-    if (Environment.TickCount64 < Interlocked.Read(ref backendOfflineUntil)) { context.Response.StatusCode = 503; return; }
+    var offline = Volatile.Read(ref backendOffline);
+    if (Environment.TickCount64 < offline.Until && (!offline.AllowPairing || !PairingLifecycle(context.Request))) { context.Response.StatusCode = 503; return; }
     metrics.Add("http_requests", 1); metrics.Add("http_request_body_bytes", context.Request.ContentLength ?? 0);
     if (context.WebSockets.IsWebSocketRequest) { await next(); return; }
     var original = context.Response.Body; await using var copy = new MemoryStream(); context.Response.Body = copy;
@@ -73,8 +74,8 @@ app.MapPost("/fixture/idle-policy", (FixtureIdlePolicy request, IOptions<NodeTra
 });
 app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
     if (request.Seconds is < 0 or > 300) return Results.BadRequest();
-    Interlocked.Exchange(ref backendOfflineUntil, Environment.TickCount64 + request.Seconds * 1000L);
-    return Results.Ok(new { seconds = request.Seconds });
+    Volatile.Write(ref backendOffline, new FixtureOfflineState(Environment.TickCount64 + request.Seconds * 1000L, request.AllowPairing));
+    return Results.Ok(new { seconds = request.Seconds, allowPairing = request.AllowPairing });
 });
 app.MapPost("/fixture/reminder-command", async (FixtureReminderCommand request, AegisDbContext db, INodeLiveNotifications socket, IReminderActionTokens tokens, CancellationToken ct) => {
     if (request.NodeId == Guid.Empty || request.CommandId == Guid.Empty) return Results.BadRequest();
@@ -129,6 +130,16 @@ using (var scope = app.Services.CreateScope())
     await File.WriteAllTextAsync(args[0], code.Code); // Temporary proof only, never a Node credential.
 }
 await app.RunAsync(); return 0;
+static bool PairingLifecycle(HttpRequest request)
+{
+    var path = request.Path.Value;
+    if (HttpMethods.IsGet(request.Method)) return path == "/api/nodes/me";
+    if (!HttpMethods.IsPost(request.Method)) return false;
+    if (path is "/api/nodes/pairing-codes" or "/api/nodes/pair" or "/api/nodes/pair/finalize") return true;
+    const string prefix = "/api/nodes/", suffix = "/revoke";
+    return path is not null && path.Length == prefix.Length + 36 + suffix.Length && path.StartsWith(prefix, StringComparison.Ordinal) && path.EndsWith(suffix, StringComparison.Ordinal) &&
+        Guid.TryParseExact(path[prefix.Length..^suffix.Length], "D", out _);
+}
 sealed class NodeControllersOnly : ControllerFeatureProvider
 {
     protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController) || type.AsType() == typeof(NodeTransportController) ||
@@ -147,6 +158,7 @@ sealed class FixtureWrites(FixtureMetrics metrics) : SaveChangesInterceptor
 }
 sealed record FixtureReminderCommand(Guid NodeId, Guid ReminderId, Guid CommandId, string Capability = "reminder.notify", int Revision = 1, int Generation = 1);
 
-sealed record FixtureOffline(int Seconds);
+sealed record FixtureOffline(int Seconds, bool AllowPairing = false);
+sealed record FixtureOfflineState(long Until, bool AllowPairing);
 
 sealed record FixtureIdlePolicy(string Mode);
