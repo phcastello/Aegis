@@ -124,6 +124,9 @@ jobs:
           else:
               print('Firebase client config absent: FCM build integration enabled; real push unavailable.')
           PYTHON
+      - if: matrix.android == 'false'
+        name: Validate Windows CDP observer without replacing native IPC
+        run: node --test ../../packages/aegis-client/tests/windows-cdp-observer.test.mjs
       - run: npm run check
       - run: npm run build
       - run: npm test
@@ -191,6 +194,8 @@ jobs:
           path: |
             artifacts/v0.7.0-completion/windows-idle-*.json
             artifacts/v0.7.0-completion/windows-upgrade.json
+            artifacts/v0.7.0-completion/windows-native-*.json
+            artifacts/v0.7.0-completion/windows-native-*.png
           if-no-files-found: warn
           retention-days: 14
       - if: matrix.android == 'false'

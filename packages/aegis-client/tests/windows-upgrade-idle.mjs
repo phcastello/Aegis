@@ -46,7 +46,7 @@ async function installedSmoke(executable, version, profile, sentinel, first) {
   let exited, browser, page;
   app.on('exit', value => { exited = value; }); app.on('error', () => { exited = -1; });
   try {
-    await waitUntil(async () => { if (exited !== undefined) throw Error('Installed runtime exited during upgrade smoke.'); try { return (await fetch('http://127.0.0.1:9463/json/version')).ok; } catch { return false; } }, 30000);
+    await waitUntil(async () => { if (exited !== undefined) throw Error('Installed runtime exited during upgrade smoke.'); try { return (await fetch('http://127.0.0.1:9463/json/version', {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } }, 30000);
     browser = await chromium.connectOverCDP('http://127.0.0.1:9463');
     await waitUntil(() => { page = browser.contexts().flatMap(context => context.pages())[0]; return Boolean(page); }, 30000);
     await page.route('**/api/**', route => route.fulfill({ json: route.request().url().includes('/chat/') ? { items: [], hasMore: false } : { enabled: false, available: false, configured: false, isConnected: false } }));
@@ -71,7 +71,18 @@ async function runIdle(executable, label, output, plan, bootstrap, expectedNodeI
     AEGIS_IDLE_KEEP_IDENTITY: label === 'before' ? '1' : '0', AEGIS_IDLE_REUSE_IDENTITY: label === 'after' ? '1' : '0',
     AEGIS_IDLE_EXPECT_NODE_ID: expectedNodeId ?? '', AEGIS_IDLE_WEBVIEW_PROFILE: plan.profile,
     AEGIS_IDLE_STORAGE_VALUE: plan.sentinel, AEGIS_IDLE_UPGRADE_VERIFY: label === 'after' ? '1' : '0' } });
-  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+  let timedOut = false, rejectDeadline;
+  const deadline = new Promise((_,reject)=>{rejectDeadline=reject;});
+  const watchdog = setTimeout(() => {
+    timedOut = true;
+    if (Number.isInteger(child.pid) && child.pid > 0) spawnSync('taskkill', ['/PID',String(child.pid),'/T','/F'], {stdio:'ignore',timeout:15000});
+    rejectDeadline(Error(`The ${label} owned measurement exceeded the fifteen-minute deadline.`));
+  }, 15 * 60 * 1000);
+  watchdog.unref();
+  let code;
+  try { code = await Promise.race([new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); }),deadline]); }
+  finally { clearTimeout(watchdog); }
+  assert.equal(timedOut, false, `The ${label} owned measurement exceeded the fifteen-minute deadline.`);
   assert.equal(code, 0, `The ${label} native idle and upgrade checks must pass.`);
   return JSON.parse(readFileSync(output, 'utf8'));
 }
@@ -109,12 +120,12 @@ if (mode === 'install-before') {
   const fixture = spawn('dotnet', ['run', '--project', join(repository, 'backend/tests/Aegis.NodeRuntimeFixture'), '--', bootstrap], { env: { ...process.env, AEGIS_IDLE_FIXTURE: 'before' }, stdio: 'inherit' });
   let fixtureExit; fixture.on('exit', value => { fixtureExit = value; }); fixture.on('error', () => { fixtureExit = -1; });
   try {
-    await waitUntil(async () => { if (fixtureExit !== undefined) throw Error('The continuous upgrade API exited.'); try { return existsSync(bootstrap) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
+    await waitUntil(async () => { if (fixtureExit !== undefined) throw Error('The continuous upgrade API exited.'); try { return existsSync(bootstrap) && (await fetch(origin + '/api/health', {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } });
     const before = await runIdle(resolve(beforeArgument), 'before', join(output, 'windows-idle-before.json'), plan, bootstrap);
     install(plan.candidateInstaller, plan.destination);
     assert.equal(installedExecutable(plan.destination), plan.executable, 'Upgrade must preserve the installation path.');
     const afterInstalled = await installedSmoke(plan.executable, candidateVersion, plan.profile, plan.sentinel, false);
-    const policy = await fetch(origin + '/fixture/idle-policy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'after' }) }); assert.equal(policy.status, 200);
+    const policy = await fetch(origin + '/fixture/idle-policy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'after' }), signal:AbortSignal.timeout(5000) }); assert.equal(policy.status, 200);
     const after = await runIdle(resolve(afterArgument), 'after', join(output, 'windows-idle-after.json'), plan, bootstrap, before.nativeNodeId);
     assert.equal(after.nativeNodeId, before.nativeNodeId); assert.equal(after.reusedIdentity, true); assert.equal(after.inventoryNodeCount, 1);
     save(join(output, 'windows-upgrade.json'), { measuredAt: new Date().toISOString(), kind: 'layered actual NSIS upgrade and isolated native identity migration',

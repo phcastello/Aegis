@@ -1,16 +1,22 @@
 // Real Windows app + Credential Manager + loopback ASP.NET Node API. No production account.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
+import { installWindowsIpcObserver } from './windows-cdp-observer.mjs';
 import WebSocket from '../../../scripts/node-transport-probe/node_modules/ws/wrapper.mjs';
 if (process.platform !== 'win32') throw Error('Requires a real Windows runner.');
 const work = mkdtempSync(join(tmpdir(), 'aegis-node-identity-'));
 const bootstrap = join(work, 'temporary-code.txt');
 const exe = resolve(process.argv[2]);
+const repository = fileURLToPath(new URL('../../../', import.meta.url));
+const artifacts = join(repository, 'artifacts/v0.7.0-completion');
+const diagnosticSource = readFileSync(join(repository,'apps/aegis-node/src/services/nodes.ts'),'utf8').match(/notificationDiagnosticCodes = new Set\(\[([\s\S]*?)\]\)/)?.[1] ?? '';
+const knownDiagnostics = [...diagnosticSource.matchAll(/'([a-z_]+)'/g)].map(match=>match[1]);
 const api = spawn('dotnet', ['run', '--project', '../../backend/tests/Aegis.NodeRuntimeFixture', '--', bootstrap], { stdio: 'inherit' });
 let app, browser, page, exited;
 const peerSockets = [];
@@ -74,6 +80,9 @@ async function open() {
   await page.route(origin + '/api/**', route => route.fulfill({ json: route.request().url().endsWith('/conversations') ? { items: [], hasMore: false } : { enabled: false, configured: false, isConnected: false } }));
   await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   assert.equal((await invoke('runtime_info')).backendUrl, origin);
+  await page.evaluate(installWindowsIpcObserver, {diagnosticCodes:knownDiagnostics});
+  await invoke('node_status');
+  assert.ok(await page.evaluate(()=>(window.__aegisIpc.counts.node_status??0)>0 && (!window.__aegisIpc.fetchFailed||window.__aegisIpc.bridgeWrapped)), 'The real Windows native IPC observer must be proven before collecting diagnostics.');
 }
 async function close() {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow()`], { encoding: 'utf8' });
@@ -143,7 +152,19 @@ try {
   await panel.getByRole('button',{name:'Atualizar lista',exact:true}).click();
   await pcRow.getByText('Detalhes técnicos e diagnóstico',{exact:true}).click();
   await pcRow.getByText(/Capacidades implementadas:.*notification\.show@1/).waitFor();
+  await page.evaluate(()=>{window.__aegisIpc.lastNotification=null;});
   await pcRow.getByRole('button', {name:'Testar notificação', exact:true}).click();
+  await waitUntil(()=>page.evaluate(()=>Boolean(window.__aegisIpc.lastNotification)),30000).catch(()=>{});
+  const buttonResult=await page.evaluate(()=>window.__aegisIpc.lastNotification) ?? {phase:'native_result_timeout',status:'unknown'};
+  const notificationSettings=await invoke('node_notification_settings');
+  const transportStatus=await invoke('node_transport_status');
+  const osQuery=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; try { $registered=@(Get-StartApps | Where-Object AppID -eq 'com.aegis.node').Count -gt 0; [pscustomobject]@{startMenuAppIdRegistered=$registered;mainWindowTitle=(Get-Process -Id ${app.pid}).MainWindowTitle} | ConvertTo-Json -Compress } catch { '{"inspection":"unavailable"}' }`],{encoding:'utf8',timeout:15000});
+  let registration={inspection:'unavailable'};try{if(osQuery.status===0)registration=JSON.parse(osQuery.stdout);}catch{}
+  const safeTransport={transportState:transportStatus.transportState,lastDiagnostic:transportStatus.lastDiagnostic?{phase:transportStatus.lastDiagnostic.phase,reason:transportStatus.lastDiagnostic.reason,httpStatus:transportStatus.lastDiagnostic.httpStatus,closeCode:transportStatus.lastDiagnostic.closeCode}:null};
+  mkdirSync(artifacts,{recursive:true});
+  writeFileSync(join(artifacts,'windows-native-diagnostics.json'),JSON.stringify({phase:'notification.show',buttonResult,settings:{granted:notificationSettings.granted,pushConfigured:notificationSettings.pushConfigured,autostart:notificationSettings.autostart,pendingActions:notificationSettings.pendingActions??0},transport:safeTransport,registration},null,2)+'\n');
+  console.log('Windows notification.show safe result: '+JSON.stringify(buttonResult));
+  assert.equal(buttonResult.status,'success','Native notification.show must post successfully; inspect windows-native-diagnostics.json for the bounded result.');
   await pcRow.getByRole('status').filter({hasText:'Notificação postada pelo dispositivo.'}).waitFor();
   const nativeNotification = await invoke('node_test_notification',{id:pcId});
   assert.equal(nativeNotification.node.id,pcId);
@@ -250,6 +271,10 @@ try {
   await close();
   console.log('Windows real native authenticated transport + heartbeat + independent server presence + close/offline + automatic re-enable + active revoke PASS.');
   console.log('Windows real native list/rename/disable/re-enable/revoke/re-pair, invalid-secret discard and chat independence PASS.');
+} catch(failure) {
+  mkdirSync(artifacts,{recursive:true});
+  if(page&&!page.isClosed())await page.screenshot({path:join(artifacts,'windows-native-failure.png')}).catch(()=>{});
+  throw failure;
 } finally {
   if (page && exited===undefined) await invoke('node_set_autostart',{enabled:false}).catch(()=>{});
   for (const socket of peerSockets) socket.terminate();

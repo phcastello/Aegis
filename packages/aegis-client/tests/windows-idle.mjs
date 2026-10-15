@@ -8,6 +8,7 @@ import { tmpdir, cpus, totalmem, release } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { installWindowsIpcObserver } from './windows-cdp-observer.mjs';
 
 if (process.platform !== 'win32') throw Error('This measurement requires a real Windows runner and WebView2.');
 const [executable, label, outputArgument, secondsArgument = '600'] = process.argv.slice(2);
@@ -41,7 +42,7 @@ async function waitUntil(action, duration = 90000) {
 }
 async function invoke(command, args) { return page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args }); }
 async function fixtureMetrics() {
-  const response = await fetch(origin + '/fixture/idle');
+  const response = await fetch(origin + '/fixture/idle', {signal:AbortSignal.timeout(5000)});
   assert.equal(response.status, 200, 'The isolated fixture must expose aggregate measurement counters.');
   return response.json();
 }
@@ -90,7 +91,7 @@ async function closeDevices() {
 }
 async function rendererSnapshot() {
   return page.evaluate(() => ({
-    ipc: { ...window.__aegisIdle.ipc },
+    ipc: { ...window.__aegisIpc.counts }, ipcObservation: {fetchWrapped:window.__aegisIpc.fetchWrapped,bridgeWrapped:window.__aegisIpc.bridgeWrapped,fetchFailed:window.__aegisIpc.fetchFailed},
     intervals: [...window.__aegisIdle.intervals.values()].map(value => value.delay).sort((a,b) => a-b),
     timeouts: [...window.__aegisIdle.timeouts.values()].filter(value => value.deadline > performance.now()).map(value => value.delay).sort((a,b) => a-b),
     runningAnimations: document.getAnimations().filter(animation => animation.playState === 'running').map(animation => ({ name: animation.animationName ?? 'script', iterations: String(animation.effect?.getTiming().iterations ?? '') })),
@@ -99,11 +100,11 @@ async function rendererSnapshot() {
   }));
 }
 try {
-  await waitUntil(async () => { if (fixtureExit !== undefined) throw Error(`Disposable fixture exited (${fixtureExit}).`); try { return (reuseIdentity || existsSync(bootstrap)) && (await fetch(origin + '/api/health')).ok; } catch { return false; } });
+  await waitUntil(async () => { if (fixtureExit !== undefined) throw Error(`Disposable fixture exited (${fixtureExit}).`); try { return (reuseIdentity || existsSync(bootstrap)) && (await fetch(origin + '/api/health', {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } });
   await fixtureMetrics();
   app = spawn(exe, [], { env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, WEBVIEW2_USER_DATA_FOLDER: process.env.AEGIS_IDLE_WEBVIEW_PROFILE ?? join(work, 'webview') }, stdio: 'ignore' });
   app.on('exit', value => { appExit = value; }); app.on('error', () => { appExit = -1; });
-  await waitUntil(async () => { if (appExit !== undefined) throw Error(`Native app exited (${appExit}).`); try { return (await fetch(`http://127.0.0.1:${port}/json/version`)).ok; } catch { return false; } }, 30000);
+  await waitUntil(async () => { if (appExit !== undefined) throw Error(`Native app exited (${appExit}).`); try { return (await fetch(`http://127.0.0.1:${port}/json/version`, {signal:AbortSignal.timeout(3000)})).ok; } catch { return false; } }, 30000);
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   await waitUntil(() => { page = browser.contexts().flatMap(context => context.pages())[0]; return Boolean(page); }, 30000);
   await page.route(origin + '/api/**', async route => {
@@ -112,9 +113,10 @@ try {
     if (path.startsWith('/api/voice/') || path === '/api/email/status') return route.fulfill({ json: { enabled: false, available: false, configured: false, isConnected: false } });
     return route.continue(); // Rust's native Node HTTP/WebSocket requests are never intercepted.
   });
+  await page.addInitScript(installWindowsIpcObserver);
   await page.addInitScript(() => {
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
-    const state = window.__aegisIdle = { ipc: {}, intervals: new Map(), timeouts: new Map() };
+    const state = window.__aegisIdle = { intervals: new Map(), timeouts: new Map() };
     const originalInterval = window.setInterval.bind(window), originalClearInterval = window.clearInterval.bind(window);
     const originalTimeout = window.setTimeout.bind(window), originalClearTimeout = window.clearTimeout.bind(window);
     window.setInterval = (callback, delay, ...args) => { const id = originalInterval(callback, delay, ...args); state.intervals.set(id, { delay: Number(delay) || 0 }); return id; };
@@ -126,13 +128,7 @@ try {
       id = originalTimeout(handler, delay, ...args); state.timeouts.set(id, { delay: duration, deadline: performance.now() + duration }); return id;
     };
     window.clearTimeout = id => { state.timeouts.delete(id); originalClearTimeout(id); };
-    const install = () => {
-      if (!window.__TAURI_INTERNALS__ || window.__TAURI_INTERNALS__.__idleWrapped) return;
-      const originalInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-      window.__TAURI_INTERNALS__.invoke = (command, ...args) => { const key = typeof command === 'string' && /^[a-z0-9_:|\-]{1,100}$/i.test(command) ? command : 'other'; state.ipc[key] = (state.ipc[key] ?? 0) + 1; return originalInvoke(command, ...args); };
-      window.__TAURI_INTERNALS__.__idleWrapped = true;
-    };
-    install(); document.addEventListener('DOMContentLoaded', install, { once: true });
+
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
@@ -160,6 +156,9 @@ try {
   }
   await waitUntil(async () => (await invoke('node_transport_status')).transportState === 'online', 30000);
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
+  await page.evaluate(()=>{window.__aegisIpc.counts={};});
+  await invoke('node_status');
+  assert.ok(await page.evaluate(()=>(window.__aegisIpc.counts.node_status??0)>0), 'The real native IPC observer must be working before reporting polling counts.');
   const pageErrors = []; page.on('pageerror', error => { pageErrors.push(error.name); });
   const cdp = await page.context().newCDPSession(page); await cdp.send('Performance.enable'); await cdp.send('Network.enable');
   const webRequests = new Set(); let pageRequests = 0, pageResponseBytes = 0;
@@ -171,7 +170,7 @@ try {
     if (state === 'devices_closed') await closeDevices();
     if (state === 'tray') { assert.equal(powershell(`(Get-Process -Id ${app.pid}).CloseMainWindow()`), 'True'); assert.equal(appExit, undefined, 'Closing the window must keep the tray runtime alive.'); }
     await sleep(2500); // Exclude opening/closing work; both versions use the same settling window.
-    await page.evaluate(() => { window.__aegisIdle.ipc = {}; });
+    await page.evaluate(() => { window.__aegisIpc.counts = {}; });
     const beforeFixture = await fixtureMetrics(), beforeRenderer = await rendererSnapshot(), beforeTask = await metric('TaskDuration');
     const startPageRequests = pageRequests, startPageBytes = pageResponseBytes;
     let previousProcesses = processSnapshot(); const initialProcesses = previousProcesses;
@@ -216,7 +215,10 @@ try {
   // Preserve the measured artifact even when an acceptance assertion fails.
   assert.deepEqual(pageErrors, [], 'The app must remain usable during idle measurement.');
   for (const sample of states) {
+    assert.ok(!sample.renderer.after.ipcObservation.fetchFailed || sample.renderer.after.ipcObservation.bridgeWrapped, 'IPC fallback must remain observable; missing instrumentation is not zero polling.');
     assert.equal(sample.nativeTransportState, 'online', `${sample.state}: a quiet but disconnected app is not a valid idle-delivery baseline.`);
+    assert.ok(Number.isFinite(sample.rendererTaskSeconds), 'Missing renderer CPU metrics cannot be reported as zero consumption.');
+    if(label==='before'&&sample.state==='devices_open')assert.ok((sample.renderer.after.ipc.node_list??0)>0,'The accepted visible panel must expose its real polling to the IPC observer.');
     assert.ok((sample.fixtureCounters.node_transport_heartbeats_total ?? 0) > 0, `${sample.state}: the real negotiated channel must remain healthy and instrumented.`);
   }
   if (label === 'after') for (const sample of states) {
