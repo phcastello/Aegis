@@ -23,7 +23,7 @@ runs:
       with:
         workspaces: apps/aegis-node/src-tauri -> target
         shared-key: ${{ inputs.cache-variant && format('{0}-{1}-{2}', runner.os, inputs.android, inputs.cache-variant) || format('{0}-{1}', runner.os, inputs.android) }}
-        cache-on-failure: ${{ inputs.cache-variant != '' }}
+        cache-on-failure: true
     - if: inputs.android == 'true'
       uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
       with:

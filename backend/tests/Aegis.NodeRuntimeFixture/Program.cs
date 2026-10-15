@@ -1,6 +1,8 @@
 using System.Reflection;
 using Aegis.Api.Controllers;
 using Aegis.Api.Nodes;
+using Aegis.Api.Nodes.Transport;
+using Microsoft.Extensions.Options;
 using Aegis.Application.Nodes;
 using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
@@ -60,6 +62,12 @@ app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapCo
 app.MapGet("/api/health", () => new { status = "ok" });
 // Loopback test executable only; not a production endpoint or new authorization path.
 app.MapGet("/fixture/idle", () => metrics.Snapshot());
+// Test-only policy change occurs between APKs, with the same disposable database/identity.
+app.MapPost("/fixture/idle-policy", (FixtureIdlePolicy request, IOptions<NodeTransportOptions> options) => {
+    if (request.Mode != "after") return Results.BadRequest();
+    options.Value.TimeoutSeconds = 360; options.Value.PersistSeconds = 300; options.Value.HeartbeatSeconds = 120;
+    return Results.Ok(new { mode = "after" });
+});
 app.MapPost("/fixture/backend-offline", (FixtureOffline request) => {
     if (request.Seconds is < 0 or > 300) return Results.BadRequest();
     Interlocked.Exchange(ref backendOfflineUntil, Environment.TickCount64 + request.Seconds * 1000L);
@@ -119,3 +127,5 @@ sealed class FixtureWrites(FixtureMetrics metrics) : SaveChangesInterceptor
 sealed record FixtureReminderCommand(Guid NodeId, Guid ReminderId, Guid CommandId, string Capability = "reminder.notify", int Revision = 1, int Generation = 1);
 
 sealed record FixtureOffline(int Seconds);
+
+sealed record FixtureIdlePolicy(string Mode);

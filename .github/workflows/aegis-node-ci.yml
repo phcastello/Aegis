@@ -301,6 +301,7 @@ jobs:
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-after.apk"
           cp src-tauri/gen/android/notificationFrameworkTest/build/outputs/apk/release/notificationFrameworkTest-release.apk "$RUNNER_TEMP/aegis-idle-test.apk"
       - name: Build accepted Android baseline with the same isolated signing identity
+        id: idle_baseline_build
         if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
@@ -310,10 +311,13 @@ jobs:
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/packages/aegis-client"
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
           cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
+          # Tauri2.12.1 codegen does not track changes to its Kotlin output directory.
+          # Refresh that package when sharing dependency caches across immutable worktrees.
+          cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --release
           npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-before.apk"
       - name: Equivalent Android idle windows before and after (ten minutes each)
-        if: ${{ !cancelled() && matrix.api == 35 && steps.release_build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && steps.idle_baseline_build.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           api-level: 35
@@ -322,8 +326,7 @@ jobs:
           working-directory: apps/aegis-node
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048
           script: |
-            node ../../scripts/node-transport-probe/android-idle.mjs before "$RUNNER_TEMP/aegis-idle-before.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion/android-idle-before.json
-            node ../../scripts/node-transport-probe/android-idle.mjs after "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion/android-idle-after.json
+            node ../../scripts/node-transport-probe/android-idle.mjs "$RUNNER_TEMP/aegis-idle-before.apk" "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: ${{ !cancelled() && matrix.api == 35 }}
         with:
