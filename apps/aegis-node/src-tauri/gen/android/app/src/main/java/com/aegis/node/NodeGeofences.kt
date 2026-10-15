@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.os.Build
@@ -43,8 +44,9 @@ object NodeGeofences {
  fun clearForScope(context:Context,id:String,origin:String) = clearWhen(context){NodeNativeSession.scopeIsCurrent(context,id,origin)}
  private fun clearWhen(context:Context,current:()->Boolean) { synchronized(manifestGate) {
   val hadRegions=prefs(context).getBoolean("hasRegions",false)
-  synchronized(applyGate){if(!current())return;check(prefs(context).edit().remove("manifest").remove("installedRevision").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
+  synchronized(applyGate){if(!current())return;check(prefs(context).edit().remove("manifest").remove("installedRevision").remove("reportPending").remove("reportError").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
+  WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-report")
   if(hadRegions)try {Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(pending(context)),15,TimeUnit.SECONDS)}catch(_:Exception){}
  } }
  fun bindIdentity(context:Context,id:String) { synchronized(applyGate) {
@@ -52,7 +54,8 @@ object NodeGeofences {
   val previous=prefs(context).getString("scopeNodeId",null) ?: manifest(context)?.optString("observerNodeId")
   if(previous!=id) {
    Store(context).use{it.writableDatabase.delete("events",null,null)}
-   NodeNativeNotifications.prefs(context).edit().remove("lastObservation").remove("observationPending").commit()
+   NodeNativeNotifications.prefs(context).edit().remove("lastObservation").remove("observationPending").remove("observationScopeId").commit()
+   check(prefs(context).edit().remove("reportPending").remove("reportError").commit())
   }
   check(prefs(context).edit().putString("scopeNodeId",id).commit())
  } }
@@ -71,7 +74,7 @@ object NodeGeofences {
   val rules=current.getJSONArray("rules")
   NodeReminderActions.reconcileRules(context,rules.objects())
   if(old?.optString("revision")!=revision || prefs(context).getBoolean("needsInstall",true) || prefs(context).getString("installedRevision",null)!=revision || prefs(context).getLong("installedUntil",0)-now<TimeUnit.DAYS.toMillis(1)) install(context,current)
-  else if(rules.length()>0) report(context,current)
+  else if(rules.length()>0 || prefs(context).getBoolean("reportPending",false)) report(context,current)
   if(rules.length()>0) {
    val renewal=PeriodicWorkRequestBuilder<NodeSyncWorker>(1,TimeUnit.DAYS).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
    WorkManager.getInstance(context).enqueueUniquePeriodicWork("aegis-geofence-lease",ExistingPeriodicWorkPolicy.KEEP,renewal)
@@ -81,7 +84,7 @@ object NodeGeofences {
  fun sync(context:Context):JSONObject {
   try{flushEvents(context)}catch(_:Exception){}
   reconcile(context)
-  return JSONObject().put("status",prefs(context).getString("status","pending_sync")).put("errorCode",prefs(context).getString("error",null))
+  return JSONObject().put("status",prefs(context).getString("status","pending_sync")).put("errorCode",prefs(context).getString("error",null)).put("syncPending",prefs(context).getBoolean("reportPending",false))
  }
  private fun activeRules(value:JSONObject,now:Long=System.currentTimeMillis()):List<JSONObject> = value.getJSONArray("rules").objects().filter {
   it.optString("status")=="active" && stamp(it.getString("leaseUntil"))>now && (it.isNull("endsAt")||stamp(it.getString("endsAt"))>now)
@@ -91,14 +94,16 @@ object NodeGeofences {
   return place.getJSONArray("circles").objects().map { NodeGeoEngine.Circle(it.getDouble("latitude"),it.getDouble("longitude"),it.getDouble("radiusMeters")) }
  }
  private fun install(context:Context,value:JSONObject) {
-  prefs(context).edit().putBoolean("needsInstall",true).commit()
+  synchronized(applyGate){if(!currentDefinition(context,value))return;check(reportPending(context,prefs(context).edit()).putBoolean("needsInstall",true).commit())}
   val state=NodeLocation.permissions(context); val rules=activeRules(value).filter { rule ->
    prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision") || !prefs(context).getBoolean("completed:${rule.getString("id")}",false)
   }
   val client=LocationServices.getGeofencingClient(context)
   if(rules.isEmpty()) {
-   if(prefs(context).getBoolean("hasRegions",false))Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
-   prefs(context).edit().putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","installed").putBoolean("hasRegions",false).remove("error").commit()
+   try {
+    if(prefs(context).getBoolean("hasRegions",false))Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
+    synchronized(applyGate){if(!currentDefinition(context,value))return;check(reportPending(context,prefs(context).edit()).putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","installed").putBoolean("hasRegions",false).remove("error").commit())}
+   }catch(_:Exception){registrationFailed(context,value)}
    report(context,value);return
   }
   val error=when {
@@ -110,7 +115,7 @@ object NodeGeofences {
    else -> null
   }
   if(error!=null) {
-   prefs(context).edit().putString("status","recoverable_error").putString("error",error).putBoolean("needsInstall",true).commit();report(context,value);return
+   synchronized(applyGate){if(!currentDefinition(context,value))return;check(reportPending(context,prefs(context).edit()).putString("status","recoverable_error").putString("error",error).putBoolean("needsInstall",true).commit())};report(context,value);return
   }
   val placeIds=rules.flatMap { it.getJSONArray("placeIds").strings() }.toSet()
   // A shared region lives until its final consumer expires, bounded by the manifest lease.
@@ -136,7 +141,7 @@ object NodeGeofences {
    }
   }
   if(regions.isEmpty()||regions.size>100) {
-   prefs(context).edit().putString("status","recoverable_error").putString("error",if(regions.isEmpty()) "geometry_required" else "region_limit_exceeded").putBoolean("needsInstall",true).commit();report(context,value);return
+   synchronized(applyGate){if(!currentDefinition(context,value))return;check(reportPending(context,prefs(context).edit()).putString("status","recoverable_error").putString("error",if(regions.isEmpty()) "geometry_required" else "region_limit_exceeded").putBoolean("needsInstall",true).commit())};report(context,value);return
   }
   try {
    // A cached location from before activation cannot establish initial presence.
@@ -160,17 +165,29 @@ object NodeGeofences {
      edit.putBoolean("armed:$id",false)
      if(prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision"))edit.putLong("ruleRevision:$id",rule.getLong("revision")).remove("completed:$id")
     }
-    check(edit.putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
+    check(reportPending(context,edit).putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
    }
+  } catch(error:Exception) {
+   registrationFailed(context,value)
+   report(context,value);return
+  }
+  // Neither the first acquisition nor a remote receipt can invalidate a successful
+  // Google registration. A failed acquisition keeps the initial presence unknown.
+  try {
    val observation=NodeLocation.current(context,upload=true,fresh=true)
    if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation))
-   report(context,value)
-  } catch(error:Exception) {
-   prefs(context).edit().putString("status","recoverable_error").putString("error","native_registration_failed").putBoolean("needsInstall",true).commit()
-   report(context,value)
-  }
+  }catch(error:Exception){notificationLog("geofence_initial_position",error)}
+  report(context,value)
  }
- private fun report(context:Context,value:JSONObject) {
+ private fun reportPending(context:Context,edit:SharedPreferences.Editor):SharedPreferences.Editor =
+  edit.putBoolean("reportPending",true).putLong("reportEpoch",prefs(context).getLong("reportEpoch",0)+1)
+ private fun currentDefinition(context:Context,value:JSONObject):Boolean =
+  manifest(context)?.optString("revision")==value.getString("revision") && NodeNativeSession.read(context)?.nodeId==value.getString("observerNodeId")
+ private fun registrationFailed(context:Context,value:JSONObject) {synchronized(applyGate) {
+  if(!currentDefinition(context,value))return
+  check(reportPending(context,prefs(context).edit()).putString("status","recoverable_error").putString("error","native_registration_failed").putBoolean("needsInstall",true).commit())
+ } }
+ private fun reportBody(context:Context,value:JSONObject):JSONObject {
   val global=prefs(context).getString("status","pending_sync")
   val rules=JSONArray()
   for(rule in value.getJSONArray("rules").objects()) {
@@ -184,7 +201,46 @@ object NodeGeofences {
    }
    rules.put(JSONObject().put("id",id).put("revision",rule.getLong("revision")).put("status",status).apply { if(status=="recoverable_error") put("errorCode",prefs(context).getString("error","native_registration_failed")) })
   }
-  NodeNativeSession.call(context,"POST","/api/nodes/geofences/sync",JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules))
+  return JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules)
+ }
+ private fun report(context:Context,value:JSONObject) {
+  synchronized(applyGate) {
+   if(!currentDefinition(context,value))return
+   if(!prefs(context).getBoolean("reportPending",false))check(reportPending(context,prefs(context).edit()).commit())
+  }
+  flushReport(context)
+ }
+ /** Receipts are a durable, coalesced latest-state outbox, independent of GMS. */
+ fun flushReport(context:Context,enqueueRetry:Boolean=true):Boolean {
+  data class Receipt(val scope:String,val revision:String,val epoch:Long,val body:JSONObject)
+  val receipt=synchronized(applyGate) {
+   val session=NodeNativeSession.read(context) ?: return false
+   val current=manifest(context) ?: return false
+   if(!prefs(context).getBoolean("reportPending",false) || current.optString("observerNodeId")!=session.nodeId || stamp(current.getString("leaseUntil"))<=System.currentTimeMillis())return false
+   if(prefs(context).getBoolean("needsInstall",true) && prefs(context).getString("status",null)!="recoverable_error")return false
+   Receipt(session.nodeId,current.getString("revision"),prefs(context).getLong("reportEpoch",0),reportBody(context,current))
+  }
+  try {
+   val response=NodeNativeSession.call(context,"POST","/api/nodes/geofences/sync",receipt.body,expectedScope=receipt.scope)
+   check(response.optBoolean("synchronized",false))
+   synchronized(applyGate) {
+    if(NodeGeofenceReportPolicy.acknowledges(prefs(context).getLong("reportEpoch",0),receipt.epoch,manifest(context)?.optString("revision"),receipt.revision,NodeNativeSession.read(context)?.nodeId,receipt.scope))check(prefs(context).edit().putBoolean("reportPending",false).remove("reportError").commit())
+   }
+  }catch(_:Exception) {
+   synchronized(applyGate) {
+    if(NodeNativeSession.read(context)?.nodeId==receipt.scope && manifest(context)?.optString("revision")==receipt.revision)check(prefs(context).edit().putString("reportError","backend_ack_pending").commit())
+   }
+  }
+  val pending=prefs(context).getBoolean("reportPending",false)
+  if(pending && enqueueRetry) {
+   val work=OneTimeWorkRequestBuilder<NodeGeofenceReportWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
+   WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-report",ExistingWorkPolicy.APPEND_OR_REPLACE,work)
+  }
+  return pending
+ }
+ fun reportRetryAllowed(context:Context,attempt:Int):Boolean {
+  val current=manifest(context) ?: return false
+  return NodeGeofenceReportPolicy.retry(attempt,System.currentTimeMillis(),stamp(current.getString("leaseUntil")),prefs(context).getBoolean("reportPending",false))
  }
  @Synchronized fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true) {
   val observer=NodeNativeSession.read(context)?.nodeId ?: return
@@ -218,12 +274,12 @@ object NodeGeofences {
     if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision") || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return@synchronized
     if(prefs(context).getBoolean("completed:$id",false)) return@synchronized
     val initial=if(transition=="exit") "inside" else "outside"
-    if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {prefs(context).edit().putBoolean("armed:$id",true).commit();needsSync=true}
+    if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",true).commit());needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
       needsSync=true
       NodeLocation.queueTransition(context,observation)
       if(createOccurrence(context,rule,observation.capturedAt)) {
-       prefs(context).edit().putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit()
+       check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit())
        retireRegions=retireRegions||!rule.getBoolean("repeat")
       }
     }
@@ -373,5 +429,13 @@ class NodeGeofenceRestoreWorker(context:Context,params:WorkerParameters):Worker(
   val definition=prefs.getString("manifest",null)?.let{JSONObject(it)} ?: return Result.success()
   val valid=java.time.OffsetDateTime.parse(definition.getString("leaseUntil")).toInstant().toEpochMilli()>System.currentTimeMillis()
   return if(valid && prefs.getString("error",null)=="native_registration_failed")Result.retry()else Result.success()
+ }
+}
+
+/** Bounded remote receipt retries never remove/re-register installed Google regions. */
+class NodeGeofenceReportWorker(context:Context,params:WorkerParameters):Worker(context,params) {
+ override fun doWork():Result {
+  val pending=NodeGeofences.flushReport(applicationContext,enqueueRetry=false)
+  return if(pending && NodeGeofences.reportRetryAllowed(applicationContext,runAttemptCount))Result.retry()else Result.success()
  }
 }

@@ -62,6 +62,7 @@ class NodeNotificationFrameworkTest {
     context.getSharedPreferences("aegis-node-push-v1", Context.MODE_PRIVATE).edit().remove("recent").commit()
   }
   @Test fun locationPermissionsMatchNativeFramework() {exerciseLocationPermissionFramework(context)}
+  @Test fun updaterCacheArchiveUsesRealPackageManagerSigners() {exerciseUpdateArchiveFramework(context)}
   @Test fun reminderActionsAndWithdrawalSurviveNativeFramework() {exerciseReminderNotificationActions({payload->render(payload)},context)}
   @Test fun validBackendCommandPostsActiveNotification() {
     assertTrue(frameworkNotificationPermission(context))

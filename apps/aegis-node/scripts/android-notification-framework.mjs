@@ -9,8 +9,8 @@ assert(['debug', 'release'].includes(buildType));
 const serial = process.env.AEGIS_TEST_EMULATOR_SERIAL ?? 'emulator-5554';
 assert(/^emulator-\d{4}$/.test(serial), 'Only a disposable emulator is allowed');
 const adb = process.env.ANDROID_HOME ? resolve(process.env.ANDROID_HOME, 'platform-tools/adb') : 'adb';
-const run = args => {
-  const result = spawnSync(adb, ['-s', serial, ...args], {encoding:'utf8', timeout:180000});
+const run = (args, timeout=180000) => {
+  const result = spawnSync(adb, ['-s', serial, ...args], {encoding:'utf8', timeout});
   assert.equal(result.status, 0, 'adb operation failed');
   return result.stdout;
 };
@@ -50,12 +50,15 @@ const permission = granted => {
   }
 };
 const instrumentation = (testClass, extra = []) => {
-  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner']);
+  // The live gate now includes four real GMS registrations/acquisitions plus
+  // authenticated failure/recovery receipts. Keep its host watchdog explicit.
+  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?240000:180000);
   // Test assertions contain only fixed phases/codes. Production logcat is never dumped.
   process.stdout.write(output);
   assert.match(output, /OK \(\d+ tests?\)/, 'Real Android framework test failed');
   assert.doesNotMatch(output, /FAILURES!!!|INSTRUMENTATION_FAILED/);
 };
+let livePassed=false;
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
   permission(true);
@@ -71,6 +74,7 @@ try {
     // MonitoringInstrumentation otherwise destroys the last Tauri Activity before
     // publishing the JUnit result, causing Tao to exit the instrumented process.
     instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim(),'-e','replacementCode',readFileSync(bootstrap+'.replacement','utf8').trim()]);
+    livePassed=true;
   }
 } finally {
   permission(true);
@@ -83,11 +87,17 @@ try {
   let crash = '';
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
+  const phases=new Set();
   for (const line of crash.split('\n')) {
-    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_cleanup_completed|location_bridge_framework|geofence_authenticated_native_http|geofence_google_registration_task_succeeded|geofence_google_registration_unavailable|geofence_pre_activation_cache_ignored|geofence_union_offline_outbox_repeat_persisted|geofence_restore_no_duplicate|native_identity_reenabled|native_identity_scope_reset|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
+    const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_cleanup_completed|location_bridge_framework|update_archive_source_inspection|geofence_authenticated_native_http|geofence_google_registration_task_succeeded|geofence_google_registration_unavailable|geofence_pre_activation_cache_ignored|geofence_union_offline_outbox_repeat_persisted|geofence_restore_no_duplicate|geofence_receipt_503_install|geofence_receipt_disconnect_install|geofence_receipt_503_restore|geofence_receipt_disconnect_restore|withdrawal_receipt_fcm_offline_replay_lost_response|native_identity_reenabled|native_identity_scope_reset|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
     if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
+    if(checkpoint?.[2]==='Checkpoint')phases.add(checkpoint[1]);
   }
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
+  if(livePassed){
+    assert(phases.has('withdrawal_receipt_fcm_offline_replay_lost_response'),'Native withdrawal receipt regression checkpoint required');
+    if(phases.has('geofence_google_registration_task_succeeded'))for(const mode of ['503','disconnect'])for(const path of ['install','restore'])assert(phases.has(`geofence_receipt_${mode}_${path}`),'Installed geofence must survive backend receipt failure');
+  }
 }
 console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap && api >= 33?' including native live WebSocket/JNI':''}`);

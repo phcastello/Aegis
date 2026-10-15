@@ -25,7 +25,9 @@ object NodeLocation {
     val provider=com.google.android.gms.common.GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)==com.google.android.gms.common.ConnectionResult.SUCCESS
     return JSONObject().put("supported",true).put("providerAvailable",provider).put("granted",fine||coarse).put("foreground",fine||coarse).put("precise",fine).put("background",background).put("servicesEnabled",enabled).put("pendingActions",NodeReminderActions.pending(context))
   }
-  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false,durationMillis:Long=15000): JSONObject {
+  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false,durationMillis:Long=15000,expectedScope:String?=null): JSONObject {
+    val scope=expectedScope?:NodeNativeSession.read(context)?.nodeId
+    if(expectedScope!=null && !locationScopeIsCurrent(expectedScope,NodeNativeSession.read(context)?.nodeId))return JSONObject().put("status","superseded")
     val state=permissions(context)
     if(!state.getBoolean("providerAvailable")) return state.put("status","provider_unavailable")
     if(!state.getBoolean("granted")) return state.put("status","permission_denied")
@@ -40,27 +42,45 @@ object NodeLocation {
       if(age>120000) return state.put("status","stale")
       val value=observation(result).apply { if(requestId!=null) put("requestId",requestId) }
       val prefs=NodeNativeNotifications.prefs(context)
-      check(prefs.edit().putString("lastObservation",value.toString()).putLong("observationMonotonic",result.elapsedRealtimeNanos).putLong("observationReceivedAt",System.currentTimeMillis()).putBoolean("observationPending",upload).commit())
-      if(upload) try { flush(context) } catch(_:Exception) { value.put("syncPending",true);NodeBackgroundWork.enqueue(context) }
+      synchronized(NodeNotificationGate.lock) {
+        if(!locationScopeIsCurrent(scope,NodeNativeSession.read(context)?.nodeId))return JSONObject().put("status","superseded")
+        check(prefs.edit().putString("lastObservation",value.toString()).putString("observationScopeId",scope).putLong("observationMonotonic",result.elapsedRealtimeNanos).putLong("observationReceivedAt",System.currentTimeMillis()).putBoolean("observationPending",upload&&scope!=null).commit())
+      }
+      if(upload&&scope!=null) try { flush(context,scope) } catch(_:Exception) { value.put("syncPending",true);NodeBackgroundWork.enqueue(context) }
       return value.put("status","available").put("ageSeconds",age/1000)
     } finally { cancel.cancel() }
   }
   fun queueTransition(context:Context,observation:NodeGeoEngine.Observation) {
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return
     val value=JSONObject().put("latitude",observation.latitude).put("longitude",observation.longitude).put("accuracyMeters",observation.accuracyMeters).put("capturedAt",Instant.ofEpochMilli(observation.capturedAt).toString()).put("source","fused")
     val prefs=NodeNativeNotifications.prefs(context)
-    val existing=prefs.getString("lastObservation",null)?.let{JSONObject(it)}
-    if(existing==null || engine(existing).capturedAt<observation.capturedAt) check(prefs.edit().putString("lastObservation",value.toString()).putBoolean("observationPending",true).commit())
+    synchronized(NodeNotificationGate.lock) {
+      if(!locationScopeIsCurrent(scope,NodeNativeSession.read(context)?.nodeId))return
+      val existing=prefs.getString("lastObservation",null)?.let{JSONObject(it)}
+      if(existing==null || engine(existing).capturedAt<observation.capturedAt) check(prefs.edit().putString("lastObservation",value.toString()).putString("observationScopeId",scope).putBoolean("observationPending",true).commit())
+    }
     NodeBackgroundWork.enqueue(context)
   }
-  fun flush(context:Context) {
+  fun flush(context:Context,expectedScope:String?=null) {
     val prefs=NodeNativeNotifications.prefs(context)
     if(!prefs.getBoolean("observationPending",false))return
     val original=prefs.getString("lastObservation",null) ?: return
-    try{NodeNativeSession.call(context,"POST","/api/nodes/location/observations",JSONObject(original))}
+    val recordedScope=prefs.getString("observationScopeId",null)
+    if(recordedScope==null) {
+      // Older caches have no provable installation scope. Keep the last known
+      // position for reference, and wait for a fresh scoped acquisition to upload.
+      synchronized(NodeNotificationGate.lock){if(prefs.getString("observationScopeId",null)==null && prefs.getString("lastObservation",null)==original)check(prefs.edit().putBoolean("observationPending",false).commit())}
+      return
+    }
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return
+    if(expectedScope!=null && scope!=expectedScope)return
+    if(recordedScope!=scope)return
+    try{NodeNativeSession.call(context,"POST","/api/nodes/location/observations",JSONObject(original),expectedScope=scope)}
     catch(error:NodeNativeSession.HttpFailure){if(error.status !in setOf(400,403,409))throw error}
-    if(prefs.getString("lastObservation",null)==original)prefs.edit().putBoolean("observationPending",false).commit()
+    synchronized(NodeNotificationGate.lock){if(NodeNativeSession.read(context)?.nodeId==scope && prefs.getString("observationScopeId",null)==scope && prefs.getString("lastObservation",null)==original)prefs.edit().putBoolean("observationPending",false).commit()}
   }
   fun observation(location: Location): JSONObject = JSONObject().put("latitude",location.latitude).put("longitude",location.longitude)
     .put("accuracyMeters",location.accuracy.toDouble()).put("capturedAt",Instant.ofEpochMilli(location.time).toString()).put("source","fused")
   fun engine(value: JSONObject): NodeGeoEngine.Observation = NodeGeoEngine.Observation(value.getDouble("latitude"),value.getDouble("longitude"),value.getDouble("accuracyMeters"),java.time.OffsetDateTime.parse(value.getString("capturedAt")).toInstant().toEpochMilli())
 }
+internal fun locationScopeIsCurrent(expectedScope:String?,currentScope:String?):Boolean = expectedScope==currentScope

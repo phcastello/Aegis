@@ -30,6 +30,13 @@
 -keepnames class com.aegis.node.NodeLocationWorker
 -keepnames class com.aegis.node.NodeGeoConfirmWorker
 -keepnames class com.aegis.node.NodeGeofenceRestoreWorker
+-keepnames class com.aegis.node.NodeGeofenceReportWorker
+-keepnames class com.aegis.node.NodeWithdrawalReceiptWorker
+# Public SDK message construction used by the independent framework harness;
+# preserve this constructor only, with no product test entrypoint or broad SDK keep.
+-keepclassmembers class com.google.firebase.messaging.RemoteMessage {
+  public <init>(android.os.Bundle);
+}
 -keepclassmembers class com.aegis.node.NodeNotificationsPlugin {
  @app.tauri.annotation.Command <methods>;
  @app.tauri.annotation.PermissionCallback <methods>;

@@ -44,7 +44,7 @@ object NodeNativeNotifications {
       if (prefs(context).getString("token", null) != token) { if(prefs(context).edit().putString("token", token).commit())NodeBackgroundWork.enqueue(context) else tokenRequested.set(false) }
     }.addOnFailureListener { tokenRequested.set(false) }
   }
-  fun fromCommand(context: Context, payload: String): NodeNotificationResult = try {
+  fun fromCommand(context: Context, payload: String, expectedScope:String?=null): NodeNotificationResult = try {
     val command = notificationPhase("payload_parse", NotificationDiagnostic.PAYLOAD_PARSE) {
       require(payload.toByteArray(Charsets.UTF_8).size <= 4096)
       val value = JSONObject(payload)
@@ -60,10 +60,10 @@ object NodeNativeNotifications {
       val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"));val now=Instant.now().epochSecond
       require(expiry>now && expiry<=now+300)
       require(input.get("generation") is Int || input.get("generation") is Long)
-      NodeReminderActions.withdraw(context,input.getString("reminderId"),input.getLong("generation"))
+      NodeReminderActions.withdrawRemote(context,input.getString("reminderId"),input.getLong("generation"))
       NodeNotificationResult("success")
     } else if(capability=="geofence.monitor" || capability=="location.current") {
-      NodeDomainCommands.accept(context,command)
+      NodeDomainCommands.accept(context,command,expectedScope)
     } else if(capability!="notification.show" && capability!="reminder.notify") NodeNotificationResult("unsupported")
     else {
       val input=command.getJSONObject("input")

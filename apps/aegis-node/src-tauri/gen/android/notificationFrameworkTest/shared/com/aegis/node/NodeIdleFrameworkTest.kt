@@ -40,7 +40,7 @@ class NodeIdleFrameworkTest {
   val duration=args.getString("phaseDurationMs")?.toLong()?:150000L;require(duration>=150000L && duration<=600000L)
   val code=if(mode=="before")args.getString("pairingCode")?:error("idle_bootstrap_missing") else null
   val expected=if(mode=="after")args.getString("expectedNodeId")?:error("idle_expected_identity_missing") else null
-  fun checkpoint(phase:String,version:String?=null) {android.util.Log.i("AegisIdleTest",JSONObject().put("event","checkpoint").put("mode",mode).put("phase",phase).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).apply{version?.let{put("runtimeVersion",it)}}.toString())}
+  fun checkpoint(phase:String,version:String?=null,receipt:JSONObject?=null) {android.util.Log.i("AegisIdleTest",JSONObject().put("event","checkpoint").put("mode",mode).put("phase",phase).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).apply{version?.let{put("runtimeVersion",it)};receipt?.let{put("withdrawalReceipt",it)}}.toString())}
   checkpoint("activity_launch")
   ActivityScenario.launch(notificationActivityClass()).let {scenario->
    checkpoint("activity_ready")
@@ -65,6 +65,7 @@ class NodeIdleFrameworkTest {
    checkpoint("transport_online")
    val configured=invoke(view,"node_notification_settings").optBoolean("pushConfigured")
    checkpoint("notification_settings_ready")
+   if(mode=="after")checkpoint("withdrawal_receipt_ready",receipt=prepareIdleWithdrawalReceipt(instrumentation.targetContext,nodeId){name,body->invoke(view,name,body)})
    fun closePanels() {
     repeat(3){evaluate(view,"(()=>{const b=document.querySelector('[aria-label=\"Fechar configurações\"]')||[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Fechar'&&b.getClientRects().length);b?.click();return Boolean(b)})()");SystemClock.sleep(100)}
    }

@@ -31,6 +31,41 @@ private fun fixtureOffline(seconds:Int,allowPairing:Boolean=false) {
  val connection=URL("http://127.0.0.1:18104/fixture/backend-offline").openConnection() as HttpURLConnection
  try {connection.requestMethod="POST";connection.connectTimeout=5000;connection.readTimeout=5000;connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(JSONObject().put("seconds",seconds).put("allowPairing",allowPairing).toString().toByteArray())};check(connection.responseCode==200)}finally{connection.disconnect()}
 }
+private fun fixtureMode(path:String,mode:String) {
+ val connection=URL("http://127.0.0.1:18104/fixture/$path").openConnection() as HttpURLConnection
+ try {connection.requestMethod="POST";connection.connectTimeout=5000;connection.readTimeout=5000;connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(JSONObject().put("mode",mode).toString().toByteArray())};check(connection.responseCode==200)}finally{connection.disconnect()}
+}
+/** Injects a real SDK RemoteMessage into the native callback; Google's provider is simulated. */
+internal fun nativeFcm(context:Context,nodeId:String,capability:String,input:JSONObject,commandId:String=UUID.randomUUID().toString(),expiresAt:String=geoStamp(System.currentTimeMillis()+240000)) {
+ val type=Class.forName("com.aegis.node.NodeMessagingService",true,context.classLoader)
+ val service=type.getConstructor().newInstance()
+ val attach=android.content.ContextWrapper::class.java.getDeclaredMethod("attachBaseContext",Context::class.java).apply{isAccessible=true}
+ attach.invoke(service,context)
+ val callback=type.methods.single{it.name=="onMessageReceived"&&it.parameterCount==1}
+ val bundle=android.os.Bundle().apply {
+  putString("google.message_id",UUID.randomUUID().toString());putString("nodeId",nodeId);putString("type",if(capability=="geofence.monitor")"domain.sync" else capability)
+  putString("version","1");putString("commandId",commandId);putString("expiresAt",expiresAt);putString("input",input.toString())
+  if(capability=="geofence.monitor")putString("capability",capability)
+ }
+ try{callback.invoke(service,callback.parameterTypes.single().getConstructor(android.os.Bundle::class.java).newInstance(bundle))}
+ finally{(service as android.app.Service).onDestroy()}
+}
+internal fun fixtureJson(path:String,body:JSONObject?=null):JSONObject {
+ val connection=URL("http://127.0.0.1:18104/fixture/$path").openConnection() as HttpURLConnection
+ try {
+  connection.connectTimeout=5000;connection.readTimeout=10000;connection.instanceFollowRedirects=false
+  if(body!=null){connection.requestMethod="POST";connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(body.toString().toByteArray())}}
+  check(connection.responseCode==200){"fixture_http_${connection.responseCode}"}
+  val result=connection.inputStream.bufferedReader().use{it.readText()};check(result.length<=262144)
+  return if(result.startsWith("["))JSONObject().put("items",JSONArray(result))else JSONObject(result)
+ }finally{connection.disconnect()}
+}
+private fun awaitGeofenceReport(context:Context,pending:Boolean) {
+ val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
+ val deadline=android.os.SystemClock.elapsedRealtime()+25000
+ while(prefs.getBoolean("reportPending",false)!=pending && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+ assertEquals(pending,prefs.getBoolean("reportPending",false))
+}
 private fun fixtureNodeRequest(path:String,credential:String?=null,body:JSONObject):JSONObject {
  val connection=URL("http://127.0.0.1:18104/api/nodes$path").openConnection() as HttpURLConnection
  try {
@@ -81,10 +116,63 @@ internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserv
   }finally{manager.cancel(commandId,1)}
   assertEquals("installed",invoke("node_geofences",JSONObject().put("operation","sync"),20000).getString("status"))
   android.util.Log.i("AegisNodeNativeTest","phase=native_identity_reenabled errorType=Checkpoint")
+  exerciseWithdrawalReceiptFramework(context,nodeId,credential)
   exercise(replacementCode)
  }finally {
   fixtureOffline(0)
   fixtureNodeRequest("/$peer/revoke",credential,JSONObject())
+ }
+}
+
+/** Provider acceptance is simulated; cancellation, SQLite and authenticated receipts are real. */
+private fun exerciseWithdrawalReceiptFramework(context:Context,nodeId:String,peerCredential:String) {
+ val id=UUID.randomUUID().toString();val commandId=UUID.randomUUID().toString();val expiresAt=geoStamp(System.currentTimeMillis()+240000)
+ val manager=context.getSystemService(NotificationManager::class.java)
+ fun receipt():Pair<Int,Long?> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT created FROM withdrawal_receipts WHERE reminderId=? AND generation=1",arrayOf(id)).use{rows->if(rows.moveToFirst())1 to rows.getLong(0)else 0 to null}}
+ fun withdrawnAt():String? {
+  val rows=fixtureJson("reminder-recipients").getJSONArray("items")
+  return (0 until rows.length()).map{rows.getJSONObject(it)}.single{it.getString("reminderId")==id&&it.getString("nodeId")==nodeId&&it.getInt("generation")==1}.optString("withdrawnAt").takeIf{it.isNotEmpty()&&it!="null"}
+ }
+ fun await(condition:()->Boolean) {
+  val deadline=android.os.SystemClock.elapsedRealtime()+45000
+  while(!condition()&&android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+  assertTrue(condition())
+ }
+ try {
+  val posted=fixtureJson("reminder-command",JSONObject().put("nodeId",nodeId).put("reminderId",id).put("commandId",UUID.randomUUID().toString()))
+  assertEquals("success",posted.getString("status"));awaitFrameworkReminder(manager,id,1)
+  val acknowledged=fixtureNodeRequest("/reminders/$id/actions",peerCredential,JSONObject().put("actionId",UUID.randomUUID().toString()).put("expectedRevision",1).put("generation",1).put("action","acknowledge"))
+  assertTrue(acknowledged.getBoolean("applied"))
+  assertNull(withdrawnAt())
+  fixtureOffline(120)
+  val input=JSONObject().put("reminderId",id).put("generation",1)
+  nativeFcm(context,nodeId,"reminder.withdraw",input,commandId,expiresAt)
+  awaitFrameworkReminderWithdrawal(manager,id,1);await{receipt().first==1}
+  val created=receipt().second
+  nativeFcm(context,nodeId,"reminder.withdraw",input,commandId,expiresAt)
+  assertEquals(1,receipt().first);assertEquals(created,receipt().second)
+  assertNull(withdrawnAt())
+  fixtureMode("withdrawal-receipt-failure","disconnect_after_apply")
+  val dropsBefore=fixtureJson("idle").optLong("withdrawal_receipt_responses_dropped",0)
+  fixtureOffline(0)
+  nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
+  await{fixtureJson("idle").optLong("withdrawal_receipt_responses_dropped",0)>dropsBefore}
+  assertNotNull(withdrawnAt());assertEquals(1,receipt().first);assertEquals(created,receipt().second)
+  // The dropped response cannot acknowledge SQLite. The ordinary bounded retry
+  // resends the same pair; the server receipt is idempotent and clears it.
+  val acceptedAt=withdrawnAt()
+  nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
+  await{receipt().first==0}
+  assertEquals(acceptedAt,withdrawnAt())
+  val requestsBeforeReplay=fixtureJson("idle").optLong("withdrawal_receipt_requests",0)
+  nativeFcm(context,nodeId,"reminder.withdraw",input,commandId,expiresAt)
+  await{fixtureJson("idle").optLong("withdrawal_receipt_requests",0)>requestsBeforeReplay && receipt().first==0}
+  assertEquals(acceptedAt,withdrawnAt())
+  assertTrue(manager.activeNotifications.none{it.tag=="reminder:$id:1"})
+  android.util.Log.i("AegisNodeNativeTest","phase=withdrawal_receipt_fcm_offline_replay_lost_response errorType=Checkpoint")
+ }finally {
+  fixtureOffline(0);fixtureMode("withdrawal-receipt-failure","none")
+  manager.cancel("reminder:$id:1",1)
  }
 }
 
@@ -110,20 +198,25 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
  val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
  val manager=context.getSystemService(NotificationManager::class.java)
  val occurrences=mutableListOf<String>()
+ val receiptOccurrences=mutableListOf<String>()
  try {
   // Restoring the same rule revision must discard its old armed presentation state.
   prefs.edit().putLong("ruleRevision:$ruleId",rule.getLong("revision")).putBoolean("armed:$ruleId",true).putBoolean("needsInstall",true).commit()
+  fixtureMode("geofence-sync-failure","503")
   val registered=ipc("node_geofences","sync",timeout=90000)
   if(registered.getString("status") in setOf("installed","waiting_initial","active")) {
    assertFalse(prefs.getBoolean("needsInstall",true));assertTrue(prefs.getBoolean("hasRegions",false))
    val initial=prefs.getString("state:$placeId",null)?.let{JSONObject(it).optString("confirmed")}
    assertEquals(initial=="inside",prefs.getBoolean("armed:$ruleId",false))
+   assertTrue(registered.getBoolean("syncPending"));assertTrue(prefs.getBoolean("reportPending",false))
    checkpoint("geofence_google_registration_task_succeeded")
+   exerciseGeofenceReportFailures(context,nodeId,ruleId,placeId,receiptOccurrences){ipc("node_geofences","sync",timeout=60000)}
   } else {
    assertEquals("recoverable_error",registered.getString("status"))
    assertTrue(registered.getString("errorCode") in setOf("location_provider_unavailable","location_permission_required","precise_location_required","background_location_required","location_services_disabled","native_registration_failed"))
    checkpoint("geofence_google_registration_unavailable")
   }
+  fixtureMode("geofence-sync-failure","none")
   // Pause through the real backend and remove native regions before deterministic observations.
   val paused=ipc("node_geofences","pause",JSONObject().put("expectedRevision",rule.getInt("revision")),ruleId)
   assertEquals("installed",ipc("node_geofences","sync",timeout=45000).getString("status"))
@@ -202,9 +295,53 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   return nextId
  } finally {
   fixtureOffline(0)
+  fixtureMode("geofence-sync-failure","none")
   // Authoritative cleanup is revision checked. Normal reconciliation may already have completed it.
   try {val list=ipc("node_geofences","list").getJSONArray("items");val current=(0 until list.length()).map{list.getJSONObject(it)}.firstOrNull{it.getString("id")==ruleId};if(current!=null)ipc("node_geofences","cancel",JSONObject().put("expectedRevision",current.getInt("revision")),ruleId)}catch(_:Exception){}
-  for(id in occurrences)manager.cancel("reminder:$id:1",1)
+  for(id in occurrences+receiptOccurrences)manager.cancel("reminder:$id:1",1)
   prefs.edit().clear().commit()
+ }
+}
+
+/** Real GMS registration is kept separate from the synthetic local observation trajectory. */
+private fun exerciseGeofenceReportFailures(context:Context,nodeId:String,ruleId:String,placeId:String,occurrences:MutableList<String>,sync:()->JSONObject) {
+ val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
+ val manager=context.getSystemService(NotificationManager::class.java)
+ val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
+ fun presented():Set<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT id FROM presentations WHERE ruleId=?",arrayOf(ruleId)).use{rows->val result=mutableSetOf<String>();while(rows.moveToNext())result.add(rows.getString(0));result}}
+ for((index,case)in listOf("503" to false,"disconnect" to false,"503" to true,"disconnect" to true).withIndex()) {
+  val(mode,restore)=case
+  fixtureMode("geofence-sync-failure",mode)
+  if(index>0) {
+   if(restore)geoRuntime(context).getMethod("restore",Context::class.java).invoke(null,context)
+   else {prefs.edit().putBoolean("needsInstall",true).commit();sync()}
+  }
+  assertFalse("A failed backend receipt cannot invalidate Google registration",prefs.getBoolean("needsInstall",true))
+  assertTrue(prefs.getBoolean("hasRegions",false));assertTrue(prefs.getBoolean("reportPending",false))
+  assertNotEquals("native_registration_failed",prefs.getString("error",null))
+  val before=presented()
+  val now=System.currentTimeMillis()
+  // Controlled captures cover the confirmation interval without waiting for a
+  // street journey. The registration above is real; this trajectory is synthetic.
+  prefs.edit().putLong("notBefore:$placeId",now-65000).remove("state:$placeId").putBoolean("armed:$ruleId",false).commit()
+  observe.invoke(null,context,0.0,0.0,5.0,now-64000,false)
+  assertTrue(prefs.getBoolean("armed:$ruleId",false))
+  observe.invoke(null,context,0.0,0.01,5.0,now-32000,false)
+  observe.invoke(null,context,0.0,0.01,5.0,now-1000,false)
+  val occurrence=(presented()-before).single()
+  occurrences.add(occurrence);awaitFrameworkReminder(manager,occurrence,1)
+  val notBefore=prefs.getLong("notBefore:$placeId",0)
+  val state=JSONObject(prefs.getString("state:$placeId",null)!!)
+  val armed=prefs.getBoolean("armed:$ruleId",false)
+  fixtureMode("geofence-sync-failure","none")
+  // An ordinary native background signal reconciles the receipt with no WebView
+  // invocation and must preserve the accepted native registration/presence.
+  nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
+  awaitGeofenceReport(context,false)
+  assertFalse(prefs.getBoolean("needsInstall",true));assertEquals(notBefore,prefs.getLong("notBefore:$placeId",0))
+  val after=JSONObject(prefs.getString("state:$placeId",null)!!)
+  assertTrue(after.getLong("lastCapturedAt")>=state.getLong("lastCapturedAt"))
+  if(after.getLong("lastCapturedAt")==state.getLong("lastCapturedAt"))assertEquals(armed,prefs.getBoolean("armed:$ruleId",false))
+  android.util.Log.i("AegisNodeNativeTest","phase=geofence_receipt_${mode}_${if(restore)"restore" else "install"} errorType=Checkpoint")
  }
 }

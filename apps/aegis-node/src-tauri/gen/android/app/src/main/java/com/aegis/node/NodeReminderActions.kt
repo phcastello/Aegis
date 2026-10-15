@@ -9,6 +9,8 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.work.*
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -16,6 +18,7 @@ import java.util.concurrent.TimeUnit
 /** Native-only occurrence context, notification generations, and bounded durable outbox. */
 internal object NodeNotificationGate { val lock=Any() }
 object NodeReminderActions {
+  private val receiptFlushing=java.util.concurrent.atomic.AtomicBoolean(false)
   // SQLiteOpenHelper acquired AutoCloseable after older supported Android releases.
   // Declare Closeable here so Kotlin use() is valid on API24+ and after R8.
   class Store(context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1), java.io.Closeable {
@@ -25,7 +28,12 @@ object NodeReminderActions {
       db.execSQL("CREATE TABLE actions (actionId TEXT PRIMARY KEY, reminderId TEXT NOT NULL, revision INTEGER NOT NULL, generation INTEGER NOT NULL, action TEXT NOT NULL, token TEXT, created INTEGER NOT NULL)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Unsupported native reminder schema") }
-    override fun onOpen(db:SQLiteDatabase) {super.onOpen(db);db.execSQL("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)") }
+    override fun onOpen(db:SQLiteDatabase) {
+      super.onOpen(db)
+      db.execSQL("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+      // Additive and idempotent for installations already using schema version 1.
+      db.execSQL("CREATE TABLE IF NOT EXISTS withdrawal_receipts(reminderId TEXT NOT NULL,generation INTEGER NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(reminderId,generation))")
+    }
   }
   fun bindIdentity(context:Context,id:String) { synchronized(NodeNotificationGate.lock) {
     if(!NodeNativeSession.bindingAllowed(context,id))return
@@ -40,7 +48,7 @@ object NodeReminderActions {
         // Under the same gate as show(), cancel every durable accepted generation.
         for((tag,notificationId)in identityReminderTags(known,active))try{manager.cancel(tag,notificationId)}catch(error:Exception){notificationLog("scope_withdraw",error)}
         try{manager.cancel("aegis-action-pending",709)}catch(error:Exception){notificationLog("scope_withdraw",error)}
-        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
+        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.delete("withdrawal_receipts",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
       }
     }
   } }
@@ -142,6 +150,73 @@ object NodeReminderActions {
     }
   }
   }
+  /** A remote withdrawal receipt is separate from a local OK/snooze presentation change. */
+  fun withdrawRemote(context:Context,id:String,generation:Long,expectedScope:String?=null) { synchronized(NodeNotificationGate.lock) {
+    require(generation>=1)
+    val scope=NodeNativeSession.read(context)?.nodeId
+    if(expectedScope!=null && scope!=expectedScope)return
+    // An unbound renderer has no authenticated Node to attribute a receipt to.
+    if(scope==null){withdraw(context,id,generation);return}
+    Store(context).use{store->val db=store.writableDatabase
+      val bound=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
+      check(bound==scope)
+      db.delete("withdrawal_receipts","created<?",arrayOf((System.currentTimeMillis()-NodeWithdrawalReceiptPolicy.TTL_MILLIS).toString()))
+      val exists=db.rawQuery("SELECT 1 FROM withdrawal_receipts WHERE reminderId=? AND generation=?",arrayOf(id,generation.toString())).use{it.moveToFirst()}
+      val count=db.rawQuery("SELECT COUNT(*) FROM withdrawal_receipts",null).use{it.moveToFirst();it.getInt(0)}
+      check(exists || count<NodeWithdrawalReceiptPolicy.MAX_ITEMS)
+    }
+    // cancel() and the durable high-water run under the rendering gate. A crash
+    // before receipt persistence is safe: replay repeats the idempotent cancel.
+    withdraw(context,id,generation)
+    val inserted=Store(context).use{store->
+      val db=store.writableDatabase
+      val exists=db.rawQuery("SELECT 1 FROM withdrawal_receipts WHERE reminderId=? AND generation=?",arrayOf(id,generation.toString())).use{it.moveToFirst()}
+      db.execSQL("INSERT OR IGNORE INTO withdrawal_receipts(reminderId,generation,created) VALUES(?,?,?)",arrayOf<Any>(id,generation,System.currentTimeMillis()))
+      !exists
+    }
+    scheduleWithdrawalReceipts(context,append=inserted)
+  } }
+  fun scheduleWithdrawalReceipts(context:Context,append:Boolean=false) {
+    if(!hasWithdrawalReceipts(context))return
+    val work=OneTimeWorkRequestBuilder<NodeWithdrawalReceiptWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
+    WorkManager.getInstance(context).enqueueUniqueWork("aegis-withdrawal-receipts",if(append)ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP,work)
+  }
+  fun hasWithdrawalReceipts(context:Context):Boolean = synchronized(NodeNotificationGate.lock) {
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return false
+    Store(context).use{store->val db=store.writableDatabase
+      val bound=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
+      if(bound!=scope)return false
+      db.delete("withdrawal_receipts","created<?",arrayOf((System.currentTimeMillis()-NodeWithdrawalReceiptPolicy.TTL_MILLIS).toString()))
+      db.rawQuery("SELECT 1 FROM withdrawal_receipts LIMIT 1",null).use{it.moveToFirst()}
+    }
+  }
+  fun flushWithdrawalReceipts(context:Context):Boolean {
+    if(!receiptFlushing.compareAndSet(false,true))return hasWithdrawalReceipts(context)
+    try {
+    val scope=NodeNativeSession.read(context)?.nodeId ?: return false
+    val requested=synchronized(NodeNotificationGate.lock) {
+      if(!hasWithdrawalReceipts(context))return false
+      Store(context).use{store->store.readableDatabase.rawQuery("SELECT reminderId,generation FROM withdrawal_receipts ORDER BY created LIMIT 100",null).use{rows->
+        val result=linkedSetOf<Pair<String,Long>>();while(rows.moveToNext())result.add(rows.getString(0) to rows.getLong(1));result
+      }}
+    }
+    val items=JSONArray(requested.map{(id,generation)->JSONObject().put("reminderId",id).put("generation",generation)})
+    val response=NodeNativeSession.call(context,"POST","/api/nodes/reminders/withdrawals/receipts",JSONObject().put("items",items),expectedScope=scope)
+    val received=response.getJSONArray("received").objects().map{it.getString("reminderId") to it.getLong("generation")}
+    synchronized(NodeNotificationGate.lock) {
+      if(NodeNativeSession.read(context)?.nodeId!=scope)return false
+      Store(context).use{store->val db=store.writableDatabase
+        val bound=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
+        if(bound!=scope)return false
+        db.beginTransaction();try {
+          for((id,generation)in NodeWithdrawalReceiptPolicy.received(requested,received))db.delete("withdrawal_receipts","reminderId=? AND generation=?",arrayOf(id,generation.toString()))
+          db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
+      }
+      return hasWithdrawalReceipts(context)
+    }
+    }finally{receiptFlushing.set(false)}
+  }
   fun enqueueUi(context:Context,id:String,body:JSONObject,expectedScope:String):JSONObject {
     synchronized(NodeNotificationGate.lock) {
       require(NodeNativeSession.read(context)?.nodeId==expectedScope)
@@ -187,7 +262,7 @@ object NodeReminderActions {
     }}
     for(batch in items.chunked(100)) {
       val response=NodeNativeSession.call(context,"POST","/api/nodes/reminders/reconcile",JSONObject().put("items",org.json.JSONArray(batch)),expectedScope=scope)
-      for(item in response.getJSONArray("withdraw").objects())withdrawScoped(context,item.getString("reminderId"),item.getLong("generation"),scope)
+      for(item in response.getJSONArray("withdraw").objects())withdrawRemote(context,item.getString("reminderId"),item.getLong("generation"),scope)
     }
   }
   fun flush(context: Context) {
@@ -229,4 +304,12 @@ object NodeReminderActions {
 }
 class NodeReminderActionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) { try { NodeReminderActions.enqueue(context,intent) } catch(error:Exception) { notificationLog("action_persist",error) } }
+}
+
+/** FCM receivers only persist receipts; authenticated delivery runs outside the receiver. */
+class NodeWithdrawalReceiptWorker(context:Context,params:WorkerParameters):Worker(context,params) {
+  override fun doWork():Result {
+    val pending=try{NodeReminderActions.flushWithdrawalReceipts(applicationContext)}catch(_:Exception){NodeReminderActions.hasWithdrawalReceipts(applicationContext)}
+    return if(NodeWithdrawalReceiptPolicy.retry(runAttemptCount,pending))Result.retry()else Result.success()
+  }
 }

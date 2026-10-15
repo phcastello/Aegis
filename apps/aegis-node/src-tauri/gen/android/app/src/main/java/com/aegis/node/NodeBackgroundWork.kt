@@ -33,6 +33,9 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
     }
     else {
       var retry=false
+      // A foreground/native reconciliation event can resume pending receipts
+      // immediately; remote failures use their own bounded retry budget.
+      try{if(NodeReminderActions.flushWithdrawalReceipts(applicationContext))NodeReminderActions.scheduleWithdrawalReceipts(applicationContext)}catch(_:Exception){NodeReminderActions.scheduleWithdrawalReceipts(applicationContext)}
       // Independent channels: a location/provider error cannot strand temporal actions.
       val token = prefs.getString("token", null)
       val stamp = System.currentTimeMillis()
