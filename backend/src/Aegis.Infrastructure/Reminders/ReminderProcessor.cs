@@ -57,7 +57,12 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IN
             {
                 var legacy = await db.ReminderDeliveryAttempts.Where(a => a.ReminderId == id && a.Generation == generation).OrderByDescending(a => a.Attempt).FirstOrDefaultAsync(ct);
                 if (legacy?.NodeId is not null)
-                { var recovered = ReminderRecipient.Recover(legacy, generation, clock.GetUtcNow()); db.Set<ReminderRecipient>().Add(recovered); current.Add(recovered); }
+                {
+                    var recovered = ReminderRecipient.Recover(legacy, generation, clock.GetUtcNow());
+                    legacy.BindRecipient(recovered.Id, generation);
+                    if (legacy.CompletedAt is null) legacy.Complete("outcome_unknown", legacy.Transport, true, clock.GetUtcNow(), clock.GetUtcNow());
+                    db.Set<ReminderRecipient>().Add(recovered); current.Add(recovered);
+                }
             }
             if (r.DeliveryPolicy == "bestAvailable" && current.Any(p => p.Status == "accepted")) return true;
             foreach (var nodeId in candidates)
