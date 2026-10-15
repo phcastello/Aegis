@@ -100,6 +100,8 @@ The repository is organized as a monorepo. Backend code lives under `backend/`, 
 - Vite
 - TypeScript
 - PWA
+- Tauri 2 e Rust nos aplicativos Android/Windows
+- Kotlin e APIs nativas Android para notificações, localização e geofencing
 
 ## Aegis Memory
 
