@@ -83,12 +83,17 @@ if (mode === 'install-before') {
   const candidateFiles = readdirSync(candidateDirectory).filter(name => /\.exe$/i.test(name)); assert.equal(candidateFiles.length, 1);
   const work = mkdtempSync(join(tmpdir(), 'aegis-windows-upgrade-'));
   const acceptedInstaller = join(work, 'accepted-installer.exe');
-  const response = await fetch(acceptedInstallerUrl); assert.equal(response.status, 200);
+  const response = await fetch(acceptedInstallerUrl, {signal:AbortSignal.timeout(60000)}); assert.equal(response.status, 200);
   const bytes = Buffer.from(await response.arrayBuffer()); assert.ok(bytes.length > 0 && bytes.length < 10 * 1024 * 1024);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), acceptedInstallerSha256, 'The immutable public installer must match its published digest.');
   writeFileSync(acceptedInstaller, bytes); install(acceptedInstaller, destination);
   const executable = installedExecutable(destination);
-  const plan = { kind: 'aegis-windows-upgrade-ci-v1', work, destination, executable, profile: join(work, 'webview'), sentinel: randomUUID(), candidateInstaller: join(candidateDirectory, candidateFiles[0]), acceptedInstallerSha256, acceptedInstallerUrl };
+  assert.ok(process.env.LOCALAPPDATA);
+  // Tauri's actual default Windows WebView data directory is app_local_data_dir.
+  // Use that directory on the disposable runner so deleting AppData during an
+  // installer upgrade cannot be hidden by a profile outside the app's storage.
+  const profile = join(process.env.LOCALAPPDATA, 'com.aegis.node');
+  const plan = { kind: 'aegis-windows-upgrade-ci-v1', work, destination, executable, profile, sentinel: randomUUID(), candidateInstaller: join(candidateDirectory, candidateFiles[0]), acceptedInstallerSha256, acceptedInstallerUrl };
   plan.beforeInstalled = await installedSmoke(executable, acceptedVersion, plan.profile, plan.sentinel, true);
   save(planPath, plan);
   assert.ok(process.env.GITHUB_ENV, 'This preparation step is intended for the isolated CI workflow.');
@@ -115,9 +120,9 @@ if (mode === 'install-before') {
     save(join(output, 'windows-upgrade.json'), { measuredAt: new Date().toISOString(), kind: 'layered actual NSIS upgrade and isolated native identity migration',
       acceptedVersion, candidateVersion, acceptedInstallerUrl, acceptedInstallerSha256, candidateInstallerSha256: hash(plan.candidateInstaller),
       beforeInstalled: plan.beforeInstalled, afterInstalled, nativeNodeIdPreserved: true, nativeNodeId: after.nativeNodeId, nodeCount: after.inventoryNodeCount, nativeAfterRepaired: false, nativeNotificationPost: after.upgradeNotificationPost,
-      sameDisposableBackendProcess: true, sameOsVault: 'com.aegis.node.identity.v1 / installation', samePrivateWebViewProfile: true,
+      sameDisposableBackendProcess: true, sameOsVault: 'com.aegis.node.identity.v1 / installation', samePrivateWebViewProfile: true, usesActualAppLocalDataDirectory: true,
       idleSecondsBefore: before.states.reduce((sum, state) => sum + state.durationSeconds, 0), idleSecondsAfter: after.states.reduce((sum, state) => sum + state.durationSeconds, 0),
-      limits: ['Actual public accepted NSIS and candidate NSIS are installed sequentially to the same path; their installed runtime versions and WebView storage are checked.', 'The published runtime keeps its production HTTPS origin and is never paired. Its WebView uses a process-only offline proxy and private CDP API responses.', 'Authentication and NodeId continuity use the immutable accepted and candidate debug executables compiled for one loopback API and in-memory database. No production Node credential is read or written.', 'This does not exercise signed updater feed/download/install, owner data, physical toast interaction or Windows display scaling. Physical upgrade acceptance remains pending.'] });
+      limits: ['Actual public accepted NSIS and candidate NSIS are installed sequentially to the same path; their installed runtime versions and the actual app local data directory are checked. The CI runner is isolated; app storage is never broadly deleted.', 'The published runtime keeps its production HTTPS origin and is never paired. Its WebView uses a process-only offline proxy and private CDP API responses.', 'Authentication and NodeId continuity use the immutable accepted and candidate debug executables compiled for one loopback API and in-memory database. No production Node credential is read or written.', 'This does not exercise signed updater feed/download/install, owner data, physical toast interaction or Windows display scaling. Physical upgrade acceptance remains pending.'] });
     console.log('Actual NSIS 11 -> candidate installation, shared storage, same native NodeId/OS vault/database without a second pairing, and equivalent ten-minute idle windows PASS.');
   } finally {
     if (fixtureExit === undefined) spawnSync('taskkill', ['/PID', String(fixture.pid), '/T', '/F'], { stdio: 'ignore' });
