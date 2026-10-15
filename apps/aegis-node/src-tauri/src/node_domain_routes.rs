@@ -14,6 +14,37 @@ fn revision(payload: &Value) -> Result<u64, String> {
         .filter(|v| *v > 0)
         .ok_or_else(|| "Atualize os dados antes de alterar.".into())
 }
+fn reminder_list_path(payload: &Value) -> Result<String, String> {
+    let fields = payload.as_object().ok_or("Dados de página inválidos.")?;
+    if fields
+        .keys()
+        .any(|key| !matches!(key.as_str(), "offset" | "seriesOffset" | "focusId"))
+    {
+        return Err("Dados de página inválidos.".into());
+    }
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    for field in ["offset", "seriesOffset"] {
+        if let Some(value) = fields.get(field) {
+            let offset = value
+                .as_u64()
+                .filter(|value| *value <= 1_000_000)
+                .ok_or("Página inválida.")?;
+            query.append_pair(field, &offset.to_string());
+        }
+    }
+    if let Some(value) = fields.get("focusId") {
+        let identifier = id(Some(
+            value.as_str().ok_or("Identificador inválido.")?.into(),
+        ))?;
+        query.append_pair("focusId", &identifier);
+    }
+    let query = query.finish();
+    Ok(if query.is_empty() {
+        "/reminders".into()
+    } else {
+        format!("/reminders?{query}")
+    })
+}
 pub(crate) fn route(
     domain: &str,
     operation: &str,
@@ -22,7 +53,7 @@ pub(crate) fn route(
 ) -> Result<(reqwest::Method, String), String> {
     use reqwest::Method;
     match (domain, operation) {
-        ("reminders", "list") => return Ok((Method::GET, "/reminders".into())),
+        ("reminders", "list") => return Ok((Method::GET, reminder_list_path(payload)?)),
         ("reminders", "create") => return Ok((Method::POST, "/reminders".into())),
         ("reminders", "update") => {
             return Ok((Method::PATCH, format!("/reminders/{}", id(identifier)?)))
@@ -122,6 +153,42 @@ pub(crate) fn route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reminder_pages_preserve_the_legacy_route_and_encode_only_bounded_parameters() {
+        assert_eq!(
+            route("reminders", "list", None, &mut json!({})).unwrap(),
+            (reqwest::Method::GET, "/reminders".into())
+        );
+        let identifier = uuid::Uuid::new_v4().to_string();
+        let (_, path) = route(
+            "reminders",
+            "list",
+            None,
+            &mut json!({"offset":200,"seriesOffset":100,"focusId":identifier}),
+        )
+        .unwrap();
+        assert_eq!(
+            path,
+            format!("/reminders?offset=200&seriesOffset=100&focusId={identifier}")
+        );
+        assert!(route("reminders", "list", None, &mut json!({"offset":1_000_000})).is_ok());
+    }
+    #[test]
+    fn reminder_pages_reject_arbitrary_queries_and_invalid_offsets_or_focus_ids() {
+        for payload in [
+            json!({"offset":-1}),
+            json!({"offset":1_000_001}),
+            json!({"offset":1.5}),
+            json!({"offset":"200&nodeId=other"}),
+            json!({"seriesOffset":null}),
+            json!({"url":"https://evil.invalid"}),
+            json!({"focusId":"../admin"}),
+            json!({"focusId":uuid::Uuid::nil()}),
+            json!([]),
+        ] {
+            assert!(route("reminders", "list", None, &mut payload.clone()).is_err());
+        }
+    }
     #[test]
     fn rejects_arbitrary_routes_and_identifiers() {
         for operation in ["/api/admin", "https://evil.invalid", "deleteAll"] {

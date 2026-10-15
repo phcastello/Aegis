@@ -41,6 +41,7 @@ var database = "native-ci-" + Guid.NewGuid();
 builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(database).AddInterceptors(new FixtureWrites(metrics)));
 builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
 builder.Services.AddScoped<ReminderStore>(); builder.Services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
+builder.Services.AddScoped<IReminderSeriesStore, ReminderSeriesStore>();
 builder.Services.AddScoped<IReminderActionStore, ReminderActionStore>(); builder.Services.AddScoped<ReminderActionService>();
 builder.Services.AddScoped<IReminderActionTokens, ReminderActionTokens>();
 builder.Services.AddScoped<IPlaceService, PlaceService>();
