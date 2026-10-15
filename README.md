@@ -6,7 +6,7 @@ Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana d
 
 ## Download Aegis
 
-A unstable.13 não foi aprovada. A revisão corrige R01–R06; campo e atualização13→14 mantendo dados/NodeId ainda dependem do aceite do proprietário. **Não desinstale para atualizar.**
+A unstable.13 não foi aprovada. A revisão corrige R01–R03/R05–R06 e melhora descoberta/diagnóstico do updater (R04); a causa física anterior continua sem comprovação. Campo e atualização 13→14 mantendo dados/NodeId dependem do aceite do proprietário. **Não desinstale para atualizar.**
 
 **Candidata integrada: 0.7.0-unstable.14**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.14). A v0.7.0 estável ainda depende desse aceite.
 
