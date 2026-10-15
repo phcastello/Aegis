@@ -42,7 +42,7 @@ docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll migrate
 docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll pairing-code
 ```
 
-The code expires after ten minutes. Enter it only on the intended device; keep it out of shared logs. Identity survives normal app restarts and updates. Rename, disable/re-enable and revoke are available in the same panel. Revocation requires new pairing; it is permanent. See [bootstrap, recovery and physical acceptance steps](docs/v0.7.0-stage03-node-identity-pairing.md).
+O código expira após dez minutos. Use-o somente no dispositivo pretendido e não o inclua em logs compartilhados. A identidade sobrevive a reinícios e atualizações normais. Desativar o celular também pausa suas regras geográficas; reativá-lo mantém essas regras pausadas até retomada explícita em Lembretes. Em aparelho offline, a pausa fica pendente de sincronização ou expiração local. O [relatório do Stage 03](docs/v0.7.0-stage03-node-identity-pairing.md) documenta o bootstrap e a recuperação originais.
 
 ### Lembretes e lugares
 
@@ -487,7 +487,9 @@ The public contracts are `GET /api/voice/transcription/status`, returning `{ "en
 
 The PWA prefers `audio/webm;codecs=opus`, then `audio/webm`, and uses an MP4/AAC MediaRecorder choice when that is what the browser supports (notably Safari). The API also accepts WAV, OGG/Opus, and MPEG/MP3. There is no browser-to-provider request, streaming STT, wake word, continuous capture, audio storage, or transcript cleanup by an LLM in this version.
 
-## Aegis reminders and Web Push (v0.5.0 — "Knock Knock")
+## Histórico: reminders e Web Push da v0.5.0 — "Knock Knock"
+
+Esta seção registra os contratos e testes da v0.5.0. Recorrência, adiamento, entrega nativa e retirada de cópias foram ampliados na candidata v0.7.0; consulte [Lembretes e lugares](#lembretes-e-lugares) e o [checklist atual](docs/v0.7.0-completion.md) para o comportamento desta versão.
 
 Reminders are Aegis entities, independent of Google Calendar and of the conversation that created them. Chat supports `reminder_create`, `reminder_list`, `reminder_update` and `reminder_cancel`. Explicit requests execute immediately; no second-turn Google mutation confirmation is used. Mentioning a deadline or casually wanting to remember something does not authorize creation. Updates/cancellation require a real reference observed in the same conversation, valid for 30 minutes. The latest list's order is preserved for requests such as “cancel the second”. Lists return at most 50 reminders and expose `hasMore`; optional time bounds use an exclusive upper bound. Text is limited to 600 characters to keep encrypted push payloads bounded.
 
@@ -551,4 +553,4 @@ Only the scenarios with recorded evidence above are marked as physically validat
 
 Web Push cannot guarantee exactly-once delivery: a crash after external acceptance but before committing `AcceptedAt` remains ambiguous. Accepted push does not prove visual receipt, and absence of `AcknowledgedAt` does not mean the user ignored the notification. Already displayed notifications on another device are not removed remotely. Without local management credentials, an old subscription may not be identifiable immediately; permission changes while the PWA is closed are reconciled when the app can next observe them or the push service rejects the subscription.
 
-Future work for the independent Aegis Reminder system deliberately excludes recurring reminders, cron/RRULE scheduling, priorities, reincidence/re-alerting, escalation, snooze, behavioral learning, a generic scheduler/automation engine, external conditions and autonomous monitoring. This does not limit the recurring Google Calendar events created in v0.5.1. The reminder worker stores useful telemetry without implementing adaptive decisions. No platform-specific Apple code or architecture is introduced.
+O escopo original da v0.5.0 excluía recorrência, adiamento e condições geográficas, agora tratados pela candidata v0.7.0. Permanecem fora desta entrega aprendizado comportamental, escalonamento autônomo e Automation Engine genérico. Recorrência de eventos do Google Calendar continua independente dos lembretes da Aegis.
