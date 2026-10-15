@@ -109,6 +109,26 @@ try {
   check(JSON.stringify(received.at(-1).payload) === envelope, 'capacity_evicted_or_reminted_original');
   console.log('PASS fixture exact notify/withdraw replay, concurrent creation, conflict409, lock released before native I/O, bounded1000/capacity429 and original retention');
 
+  await request('/api/nodes/reminders/' + original.reminderId + '/actions', { actionId: randomUUID(), expectedRevision: 1, generation: 1, action: 'acknowledge' }, 200, node.credential);
+  const receiptBody = { items: [{ reminderId: original.reminderId, generation: 1 }] };
+  const receiptPath = '/api/nodes/reminders/withdrawals/receipts';
+  await request('/fixture/withdrawal-receipt-failure', { mode: 'disconnect_after_apply' });
+  let responseUnavailable = false;
+  try { await request(receiptPath, receiptBody, 200, node.credential); } catch { responseUnavailable = true; }
+  check(responseUnavailable, 'committed_receipt_response_was_not_lost');
+  const applied = (await request('/fixture/reminder-recipients')).find(r => r.reminderId === original.reminderId && r.nodeId === node.nodeId);
+  check(applied?.withdrawnAt, 'lost_response_did_not_commit_receipt');
+  await request(receiptPath, receiptBody, 503, node.credential);
+  await request(receiptPath, receiptBody, 503, node.credential);
+  const lost = await request('/fixture/idle');
+  check(lost.withdrawal_receipt_responses_dropped === 1 && lost.withdrawal_receipt_responses_unavailable >= 2, 'transparent_retry_could_acknowledge_lost_response');
+  await request('/fixture/withdrawal-receipt-failure', { mode: 'none' });
+  const recovered = await request(receiptPath, receiptBody, 200, node.credential);
+  check(recovered.received.length === 1 && recovered.received[0].reminderId === original.reminderId, 'receipt_recovery_failed');
+  const repeated = (await request('/fixture/reminder-recipients')).find(r => r.reminderId === original.reminderId && r.nodeId === node.nodeId);
+  check(repeated.withdrawnAt === applied.withdrawnAt, 'replayed_receipt_replaced_original_confirmation');
+  console.log('PASS committed withdrawal receipt loses its response, transparent retries stay503, explicit recovery is idempotent');
+
   // Lifecycle exceptions retain the real controllers and their normal authorization.
   // All domain routes remain inaccessible while this isolated backend is offline.
   await request('/fixture/backend-offline', { seconds: 300 });

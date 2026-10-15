@@ -69,12 +69,17 @@ app.Use(async (context, next) => {
         if (failure == "503") { context.Response.StatusCode = 503; return; }
         if (failure == "disconnect") { context.Abort(); return; }
     }
-    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts") metrics.Add("withdrawal_receipt_requests", 1);
+    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts") {
+        metrics.Add("withdrawal_receipt_requests", 1);
+        // After losing a committed response, keep transparent HTTP replays from
+        // turning a lost-response test into a successful-retry test by accident.
+        if (Volatile.Read(ref dropWithdrawalReceiptResponse) == -1) { metrics.Add("withdrawal_receipt_responses_unavailable", 1); context.Response.StatusCode = 503; return; }
+    }
     if (context.WebSockets.IsWebSocketRequest) { await next(); return; }
     var original = context.Response.Body; await using var copy = new MemoryStream(); context.Response.Body = copy;
     try {
         await next();
-        if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts" && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref dropWithdrawalReceiptResponse, 0, 1) == 1) {
+        if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts" && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref dropWithdrawalReceiptResponse, -1, 1) == 1) {
             metrics.Add("withdrawal_receipt_responses_dropped", 1); context.Abort(); return;
         }
         metrics.Add("http_response_body_bytes", copy.Length); copy.Position = 0; await copy.CopyToAsync(original);

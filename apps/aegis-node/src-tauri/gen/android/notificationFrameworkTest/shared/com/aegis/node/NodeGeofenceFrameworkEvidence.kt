@@ -161,6 +161,7 @@ private fun exerciseWithdrawalReceiptFramework(context:Context,nodeId:String,pee
   // The dropped response cannot acknowledge SQLite. The ordinary bounded retry
   // resends the same pair; the server receipt is idempotent and clears it.
   val acceptedAt=withdrawnAt()
+  fixtureMode("withdrawal-receipt-failure","none")
   nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
   await{receipt().first==0}
   assertEquals(acceptedAt,withdrawnAt())
