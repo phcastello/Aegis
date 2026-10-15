@@ -44,7 +44,20 @@ object NodeNativeNotifications {
       if (prefs(context).getString("token", null) != token) { if(prefs(context).edit().putString("token", token).commit())NodeBackgroundWork.enqueue(context) else tokenRequested.set(false) }
     }.addOnFailureListener { tokenRequested.set(false) }
   }
-  fun fromCommand(context: Context, payload: String, expectedScope:String?=null): NodeNotificationResult = try {
+  // Private JNI metadata is separate from the strict external command contract.
+  fun fromLiveCommand(context:Context,payload:String):NodeNotificationResult=try {
+    val wrapper=notificationPhase("payload_parse",NotificationDiagnostic.PAYLOAD_PARSE) {
+      require(payload.toByteArray(Charsets.UTF_8).size<=4352)
+      JSONObject(payload).also {
+        require(it.keys().asSequence().toSet()==setOf("command","validatedNowEpochMillis"))
+        require(it.get("validatedNowEpochMillis") is Int || it.get("validatedNowEpochMillis") is Long)
+      }
+    }
+    val clock=notificationPhase("payload_parse",NotificationDiagnostic.PAYLOAD_PARSE) {NodeNotificationClock.authenticated(wrapper.getLong("validatedNowEpochMillis"))}
+    fromCommand(context,wrapper.getJSONObject("command").toString(),clock=clock)
+  }catch(error:NotificationPhaseFailure){NodeNotificationResult("failed",error.diagnostic)}
+   catch(error:Exception){notificationLog("payload_parse",error);NodeNotificationResult("failed",NotificationDiagnostic.PAYLOAD_PARSE)}
+  fun fromCommand(context: Context, payload: String, expectedScope:String?=null,clock:NodeNotificationClock=NodeNotificationClock.wall): NodeNotificationResult = try {
     val command = notificationPhase("payload_parse", NotificationDiagnostic.PAYLOAD_PARSE) {
       require(payload.toByteArray(Charsets.UTF_8).size <= 4096)
       val value = JSONObject(payload)
@@ -57,28 +70,29 @@ object NodeNativeNotifications {
       val input=command.getJSONObject("input")
       require(input.keys().asSequence().toSet()==setOf("reminderId","generation"))
       val commandId=command.getString("commandId");require(UUID.fromString(commandId).toString()==commandId && commandId!="00000000-0000-0000-0000-000000000000")
-      val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"));val now=Instant.now().epochSecond
+      val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"));val now=clock.nowEpochSecond()
       require(expiry>now && expiry<=now+300)
       require(input.get("generation") is Int || input.get("generation") is Long)
       NodeReminderActions.withdrawRemote(context,input.getString("reminderId"),input.getLong("generation"))
       NodeNotificationResult("success")
     } else if(capability=="geofence.monitor" || capability=="location.current") {
-      NodeDomainCommands.accept(context,command,expectedScope)
+      NodeDomainCommands.accept(context,command,expectedScope,clock)
     } else if(capability!="notification.show" && capability!="reminder.notify") NodeNotificationResult("unsupported")
     else {
       val input=command.getJSONObject("input")
       val reminder=if(capability=="reminder.notify") NodeReminderActions.read(input,command.getString("commandId")) else null
       if(reminder==null) require(input.keys().asSequence().toSet()==setOf("title","body"))
-      show(context,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body"),reminder)
+      show(context,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body"),reminder,clock)
     }
   } catch (error: NotificationPhaseFailure) { NodeNotificationResult("failed", error.diagnostic) }
     catch (error: Exception) { notificationLog("payload_parse", error); NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_PARSE) }
 
-  fun show(context: Context, id: String, expires: String, title: String, body: String, reminder: NodeReminderActions.Presentation? = null): NodeNotificationResult { synchronized(NodeNotificationGate.lock) { return try {
+  fun show(context: Context, id: String, expires: String, title: String, body: String, reminder: NodeReminderActions.Presentation? = null,clock:NodeNotificationClock=NodeNotificationClock.wall): NodeNotificationResult { synchronized(NodeNotificationGate.lock) { return try {
     val now = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { Instant.now().epochSecond }
+    val commandNow=notificationPhase("expiry_parse",NotificationDiagnostic.EXPIRY_PARSE){clock.nowEpochSecond()}
     val expiry = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { NodeNotificationPayload.expiryEpochSecond(expires) }
-    if (expiry <= now) NodeNotificationResult("expired")
-    else if (expiry > now + 300 || !NodeNotificationPayload.validText(title, body)) NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_INVALID)
+    if (expiry <= commandNow) NodeNotificationResult("expired")
+    else if (expiry > commandNow + 300 || !NodeNotificationPayload.validText(title, body)) NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_INVALID)
     else {
       notificationPhase("command_id", NotificationDiagnostic.COMMAND_ID) {
         require(UUID.fromString(id).toString() == id && id != "00000000-0000-0000-0000-000000000000")

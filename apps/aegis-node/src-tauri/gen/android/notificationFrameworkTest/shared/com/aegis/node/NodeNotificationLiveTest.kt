@@ -59,7 +59,7 @@ class NodeNotificationLiveTest {
       var candidate: WebView? = null
       scenario.onActivity { activity ->
         // Verify exact fixed method descriptors in the actual installed/minified activity.
-        for (method in listOf("showNodeNotification", "nodePushState", "bindNodePush","settingsOpen","nodeActionState","consumeReminderOpen")) {
+        for (method in listOf("showNodeNotification", "showNodeNotificationLive", "nodePushState", "bindNodePush","settingsOpen","nodeActionState","consumeReminderOpen")) {
           assertEquals(String::class.java, activity.javaClass.getMethod(method, String::class.java).returnType)
         }
         assertEquals(Build.VERSION.SDK_INT < 33, frameworkNotificationPermission(activity))

@@ -44,6 +44,7 @@ class MainActivity : TauriActivity() {
   }
   fun nodeActionState(payload:String):String=org.json.JSONObject().put("pendingActions",NodeReminderActions.pending(this)).toString()
   fun showNodeNotification(payload: String): String = NodeNativeNotifications.fromCommand(this, payload).json()
+  fun showNodeNotificationLive(payload:String):String=NodeNativeNotifications.fromLiveCommand(this,payload).json()
 
   // Sensitive state is returned only to native Rust; these are not WebView interfaces.
   fun nodePushState(payload:String):String {

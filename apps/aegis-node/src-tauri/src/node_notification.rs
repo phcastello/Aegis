@@ -17,6 +17,41 @@ pub struct NotificationCommand {
     pub expires_at: String,
     pub input: serde_json::Value,
 }
+/// Private native context, never part of the remote command schema. Live commands
+/// use the authenticated transport clock through the renderer, including time
+/// spent waiting for the JNI/UI queue. A different device wall clock must not
+/// invalidate a command which the transport has just validated.
+#[derive(Clone, Copy)]
+pub struct NotificationClock {
+    epoch_second: i64,
+    started: std::time::Instant,
+}
+impl NotificationClock {
+    pub fn new(epoch_second: i64) -> Self {
+        Self {
+            epoch_second,
+            started: std::time::Instant::now(),
+        }
+    }
+    pub fn now_epoch_second(&self) -> i64 {
+        self.epoch_second
+            .saturating_add(self.started.elapsed().as_secs().min(i64::MAX as u64) as i64)
+    }
+    pub fn now_epoch_millis(&self) -> i64 {
+        self.epoch_second
+            .saturating_mul(1_000)
+            .saturating_add(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64)
+    }
+    pub fn native_payload(
+        &self,
+        command: &NotificationCommand,
+    ) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&serde_json::json!({
+            "command": command,
+            "validatedNowEpochMillis": self.now_epoch_millis(),
+        }))
+    }
+}
 // Diagnostics are a closed, bounded vocabulary; never native error prose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,6 +117,13 @@ pub trait NotificationSink: Send + Sync {
         &'a self,
         command: &'a NotificationCommand,
     ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>>;
+    fn show_with_clock<'a>(
+        &'a self,
+        command: &'a NotificationCommand,
+        _clock: NotificationClock,
+    ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+        self.show(command)
+    }
 }
 pub struct NotificationExecutor {
     sink: Box<dyn NotificationSink>,
@@ -98,7 +140,7 @@ impl NotificationExecutor {
         self.sink.connected();
     }
     pub async fn execute(&self, c: &NotificationCommand, now: i64) -> NotificationResult {
-        let started = tokio::time::Instant::now();
+        let clock = NotificationClock::new(now);
         if !matches!(
             c.capability.as_str(),
             "notification.show"
@@ -122,7 +164,7 @@ impl NotificationExecutor {
         }
         // Serialize the short native API invocation with dedupe reservation; never hold the socket writer.
         let mut recent = self.recent.lock().await;
-        let now = now + started.elapsed().as_secs() as i64;
+        let now = clock.now_epoch_second();
         if expiry <= now {
             return NotificationResult::new(NotificationStatus::Expired);
         }
@@ -130,21 +172,24 @@ impl NotificationExecutor {
         if recent.iter().any(|(id, _)| *id == c.command_id) {
             return NotificationResult::new(NotificationStatus::Duplicate);
         }
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), self.sink.show(c))
-            .await
-            .unwrap_or_else(|_| {
-                #[cfg(target_os = "android")]
-                {
-                    NotificationResult::diagnostic(
-                        NotificationStatus::Failed,
-                        AndroidDiagnosticCode::AndroidNativeTimeout,
-                    )
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    NotificationResult::new(NotificationStatus::Failed)
-                }
-            });
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.sink.show_with_clock(c, clock),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            #[cfg(target_os = "android")]
+            {
+                NotificationResult::diagnostic(
+                    NotificationStatus::Failed,
+                    AndroidDiagnosticCode::AndroidNativeTimeout,
+                )
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                NotificationResult::new(NotificationStatus::Failed)
+            }
+        });
         if matches!(
             result.status,
             NotificationStatus::Success | NotificationStatus::Duplicate
@@ -240,6 +285,86 @@ mod tests {
             expires_at: "2026-10-03T12:01:00Z".into(),
             input: serde_json::json!({"title":"Aegis","body":"Olá"}),
         }
+    }
+    #[test]
+    fn native_clock_counts_queue_delay_without_changing_the_external_command() {
+        let command = command();
+        let original = serde_json::to_value(&command).unwrap();
+        let clock = NotificationClock {
+            epoch_second: 1_000,
+            started: std::time::Instant::now() - std::time::Duration::from_secs(301),
+        };
+        let native: serde_json::Value =
+            serde_json::from_str(&clock.native_payload(&command).unwrap()).unwrap();
+        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_301_000);
+        assert_eq!(native["command"], original);
+        assert_eq!(native.as_object().unwrap().len(), 2);
+        // Neither the FCM nor live network parser accepts the private wrapper.
+        assert!(serde_json::from_value::<NotificationCommand>(native).is_err());
+        assert_eq!(serde_json::to_value(&command).unwrap(), original);
+    }
+    #[test]
+    fn native_clock_preserves_fractional_queue_time() {
+        let clock = NotificationClock {
+            epoch_second: 1_000,
+            started: std::time::Instant::now() - std::time::Duration::from_millis(900),
+        };
+        let native: serde_json::Value =
+            serde_json::from_str(&clock.native_payload(&command()).unwrap()).unwrap();
+        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_000_900);
+        // Kotlin adds its remaining native time before converting to seconds.
+        assert!((native["validatedNowEpochMillis"].as_i64().unwrap() + 200) / 1_000 >= 1_001);
+    }
+    #[tokio::test]
+    async fn authenticated_clock_reaches_native_sink_with_ttl_and_dedupe_unchanged() {
+        struct ClockSink(Arc<AtomicUsize>);
+        impl NotificationSink for ClockSink {
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                panic!("executor must pass its authenticated clock")
+            }
+            fn show_with_clock<'a>(
+                &'a self,
+                command: &'a NotificationCommand,
+                clock: NotificationClock,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                Box::pin(async move {
+                    let now = clock.now_epoch_second();
+                    let expiry = chrono::DateTime::parse_from_rfc3339(&command.expires_at)
+                        .unwrap()
+                        .timestamp();
+                    assert!(expiry > now && expiry <= now + 300);
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    NotificationResult::new(NotificationStatus::Success)
+                })
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = NotificationExecutor::new(ClockSink(calls.clone()));
+        let mut command = command();
+        let expiry = chrono::DateTime::parse_from_rfc3339(&command.expires_at)
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            executor.execute(&command, expiry - 300).await.status,
+            NotificationStatus::Success
+        );
+        assert_eq!(
+            executor.execute(&command, expiry - 300).await.status,
+            NotificationStatus::Duplicate
+        );
+        command.command_id = uuid::Uuid::new_v4();
+        assert_eq!(
+            executor.execute(&command, expiry - 301).await.status,
+            NotificationStatus::Failed
+        );
+        assert_eq!(
+            executor.execute(&command, expiry).await.status,
+            NotificationStatus::Expired
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn legacy_input_stays_strict_and_new_reminder_requires_scoped_context() {

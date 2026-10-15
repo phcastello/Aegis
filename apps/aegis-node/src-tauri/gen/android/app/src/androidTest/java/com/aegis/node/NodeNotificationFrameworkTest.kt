@@ -39,6 +39,7 @@ class NodeNotificationFrameworkTest {
   @After fun cleanup() { ids.forEach { manager.cancel(it, 1) }; NodeNativeNotifications.prefs(context).edit().remove("recent").commit() }
   @Test fun locationPermissionsMatchNativeFramework() {exerciseLocationPermissionFramework(context)}
   @Test fun updaterCacheArchiveUsesRealPackageManagerSigners() {exerciseUpdateArchiveFramework(context)}
+  @Test fun liveAuthenticatedClockPreservesTheCommandLifetime() {exerciseNotificationLiveClockFramework(context,{payload->JSONObject(NodeNativeNotifications.fromCommand(context,payload).json())},{payload->JSONObject(NodeNativeNotifications.fromLiveCommand(context,payload).json())})}
   @Test fun reminderActionsAndWithdrawalSurviveNativeFramework() {exerciseReminderNotificationActions({payload->JSONObject(NodeNativeNotifications.fromCommand(context,payload).json())},context)}
   @Test fun validBackendCommandPostsActiveNotification() {
     assertTrue(NodeNativeNotifications.granted(context))

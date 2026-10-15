@@ -3,13 +3,12 @@ package com.aegis.node
 import android.content.Context
 import androidx.work.*
 import org.json.JSONObject
-import java.time.Instant
 import java.util.UUID
 
 object NodeDomainCommands {
- fun accept(context: Context,command: JSONObject,expectedScope:String?=null): NodeNotificationResult {
+ fun accept(context: Context,command: JSONObject,expectedScope:String?=null,clock:NodeNotificationClock=NodeNotificationClock.wall): NodeNotificationResult {
   require(UUID.fromString(command.getString("commandId")).toString()==command.getString("commandId"))
-  val now=Instant.now().epochSecond;val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"))
+  val now=clock.nowEpochSecond();val expiry=NodeNotificationPayload.expiryEpochSecond(command.getString("expiresAt"))
   if(expiry<=now) return NodeNotificationResult("expired")
   require(expiry<=now+300)
   val scope=expectedScope?:NodeNativeSession.read(context)?.nodeId ?: return NodeNotificationResult("expired")

@@ -19,7 +19,7 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
-private fun renderNotification(payload: String, base: Context): JSONObject {
+private fun renderNotification(payload: String, base: Context,method:String="showNodeNotification"): JSONObject {
   val instrumentation = InstrumentationRegistry.getInstrumentation()
   lateinit var activity: Activity
   instrumentation.runOnMainSync {
@@ -30,7 +30,7 @@ private fun renderNotification(payload: String, base: Context): JSONObject {
       isAccessible = true
     }.invoke(activity, base)
   }
-  return JSONObject(activity.javaClass.getMethod("showNodeNotification", String::class.java).invoke(activity, payload) as String)
+  return JSONObject(activity.javaClass.getMethod(method, String::class.java).invoke(activity, payload) as String)
 }
 
 /** Targets the actual minified APK through its fixed native entry point, without app dependencies. */
@@ -63,6 +63,7 @@ class NodeNotificationFrameworkTest {
   }
   @Test fun locationPermissionsMatchNativeFramework() {exerciseLocationPermissionFramework(context)}
   @Test fun updaterCacheArchiveUsesRealPackageManagerSigners() {exerciseUpdateArchiveFramework(context)}
+  @Test fun liveAuthenticatedClockPreservesTheCommandLifetime() {exerciseNotificationLiveClockFramework(context,{payload->render(payload)},{payload->renderNotification(payload,context,"showNodeNotificationLive")})}
   @Test fun reminderActionsAndWithdrawalSurviveNativeFramework() {exerciseReminderNotificationActions({payload->render(payload)},context)}
   @Test fun validBackendCommandPostsActiveNotification() {
     assertTrue(frameworkNotificationPermission(context))

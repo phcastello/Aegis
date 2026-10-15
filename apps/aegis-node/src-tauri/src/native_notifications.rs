@@ -1,6 +1,6 @@
 use crate::node_notification::{
-    NotificationCommand, NotificationExecutor, NotificationResult, NotificationSink,
-    NotificationStatus,
+    NotificationClock, NotificationCommand, NotificationExecutor, NotificationResult,
+    NotificationSink, NotificationStatus,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -72,24 +72,35 @@ impl NotificationSink for NativeSink {
         &'a self,
         command: &'a NotificationCommand,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = NotificationResult> + Send + 'a>> {
+        self.show_with_clock(
+            command,
+            NotificationClock::new(chrono::Utc::now().timestamp()),
+        )
+    }
+    fn show_with_clock<'a>(
+        &'a self,
+        command: &'a NotificationCommand,
+        clock: NotificationClock,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = NotificationResult> + Send + 'a>> {
         Box::pin(async move {
             #[cfg(windows)]
             {
+                let _ = clock;
                 crate::windows_notifications::show(&self.0, command)
             }
             #[cfg(target_os = "android")]
             {
                 use crate::node_notification::AndroidDiagnosticCode as Code;
-                let payload = match serde_json::to_string(command) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        return NotificationResult::diagnostic(
-                            NotificationStatus::Failed,
-                            Code::AndroidInvalidNotificationPayload,
-                        )
-                    }
-                };
-                match android_call(&self.0, "showNodeNotification", payload).await {
+                let command = command.clone();
+                // Build at invocation, after the native queue, so waiting time
+                // cannot extend the original command's validity.
+                match android_call_build(&self.0, "showNodeNotificationLive", move || {
+                    clock
+                        .native_payload(&command)
+                        .map_err(|_| Code::AndroidInvalidNotificationPayload)
+                })
+                .await
+                {
                     Ok(output) => serde_json::from_str::<NotificationResult>(&output)
                         .unwrap_or_else(|_| {
                             NotificationResult::diagnostic(
@@ -102,7 +113,7 @@ impl NotificationSink for NativeSink {
             }
             #[cfg(not(any(windows, target_os = "android")))]
             {
-                let _ = command;
+                let _ = (command, clock);
                 NotificationResult::new(NotificationStatus::Unsupported)
             }
         })
@@ -134,6 +145,16 @@ pub(crate) async fn android_call(
     method: &'static str,
     payload: String,
 ) -> Result<String, crate::node_notification::AndroidDiagnosticCode> {
+    android_call_build(app, method, move || Ok(payload)).await
+}
+#[cfg(target_os = "android")]
+async fn android_call_build(
+    app: &AppHandle,
+    method: &'static str,
+    build: impl FnOnce() -> Result<String, crate::node_notification::AndroidDiagnosticCode>
+        + Send
+        + 'static,
+) -> Result<String, crate::node_notification::AndroidDiagnosticCode> {
     use crate::node_notification::AndroidDiagnosticCode as Code;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let webview = app
@@ -145,6 +166,13 @@ pub(crate) async fn android_call(
                 if tx.is_closed() {
                     return;
                 }
+                let payload = match build() {
+                    Ok(payload) => payload,
+                    Err(code) => {
+                        let _ = tx.send(Err(code));
+                        return;
+                    }
+                };
                 let result = (|| -> Result<String, jni::errors::Error> {
                     let text = env.new_string(payload)?;
                     let object = jni::objects::JObject::from(text);
