@@ -31,6 +31,50 @@ private fun fixtureOffline(seconds:Int,allowPairing:Boolean=false) {
  val connection=URL("http://127.0.0.1:18104/fixture/backend-offline").openConnection() as HttpURLConnection
  try {connection.requestMethod="POST";connection.connectTimeout=5000;connection.readTimeout=5000;connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(JSONObject().put("seconds",seconds).put("allowPairing",allowPairing).toString().toByteArray())};check(connection.responseCode==200)}finally{connection.disconnect()}
 }
+private fun fixtureNodeRequest(path:String,credential:String?=null,body:JSONObject):JSONObject {
+ val connection=URL("http://127.0.0.1:18104/api/nodes$path").openConnection() as HttpURLConnection
+ try {
+  connection.requestMethod="POST";connection.connectTimeout=10000;connection.readTimeout=15000;connection.instanceFollowRedirects=false;connection.doOutput=true
+  connection.setRequestProperty("Content-Type","application/json")
+  if(credential!=null)connection.setRequestProperty("Authorization","AegisNode $credential")
+  connection.outputStream.use{it.write(body.toString().toByteArray())}
+  val status=connection.responseCode;check(status==200){"fixture_node_http_$status"}
+  val result=connection.inputStream.bufferedReader().use{it.readText()};check(result.length<=65536){"fixture_node_response_too_large"}
+  return JSONObject(result)
+ }finally{connection.disconnect()}
+}
+private fun assertFrameworkIdentityBinding(context:Context,nodeId:String) {
+ assertEquals(nodeId,context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE).getString("scopeNodeId",null))
+ assertEquals(nodeId,context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
+ SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->
+  db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{row->assertTrue(row.moveToFirst());assertEquals(nodeId,row.getString(0))}
+ }
+}
+
+/** Peer credentials remain solely in the instrumentation process and never enter its WebView. */
+internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserveCode:String,appVersion:String,invoke:(String,JSONObject,Long)->JSONObject,exercise:(String)->Unit) {
+ val attempt=UUID.randomUUID().toString()
+ val recovery=ByteArray(32).also{java.security.SecureRandom().nextBytes(it)}
+ val receipt=fixtureNodeRequest("/pair",body=JSONObject().put("attemptId",attempt).put("code",reserveCode).put("recoveryKey",android.util.Base64.encodeToString(recovery,android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)).put("name","Android framework peer").put("platform","android").put("appVersion",appVersion).put("protocolVersion",1))
+ val credential=receipt.getString("credential")
+ val peer=fixtureNodeRequest("/pair/finalize",body=JSONObject().put("attemptId",attempt).put("credential",credential)).getString("id")
+ try {
+  val replacementCode=fixtureNodeRequest("/pairing-codes",credential,JSONObject()).getString("code")
+  invoke("node_set_enabled",JSONObject().put("id",nodeId).put("enabled",false),20000)
+  assertNull(context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
+  fixtureNodeRequest("/$nodeId/enable",credential,JSONObject())
+  // The Activity remains foreground: no lifecycle/resume callback can mask this
+  // explicit status interaction restoring the native operational binding.
+  assertEquals("paired",invoke("node_status",JSONObject(),20000).getString("state"))
+  assertFrameworkIdentityBinding(context,nodeId)
+  assertEquals("installed",invoke("node_geofences",JSONObject().put("operation","sync"),20000).getString("status"))
+  android.util.Log.i("AegisNodeNativeTest","phase=native_identity_reenabled errorType=Checkpoint")
+  exercise(replacementCode)
+ }finally {
+  fixtureOffline(0)
+  fixtureNodeRequest("/$peer/revoke",credential,JSONObject())
+ }
+}
 
 /** Authenticated Kotlin HTTP and real Google Task are separate from seeded deterministic state tests. */
 internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,invoke:(String,JSONObject,Long)->JSONObject):String {
@@ -139,11 +183,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   assertEquals("paired",replacement.getString("state"))
   val nextId=replacement.getJSONObject("node").getString("id")
   assertNotEquals(nodeId,nextId)
-  assertEquals(nextId,prefs.getString("scopeNodeId",null))
-  assertEquals(nextId,context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
-  SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->
-   db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{row->assertTrue(row.moveToFirst());assertEquals(nextId,row.getString(0))}
-  }
+  assertFrameworkIdentityBinding(context,nextId)
   assertTrue(events().isEmpty())
   for(id in occurrences)awaitFrameworkReminderWithdrawal(manager,id,1)
   checkpoint("native_identity_scope_reset")

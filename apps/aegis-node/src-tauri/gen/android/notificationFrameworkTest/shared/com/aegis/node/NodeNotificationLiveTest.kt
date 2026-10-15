@@ -75,7 +75,8 @@ class NodeNotificationLiveTest {
       val deadline = SystemClock.elapsedRealtime() + 30000
       while (evaluate(webview, "Boolean(window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)") != "true" && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
       // Fail before pairing if this APK points anywhere except the isolated fixture.
-      assertEquals("http://127.0.0.1:18104", invoke(webview, "runtime_info").getString("backendUrl"))
+      val runtime=invoke(webview,"runtime_info")
+      assertEquals("http://127.0.0.1:18104",runtime.getString("backendUrl"))
       checkpoint("live_runtime_ready")
       val permissions=invoke(webview,"node_location",JSONObject().put("operation","permissions"))
       assertTrue(permissions.getBoolean("supported"))
@@ -116,7 +117,9 @@ class NodeNotificationLiveTest {
         while (manager.activeNotifications.none { it.tag == commandId && it.id == 1 } && SystemClock.elapsedRealtime() < activeEnd) SystemClock.sleep(50)
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
-        exerciseGeofenceLiveFramework(context,id,replacementCode){name,args,timeout->invoke(webview,name,args,timeout)}
+        withReenabledIdentityFramework(context,id,replacementCode,runtime.getString("version"),{name,args,timeout->invoke(webview,name,args,timeout)}) { nextCode->
+          exerciseGeofenceLiveFramework(context,id,nextCode){name,args,timeout->invoke(webview,name,args,timeout)}
+        }
       } finally {
         checkpoint("live_cleanup_started")
         manager.cancel(commandId, 1)
