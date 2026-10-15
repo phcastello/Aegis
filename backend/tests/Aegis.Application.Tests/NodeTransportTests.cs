@@ -334,14 +334,24 @@ public sealed class NodeTransportTests
         Assert.Equal("success", attempt.Result); Assert.Equal("live_websocket", attempt.Transport); Assert.NotNull(attempt.AcceptedAt);
         Assert.Equal(Aegis.Domain.Entities.ReminderStatus.Triggered, (await db.Reminders.SingleAsync()).Status); Assert.Empty(await db.PushSubscriptions.ToListAsync());
     }
-    [Fact] public async Task LiveDiagnosticTravelsWithSameCommandResult() {
+    [Theory]
+    [InlineData("android_notification_build_failed")]
+    [InlineData("windows_identity_unavailable")]
+    [InlineData("windows_store_failed")]
+    [InlineData("windows_winrt_initialize_failed")]
+    [InlineData("windows_toast_xml_failed")]
+    [InlineData("windows_toast_build_failed")]
+    [InlineData("windows_notifier_failed")]
+    [InlineData("windows_permission_check_failed")]
+    [InlineData("windows_notification_post_failed")]
+    public async Task LiveDiagnosticTravelsWithSameCommandResult(string diagnosticCode) {
         await using var f = await Host(); var (node, secret) = await f.Pair(); using var socket = await f.Connect(secret);
         await Advertise(socket, new NodeCapability("notification.show", 1));
         var command = new NodeNotificationCommand(Guid.NewGuid(), "notification.show", 1, DateTimeOffset.UtcNow.AddSeconds(60), new("Aegis", "fixture"));
         var pending = f.Connections.SendAsync(node.Id, command, default); await Read(socket);
         await Send(socket, new { protocolVersion = 1, type = "command_result", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow,
-            payload = new { commandId = command.CommandId, status = "failed", diagnosticCode = "android_notification_build_failed" } });
-        var result = await pending; Assert.Equal("failed", result.Status); Assert.Equal("android_notification_build_failed", result.DiagnosticCode);
+            payload = new { commandId = command.CommandId, status = "failed", diagnosticCode } });
+        var result = await pending; Assert.Equal("failed", result.Status); Assert.Equal(diagnosticCode, result.DiagnosticCode);
         Assert.True(f.Connections.IsOnline(node.Id));
     }
     [Theory]

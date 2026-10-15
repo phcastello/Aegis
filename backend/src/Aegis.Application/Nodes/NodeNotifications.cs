@@ -38,7 +38,15 @@ public static class NotificationContract
         "android_notification_build_failed",
         "android_notification_post_failed",
         "android_dedupe_read_failed",
-        "android_dedupe_persist_failed"
+        "android_dedupe_persist_failed",
+        "windows_identity_unavailable",
+        "windows_store_failed",
+        "windows_winrt_initialize_failed",
+        "windows_toast_xml_failed",
+        "windows_toast_build_failed",
+        "windows_notifier_failed",
+        "windows_permission_check_failed",
+        "windows_notification_post_failed"
     };
     public static bool ValidDiagnostic(string? code) => code is not null && code.Length <= MaximumDiagnosticLength && DiagnosticCodes.Contains(code);
     public static void Validate(string? title, string? body, int ttl)
