@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
 import { installWindowsIpcObserver } from './windows-cdp-observer.mjs';
+import { pendingToastHistoryScript, parsePendingToastHistory } from './windows-toast-history.mjs';
 import WebSocket from '../../../scripts/node-transport-probe/node_modules/ws/wrapper.mjs';
 if (process.platform !== 'win32') throw Error('Requires a real Windows runner.');
 const work = mkdtempSync(join(tmpdir(), 'aegis-node-identity-'));
@@ -61,6 +62,16 @@ function nativeReminderMetadata(reminderId) {
   const python="import sqlite3,json,sys,pathlib\ndb=sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri()+'?mode=ro',uri=True)\ndb.row_factory=sqlite3.Row\nr=sys.argv[2]\na=[dict(x) for x in db.execute('SELECT id,revision,generation,action,queued FROM actions WHERE reminderId=?',(r,))]\np=db.execute('SELECT revision,generation FROM presentations WHERE id=?',(r,)).fetchone()\nw=db.execute('SELECT generation FROM withdrawals WHERE id=?',(r,)).fetchone()\nprint(json.dumps({'actions':a,'presentation':dict(p) if p else None,'withdrawal':dict(w) if w else None}))\n";
   const result=spawnSync(process.env.PYTHON ?? 'python',['-c',python,database,reminderId],{encoding:'utf8'});
   assert.equal(result.status,0,'Read-only native SQLite fixture metadata requires Python sqlite3.');return JSON.parse(result.stdout);
+}
+function pendingToastHistory() {
+  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Mta','-Command',pendingToastHistoryScript],{encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,'The real WinRT history query must succeed.');return parsePendingToastHistory(result.stdout);
+}
+function pendingFeedbackActionId() {
+  const database=join(process.env.LOCALAPPDATA,'com.aegis.node','native-reminder-actions-v1.sqlite');
+  const python="import sqlite3,json,sys,pathlib\ndb=sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri()+'?mode=ro',uri=True)\nrow=db.execute(\"SELECT value FROM metadata WHERE key='pendingFeedbackActionId'\").fetchone()\nprint(json.dumps(row[0] if row else None))\n";
+  const result=spawnSync(process.env.PYTHON??'python',['-c',python,database],{encoding:'utf8',timeout:15000});assert.equal(result.status,0);
+  const value=JSON.parse(result.stdout);assert.ok(value===null || /^[0-9a-f-]{36}$/i.test(value));return value;
 }
 function activateReminderAction(actionId) {
   assert.match(actionId,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -269,18 +280,31 @@ try {
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
   const offlineOccurrence=randomUUID();
   assert.equal((await reminderCommand(pcId,offlineOccurrence,'reminder.notify')).status,'success');
-  const offlineAction=nativeReminderMetadata(offlineOccurrence).actions.find(item=>item.action==='acknowledge');assert.ok(offlineAction);
+  const offlineAction=nativeReminderMetadata(offlineOccurrence).actions.find(item=>item.action==='snooze');assert.ok(offlineAction);
+  const offlineHide=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`(Get-Process -Id ${app.pid}).CloseMainWindow()`],{encoding:'utf8',timeout:15000});assert.equal(offlineHide.status,0);assert.equal(offlineHide.stdout.trim(),'True');
   async function backendOffline(seconds) { const response=await fetch(origin+'/fixture/backend-offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seconds})});assert.equal(response.status,200); }
-  await backendOffline(120);activateReminderAction(offlineAction.id);
+  await backendOffline(300);activateReminderAction(offlineAction.id);
   await waitUntil(()=>nativeReminderMetadata(offlineOccurrence).actions.some(item=>item.id===offlineAction.id&&item.queued===1),15000);
   assert.ok((await invoke('node_notification_settings')).pendingActions>=1,'Offline action must be visibly pending, without claiming server acknowledgement.');
   assert.equal((await reminderReceipts(offlineOccurrence)).length,0,'Unavailable backend cannot have acknowledged the offline action.');
+  await assertNativeWindowVisible(false);
+  let firstPendingToast;await waitUntil(()=>{firstPendingToast=pendingToastHistory();return firstPendingToast.count===1;},15000);
+  assert.equal(pendingFeedbackActionId(),offlineAction.id,'The pending card is tied to the original immutable ActionId.');
+  await new Promise(resolve=>setTimeout(resolve,35000));
+  assert.deepEqual(pendingToastHistory(),firstPendingToast,'The natural retry must not repost or extend the pending card.');
+  assert.equal(pendingFeedbackActionId(),offlineAction.id);
+  assert.equal((await reminderReceipts(offlineOccurrence)).length,0);
   await close();await open();
   assert.ok(nativeReminderMetadata(offlineOccurrence).actions.some(item=>item.id===offlineAction.id&&item.queued===1),'Outbox must survive a real native process restart.');
+  assert.deepEqual(pendingToastHistory(),firstPendingToast,'Restart must retain the same status card without reposting.');
+  assert.equal(pendingFeedbackActionId(),offlineAction.id);
   await backendOffline(0);await invoke('node_transport_reconnect');
-  await waitUntil(async()=>(await reminderReceipts(offlineOccurrence)).some(item=>item.actionId===offlineAction.id&&item.applied),90000);
+  await waitUntil(async()=>(await reminderReceipts(offlineOccurrence)).some(item=>item.actionId===offlineAction.id&&item.action==='snooze'&&item.applied),90000);
   assert.equal((await reminderReceipts(offlineOccurrence)).length,1);await waitUntil(async()=>(await invoke('node_notification_settings')).pendingActions===0,15000);
-  console.log('Windows real offline URI action -> durable native pending outbox -> process restart -> same authenticated ActionId synchronized exactly once PASS.');
+  await waitUntil(()=>pendingToastHistory().count===0 && pendingFeedbackActionId()===null,15000);
+  const offlineSnoozed=(await invoke('node_reminders',{operation:'list'})).reminders.find(item=>item.reminderId===offlineOccurrence);assert.equal(offlineSnoozed.generation,2);assert.equal(offlineSnoozed.acknowledgedAt,null);
+  writeFileSync(join(artifacts,'windows-native-offline-feedback.json'),JSON.stringify({actionId:offlineAction.id,reminderId:offlineOccurrence,firstPendingToast,retryPreservedCard:true,restartPreservedCard:true,serverReceiptCount:1,serverAction:'snooze',generation:2,pendingCardRemoved:true,pendingMarkerRemoved:true},null,2)+'\n');
+  console.log('Windows real offline snooze -> silent generic pending toast without retry/restart repost -> durable same ActionId -> one server receipt -> pending card withdrawn PASS.');
 
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
   await invoke('node_set_enabled', { id: peer.body.id, enabled: false }); assert.equal((await call('/me', undefined, peerCredential)).status, 403);
