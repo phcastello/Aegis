@@ -259,6 +259,10 @@ jobs:
       - name: Build debug APK and instrumentation
         id: debug_build
         run: |
+          # The shared cache may contain the accepted worktree's Kotlin output path.
+          # Refresh only Tauri codegen in both profiles before returning to this checkout.
+          cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --profile dev
+          cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --release
           npm run tauri -- android build --debug --apk --target x86_64 --features android-framework-fixture
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
       - name: Test real renderer then real native live path
