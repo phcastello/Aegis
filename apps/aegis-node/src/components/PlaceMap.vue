@@ -65,8 +65,8 @@ onBeforeUnmount(() => { disposed = true; resize?.disconnect(); map?.remove(); })
 <style>
 .place-map { height: 340px; min-height: 260px; border-radius: var(--radius-sm); background: var(--canvas); border: 1px solid var(--line-strong); z-index: 0; }
 .place-map .leaflet-tile-pane { filter: brightness(.74) saturate(.7); }
-.place-map-center { display: grid; place-items: center; border: 2px solid #172132; border-radius: 50%; color: #172132; background: #bdcbf6; font: bold 13px/1 system-ui; cursor: move; }
-.place-map-radius { display: grid; place-items: center; background: transparent; cursor: ew-resize; }.place-map-radius::before { content: ''; width: 18px; height: 18px; border: 2px solid #172132; border-radius: 50%; background: #91a9ee; }
+.place-map .place-map-center { display: grid; place-items: center; border: 2px solid #172132; border-radius: 50%; color: #172132; background: #bdcbf6; font: bold 13px/1 system-ui; cursor: move; }
+.place-map .place-map-radius { display: grid; place-items: center; background: transparent; cursor: ew-resize; }.place-map .place-map-radius::before { display: block; content: ''; width: 18px; height: 18px; border: 2px solid #172132; border-radius: 50%; background: #91a9ee; }
 .map-circle-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .map-circle-row input { width: 100px; }
 .map-circle-row label { font-size: .82rem; color: var(--muted); }

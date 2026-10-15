@@ -211,6 +211,21 @@ try {
   assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',1,1)).status,'expired','Withdrawal high-water mark must survive a real process restart.');
   assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',2,2,secondGenerationCommand.commandId)).status,'duplicate','Native command dedupe must survive restart without reposting.');
   console.log('Windows real app pairing + secure storage + restart with same NodeId PASS; second peer simulated.');
+  const offlineOccurrence=randomUUID();
+  assert.equal((await reminderCommand(pcId,offlineOccurrence,'reminder.notify')).status,'success');
+  const offlineAction=nativeReminderMetadata(offlineOccurrence).actions.find(item=>item.action==='acknowledge');assert.ok(offlineAction);
+  async function backendOffline(seconds) { const response=await fetch(origin+'/fixture/backend-offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seconds})});assert.equal(response.status,200); }
+  await backendOffline(120);activateReminderAction(offlineAction.id);
+  await waitUntil(()=>nativeReminderMetadata(offlineOccurrence).actions.some(item=>item.id===offlineAction.id&&item.queued===1),15000);
+  assert.ok((await invoke('node_notification_settings')).pendingActions>=1,'Offline action must be visibly pending, without claiming server acknowledgement.');
+  assert.equal((await reminderReceipts(offlineOccurrence)).length,0,'Unavailable backend cannot have acknowledged the offline action.');
+  await close();await open();
+  assert.ok(nativeReminderMetadata(offlineOccurrence).actions.some(item=>item.id===offlineAction.id&&item.queued===1),'Outbox must survive a real native process restart.');
+  await backendOffline(0);await invoke('node_transport_reconnect');
+  await waitUntil(async()=>(await reminderReceipts(offlineOccurrence)).some(item=>item.actionId===offlineAction.id&&item.applied),90000);
+  assert.equal((await reminderReceipts(offlineOccurrence)).length,1);await waitUntil(async()=>(await invoke('node_notification_settings')).pendingActions===0,15000);
+  console.log('Windows real offline URI action -> durable native pending outbox -> process restart -> same authenticated ActionId synchronized exactly once PASS.');
+
   await invoke('node_rename', { id: peer.body.id, name: 'Pixel CI' }); assert.equal((await call('/me', undefined, peerCredential)).body.name, 'Pixel CI');
   await invoke('node_set_enabled', { id: peer.body.id, enabled: false }); assert.equal((await call('/me', undefined, peerCredential)).status, 403);
   await invoke('node_set_enabled', { id: peer.body.id, enabled: true }); assert.equal((await call('/me', undefined, peerCredential)).status, 200);

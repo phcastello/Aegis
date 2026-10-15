@@ -70,20 +70,22 @@ try {
      const reminders=[],series=[],places=[],geofences=[];
      const location={sourceNodeId:'native-current',nodes:[],latest:null};
      const now = new Date().toISOString();
-     const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-stage.4', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
+     const current = { availability:'online', capabilities: [{ name: 'audio.input', version: 1 }, { name: 'audio.output', version: 1 }, { name:'notification.show',version:1 }], targetPriority: 0, id: 'native-current', name: 'Celular', platform: 'android', enabled: true, appVersion: '0.7.0-unstable.12', protocolVersion: 1, pairedAt: now, createdAt: now, updatedAt: now, revokedAt: null };
      const other = { ...current, id: 'native-other', name: 'PC', platform: 'windows' };
      let identity = { state: 'unpaired', node: null, error: null };
      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
        window.nativeCalls.push(command);
+       // Match Tauri's JSON IPC boundary instead of retaining Vue proxy references.
+       if(args!==undefined)args=JSON.parse(JSON.stringify(args));
        if(command === 'node_settings_open') return;
-       if(command === 'node_reminders') { if(args.operation === 'list') return {reminders,series}; window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
-       if(command === 'node_places') { if(args.operation==='list')return places;if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
+       if(command === 'node_reminders') { if(args.operation === 'list') return structuredClone({reminders,series}); window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
+       if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};return {}; }
-       if(command === 'node_geofences') { if(args.operation==='list')return geofences;if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}return {}; }
+       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}return {}; }
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
-       if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-stage.2' };
+       if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: '0.7.0-unstable.12' };
        if (command === 'check_backend') return { status: 'connected', message: null };
        if (command === 'node_transport_status') return { transportState: 'online', lastError: null };
        if (command === 'node_transport_reconnect') return;

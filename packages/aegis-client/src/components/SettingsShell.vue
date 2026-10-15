@@ -27,6 +27,15 @@ function discard() {
   emit('discard');
   if (destination === 'close') emit('close'); else if (destination) emit('navigate', destination);
 }
+function keepFocus(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || !dialog.value?.open) return;
+  const controls = Array.from(dialog.value.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter(element => !element.closest('[inert]') && element.getClientRects().length > 0);
+  const first = controls[0], last = controls.at(-1);
+  if (!first || !last) { event.preventDefault(); dialog.value.focus(); return; }
+  if (event.shiftKey && (document.activeElement === first || !controls.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && (document.activeElement === last || !controls.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
+}
 function backdrop(event: MouseEvent) {
   const element = dialog.value;
   if (!element || event.target !== element) return;
@@ -52,7 +61,7 @@ onBeforeUnmount(() => { dialog.value?.close(); previousFocus?.focus({ preventScr
 defineExpose({ requestClose, navigate });
 </script>
 <template>
-  <dialog ref="dialog" class="settings-dialog" aria-labelledby="settings-title" @cancel.prevent="requestClose" @click="backdrop">
+  <dialog ref="dialog" class="settings-dialog" aria-labelledby="settings-title" @cancel.prevent="requestClose" @click="backdrop" @keydown="keepFocus">
     <header class="settings-header" :inert="pending !== null"><div><span class="settings-eyebrow">Aegis</span><h1 id="settings-title">Configurações</h1></div><button class="settings-icon-button" type="button" aria-label="Fechar configurações" @click="requestClose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></header>
     <div class="settings-layout" :inert="pending !== null">
       <nav class="settings-navigation" aria-label="Seções de configurações"><button v-for="item in sections" :key="item.id" type="button" :aria-current="section === item.id ? 'page' : undefined" @click="navigate(item.id)">{{ item.label }}</button></nav>
