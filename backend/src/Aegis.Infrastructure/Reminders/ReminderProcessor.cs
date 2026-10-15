@@ -79,7 +79,9 @@ public sealed class ReminderProcessor(AegisDbContext db, ReminderStore store, IN
                 var recipient = await FreshRecipient(recipientId, ct); if (!recipient.NeedsRetry(clock.GetUtcNow()) || recipient.NodeId is null) return (null, null);
                 var interrupted = await db.ReminderDeliveryAttempts.Where(a => a.RecipientId == recipient.Id && a.CompletedAt == null).ToListAsync(ct);
                 foreach (var prior in interrupted) prior.Complete("outcome_unknown", prior.Transport, true, clock.GetUtcNow(), clock.GetUtcNow());
-                recipient.Begin(clock.GetUtcNow());
+                if (generation == 1 && r.SourceEventId is { } sourceEvent && r.ObserverNodeId == recipient.NodeId)
+                    recipient.Begin(clock.GetUtcNow(), sourceEvent, r.DeliveryUntil ?? r.DueAtUtc.AddMinutes(5));
+                else recipient.Begin(clock.GetUtcNow(), notAfter: r.DeliveryUntil ?? r.DueAtUtc.AddMinutes(10));
                 var attempt = new ReminderDeliveryAttempt(id, recipient.Attempts, recipient.NodeId, recipient.CommandId, recipient.CommandExpiresAt, clock.GetUtcNow()); attempt.BindRecipient(recipient.Id, generation);
                 db.ReminderDeliveryAttempts.Add(attempt); r.RenewLease(clock.GetUtcNow()); return (recipient, attempt);
             }, ct);

@@ -1,8 +1,12 @@
 using Aegis.Application.Reminders;
+using Aegis.Application.Nodes;
+using Aegis.Application.Observability;
 using Aegis.Domain.Entities;
+using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Reminders;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.DataProtection;
 using Xunit;
 namespace Aegis.Application.Tests;
 
@@ -134,6 +138,76 @@ public sealed class ReminderCompletionPostgresTests
         }
         finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
     }
+    [ReminderPostgresTests.PostgresFact]
+    public async Task GeographicObserverUnknownLocalOutcomeReplaysItsEventAcrossRestartAndSnoozeGetsANewPresentation()
+    {
+        var schema = "geographic_replay_" + Guid.NewGuid().ToString("N"); await using var setup = Db(schema); var clock = new ReminderTests.TestClock();
+        try
+        {
+            await setup.Database.ExecuteSqlRawAsync("CREATE SCHEMA \"" + schema + "\""); await setup.Database.MigrateAsync();
+            var observer = Guid.NewGuid(); var desktop = Guid.NewGuid(); var eventId = Guid.NewGuid(); var occurredAt = clock.GetUtcNow(); var expiry = occurredAt.AddMinutes(5);
+            var live = new ReminderTests.LiveConnections(); var background = new ReminderTests.BackgroundRoutes();
+            foreach (var node in new[] { observer, desktop })
+            {
+                setup.Nodes.Add(new(node, "Synthetic replay recipient", node == observer ? NodePlatform.Android : NodePlatform.Windows, "0.7.0-unstable.12", 1, occurredAt));
+                setup.NodeCapabilities.Add(new(node, "reminder.notify", 1)); live.Nodes[node] = [new("reminder.notify", 1)];
+            }
+            clock.Advance(TimeSpan.FromMinutes(2));
+            var reminder = Reminder.CreateGeographic(Guid.NewGuid(), eventId, observer, "Synthetic unknown local result", occurredAt, "UTC", clock.GetUtcNow());
+            setup.Reminders.Add(reminder); await setup.SaveChangesAsync();
+            var native = new GeographicReplayNative(observer, eventId); using var metrics = new AegisMetrics();
+            var tokens = new ReminderActionTokens(new EphemeralDataProtectionProvider(), clock);
+            ReminderProcessor Processor(AegisDbContext db)
+            {
+                var registry = new NodeRegistry(db, clock, live, background); var resolver = new NodeTargetResolver(registry, live, background);
+                return new(db, new(db), resolver, new NodeNotificationDispatcher(registry, resolver, live, native, native, background, clock), clock, metrics, registry, tokens);
+            }
+            await using (var first = Db(schema)) Assert.True(await Processor(first).ProcessNextAsync());
+            var original = Assert.Single(native.Commands, c => c.NodeId == observer).Command;
+            Assert.Equal(eventId, original.CommandId); Assert.Equal(expiry, original.ExpiresAt);
+            Assert.NotEqual(eventId, Assert.Single(native.Commands, c => c.NodeId == desktop).Command.CommandId);
+            Assert.Equal(expiry, Assert.Single(native.Commands, c => c.NodeId == desktop).Command.ExpiresAt); // Only three minutes remain in the geographic window.
+            clock.Advance(TimeSpan.FromSeconds(10));
+            await using (var restarted = Db(schema))
+            {
+                Assert.True(await Processor(restarted).ProcessNextAsync());
+                var attempts = await restarted.ReminderDeliveryAttempts.Where(a => a.NodeId == observer).OrderBy(a => a.Attempt).ToArrayAsync();
+                Assert.Equal(2, attempts.Length); Assert.All(attempts, a => { Assert.Equal(eventId, a.CommandId); Assert.Equal(expiry, a.CommandExpiresAt); });
+                Assert.Equal("timeout", attempts[0].Result); Assert.Equal("duplicate", attempts[1].Result);
+                var stored = await restarted.Reminders.AsNoTracking().SingleAsync(); Assert.Null(stored.ObserverPostedAt);
+                Assert.Null((await restarted.Set<ReminderRecipient>().AsNoTracking().SingleAsync(r => r.NodeId == observer)).PostedAt);
+                Assert.Equal(0, native.ObserverNewPosts); // The simulated durable renderer already posted EventId locally.
+                var snoozed = await new ReminderActionService(new ReminderActionStore(restarted, new(restarted), clock)).ApplyAsync(reminder.Id, new(Guid.NewGuid(), 1, 1, "snooze"), default);
+                Assert.True(snoozed.Applied);
+            }
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await using (var snoozed = Db(schema)) Assert.True(await Processor(snoozed).ProcessNextAsync());
+            var presentation = native.Commands.Last(c => c.NodeId == observer).Command;
+            Assert.NotEqual(eventId, presentation.CommandId); Assert.Equal(2, presentation.Input.Generation);
+            Assert.Equal(clock.GetUtcNow().AddMinutes(5), presentation.ExpiresAt); Assert.Equal(1, native.ObserverNewPosts);
+            Assert.Equal(2, native.Commands.Where(c => c.NodeId == desktop).Select(c => c.Command.CommandId).Distinct().Count());
+        }
+        finally { await setup.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE"); }
+    }
+
+    private sealed class GeographicReplayNative(Guid observer, Guid localEventId) : INodeLiveNotifications, INodePushNotifications
+    {
+        private readonly HashSet<(Guid NodeId, Guid CommandId)> posted = [(observer, localEventId)];
+        private bool loseFirstObserverResponse = true;
+        public List<(Guid NodeId, NodeNotificationCommand Command)> Commands { get; } = [];
+        public int ObserverNewPosts { get; private set; }
+        private string Send(Guid nodeId, NodeNotificationCommand command)
+        {
+            Commands.Add((nodeId, command));
+            if (nodeId == observer && loseFirstObserverResponse) { loseFirstObserverResponse = false; return "timeout"; }
+            if (!posted.Add((nodeId, command.CommandId))) return "duplicate";
+            if (nodeId == observer) ObserverNewPosts++;
+            return "success";
+        }
+        Task<NodeLiveNotificationResult> INodeLiveNotifications.SendAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct) => Task.FromResult(new NodeLiveNotificationResult(Send(nodeId, command)));
+        Task<string> INodePushNotifications.SendAsync(Guid nodeId, NodeNotificationCommand command, CancellationToken ct) => Task.FromResult(Send(nodeId, command));
+    }
+
     [ReminderPostgresTests.PostgresFact]
     public async Task ConcurrentActionsOnSameRevisionHaveOneWinnerAndReplayRemainsIdempotent()
     {

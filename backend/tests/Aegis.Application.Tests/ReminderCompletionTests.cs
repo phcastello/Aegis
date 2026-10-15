@@ -159,6 +159,34 @@ public sealed class ReminderCompletionTests
         var now = f.Clock.GetUtcNow(); f.Db.Reminders.Add(Reminder.CreateGeographic(Guid.NewGuid(), Guid.NewGuid(), phone.Id, "local unknown", now, "UTC", now)); await f.Db.SaveChangesAsync();
         await f.Processor.ProcessNextAsync(); Assert.Equal(phone.Id, Assert.Single(f.Native.Commands).NodeId);
     }
+    [Fact] public void GeographicObserverReplayKeepsEventIdentityAndOriginalExpiryAfterDefiniteFailure()
+    {
+        var now = At("2026-10-15T12:00Z"); var eventId = Guid.NewGuid(); var expires = now.AddMinutes(5);
+        var recipient = new ReminderRecipient(Guid.NewGuid(), 1, Guid.NewGuid(), now);
+        recipient.Begin(now.AddMinutes(1), eventId, expires); recipient.Result("unavailable", null, false, now.AddMinutes(1));
+        recipient.Begin(now.AddMinutes(2), eventId, expires);
+        Assert.Equal(eventId, recipient.CommandId); Assert.Equal(expires, recipient.CommandExpiresAt);
+        recipient.Result("timeout", "live_websocket", true, now.AddMinutes(2)); recipient.Begin(now.AddMinutes(3), eventId, expires);
+        Assert.Equal(eventId, recipient.CommandId); Assert.Equal(expires, recipient.CommandExpiresAt);
+        // A command attempted by an older backend remains conservative during upgrade.
+        var existing = new ReminderRecipient(Guid.NewGuid(), 1, Guid.NewGuid(), now); existing.Begin(now); var attempted = existing.CommandId; var lifetime = existing.CommandExpiresAt;
+        existing.Result("timeout", "live_websocket", true, now); existing.Begin(now.AddMinutes(1), eventId, expires);
+        Assert.Equal(attempted, existing.CommandId); Assert.Equal(lifetime, existing.CommandExpiresAt);
+    }
+    [Fact] public void NewCommandsCannotOutliveDeliveryWindowAndAmbiguousReplayKeepsItsPersistedLifetime()
+    {
+        var now = At("2026-10-15T12:09Z"); var deadline = now.AddMinutes(1);
+        var recipient = new ReminderRecipient(Guid.NewGuid(), 1, Guid.NewGuid(), now);
+        recipient.Begin(now, notAfter: deadline); var id = recipient.CommandId;
+        Assert.Equal(deadline, recipient.CommandExpiresAt);
+        recipient.Result("timeout", "live_websocket", true, now);
+        recipient.Begin(now.AddSeconds(10), notAfter: now.AddSeconds(20));
+        Assert.Equal(id, recipient.CommandId); Assert.Equal(deadline, recipient.CommandExpiresAt);
+        recipient.Result("unavailable", null, false, now.AddSeconds(10)); recipient.Begin(now.AddSeconds(20), notAfter: deadline);
+        Assert.NotEqual(id, recipient.CommandId); Assert.Equal(deadline, recipient.CommandExpiresAt);
+        var legacy = new ReminderRecipient(Guid.NewGuid(), 1, Guid.NewGuid(), now); legacy.Begin(now);
+        Assert.Equal(now.AddMinutes(5), legacy.CommandExpiresAt);
+    }
     [Fact] public void OldSeriesBaseIsSkippedDirectlyWhileOrdinalAndCountRemainCorrect()
     {
         var result = ReminderCalendar.Next(Daily("1970-01-01", "08:00", 3), "UTC", At("2026-09-27T00:00Z"));

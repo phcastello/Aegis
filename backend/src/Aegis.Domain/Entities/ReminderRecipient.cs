@@ -34,10 +34,22 @@ public sealed class ReminderRecipient : AuditableEntity
     }
     public void Stop(DateTimeOffset now) { if (Status == "pending") Status = "failed"; Touch(now); }
     public bool NeedsRetry(DateTimeOffset now) => Status == "pending" && Attempts < 5 && NextAttemptAt <= now;
-    public void Begin(DateTimeOffset now)
+    public void Begin(DateTimeOffset now, Guid? replayCommandId = null, DateTimeOffset? replayExpiresAt = null, DateTimeOffset? notAfter = null)
     {
+        if ((replayCommandId is null) != (replayExpiresAt is null) || replayCommandId == Guid.Empty) throw new ArgumentException("Identidade de replay inválida.");
         // Pending from a crashed process is ambiguous and reuses its original command.
-        if (CommandId is null || !Ambiguous) { CommandId = Guid.NewGuid(); CommandExpiresAt = now.AddSeconds(300); }
+        if (replayCommandId is not null)
+        {
+            // The geographic observer may already have posted locally without
+            // a receipt. Keep its event identity and original lifetime even
+            // after a definite route failure; never replace an attempted ID.
+            CommandId ??= replayCommandId; CommandExpiresAt ??= replayExpiresAt;
+        }
+        else if (CommandId is null || !Ambiguous)
+        {
+            CommandId = Guid.NewGuid(); CommandExpiresAt = now.AddSeconds(300);
+            if (notAfter < CommandExpiresAt) CommandExpiresAt = notAfter;
+        }
         Attempts++; Ambiguous = true; Touch(now);
     }
     public void Result(string status, string? transport, bool ambiguous, DateTimeOffset now)
