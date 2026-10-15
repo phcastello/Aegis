@@ -11,12 +11,31 @@ use tauri::{AppHandle, Emitter, Manager};
 use windows::{
     core::HSTRING,
     Data::Xml::Dom::XmlDocument,
+    Win32::System::Com::CoIncrementMTAUsage,
     Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
     UI::Notifications::{ToastNotification, ToastNotificationManager},
 };
 static PRESENTATION_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static WAKE: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
+// windows-core caches agile activation factories for the process lifetime. Keep
+// their MTA alive when the last temporary worker's balanced RoUninitialize runs.
+// The process owns this one cookie, as windows-core's automatic MTA fallback does;
+// no dedicated thread, timer, or per-notification allocation is retained.
+static PROCESS_MTA: OnceLock<Result<usize, ()>> = OnceLock::new();
+fn keep_process_mta() -> Result<(), ()> {
+    PROCESS_MTA
+        .get_or_init(|| {
+            unsafe { CoIncrementMTAUsage() }
+                .map(|cookie| cookie.0 as usize)
+                .map_err(|error| {
+                    log_hresult("mta_lifetime", &error);
+                })
+        })
+        .as_ref()
+        .map(|_| ())
+        .map_err(|_| ())
+}
 // Every synchronous WinRT operation owns its thread's initialization. This guard
 // deliberately cannot cross an await or move to another executor thread.
 struct Apartment {
@@ -25,6 +44,7 @@ struct Apartment {
 }
 impl Apartment {
     fn enter() -> Result<Self, ()> {
+        keep_process_mta()?;
         match unsafe { RoInitialize(RO_INIT_MULTITHREADED) } {
             Ok(()) => Ok(Self {
                 uninitialize: true,
@@ -728,19 +748,40 @@ mod tests {
 
     #[test]
     fn winrt_operations_initialize_and_balance_on_a_native_worker_thread() {
-        std::thread::spawn(|| {
-            let first = Apartment::enter().unwrap();
-            {
-                let _nested = Apartment::enter().unwrap();
-                let xml = XmlDocument::new().unwrap();
-                xml.LoadXml(&HSTRING::from("<toast><visual/></toast>"))
-                    .unwrap();
+        const CHILD: &str = "AEGIS_WINRT_LIFETIME_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // The second worker must reuse cached factories after the first exits.
+            for _ in 0..2 {
+                std::thread::spawn(|| {
+                    eprintln!("AegisWinrtTest phase=worker_start");
+                    let first = Apartment::enter().unwrap();
+                    {
+                        let _nested = Apartment::enter().unwrap();
+                        let xml = XmlDocument::new().unwrap();
+                        xml.LoadXml(&HSTRING::from("<toast><visual/></toast>"))
+                            .unwrap();
+                        eprintln!("AegisWinrtTest phase=xml_loaded");
+                    }
+                    drop(first);
+                    let _reinitialized = Apartment::enter().unwrap();
+                    assert!(XmlDocument::new().is_ok());
+                    eprintln!("AegisWinrtTest phase=worker_completed");
+                })
+                .join()
+                .unwrap();
             }
-            drop(first);
-            let _reinitialized = Apartment::enter().unwrap();
-            assert!(XmlDocument::new().is_ok());
-        })
-        .join()
-        .unwrap();
+            return;
+        }
+        // A native access violation must become an explicit failed assertion rather
+        // than aborting the unrelated desktop regression tests without diagnostics.
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "windows_notifications::tests::winrt_operations_initialize_and_balance_on_a_native_worker_thread", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(
+            result.status.success(),
+            "WinRT worker subprocess {:?}: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }
