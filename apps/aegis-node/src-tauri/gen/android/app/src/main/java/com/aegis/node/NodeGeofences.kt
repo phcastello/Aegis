@@ -21,7 +21,9 @@ import java.util.concurrent.TimeUnit
 /** Native persisted execution of server definitions; no separate recurrence scheduler. */
 object NodeGeofences {
  private val executor=Executors.newSingleThreadExecutor()
+ private val eventExecutor=Executors.newSingleThreadExecutor()
  fun background(block:()->Unit){executor.execute(block)}
+ fun event(block:()->Unit){eventExecutor.execute(block)}
  private val manifestGate=Any()
  private val applyGate=Any()
  private const val PREFS="aegis-geofences-v1"
@@ -310,10 +312,10 @@ internal fun JSONArray.strings():List<String> =(0 until length()).map{getString(
 class NodeGeofenceReceiver:BroadcastReceiver() {
  override fun onReceive(context:Context,intent:Intent) {
   val pending=goAsync()
-  NodeGeofences.background {
+  NodeGeofences.event {
    try {
-    val event=GeofencingEvent.fromIntent(intent) ?: return@background
-    if(event.hasError()) {NodeGeofences.scheduleRestore(context);return@background}
+    val event=GeofencingEvent.fromIntent(intent) ?: return@event
+    if(event.hasError()) {NodeGeofences.scheduleRestore(context);return@event}
     val location=event.triggeringLocation
     if(location!=null) {val observation=NodeLocation.observation(location);NodeGeofenceRuntime.observe(context,observation.getDouble("latitude"),observation.getDouble("longitude"),observation.getDouble("accuracyMeters"),NodeLocation.engine(observation).capturedAt,true)}
    }catch(error:Exception){notificationLog("geofence_event",error)}finally{pending.finish()}
