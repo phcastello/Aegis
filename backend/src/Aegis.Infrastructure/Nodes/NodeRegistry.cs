@@ -168,7 +168,12 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
         var result = await Locked(async () =>
     {
         if (actor is { } id) await Active(id, ct);
-        var node = await Target(target, ct); node.SetEnabled(enabled, Now); return View(node);
+        var node = await Target(target, ct); node.SetEnabled(enabled, Now);
+        // Persist the known administrative suspension together with the Node.
+        // Offline native registrations remain pending reconciliation; enabling
+        // the device again must not silently resume its geographic rules.
+        if (!enabled) foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && r.Status == "active").ToArrayAsync(ct)) rule.SetStatus("pause", Now);
+        return View(node);
         }, ct);
         if (!enabled) connections?.Disconnect(target, "node_disabled");
         return result with { Availability = enabled && connections?.IsOnline(target) == true ? "online" : "offline" };

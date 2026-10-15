@@ -177,6 +177,50 @@ public sealed class PlaceCompletionPostgresTests
     });
 
     [NodePostgresTests.PostgresFact]
+    public Task DisablingObserverPausesOnlyItsActiveRulesAndReenableRequiresExplicitResumeAndNativeConfirmation() => WithSchema(async create => {
+        var clock = new Clock(); Guid actor; Guid observer; Guid other; string credential; GeographicRuleView active; GeographicRuleView paused; GeographicRuleView cancelled; GeographicRuleView completed; GeographicRuleView unrelated; Guid occurrence;
+        await using (var initial = create()) {
+            actor = (await Pair(initial, clock, "windows")).Id; var phone = await Pair(initial, clock); observer = phone.Id; credential = phone.Credential; other = (await Pair(initial, clock)).Id;
+            await ConfigureObserver(initial, clock, observer); await ConfigureObserver(initial, clock, other);
+            var place = await Places(initial, clock).SaveAsync(null, new("Synthetic disable place", "property", null, [Circle()], []));
+            active = await Places(initial, clock).SaveRuleAsync(null, new("Synthetic active task", [place.Id], observer, "exit", true));
+            var pending = await Places(initial, clock).SaveRuleAsync(null, new("Synthetic paused task", [place.Id], observer, "exit", true));
+            paused = await Places(initial, clock).ActOnRuleAsync(pending.Id, pending.Revision, "pause");
+            pending = await Places(initial, clock).SaveRuleAsync(null, new("Synthetic cancelled task", [place.Id], observer, "exit", true));
+            cancelled = await Places(initial, clock).ActOnRuleAsync(pending.Id, pending.Revision, "cancel");
+            completed = await Places(initial, clock).SaveRuleAsync(null, new("Synthetic completed task", [place.Id], observer, "enter"));
+            unrelated = await Places(initial, clock).SaveRuleAsync(null, new("Synthetic other observer task", [place.Id], other, "exit", true));
+            clock.Now += TimeSpan.FromSeconds(2); occurrence = Guid.NewGuid();
+            await Places(initial, clock).EventAsync(observer, new(Guid.NewGuid(), occurrence, completed.Id, completed.Revision, "enter", clock.Now.AddSeconds(-1), 1, clock.Now));
+            var manifest = Json(await Places(initial, clock).ManifestAsync(observer));
+            await Places(initial, clock).ConfirmAsync(observer, new(manifest.GetProperty("revision").GetString()!, [new(active.Id, active.Revision, "active"), new(paused.Id, paused.Revision, "paused")]));
+            Assert.Equal("active", (await initial.Set<GeographicReminderRule>().AsNoTracking().SingleAsync(r => r.Id == active.Id)).SyncStatus);
+            await new NodeRegistry(initial, clock).SetEnabledAsync(actor, observer, false);
+            Assert.Equal("node_disabled", (await new NodeRegistry(initial, clock).AuthenticateAsync(credential)).Error);
+        }
+        await using (var restarted = create()) {
+            Assert.False((await restarted.Nodes.SingleAsync(n => n.Id == observer)).Enabled);
+            var rules = await restarted.Set<GeographicReminderRule>().AsNoTracking().ToDictionaryAsync(r => r.Id);
+            Assert.Equal("paused", rules[active.Id].Status); Assert.Equal(active.Revision + 1, rules[active.Id].Revision); Assert.Equal("pending_sync", rules[active.Id].SyncStatus); Assert.Equal(active.Revision, rules[active.Id].SyncedRevision);
+            Assert.Equal("paused", rules[paused.Id].Status); Assert.Equal(paused.Revision, rules[paused.Id].Revision); Assert.Equal("paused", rules[paused.Id].SyncStatus);
+            Assert.Equal("cancelled", rules[cancelled.Id].Status); Assert.Equal(cancelled.Revision, rules[cancelled.Id].Revision);
+            Assert.Equal("completed", rules[completed.Id].Status); Assert.Equal(completed.Revision, rules[completed.Id].Revision);
+            Assert.Equal("active", rules[unrelated.Id].Status); Assert.Equal(unrelated.Revision, rules[unrelated.Id].Revision);
+            Assert.Equal(occurrence, (await restarted.Reminders.SingleAsync()).Id); Assert.Single(await restarted.Set<GeographicReminderEvent>().ToArrayAsync()); Assert.Single(await restarted.Set<ReminderRecipient>().ToArrayAsync());
+            await new NodeRegistry(restarted, clock).SetEnabledAsync(actor, observer, false);
+            Assert.Equal(active.Revision + 1, (await restarted.Set<GeographicReminderRule>().AsNoTracking().SingleAsync(r => r.Id == active.Id)).Revision);
+            await new NodeRegistry(restarted, clock).SetEnabledAsync(actor, observer, true);
+            Assert.True((await new NodeRegistry(restarted, clock).AuthenticateAsync(credential)).Authenticated);
+            var stillPaused = (await Places(restarted, clock).RulesAsync()).Single(r => r.Id == active.Id); Assert.Equal("paused", stillPaused.Status); Assert.Equal("pending_sync", stillPaused.SyncStatus);
+            var manifest = Json(await Places(restarted, clock).ManifestAsync(observer)); Assert.All(manifest.GetProperty("rules").EnumerateArray(), r => Assert.Equal("paused", r.GetProperty("status").GetString()));
+            var resumed = await Places(restarted, clock).ActOnRuleAsync(active.Id, stillPaused.Revision, "resume"); Assert.Equal("active", resumed.Status); Assert.Equal(active.Revision + 2, resumed.Revision); Assert.Equal("pending_sync", resumed.SyncStatus);
+            var fresh = Json(await Places(restarted, clock).ManifestAsync(observer));
+            await Places(restarted, clock).ConfirmAsync(observer, new(fresh.GetProperty("revision").GetString()!, [new(resumed.Id, resumed.Revision, "waiting_initial")]));
+            Assert.Equal("waiting_initial", (await Places(restarted, clock).RulesAsync()).Single(r => r.Id == active.Id).SyncStatus);
+        }
+    });
+
+    [NodePostgresTests.PostgresFact]
     public Task RemovingSelectedObserverInvalidatesIdentityAndNullsHistoryReferencesWithoutDeletingOccurrences() => WithSchema(async create => {
         var clock = new Clock(); Guid actor; Guid observer; string observerCredential; Guid occurrenceId;
         await using (var initial = create()) {
