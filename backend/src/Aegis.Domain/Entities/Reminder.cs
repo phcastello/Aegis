@@ -142,7 +142,7 @@ public sealed class Reminder : AuditableEntity
         var reminder = new Reminder(text, occurredAt, timeZoneId, null, occurredAt.AddTicks(-1));
         reminder.CreatedAt = reminder.UpdatedAt = now;
         reminder.Id = occurrenceId; reminder.SourceEventId = eventId; reminder.ObserverNodeId = observerNodeId;
-        reminder.ObserverPostedAt = observerPostedAt; reminder.TriggeredAt = occurredAt; reminder.SetDeliveryPolicy(deliveryPolicy); return reminder;
+        reminder.ObserverPostedAt = observerPostedAt; reminder.TriggeredAt = occurredAt; reminder.DeliveryUntil = occurredAt.AddMinutes(5); reminder.SetDeliveryPolicy(deliveryPolicy); return reminder;
     }
     public void Snooze(DateTimeOffset now, int minutes)
     {

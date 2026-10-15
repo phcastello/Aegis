@@ -121,7 +121,7 @@ public sealed class ReminderCompletionTests
         using var f = new Fixture(); var observer = f.AddNode(NodePlatform.Android); await f.Db.SaveChangesAsync();
         var now = f.Clock.GetUtcNow(); var reminder = Reminder.CreateGeographic(Guid.NewGuid(), Guid.NewGuid(), observer.Id, "local", now, "UTC", now, observerPostedAt: now);
         f.Db.Reminders.Add(reminder); await f.Db.SaveChangesAsync(); await f.Processor.ProcessNextAsync(); Assert.Single(f.Native.Commands); Assert.DoesNotContain(f.Native.Commands, c => c.NodeId == observer.Id);
-        var stale = Reminder.CreateGeographic(Guid.NewGuid(), Guid.NewGuid(), observer.Id, "stale", now.AddHours(-1), "UTC", now, observerPostedAt: now); f.Db.Reminders.Add(stale); await f.Db.SaveChangesAsync();
+        var stale = Reminder.CreateGeographic(Guid.NewGuid(), Guid.NewGuid(), observer.Id, "stale", now.AddMinutes(-6), "UTC", now, observerPostedAt: now.AddMinutes(-6)); f.Db.Reminders.Add(stale); await f.Db.SaveChangesAsync();
         await f.Processor.ProcessNextAsync(); Assert.Single(f.Native.Commands);
     }
     [Fact] public async Task EditingSeriesPreservesCompletedDateAndIndividualCancellation()
