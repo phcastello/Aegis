@@ -1,3 +1,5 @@
+using Aegis.Api;
+using Aegis.Api.Nodes;
 using Aegis.Application;
 using Aegis.Infrastructure;
 using Aegis.Infrastructure.Persistence;
@@ -9,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "AegisCors";
 
 builder.Services.AddControllers();
+builder.Services.AddNodeApi(builder.Configuration);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
@@ -22,7 +25,12 @@ builder.Services.AddCors(options =>
                 "http://localhost:5173",
                 "https://localhost:5173",
                 "http://localhost:3000",
-                "https://localhost:3000");
+                "https://localhost:3000",
+                "http://localhost:1420",
+                "https://localhost:1420",
+                "https://tauri.localhost")
+            .WithOrigins(ClientCors.AdditionalOrigins(builder.Configuration["AEGIS_CORS_ORIGINS"]))
+            .WithExposedHeaders("X-Aegis-Audio-Format", "X-Aegis-Sample-Rate", "X-Aegis-Channels");
     });
 });
 
@@ -49,7 +57,10 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors(CorsPolicyName);
 
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.Zero });
+app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapControllers();
 

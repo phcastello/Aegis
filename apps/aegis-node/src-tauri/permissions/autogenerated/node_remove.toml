@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-remove"
+description = "Enables the node_remove command without any pre-configured scope."
+commands.allow = ["node_remove"]
+
+[[permission]]
+identifier = "deny-node-remove"
+description = "Denies the node_remove command without any pre-configured scope."
+commands.deny = ["node_remove"]

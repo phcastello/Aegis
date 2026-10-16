@@ -9,6 +9,13 @@ namespace Aegis.Infrastructure.Persistence;
 
 public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
 {
+    public DbSet<NodePushRegistration> NodePushRegistrations => Set<NodePushRegistration>();
+    public DbSet<NodeCapabilitySnapshot> NodeCapabilities => Set<NodeCapabilitySnapshot>();
+    public DbSet<AegisNode> Nodes => Set<AegisNode>();
+    public DbSet<NodeCredential> NodeCredentials => Set<NodeCredential>();
+    public DbSet<NodePairingCode> NodePairingCodes => Set<NodePairingCode>();
+    public DbSet<NodePairingAttempt> NodePairingAttempts => Set<NodePairingAttempt>();
+
     public DbSet<Reminder> Reminders => Set<Reminder>();
     public DbSet<MemoryRecord> MemoryRecords => Set<MemoryRecord>();
     public DbSet<MemoryEvidence> MemoryEvidences => Set<MemoryEvidence>();
@@ -401,6 +408,9 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureMemory();
+        modelBuilder.ConfigureNodes();
+        Aegis.Infrastructure.Reminders.ReminderCompletionModelConfiguration.ConfigureReminderCompletion(modelBuilder);
+        Aegis.Infrastructure.Places.PlaceModelConfiguration.ConfigurePlaces(modelBuilder);
         modelBuilder.Entity<Reminder>(e =>
         {
             e.ToTable("reminders");
@@ -427,12 +437,14 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
         });
         modelBuilder.Entity<ReminderDeliveryAttempt>(e =>
         {
-            e.ToTable("reminder_delivery_attempts");
+            e.ToTable("reminder_node_delivery_attempts");
             e.HasKey(a => a.Id);
-            e.Property(a => a.FailureReason).HasMaxLength(100);
+            e.Property(a => a.Result).HasMaxLength(40);
+            e.Property(a => a.Transport).HasMaxLength(30);
             e.HasOne<Reminder>().WithMany().HasForeignKey(a => a.ReminderId).OnDelete(DeleteBehavior.Restrict);
-            e.HasOne<PushSubscription>().WithMany().HasForeignKey(a => a.PushSubscriptionId).OnDelete(DeleteBehavior.Restrict);
-            e.HasIndex(a => new { a.ReminderId, a.PushSubscriptionId, a.Attempt }).IsUnique();
+            e.HasOne<AegisNode>().WithMany().HasForeignKey(a => a.NodeId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(a => new { a.ReminderId, a.Attempt }).IsUnique(false);
+            e.HasIndex(a => a.CommandId);
         });
         modelBuilder.Entity<Conversation>(entity =>
         {

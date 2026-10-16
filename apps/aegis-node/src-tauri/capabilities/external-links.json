@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "external-links",
+  "description": "Open user-selected HTTP(S) and mail links in the system browser only.",
+  "windows": ["main"],
+  "platforms": ["windows", "android"],
+  "permissions": [{ "identifier": "opener:allow-open-url", "allow": [{"url": "https://*"}, {"url": "http://*"}, {"url": "mailto:*"}] }]
+}

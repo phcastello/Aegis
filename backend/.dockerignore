@@ -4,3 +4,6 @@
 .env
 .vs/
 .vscode/
+
+.runtime-secrets/
+**/google-services.json

@@ -25,6 +25,14 @@ public static class DependencyInjection
     {
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<ReminderService>();
+        services.AddScoped<ReminderSeriesService>();
+        services.AddScoped<ReminderActionService>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.PlaceListTool>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.PlaceResolveTool>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.LocationStatusTool>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.GeographicReminderCreateTool>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.GeographicReminderListTool>();
+        services.AddScoped<IAegisTool, Aegis.Application.Places.GeographicReminderChangeTool>();
         services.AddScoped<MemoryService>();
         services.AddScoped<MemorySemanticSearch>();
         services.AddScoped<MemoryEntityResolver>();
@@ -39,6 +47,10 @@ public static class DependencyInjection
         services.AddScoped<IAegisTool, ReminderListTool>();
         services.AddScoped<IAegisTool, ReminderUpdateTool>();
         services.AddScoped<IAegisTool, ReminderCancelTool>();
+        services.AddScoped<IAegisTool, ReminderSeriesCreateTool>();
+        services.AddScoped<IAegisTool, ReminderSeriesListTool>();
+        services.AddScoped<IAegisTool, ReminderSeriesChangeTool>();
+        services.AddScoped<IAegisTool, ReminderActionTool>();
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<IVoiceService, VoiceService>();

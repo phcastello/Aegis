@@ -1,0 +1,545 @@
+//! The only remotely executable operation. No credential or arbitrary OS error is public.
+use serde::{Deserialize, Serialize};
+use std::{collections::VecDeque, future::Future, pin::Pin};
+use tokio::sync::Mutex;
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationInput {
+    pub title: String,
+    pub body: String,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationCommand {
+    pub command_id: uuid::Uuid,
+    pub capability: String,
+    pub capability_version: u32,
+    pub expires_at: String,
+    pub input: serde_json::Value,
+}
+/// Private native context, never part of the remote command schema. Live commands
+/// use the authenticated transport clock through the renderer, including time
+/// spent waiting for the JNI/UI queue. A different device wall clock must not
+/// invalidate a command which the transport has just validated.
+#[derive(Clone, Copy)]
+pub struct NotificationClock {
+    epoch_second: i64,
+    started: std::time::Instant,
+}
+impl NotificationClock {
+    pub fn new(epoch_second: i64) -> Self {
+        Self {
+            epoch_second,
+            started: std::time::Instant::now(),
+        }
+    }
+    pub fn now_epoch_second(&self) -> i64 {
+        self.epoch_second
+            .saturating_add(self.started.elapsed().as_secs().min(i64::MAX as u64) as i64)
+    }
+    pub fn now_epoch_millis(&self) -> i64 {
+        self.epoch_second
+            .saturating_mul(1_000)
+            .saturating_add(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64)
+    }
+    pub fn native_payload(
+        &self,
+        command: &NotificationCommand,
+    ) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&serde_json::json!({
+            "command": command,
+            "validatedNowEpochMillis": self.now_epoch_millis(),
+        }))
+    }
+}
+// Diagnostics are a closed, bounded vocabulary; never native error prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AndroidDiagnosticCode {
+    AndroidJniUnavailable,
+    AndroidJniCallFailed,
+    AndroidNativeTimeout,
+    AndroidPayloadParseFailed,
+    AndroidExpiryParseFailed,
+    AndroidInvalidCommandId,
+    AndroidInvalidNotificationPayload,
+    AndroidPermissionDenied,
+    AndroidPermissionCheckFailed,
+    AndroidChannelMissing,
+    AndroidPendingIntentFailed,
+    AndroidNotificationBuildFailed,
+    AndroidNotificationPostFailed,
+    AndroidDedupeReadFailed,
+    AndroidDedupePersistFailed,
+    WindowsIdentityUnavailable,
+    WindowsStoreFailed,
+    WindowsWinrtInitializeFailed,
+    WindowsToastXmlFailed,
+    WindowsToastBuildFailed,
+    WindowsNotifierFailed,
+    WindowsPermissionCheckFailed,
+    WindowsNotificationPostFailed,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationStatus {
+    Success,
+    Expired,
+    Unsupported,
+    PermissionDenied,
+    Failed,
+    Duplicate,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationResult {
+    pub status: NotificationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<AndroidDiagnosticCode>,
+}
+impl NotificationResult {
+    pub fn new(status: NotificationStatus) -> Self {
+        Self {
+            status,
+            diagnostic_code: None,
+        }
+    }
+    pub fn diagnostic(status: NotificationStatus, code: AndroidDiagnosticCode) -> Self {
+        Self {
+            status,
+            diagnostic_code: Some(code),
+        }
+    }
+}
+pub trait NotificationSink: Send + Sync {
+    fn connected(&self) {}
+    fn show<'a>(
+        &'a self,
+        command: &'a NotificationCommand,
+    ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>>;
+    fn show_with_clock<'a>(
+        &'a self,
+        command: &'a NotificationCommand,
+        _clock: NotificationClock,
+    ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+        self.show(command)
+    }
+}
+pub struct NotificationExecutor {
+    sink: Box<dyn NotificationSink>,
+    recent: Mutex<VecDeque<(uuid::Uuid, i64)>>,
+}
+impl NotificationExecutor {
+    pub fn new(sink: impl NotificationSink + 'static) -> Self {
+        Self {
+            sink: Box::new(sink),
+            recent: Mutex::new(VecDeque::new()),
+        }
+    }
+    pub fn connected(&self) {
+        self.sink.connected();
+    }
+    pub async fn execute(&self, c: &NotificationCommand, now: i64) -> NotificationResult {
+        let clock = NotificationClock::new(now);
+        if !matches!(
+            c.capability.as_str(),
+            "notification.show"
+                | "reminder.notify"
+                | "reminder.withdraw"
+                | "geofence.monitor"
+                | "location.current"
+        ) || c.capability_version != 1
+        {
+            return NotificationResult::new(NotificationStatus::Unsupported);
+        }
+        let expiry = match chrono::DateTime::parse_from_rfc3339(&c.expires_at) {
+            Ok(d) => d.timestamp(),
+            Err(_) => return NotificationResult::new(NotificationStatus::Failed),
+        };
+        if expiry <= now {
+            return NotificationResult::new(NotificationStatus::Expired);
+        }
+        if expiry > now + 300 || c.command_id.is_nil() || !valid_command_input(c) {
+            return NotificationResult::new(NotificationStatus::Failed);
+        }
+        // Serialize the short native API invocation with dedupe reservation; never hold the socket writer.
+        let mut recent = self.recent.lock().await;
+        let now = clock.now_epoch_second();
+        if expiry <= now {
+            return NotificationResult::new(NotificationStatus::Expired);
+        }
+        recent.retain(|(_, at)| now.saturating_sub(*at) < 600);
+        if recent.iter().any(|(id, _)| *id == c.command_id) {
+            return NotificationResult::new(NotificationStatus::Duplicate);
+        }
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.sink.show_with_clock(c, clock),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            #[cfg(target_os = "android")]
+            {
+                NotificationResult::diagnostic(
+                    NotificationStatus::Failed,
+                    AndroidDiagnosticCode::AndroidNativeTimeout,
+                )
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                NotificationResult::new(NotificationStatus::Failed)
+            }
+        });
+        if matches!(
+            result.status,
+            NotificationStatus::Success | NotificationStatus::Duplicate
+        ) {
+            if recent.len() == 256 {
+                recent.pop_front();
+            }
+            recent.push_back((c.command_id, now));
+        }
+        result
+    }
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderNotificationInput {
+    pub title: String,
+    pub body: String,
+    pub reminder_id: uuid::Uuid,
+    pub revision: u64,
+    pub generation: u64,
+    pub interaction_token: String,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderWithdrawInput {
+    pub reminder_id: uuid::Uuid,
+    pub generation: u64,
+}
+fn valid_command_input(c: &NotificationCommand) -> bool {
+    match c.capability.as_str() {
+        "notification.show" => {
+            serde_json::from_value::<NotificationInput>(c.input.clone()).is_ok_and(|i| valid(&i))
+        }
+        "reminder.notify" => serde_json::from_value::<ReminderNotificationInput>(c.input.clone())
+            .is_ok_and(|i| {
+                !i.reminder_id.is_nil()
+                    && i.revision > 0
+                    && (20..=2048).contains(&i.interaction_token.len())
+                    && !i.interaction_token.chars().any(char::is_control)
+                    && valid(&NotificationInput {
+                        title: i.title,
+                        body: i.body,
+                    })
+            }),
+        "reminder.withdraw" => serde_json::from_value::<ReminderWithdrawInput>(c.input.clone())
+            .is_ok_and(|i| !i.reminder_id.is_nil()),
+        "geofence.monitor" => c.input == serde_json::json!({"operation":"sync"}),
+        "location.current" => c.input.as_object().is_some_and(|o| {
+            o.len() == 2
+                && o.get("operation").and_then(|v| v.as_str()) == Some("refresh")
+                && o.get("requestId")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+        }),
+        _ => false,
+    }
+}
+pub fn valid(input: &NotificationInput) -> bool {
+    !input.title.trim().is_empty()
+        && input.title.chars().count() <= 120
+        && input.body.chars().count() <= 2000
+        && input.title.len() + input.body.len() <= 2800
+        && !input.title.chars().any(char::is_control)
+        && !input
+            .body
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct Mock(Arc<AtomicUsize>);
+    impl NotificationSink for Mock {
+        fn show<'a>(
+            &'a self,
+            _: &'a NotificationCommand,
+        ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                NotificationResult::new(NotificationStatus::Success)
+            })
+        }
+    }
+    fn command() -> NotificationCommand {
+        NotificationCommand {
+            command_id: uuid::Uuid::new_v4(),
+            capability: "notification.show".into(),
+            capability_version: 1,
+            expires_at: "2026-10-03T12:01:00Z".into(),
+            input: serde_json::json!({"title":"Aegis","body":"Olá"}),
+        }
+    }
+    #[test]
+    fn native_clock_counts_queue_delay_without_changing_the_external_command() {
+        let command = command();
+        let original = serde_json::to_value(&command).unwrap();
+        let clock = NotificationClock {
+            epoch_second: 1_000,
+            started: std::time::Instant::now() - std::time::Duration::from_secs(301),
+        };
+        let native: serde_json::Value =
+            serde_json::from_str(&clock.native_payload(&command).unwrap()).unwrap();
+        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_301_000);
+        assert_eq!(native["command"], original);
+        assert_eq!(native.as_object().unwrap().len(), 2);
+        // Neither the FCM nor live network parser accepts the private wrapper.
+        assert!(serde_json::from_value::<NotificationCommand>(native).is_err());
+        assert_eq!(serde_json::to_value(&command).unwrap(), original);
+    }
+    #[test]
+    fn native_clock_preserves_fractional_queue_time() {
+        let clock = NotificationClock {
+            epoch_second: 1_000,
+            started: std::time::Instant::now() - std::time::Duration::from_millis(900),
+        };
+        let native: serde_json::Value =
+            serde_json::from_str(&clock.native_payload(&command()).unwrap()).unwrap();
+        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_000_900);
+        // Kotlin adds its remaining native time before converting to seconds.
+        assert!((native["validatedNowEpochMillis"].as_i64().unwrap() + 200) / 1_000 >= 1_001);
+    }
+    #[tokio::test]
+    async fn authenticated_clock_reaches_native_sink_with_ttl_and_dedupe_unchanged() {
+        struct ClockSink(Arc<AtomicUsize>);
+        impl NotificationSink for ClockSink {
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                panic!("executor must pass its authenticated clock")
+            }
+            fn show_with_clock<'a>(
+                &'a self,
+                command: &'a NotificationCommand,
+                clock: NotificationClock,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                Box::pin(async move {
+                    let now = clock.now_epoch_second();
+                    let expiry = chrono::DateTime::parse_from_rfc3339(&command.expires_at)
+                        .unwrap()
+                        .timestamp();
+                    assert!(expiry > now && expiry <= now + 300);
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    NotificationResult::new(NotificationStatus::Success)
+                })
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = NotificationExecutor::new(ClockSink(calls.clone()));
+        let mut command = command();
+        let expiry = chrono::DateTime::parse_from_rfc3339(&command.expires_at)
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            executor.execute(&command, expiry - 300).await.status,
+            NotificationStatus::Success
+        );
+        assert_eq!(
+            executor.execute(&command, expiry - 300).await.status,
+            NotificationStatus::Duplicate
+        );
+        command.command_id = uuid::Uuid::new_v4();
+        assert_eq!(
+            executor.execute(&command, expiry - 301).await.status,
+            NotificationStatus::Failed
+        );
+        assert_eq!(
+            executor.execute(&command, expiry).await.status,
+            NotificationStatus::Expired
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn legacy_input_stays_strict_and_new_reminder_requires_scoped_context() {
+        let mut c = command();
+        c.input["reminderId"] = serde_json::json!(uuid::Uuid::new_v4());
+        assert!(!valid_command_input(&c));
+        c.capability = "reminder.notify".into();
+        c.input["revision"] = serde_json::json!(1);
+        c.input["generation"] = serde_json::json!(1);
+        assert!(!valid_command_input(&c));
+        c.input["interactionToken"] = serde_json::json!("restricted-fixture-token-value");
+        assert!(valid_command_input(&c));
+        c.input["arbitrary"] = serde_json::json!(true);
+        assert!(!valid_command_input(&c));
+    }
+    #[test]
+    fn domain_signals_are_fixed_operations_not_generic_rpc() {
+        let mut c = command();
+        c.capability = "geofence.monitor".into();
+        c.input = serde_json::json!({"operation":"sync"});
+        assert!(valid_command_input(&c));
+        c.input = serde_json::json!({"operation":"shell","command":"bad"});
+        assert!(!valid_command_input(&c));
+        c.capability = "location.current".into();
+        c.input = serde_json::json!({"operation":"refresh","requestId":uuid::Uuid::new_v4()});
+        assert!(valid_command_input(&c));
+        c.input["url"] = serde_json::json!("https://evil.invalid");
+        assert!(!valid_command_input(&c));
+    }
+    #[tokio::test]
+    async fn execution_dedupe_expiry_and_only_notification() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = NotificationExecutor::new(Mock(calls.clone()));
+        let mut c = command();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-03T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Success
+        );
+        assert_eq!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Duplicate
+        );
+        assert_eq!(
+            executor.execute(&c, now + 61).await.status,
+            NotificationStatus::Expired
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        c.capability = "shell.execute".into();
+        assert_eq!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Unsupported
+        );
+    }
+    #[test]
+    fn strict_payload_and_limits() {
+        let mut c = command();
+        c.input["title"] = serde_json::json!("");
+        assert!(!valid_command_input(&c));
+        c.input["title"] = serde_json::json!("a".repeat(121));
+        assert!(!valid_command_input(&c));
+        assert!(
+            serde_json::from_str::<NotificationCommand>("{\"credential\":\"secret\"}").is_err()
+        );
+    }
+    #[test]
+    fn native_result_rejects_arbitrary_diagnostics_and_statuses() {
+        let result: NotificationResult = serde_json::from_str(
+            r#"{"status":"failed","diagnosticCode":"android_notification_build_failed"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            result.diagnostic_code,
+            Some(AndroidDiagnosticCode::AndroidNotificationBuildFailed)
+        );
+        for invalid in [
+            r#"{"status":"failed","diagnosticCode":"arbitrary-secret"}"#,
+            r#"{"status":"arbitrary-secret"}"#,
+            r#"{"status":"failed","stack":"arbitrary-secret"}"#,
+        ] {
+            assert!(serde_json::from_str::<NotificationResult>(invalid).is_err());
+        }
+        assert_eq!(
+            serde_json::to_string(&NotificationResult::new(NotificationStatus::Success)).unwrap(),
+            r#"{"status":"success"}"#
+        );
+    }
+    #[test]
+    fn windows_result_diagnostics_remain_a_closed_bounded_vocabulary() {
+        for code in [
+            "windows_identity_unavailable",
+            "windows_store_failed",
+            "windows_winrt_initialize_failed",
+            "windows_toast_xml_failed",
+            "windows_toast_build_failed",
+            "windows_notifier_failed",
+            "windows_permission_check_failed",
+            "windows_notification_post_failed",
+        ] {
+            let result: NotificationResult = serde_json::from_value(
+                serde_json::json!({"status":"failed","diagnosticCode":code}),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(result).unwrap()["diagnosticCode"],
+                code
+            );
+        }
+        assert!(serde_json::from_value::<NotificationResult>(
+            serde_json::json!({"status":"failed","diagnosticCode":"windows_private_error_message"})
+        )
+        .is_err());
+    }
+    #[tokio::test]
+    async fn renderer_diagnostic_survives_executor_without_reserving_failed_id() {
+        struct Failing;
+        impl NotificationSink for Failing {
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                Box::pin(async {
+                    NotificationResult::diagnostic(
+                        NotificationStatus::Failed,
+                        AndroidDiagnosticCode::AndroidNotificationBuildFailed,
+                    )
+                })
+            }
+        }
+        let executor = NotificationExecutor::new(Failing);
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-03T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        let c = command();
+        for _ in 0..2 {
+            let result = executor.execute(&c, now).await;
+            assert_eq!(result.status, NotificationStatus::Failed);
+            assert_eq!(
+                result.diagnostic_code,
+                Some(AndroidDiagnosticCode::AndroidNotificationBuildFailed)
+            );
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn stalled_native_call_is_bounded_and_cancelled() {
+        struct Guard(Arc<AtomicUsize>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        struct Stalled(Arc<AtomicUsize>);
+        impl NotificationSink for Stalled {
+            fn show<'a>(
+                &'a self,
+                _: &'a NotificationCommand,
+            ) -> Pin<Box<dyn Future<Output = NotificationResult> + Send + 'a>> {
+                Box::pin(async move {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    let _guard = Guard(self.0.clone());
+                    std::future::pending().await
+                })
+            }
+        }
+        let active = Arc::new(AtomicUsize::new(0));
+        let executor = NotificationExecutor::new(Stalled(active.clone()));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-03T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            executor.execute(&command(), now).await.status,
+            NotificationStatus::Failed
+        );
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+}

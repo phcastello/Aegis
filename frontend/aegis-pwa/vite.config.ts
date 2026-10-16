@@ -3,6 +3,8 @@ import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  resolve: { dedupe: ['vue'] },
+  define: { __AEGIS_WEB_VERSION__: JSON.stringify(process.env.npm_package_version ?? 'web') },
   plugins: [
     vue(),
     VitePWA({
@@ -14,7 +16,7 @@ export default defineConfig({
       manifest: {
         name: 'Aegis',
         short_name: 'Aegis',
-        description: 'Aegis v0.6.1 — Yeah, I know.',
+        description: 'Aegis — Assistente pessoal',
         theme_color: '#101827',
         background_color: '#101827',
         display: 'standalone',

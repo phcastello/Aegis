@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aegis",
+  "version": "../package.json",
+  "identifier": "com.aegis.node",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Aegis",
+        "width": 1100,
+        "height": 800,
+        "minWidth": 320,
+        "minHeight": 400,
+        "dragDropEnabled": false,
+        "create": false,
+        "useHttpsScheme": true
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "diagnostics",
+        "node-identity",
+        "external-links",
+        "windows-updater",
+        "android-updates"
+      ],
+      "csp": "default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src http: https: ws: wss: ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "versionCode": 7000016
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQ0MxMEE4QTg1RDg5MjIKUldRaWlWMm9xQkRNcTl4UWxQU1ZTQlhCNlZDVXNOMUt2ZGtVU0FDY2tYcXJ3cHZxc1dacWZhZGUK",
+      "endpoints": [
+        "https://github.com/phcastello/Aegis/releases/download/node-preview/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

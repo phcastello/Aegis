@@ -1,0 +1,37 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { androidVersionCode, synchronize } from './version.mjs';
+
+export function metadata(version, signature, date) {
+  const versionCode = androidVersionCode(version);
+  if (!signature.trim()) throw new Error('Missing Windows updater signature.');
+  const decoded = Buffer.from(signature.trim(), 'base64').toString('utf8');
+  const trusted = decoded.split('\n').find(line => line.startsWith('trusted comment: '));
+  const signedVersion = trusted?.split('\t').find(field => field.startsWith('version:'))?.slice(8);
+  if (signedVersion !== version) throw new Error('Updater signature must bind this exact version; use the current Tauri CLI.');
+  // The official updater performs cryptographic verification against the committed public key.
+
+  if (Number.isNaN(Date.parse(date))) throw new Error('Invalid release date.');
+  const base = `https://github.com/phcastello/Aegis/releases/download/node-v${version}/`;
+  return {
+    version, notes: `Aegis ${version}`, pub_date: new Date(date).toISOString(),
+    platforms: {
+      'windows-x86_64': { url: base + 'Aegis-Windows-x86_64-Setup.exe', signature: signature.trim() }
+    },
+    // Custom Android link metadata is outside platforms: desktop updater requires signatures
+    // on every platforms entry and does not support Android. Android verifies APK signing.
+    android: {
+      aarch64: { url: base + 'Aegis-Android-arm64.apk', versionCode }
+    }
+  };
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const directory = resolve(process.argv[2]);
+  const { version } = synchronize();
+  if (process.argv[3] !== `node-v${version}`) throw new Error('Release tag does not match package.json.');
+  const signature = readFileSync(resolve(directory, 'Aegis-Windows-x86_64-Setup.exe.sig'), 'utf8');
+  const result = metadata(version, signature, process.env.RELEASE_DATE);
+  writeFileSync(resolve(directory, 'latest.json'), JSON.stringify(result, null, 2) + '\n');
+}

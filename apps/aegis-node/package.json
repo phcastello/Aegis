@@ -1,0 +1,47 @@
+{
+  "name": "aegis-node",
+  "private": true,
+  "version": "0.7.0-unstable.16",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "check": "npm run version:check && vue-tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "npm run check && vite build",
+    "test": "tsc -p tsconfig.test.json && node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "dev:desktop": "tauri dev --target x86_64-pc-windows-msvc",
+    "build:desktop": "tauri build --target x86_64-pc-windows-msvc",
+    "android:init": "tauri android init",
+    "dev:android": "tauri android dev",
+    "build:android": "tauri android build --debug --apk --target aarch64",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features --lib",
+    "version:sync": "node scripts/version.mjs --write",
+    "version:check": "node scripts/version.mjs",
+    "test:release": "node --test scripts/*.test.mjs",
+    "build:android:release": "tauri android build --apk --target aarch64",
+    "test:rust:desktop": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib"
+  },
+  "dependencies": {
+    "@aegis/client": "file:../../packages/aegis-client",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.1",
+    "leaflet": "1.9.4",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
+    "@types/leaflet": "1.9.22",
+    "@types/node": "^22.19.0",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.5"
+  }
+}

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aegis.Infrastructure.Reminders;
 
-public sealed class ReminderWorker(IServiceScopeFactory scopes, TimeProvider clock, IOptions<WebPushOptions> options,
+public sealed class ReminderWorker(IServiceScopeFactory scopes, TimeProvider clock, IOptions<ReminderOptions> options,
     ILogger<ReminderWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -14,6 +14,14 @@ public sealed class ReminderWorker(IServiceScopeFactory scopes, TimeProvider clo
         {
             try
             {
+                await using (var reconciliation = scopes.CreateAsyncScope())
+                {
+                    var services = reconciliation.ServiceProvider;
+                    var series = services.GetService<ReminderSeriesStore>();
+                    if (series is not null) await series.MaterializePendingAsync(stoppingToken);
+                    var withdrawals = services.GetService<ReminderWithdrawalReconciler>();
+                    if (withdrawals is not null) await withdrawals.ReconcileAsync(stoppingToken);
+                }
                 // Bounded batches keep shutdown responsive and scopes small.
                 for (var i = 0; i < 20; i++)
                 {

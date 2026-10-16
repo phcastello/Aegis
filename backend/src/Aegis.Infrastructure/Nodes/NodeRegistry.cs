@@ -1,0 +1,224 @@
+using Aegis.Application.Nodes;
+using Aegis.Domain.Entities;
+using Aegis.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+namespace Aegis.Infrastructure.Nodes;
+
+public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeConnections? connections = null, INodeBackgroundAvailability? background = null) : INodeRegistry
+{
+    // The small administrative registry follows the existing PostgreSQL advisory-lock pattern.
+    // Hello snapshot replacement shares this short DB transaction lock; heartbeat/presence do not.
+    private async Task<T> Locked<T>(Func<Task<T>> action, CancellationToken ct)
+    {
+        await using var transaction = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
+        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(7070003)", ct);
+        db.ChangeTracker.Clear(); // Each registry command is its own unit of work; no cached identity state.
+        var result = await action();
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
+        return result;
+    }
+    // PostgreSQL timestamps have microsecond precision; keep replayed establishment DTOs stable.
+    private DateTimeOffset Now { get { var now = clock.GetUtcNow(); return new(now.Ticks - now.Ticks % 10, now.Offset); } }
+    private NodeView View(AegisNode node) => NodeView.From(node) with {
+        Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) == true ? "online" : "offline" };
+    private async Task<NodeView> SnapshotView(AegisNode node, CancellationToken ct) => View(node) with {
+        Availability = node.Enabled && node.RevokedAt is null && connections?.IsOnline(node.Id) != true && background is not null && await background.HasRouteAsync(node.Id, ct) ? "backgroundReachable" : View(node).Availability,
+        Capabilities = await db.NodeCapabilities.AsNoTracking().Where(c => c.NodeId == node.Id).OrderBy(c => c.Name)
+            .Select(c => new NodeCapability(c.Name, c.Version)).ToArrayAsync(ct) };
+    private async Task<AegisNode> Active(Guid id, CancellationToken ct)
+    {
+        var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == id, ct);
+        if (node is null) throw new NodeException("node_authentication_required", "Identidade de Node não reconhecida.", 401);
+        if (node.RevokedAt is not null) throw new NodeException("node_revoked", "A identidade foi revogada. Pareie este dispositivo novamente.", 401);
+        if (!node.Enabled) throw new NodeException("node_disabled", "Este Node está desativado. Outro Node ativo ou o administrador local pode reativá-lo.", 403);
+        return node;
+    }
+    private async Task<AegisNode> Target(Guid id, CancellationToken ct)
+    {
+        var target = await db.Nodes.SingleOrDefaultAsync(n => n.Id == id, ct)
+            ?? throw new NodeException("node_not_found", "Node não encontrado.", 404);
+        if (target.RevokedAt is not null) throw new NodeException("node_revoked", "A identidade revogada não pode ser alterada ou reativada.", 409);
+        return target;
+    }
+    private async Task Prune(CancellationToken ct)
+    {
+        // Runs on administrative/pairing activity or explicit local cleanup, never as a heartbeat.
+        var now = Now;
+        db.NodePairingAttempts.RemoveRange(await db.NodePairingAttempts.Where(a => a.ExpiresAt <= now).ToListAsync(ct));
+        db.NodePairingCodes.RemoveRange(await db.NodePairingCodes.Where(c => c.ExpiresAt <= now).ToListAsync(ct));
+        await db.SaveChangesAsync(ct);
+    }
+    public Task CleanupAsync(CancellationToken ct = default) => Locked(async () => { await Prune(ct); return true; }, ct);
+    public Task<PairingCodeView> CreateCodeAsync(Guid? issuer, CancellationToken ct = default) => Locked(async () =>
+    {
+        if (issuer is { } id) await Active(id, ct);
+        await Prune(ct);
+        if (await db.NodePairingCodes.CountAsync(c => c.ConsumedAt == null && c.IssuerNodeId == issuer, ct) >= 10)
+            throw new NodeException("pairing_limit", "Use ou aguarde expirar os códigos já emitidos.", 429);
+        var code = NodeSecrets.NewCode(); var entity = new NodePairingCode(code[..8], NodeSecrets.Hash(code), issuer, Now);
+        db.NodePairingCodes.Add(entity); return new PairingCodeView(NodeSecrets.DisplayCode(code), entity.ExpiresAt);
+    }, ct);
+    public async Task<PairNodeReceipt> PairAsync(PairNodeRequest request, CancellationToken ct = default)
+    {
+        var receipt = await Locked(async () =>
+    {
+        if (request.AttemptId == Guid.Empty) throw NodeSecrets.PairingError();
+        var code = NodeSecrets.NormalizeCode(request.Code); var recovery = NodeSecrets.RecoveryKey(request.RecoveryKey);
+        var platform = request.Platform switch { "android" => NodePlatform.Android, "windows" => NodePlatform.Windows, _ => (NodePlatform)(-1) };
+        try { AegisNode.Validate(request.Name, platform, request.AppVersion, request.ProtocolVersion); }
+        catch (ArgumentException) { throw new NodeException("invalid_node", "Informe nome, plataforma e versão/protocolo de Node válidos."); }
+        await Prune(ct);
+        var entry = await db.NodePairingCodes.SingleOrDefaultAsync(c => c.Selector == code.Substring(0, 8), ct);
+        if (entry is null) throw NodeSecrets.PairingError();
+        if (entry.IssuerNodeId is { } issuer)
+        {
+            var source = await db.Nodes.SingleOrDefaultAsync(n => n.Id == issuer, ct);
+            if (source is null || !source.Enabled || source.RevokedAt is not null) throw NodeSecrets.PairingError();
+        }
+        var retry = await db.NodePairingAttempts.SingleOrDefaultAsync(a => a.Id == request.AttemptId, ct);
+        if (retry is not null)
+        {
+            if (retry.PairingCodeId != entry.Id || retry.ExpiresAt <= Now || !NodeSecrets.Matches(entry.CodeHash, code) ||
+                !NodeSecrets.Matches(retry.RecoveryHash, request.RecoveryKey) || retry.Name != request.Name.Trim() ||
+                retry.Platform != platform || retry.AppVersion != request.AppVersion) throw NodeSecrets.PairingError();
+            return new PairNodeReceipt(retry.NodeId, NodeSecrets.DecryptReceipt(retry.EncryptedReceipt, recovery, retry.Id), retry.ExpiresAt);
+        }
+        if (!entry.IsUsable(Now)) throw NodeSecrets.PairingError();
+        if (!NodeSecrets.Matches(entry.CodeHash, code))
+        {
+            entry.Fail(Now);
+            // Commit failed-attempt budget before returning a generic failure.
+            await db.SaveChangesAsync(ct);
+            return new PairNodeReceipt(Guid.Empty, "", DateTimeOffset.MinValue);
+        }
+        var nodeId = Guid.NewGuid(); var credential = NodeSecrets.NewCredential(nodeId);
+        var attempt = new NodePairingAttempt(request.AttemptId, nodeId, entry, request.Name, platform, request.AppVersion,
+            NodeSecrets.Hash(request.RecoveryKey), NodeSecrets.Hash(credential), NodeSecrets.EncryptReceipt(credential, recovery, request.AttemptId), Now);
+        entry.Consume(Now); db.NodePairingAttempts.Add(attempt);
+        return new PairNodeReceipt(nodeId, credential, attempt.ExpiresAt);
+    }, ct);
+        if (receipt.NodeId == Guid.Empty) throw NodeSecrets.PairingError();
+        return receipt;
+    }
+    public Task<NodeView> FinalizeAsync(FinalizeNodeRequest request, CancellationToken ct = default) => Locked(async () =>
+    {
+        var nodeId = NodeSecrets.CredentialNodeId(request.Credential) ?? throw NodeSecrets.PairingError();
+        var existing = await db.NodeCredentials.SingleOrDefaultAsync(c => c.NodeId == nodeId, ct);
+        if (existing is not null)
+        {
+            if (!NodeSecrets.Matches(existing.SecretHash, request.Credential)) throw NodeSecrets.PairingError();
+            return View(await Active(nodeId, ct)); // Finalize response lost after commit: same identity, no new Node.
+        }
+        await Prune(ct);
+        var attempt = await db.NodePairingAttempts.SingleOrDefaultAsync(a => a.Id == request.AttemptId && a.NodeId == nodeId, ct);
+        if (attempt is null || attempt.ExpiresAt <= Now || !NodeSecrets.Matches(attempt.CredentialHash, request.Credential)) throw NodeSecrets.PairingError();
+        var code = await db.NodePairingCodes.SingleAsync(c => c.Id == attempt.PairingCodeId, ct);
+        if (code.IssuerNodeId is { } issuer)
+        {
+            var source = await db.Nodes.SingleOrDefaultAsync(n => n.Id == issuer, ct);
+            // Failure of the issuing identity invalidates establishment, not the new device's identity.
+            if (source is null || !source.Enabled || source.RevokedAt is not null) throw NodeSecrets.PairingError();
+        }
+        var node = new AegisNode(nodeId, attempt.Name, attempt.Platform, attempt.AppVersion, 1, Now);
+        db.Nodes.Add(node); db.NodeCredentials.Add(new NodeCredential(node.Id, attempt.CredentialHash, Now));
+        db.NodePairingAttempts.Remove(attempt); // Erase retry receipt/recovery hash on successful establishment.
+        return View(node);
+    }, ct);
+    public async Task<NodeAuthentication> AuthenticateAsync(string credential, CancellationToken ct = default)
+    {
+        var id = NodeSecrets.CredentialNodeId(credential);
+        if (id is null) return new(null, "node_authentication_required");
+        var stored = await db.NodeCredentials.AsNoTracking().SingleOrDefaultAsync(c => c.NodeId == id, ct);
+        if (stored is null || !NodeSecrets.Matches(stored.SecretHash, credential)) return new(null, "node_authentication_required");
+        var node = await db.Nodes.AsNoTracking().SingleOrDefaultAsync(n => n.Id == id, ct);
+        if (node is null) return new(null, "node_authentication_required");
+        var error = node.RevokedAt is not null || stored.RevokedAt is not null ? "node_revoked" : !node.Enabled ? "node_disabled" : null;
+        return new(View(node), error);
+    }
+    public Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default) => Locked(async () => await SnapshotView(await Active(actor, ct), ct), ct);
+    public Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default) => Locked<IReadOnlyList<NodeView>>(async () =>
+    {
+        await Active(actor, ct);
+        var result = new List<NodeView>();
+        foreach (var node in await db.Nodes.Where(n => n.RevokedAt == null).OrderBy(n => n.CreatedAt).ToArrayAsync(ct)) result.Add(await SnapshotView(node, ct));
+        return result;
+
+    }, ct);
+    public async Task<IReadOnlyList<NodeView>> ListForDeliveryAsync(CancellationToken ct = default)
+    {
+        var result = new List<NodeView>();
+        foreach (var node in await db.Nodes.AsNoTracking().OrderBy(n => n.CreatedAt).ToArrayAsync(ct))
+            result.Add(await SnapshotView(node, ct));
+        return result;
+    }
+    public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
+    {
+        await Active(actor, ct); var node = await Target(target, ct);
+        try { node.Rename(name, Now); } catch (ArgumentException) { throw new NodeException("invalid_name", "Nome inválido."); }
+        return View(node);
+    }, ct);
+    public Task<NodeView> SetTargetPriorityAsync(Guid actor, Guid target, int priority, CancellationToken ct = default) => Locked(async () => {
+        await Active(actor, ct); var node = await Target(target, ct);
+        try { node.SetTargetPriority(priority, Now); } catch (ArgumentException) { throw new NodeException("invalid_target_priority", "Prioridade deve estar entre -1000 e 1000."); }
+        return await SnapshotView(node, ct);
+    }, ct);
+    public async Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default)
+    {
+        var result = await Locked(async () =>
+    {
+        if (actor is { } id) await Active(id, ct);
+        var node = await Target(target, ct); node.SetEnabled(enabled, Now);
+        // Persist the known administrative suspension together with the Node.
+        // Offline native registrations remain pending reconciliation; enabling
+        // the device again must not silently resume its geographic rules.
+        if (!enabled) foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && r.Status == "active").ToArrayAsync(ct)) rule.SetStatus("pause", Now);
+        return View(node);
+        }, ct);
+        if (!enabled) connections?.Disconnect(target, "node_disabled");
+        return result with { Availability = enabled && connections?.IsOnline(target) == true ? "online" : "offline" };
+    }
+    public async Task<NodeView> RevokeAsync(Guid actor, Guid target, CancellationToken ct = default)
+    {
+        var result = await Locked(async () =>
+    {
+        await Active(actor, ct); var node = await Target(target, ct); node.Revoke(Now);
+            foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && (r.Status == "active" || r.Status == "paused")).ToArrayAsync(ct)) rule.SetStatus("cancel", Now);
+            db.Set<NodeLocationProfile>().RemoveRange(await db.Set<NodeLocationProfile>().Where(p => p.NodeId == target).ToArrayAsync(ct));
+            db.NodePushRegistrations.RemoveRange(await db.NodePushRegistrations.Where(r => r.NodeId == target).ToArrayAsync(ct));
+        var credential = await db.NodeCredentials.SingleAsync(c => c.NodeId == target, ct); credential.Revoke(Now); return View(node);
+        }, ct);
+        connections?.Disconnect(target, "node_revoked");
+        return result with { Availability = "offline" };
+    }
+    public Task<NodeView> SetReceiveRemindersAsync(Guid actor, Guid target, bool receive, CancellationToken ct = default) => Locked(async () => {
+        await Active(actor, ct); var node = await Target(target, ct); node.SetReceiveReminders(receive, Now);
+        if (!receive) foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && r.Status == "active").ToArrayAsync(ct)) rule.SetStatus("pause", Now);
+        return await SnapshotView(node, ct);
+    }, ct);
+    public async Task RemoveAsync(Guid actor, Guid target, CancellationToken ct = default)
+    {
+        await Locked(async () => {
+            await Active(actor, ct);
+            var node = await db.Nodes.SingleOrDefaultAsync(n => n.Id == target, ct);
+            if (node is null) return true;
+            foreach (var rule in await db.Set<GeographicReminderRule>().Where(r => r.ObserverNodeId == target && (r.Status == "active" || r.Status == "paused")).ToArrayAsync(ct)) rule.SetStatus("cancel", Now);
+            // Issued pairing receipts must become unusable before deleting their issuer.
+            var codes = await db.NodePairingCodes.Where(c => c.IssuerNodeId == target).ToArrayAsync(ct);
+            var codeIds = codes.Select(c => c.Id).ToArray();
+            db.NodePairingAttempts.RemoveRange(await db.NodePairingAttempts.Where(a => codeIds.Contains(a.PairingCodeId) || a.NodeId == target).ToArrayAsync(ct));
+            db.NodePairingCodes.RemoveRange(codes);
+            // SET NULL preserves reminder/event history without retaining a device dossier.
+            // Explicit updates also make the deterministic InMemory tests match PostgreSQL.
+            foreach (var attempt in await db.ReminderDeliveryAttempts.Where(a => a.NodeId == target).ToArrayAsync(ct)) db.Entry(attempt).Property(a => a.NodeId).CurrentValue = null;
+            foreach (var recipient in await db.Set<ReminderRecipient>().Where(a => a.NodeId == target).ToArrayAsync(ct)) db.Entry(recipient).Property(a => a.NodeId).CurrentValue = null;
+            foreach (var item in await db.Set<GeographicReminderEvent>().Where(e => e.ObserverNodeId == target).ToArrayAsync(ct)) db.Entry(item).Property(e => e.ObserverNodeId).CurrentValue = null;
+            db.NodePushRegistrations.RemoveRange(await db.NodePushRegistrations.Where(p => p.NodeId == target).ToArrayAsync(ct));
+            db.NodeCredentials.RemoveRange(await db.NodeCredentials.Where(c => c.NodeId == target).ToArrayAsync(ct));
+            db.NodeCapabilities.RemoveRange(await db.NodeCapabilities.Where(c => c.NodeId == target).ToArrayAsync(ct));
+            db.Set<NodeLocationProfile>().RemoveRange(await db.Set<NodeLocationProfile>().Where(p => p.NodeId == target).ToArrayAsync(ct));
+            db.Nodes.Remove(node); return true;
+        }, ct);
+        connections?.Disconnect(target, "node_revoked");
+    }
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-settings-open"
+description = "Enables the node_settings_open command without any pre-configured scope."
+commands.allow = ["node_settings_open"]
+
+[[permission]]
+identifier = "deny-node-settings-open"
+description = "Denies the node_settings_open command without any pre-configured scope."
+commands.deny = ["node_settings_open"]
