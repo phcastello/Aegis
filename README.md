@@ -1,6 +1,6 @@
 # Aegis v0.7.0 — preview integrada
 
-Aegis é uma assistente pessoal com modelos acessados por API. A candidata revisada **0.7.0-unstable.15** é destinada a **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
+Aegis é uma assistente pessoal com modelos acessados por API. A candidata revisada **0.7.0-unstable.16** é destinada a **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
 
 Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana de uso cotidiano do Stage 07 sem lembretes perdidos relatados. Isso não comprova todos os casos extremos físicos. A conclusão acrescenta séries/ocorrências, entrega por dispositivo, OK/adiamento, lugares contextuais e execução geográfica nativa Android. O Web Client/PWA continua disponível; esta versão não distribui aplicativos Linux, iOS ou macOS.
 
@@ -8,12 +8,14 @@ Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana d
 
 A unstable.13 não foi aprovada. A revisão corrige R01–R03/R05–R06 e melhora descoberta/diagnóstico do updater (R04); a causa física anterior continua desconhecida. O proprietário confirmou que o fluxo do updater **para unstable.14 funcionou no aparelho**. A preservação de NodeId, credential, dados, lugares, regras e permissões não foi informada; essas verificações e o campo integrado continuam pendentes. **Não desinstale para atualizar.**
 
-**Candidata integrada: 0.7.0-unstable.15**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.15). A v0.7.0 estável ainda depende desse aceite.
+**Candidata integrada: 0.7.0-unstable.16**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.16). A v0.7.0 estável ainda depende desse aceite.
+
+A 16 corrige a confirmação inicial de presença, acrescenta diagnóstico/verificação local e reorganiza Lugares e os editores de Lembretes. Círculos de 65 m com precisão de 100 m continuam incertos; uma área maior exige escolha explícita e pode atrasar o lembrete de saída.
 
 | Plataforma | Download oficial |
 | --- | --- |
-| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.15/Aegis-Android-arm64.apk) |
-| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.15/Aegis-Windows-x86_64-Setup.exe) |
+| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.16/Aegis-Android-arm64.apk) |
+| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.16/Aegis-Windows-x86_64-Setup.exe) |
 
 O Web Client/PWA permanece disponível. Esta versão não distribui aplicativos Linux, iOS ou macOS. Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente.
 
@@ -27,7 +29,7 @@ A distribuição Android é por APK, fora da Play Store. Use **Configurações �
 
 Na 15, o aviso mobile usa título curto, versão secundária e as ações juntas abaixo do texto, empilhando quando necessário. O aviso da 14 oferecendo a 15 ainda usa o layout antigo; o novo layout passa a valer após instalar a 15.
 
-**Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK `unstable.15` oficial e instale sobre a release existente uma vez, sem desinstalar. Pacote, certificado de distribuição e identidade do Node permanecem os mesmos. Previews seguintes usam `0.7.0-unstable.N`, independentemente dos Stages. O versionCode da candidata é 7000015; o estável 0.7.0 reserva 7000999.
+**Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK `unstable.16` oficial e instale sobre a release existente uma vez, sem desinstalar. Pacote, certificado de distribuição e identidade do Node permanecem os mesmos. Previews seguintes usam `0.7.0-unstable.N`, independentemente dos Stages. O versionCode da candidata é 7000016; o estável 0.7.0 reserva 7000999.
 
 APKs debug antigos podem usar outro certificado e precisam de uma migração específica; não apague dados para contornar um conflito de assinatura. APKs baixados anteriormente pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos. Você pode removê-los manualmente, se desejar.
 
