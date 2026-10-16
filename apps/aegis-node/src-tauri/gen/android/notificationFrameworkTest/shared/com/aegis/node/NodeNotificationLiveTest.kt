@@ -56,13 +56,22 @@ class NodeNotificationLiveTest {
   }
   /** Actual target WebView, Android touch input, IME and native back dispatcher. */
   private fun exerciseReminderEditing(webview:WebView,scenario:ActivityScenario<out android.app.Activity>,ruleId:String) {
-    fun awaitUi(script:String,message:String) {
-      val deadline=SystemClock.elapsedRealtime()+15000
+    fun awaitUi(script:String,message:String,timeoutMillis:Long=15000) {
+      val deadline=SystemClock.elapsedRealtime()+timeoutMillis
       while(evaluate(webview,script)!="true" && SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(50)
-      assertEquals(message,"true",evaluate(webview,script))
+      val actual=evaluate(webview,script)
+      if(actual!="true") {
+        val detail=evaluate(webview,"(()=>{const h=document.querySelector('#reminder-editor-title'),c=document.querySelector('.settings-content'),button=[...document.querySelectorAll('.geofence-rule button')].find(b=>b.textContent.trim()==='Editar regra');const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom}};return {formExists:Boolean(document.querySelector('.reminder-editor')),activeId:document.activeElement?.id??null,activeTag:document.activeElement?.tagName??null,heading:rect(h),content:rect(c),editDisabled:button?.disabled??null}})()")
+        assertEquals("$message; safeUi=$detail","true",actual)
+      }
     }
     fun tap(expression:String) {
-      val bounds=JSONObject(evaluate(webview,"(()=>{const element=$expression;if(!element)throw Error('ui_control_missing');element.scrollIntoView({block:'center'});const r=element.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2,scale:window.devicePixelRatio}})()"))
+      evaluate(webview,"(()=>{const element=$expression;if(!element)throw Error('ui_control_missing');element.scrollIntoView({block:'center',behavior:'instant'});window.__aegisAndroidUiPaintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.__aegisAndroidUiPaintReady=true));return true})()")
+      // DOM geometry changes synchronously, but native input must wait for the
+      // WebView compositor to display the scrolled frame at those coordinates.
+      awaitUi("window.__aegisAndroidUiPaintReady===true","Scrolled WebView frame is ready for native touch")
+      instrumentation.waitForIdleSync()
+      val bounds=JSONObject(evaluate(webview,"(()=>{const element=$expression;if(!element||element.disabled)throw Error('ui_control_not_ready');const r=element.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2,scale:window.devicePixelRatio}})()"))
       val offset=IntArray(2);instrumentation.runOnMainSync{webview.getLocationOnScreen(offset)}
       val x=offset[0]+bounds.getDouble("x").toFloat()*bounds.getDouble("scale").toFloat()
       val y=offset[1]+bounds.getDouble("y").toFloat()*bounds.getDouble("scale").toFloat()
@@ -98,13 +107,18 @@ class NodeNotificationLiveTest {
     awaitUi("Boolean(document.querySelector('.settings-dialog[open]'))","Settings dialog opened")
     evaluate(webview,"[...document.querySelectorAll('.settings-navigation button')].find(button=>button.textContent.trim()==='Lembretes')?.click();null")
     awaitUi("Boolean($article)","Authenticated geographic rule is visible in Android WebView")
+    // Rows render before asynchronous location/diagnostic loading finishes.
+    // The user's Edit control is intentionally disabled until that load ends.
+    awaitUi("Boolean($edit)&&!($edit).disabled","Edit control is enabled after native diagnostics load",90000)
     // A disposable DOM fixture supplies scroll distance without adding personal
     // records or changing the existing authenticated rule and its revision.
     evaluate(webview,"(()=>{const row=$article;const spacer=document.createElement('div');spacer.dataset.androidUiFixture='scroll';spacer.style.minHeight=(window.innerHeight*3)+'px';row.before(spacer);($edit).scrollIntoView({block:'center'});return true})()")
     awaitUi("document.querySelector('.settings-content').scrollTop>0","Rule starts in a scrolled list")
     val originalScroll=evaluate(webview,"document.querySelector('.settings-content').scrollTop").toDouble()
     tap(edit)
-    awaitUi("(()=>{const form=document.querySelector('.reminder-editor'),heading=document.querySelector('#reminder-editor-title'),content=document.querySelector('.settings-content');if(!form||!heading||!content)return false;const h=heading.getBoundingClientRect(),c=content.getBoundingClientRect();return document.activeElement===heading&&h.top>=c.top&&h.bottom<=c.bottom})()","Editor is immediately visible and focused")
+    awaitUi("Boolean(document.querySelector('.reminder-editor'))","Enabled Edit touch opens the editor")
+    awaitUi("document.activeElement===document.querySelector('#reminder-editor-title')","Opened editor heading receives focus")
+    awaitUi("(()=>{const heading=document.querySelector('#reminder-editor-title'),content=document.querySelector('.settings-content');if(!heading||!content)return false;const h=heading.getBoundingClientRect(),c=content.getBoundingClientRect();return h.top>=c.top&&h.bottom<=c.bottom})()","Opened editor heading is within the scrolled viewport")
     // The production list uses v-show, so this fixture and its scroll distance
     // must remain connected while the editor is visible.
     awaitUi("document.querySelector('[data-android-ui-fixture=\"scroll\"]')?.isConnected===true","Scrolled list fixture survives editor opening")

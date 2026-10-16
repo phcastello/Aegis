@@ -391,7 +391,11 @@ try {
    await page.locator('#conversation-sidebar').evaluate(element=>Promise.all(element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));
    if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${host}-chat-mobile.png`});
    await page.setViewportSize({ width: 1600, height: 900 });
-   const panelBounds=await page.locator('.chat-panel').boundingBox();const composerBounds=await page.locator('.composer-field').boundingBox();
+   // matchMedia delivers the breakpoint change asynchronously. Wait for Vue's
+   // desktop layout, then read both rectangles in the same browser frame.
+   await page.locator('.hideout-shell--sidebar-open .chat-panel').waitFor();
+   await page.locator('#conversation-sidebar').evaluate(element=>Promise.all(element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));
+   const {panelBounds,composerBounds}=await page.evaluate(()=>({panelBounds:document.querySelector('.chat-panel').getBoundingClientRect().toJSON(),composerBounds:document.querySelector('.composer-field').getBoundingClientRect().toJSON()}));
    assert.ok(Math.abs(composerBounds.x+composerBounds.width/2-(panelBounds.x+panelBounds.width/2))<2,'Composer must center inside usable chat area');
    assert.ok(panelBounds.x>200,'Desktop sidebar must occupy a real layout column');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
