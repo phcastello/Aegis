@@ -121,7 +121,7 @@ object NodeGeofences {
    if(latest!=null && now-latest.getLong("lastObservationAt")>NodeGeoEngine.MAX_AGE_MILLIS){presence="unknown";reason="stale_location"}
    if(acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latest?.optLong("receivedAt",0)?:0)) {
     presence="unknown"
-    reason=when(acquisitionStatus){"permission_denied"->"permission_required";"location_disabled"->"location_disabled";"provider_unavailable"->"provider_unavailable";"stale"->"stale_location";else->"location_unavailable"}
+    reason=when(acquisitionStatus){"permission_denied"->"permission_required";"location_disabled"->"location_disabled";"provider_unavailable"->"provider_unavailable";"stale"->"stale_location";"invalid_accuracy"->"accuracy_insufficient";else->"location_unavailable"}
    }
    if(!permission.optBoolean("granted") || !permission.optBoolean("precise") || !permission.optBoolean("background")){presence="unknown";reason="permission_required"}
    else if(!permission.optBoolean("servicesEnabled")){presence="unknown";reason="location_disabled"}
@@ -131,7 +131,7 @@ object NodeGeofences {
    val armed=installed && rule.optString("status")=="active" && (rule.isNull("endsAt")||stamp(rule.getString("endsAt"))>now) && preferences.getLong("ruleRevision:$id",-1)==rule.getLong("revision") && preferences.getBoolean("armed:$id",false) && !preferences.getBoolean("completed:$id",false)
    if(installation=="installed" && !armed && presence=="outside" && rule.optString("transition")=="exit")reason="outside_initial"
    output.put(JSONObject().put("id",id).put("revision",rule.getLong("revision")).put("installationStatus",installation).put("presence",presence).put("confirmedPresence",combine(saved)).put("armed",armed)
-    .put("lastObservationAt",latest?.optLong("lastObservationAt")?:JSONObject.NULL).put("accuracyMeters",latest?.optDouble("accuracyMeters")?:JSONObject.NULL).put("reasonCode",reason).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)))
+    .put("lastObservationAt",latest?.optLong("lastObservationAt")?:JSONObject.NULL).put("accuracyMeters",latest?.optDouble("accuracyMeters")?.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL).put("reasonCode",reason).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)))
   }
   return result
  }
@@ -335,7 +335,7 @@ object NodeGeofences {
      val edit=prefs(context).edit()
      if(state!=old)edit.putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString())
      val priorDiagnostic=prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
-     if(priorDiagnostic==null || observation.capturedAt>priorDiagnostic.optLong("lastObservationAt",0))edit.putString("diagnostic:$placeId",JSONObject().put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()}?:JSONObject.NULL).put("presence",presence).put("reasonCode",reason).put("receivedAt",now).toString())
+     if(priorDiagnostic==null || observation.capturedAt>priorDiagnostic.optLong("lastObservationAt",0))edit.putString("diagnostic:$placeId",JSONObject().put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL).put("presence",presence).put("reasonCode",reason).put("receivedAt",now).toString())
      check(edit.commit())
      true
     }

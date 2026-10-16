@@ -193,7 +193,7 @@ private fun exerciseWithdrawalReceiptFramework(context:Context,nodeId:String,pee
 }
 
 /** Authenticated Kotlin HTTP and real Google Task are separate from seeded deterministic state tests. */
-internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,invoke:(String,JSONObject,Long)->JSONObject):String {
+internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,setBackground:((Boolean)->Unit)?=null,exerciseUi:((String)->Unit)?=null,invoke:(String,JSONObject,Long)->JSONObject):String {
  fun ipc(name:String,operation:String,payload:JSONObject?=null,id:String?=null,timeout:Long=20000):JSONObject=invoke(name,JSONObject().put("operation",operation).apply{if(payload!=null)put("payload",payload);if(id!=null)put("id",id)},timeout)
  fun checkpoint(phase:String)=android.util.Log.i("AegisNodeNativeTest","phase=$phase errorType=Checkpoint")
  // This empty-manifest round trip must read the actual Rust keyring credential in Kotlin.
@@ -216,6 +216,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
  val occurrences=mutableListOf<String>()
  val receiptOccurrences=mutableListOf<String>()
  try {
+  exerciseUi?.invoke(ruleId)
   // Restoring the same rule revision must discard its old armed presentation state.
   prefs.edit().putLong("ruleRevision:$ruleId",rule.getLong("revision")).putBoolean("armed:$ruleId",true).putBoolean("needsInstall",true).commit()
   fixtureMode("geofence-sync-failure","503")
@@ -245,7 +246,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   val definition=JSONObject().put("id",ruleId).put("revision",resumed.getInt("revision")).put("placeIds",JSONArray().put(placeId)).put("text","Synthetic geographic fixture").put("transition","exit").put("repeat",true).put("status","active").put("startsAt",JSONObject.NULL).put("endsAt",JSONObject.NULL).put("leaseUntil",geoStamp(now+3600000)).put("timeZoneId","UTC").put("deliveryPolicy","allEligible")
   val manifest=JSONObject().put("revision","instrumented-${UUID.randomUUID()}").put("generatedAt",geoStamp(now)).put("leaseUntil",geoStamp(now+3600000)).put("observerNodeId",nodeId).put("places",JSONArray().put(place)).put("rules",JSONArray().put(definition))
   prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
-  exerciseResidentialLocationAdapterFramework(context,manifest,ruleId,placeId)
+  exerciseResidentialLocationAdapterFramework(context,manifest,ruleId,placeId,setBackground)
   val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
   fun position(longitude:Double,ago:Long,accuracy:Double=5.0)=observe.invoke(null,context,0.0,longitude,accuracy,now-ago,false)
   fun events():List<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-geofence-events-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT occurrenceId FROM events WHERE ruleId=? ORDER BY sequence",arrayOf(ruleId)).use{rows->val ids=mutableListOf<String>();while(rows.moveToNext())ids.add(rows.getString(0));ids}}
@@ -365,7 +366,7 @@ private fun exerciseGeofenceReportFailures(context:Context,nodeId:String,ruleId:
 
 
 /** Framework Location objects exercise the actual bounded adapter; only provider delivery is simulated. */
-private fun exerciseResidentialLocationAdapterFramework(context:Context,original:JSONObject,ruleId:String,placeId:String) {
+private fun exerciseResidentialLocationAdapterFramework(context:Context,original:JSONObject,ruleId:String,placeId:String,setBackground:((Boolean)->Unit)?) {
  val instrumentation=InstrumentationRegistry.getInstrumentation()
  val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
  val runtime=geoRuntime(context)
@@ -403,6 +404,10 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
   val absent=details(acquisition("unavailable"));assertEquals("unknown",absent.getString("presence"));assertEquals("location_unavailable",absent.getString("reasonCode"))
   assertEquals("unavailable",acquisition("timeout").getString("acquisitionStatus"))
   assertEquals("stale",acquisition("available",13.0,30000).getString("acquisitionStatus"))
+  assertEquals("invalid_accuracy",acquisition("available",Double.NaN).getString("acquisitionStatus"))
+  observe.invoke(null,context,0.0,0.0,Double.NaN,System.currentTimeMillis(),false)
+  val invalid=details(JSONObject(diagnostics.invoke(null,context) as String))
+  assertEquals("accuracy_insufficient",invalid.getString("reasonCode"));assertTrue(invalid.isNull("accuracyMeters"))
   // Future/out-of-order deliveries cannot poison diagnostic ordering.
   observe.invoke(null,context,0.0,0.01,13.0,System.currentTimeMillis()+3600000,false)
   val recovered=details(acquisition("available",13.0));assertEquals("inside",recovered.getString("presence"))
@@ -419,12 +424,22 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
    val state=acquisition("available",100.0)
    assertEquals(enabled,state.getBoolean("powerSaveMode"));assertEquals("unknown",details(state).getString("presence"))
    assertEquals("inside",details(acquisition("available",13.0)).getString("presence"))
+   if(setBackground!=null) {
+    setBackground(true)
+    try {
+     val background=acquisition("available",100.0)
+     assertEquals(enabled,background.getBoolean("powerSaveMode"));assertEquals("unknown",details(background).getString("presence"))
+     assertEquals("inside",details(acquisition("available",13.0)).getString("presence"))
+     assertEquals("location_unavailable",details(acquisition("unavailable")).getString("reasonCode"))
+    }finally{setBackground(false)}
+   }
   }
   // An installed fence with no observation remains unarmed and explainable.
   prefs.edit().remove("state:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").putBoolean("armed:$ruleId",false).commit()
   assertEquals("not_observed",details(JSONObject(diagnostics.invoke(null,context) as String)).getString("reasonCode"))
   android.util.Log.i("AegisNodeNativeTest","phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint")
  }finally {
+  setBackground?.invoke(false)
   shell("cmd power set-mode 0");shell("dumpsys battery reset")
   val edit=prefs.edit()
   for(key in listOf("manifest","installedUntil","hasRegions","notBefore:$placeId","armed:$ruleId","state:$placeId","diagnostic:$placeId","lastAcquisitionStatus","lastAcquisitionAt")) {

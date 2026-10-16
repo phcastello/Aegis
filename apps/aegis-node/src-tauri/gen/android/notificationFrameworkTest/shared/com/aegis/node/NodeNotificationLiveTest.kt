@@ -6,8 +6,14 @@ import android.app.NotificationManager
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.KeyEvent
+import android.view.WindowInsets
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
+import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
@@ -47,6 +53,91 @@ class NodeNotificationLiveTest {
       SystemClock.sleep(100)
     }
     error("native_invocation_timeout")
+  }
+  /** Actual target WebView, Android touch input, IME and native back dispatcher. */
+  private fun exerciseReminderEditing(webview:WebView,scenario:ActivityScenario<out android.app.Activity>,ruleId:String) {
+    fun awaitUi(script:String,message:String) {
+      val deadline=SystemClock.elapsedRealtime()+15000
+      while(evaluate(webview,script)!="true" && SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(50)
+      assertEquals(message,"true",evaluate(webview,script))
+    }
+    fun tap(expression:String) {
+      val bounds=JSONObject(evaluate(webview,"(()=>{const element=$expression;if(!element)throw Error('ui_control_missing');element.scrollIntoView({block:'center'});const r=element.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2,scale:window.devicePixelRatio}})()"))
+      val offset=IntArray(2);instrumentation.runOnMainSync{webview.getLocationOnScreen(offset)}
+      val x=offset[0]+bounds.getDouble("x").toFloat()*bounds.getDouble("scale").toFloat()
+      val y=offset[1]+bounds.getDouble("y").toFloat()*bounds.getDouble("scale").toFloat()
+      val at=SystemClock.uptimeMillis()
+      val down=MotionEvent.obtain(at,at,MotionEvent.ACTION_DOWN,x,y,0)
+      val up=MotionEvent.obtain(at,at+30,MotionEvent.ACTION_UP,x,y,0)
+      try{instrumentation.sendPointerSync(down);instrumentation.sendPointerSync(up)}finally{down.recycle();up.recycle()}
+      instrumentation.waitForIdleSync()
+    }
+    fun imeVisible():Boolean {
+      var visible=false
+      scenario.onActivity{activity->if(Build.VERSION.SDK_INT>=30)visible=activity.window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime())==true}
+      return visible
+    }
+    fun awaitIme(expected:Boolean) {
+      val deadline=SystemClock.elapsedRealtime()+5000
+      while(imeVisible()!=expected && SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(50)
+      assertEquals("Android IME visibility",expected,imeVisible())
+    }
+    fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{descriptor->android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use{it.readText()}}
+    val hardwareKeyboardIme=shell("settings get secure show_ime_with_hard_keyboard").trim()
+    try {
+    // CI emulators expose a hardware keyboard; explicitly permit the software
+    // keyboard for this assertion and restore the prior secure setting below.
+    shell("settings put secure show_ime_with_hard_keyboard 1")
+    val article="document.getElementById('geofence-$ruleId')"
+    val edit="[...($article?.querySelectorAll('button')??[])].find(button=>button.textContent.trim()==='Editar regra')"
+    // The settings control lives in the normal sidebar, which is absent while
+    // mobile history is collapsed. Exercise the actual product entry path.
+    if(evaluate(webview,"Boolean(document.querySelector('[aria-label=\"Abrir histórico\"]')?.getClientRects().length)")=="true")tap("document.querySelector('[aria-label=\"Abrir histórico\"]')")
+    awaitUi("Boolean(document.querySelector('[aria-label=\"Configurações da Aegis\"]')?.getClientRects().length)","Settings control is available in the opened sidebar")
+    tap("document.querySelector('[aria-label=\"Configurações da Aegis\"]')")
+    awaitUi("Boolean(document.querySelector('.settings-dialog[open]'))","Settings dialog opened")
+    evaluate(webview,"[...document.querySelectorAll('.settings-navigation button')].find(button=>button.textContent.trim()==='Lembretes')?.click();null")
+    awaitUi("Boolean($article)","Authenticated geographic rule is visible in Android WebView")
+    // A disposable DOM fixture supplies scroll distance without adding personal
+    // records or changing the existing authenticated rule and its revision.
+    evaluate(webview,"(()=>{const row=$article;const spacer=document.createElement('div');spacer.dataset.androidUiFixture='scroll';spacer.style.minHeight=(window.innerHeight*3)+'px';row.before(spacer);($edit).scrollIntoView({block:'center'});return true})()")
+    awaitUi("document.querySelector('.settings-content').scrollTop>0","Rule starts in a scrolled list")
+    val originalScroll=evaluate(webview,"document.querySelector('.settings-content').scrollTop").toDouble()
+    tap(edit)
+    awaitUi("(()=>{const form=document.querySelector('.reminder-editor'),heading=document.querySelector('#reminder-editor-title'),content=document.querySelector('.settings-content');if(!form||!heading||!content)return false;const h=heading.getBoundingClientRect(),c=content.getBoundingClientRect();return document.activeElement===heading&&h.top>=c.top&&h.bottom<=c.bottom})()","Editor is immediately visible and focused")
+    // The production list uses v-show, so this fixture and its scroll distance
+    // must remain connected while the editor is visible.
+    awaitUi("document.querySelector('[data-android-ui-fixture=\"scroll\"]')?.isConnected===true","Scrolled list fixture survives editor opening")
+    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    awaitUi("!document.querySelector('.reminder-editor')&&Boolean(document.querySelector('.settings-dialog[open]'))&&!document.querySelector('.settings-confirm')","Unchanged native back closes only the editor without a discard warning")
+    assertTrue("Scrolled list position restored",kotlin.math.abs(evaluate(webview,"document.querySelector('.settings-content').scrollTop").toDouble()-originalScroll)<3.0)
+    awaitUi("document.activeElement===($edit)","Focus returns to the edited row")
+    tap(edit)
+    awaitUi("Boolean(document.querySelector('.reminder-editor'))","Editor reopened")
+    tap("document.querySelector('.reminder-editor textarea')")
+    instrumentation.runOnMainSync{webview.requestFocus();(webview.context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(webview,InputMethodManager.SHOW_IMPLICIT)}
+    awaitIme(true)
+    instrumentation.sendStringSync(" changed")
+    awaitUi("document.querySelector('.reminder-editor textarea')?.value.includes('changed')===true","Android key input changes the reminder")
+    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    awaitIme(false)
+    awaitUi("Boolean(document.querySelector('.reminder-editor'))&&!document.querySelector('.editor-discard')","First back dismisses the keyboard and preserves the editor")
+    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    awaitUi("Boolean(document.querySelector('.editor-discard'))","Dirty native back requires explicit discard")
+    tap("document.querySelector('[data-continue-editing]')")
+    awaitUi("!document.querySelector('.editor-discard')&&document.querySelector('.reminder-editor textarea')?.value.includes('changed')===true","Continue editing preserves the unsaved text")
+    tap("[...document.querySelectorAll('.reminder-editor button')].find(button=>button.textContent.trim()==='Cancelar')")
+    awaitUi("Boolean(document.querySelector('.editor-discard'))","Cancel also protects actual unsaved changes")
+    tap("document.querySelector('.editor-discard button.settings-danger')")
+    awaitUi("!document.querySelector('.reminder-editor')&&document.activeElement===($edit)","Explicit discard returns focus to the original row")
+    evaluate(webview,"document.querySelector('[data-android-ui-fixture=\"scroll\"]')?.remove();null")
+    tap("document.querySelector('[aria-label=\"Fechar configurações\"]')")
+    awaitUi("!document.querySelector('.settings-dialog[open]')","Settings close without a stale dirty warning")
+    checkpoint("reminder_webview_scroll_edit_keyboard_native_back")
+    } finally {
+      if(hardwareKeyboardIme in setOf("0","1"))shell("settings put secure show_ime_with_hard_keyboard $hardwareKeyboardIme")
+      else shell("settings delete secure show_ime_with_hard_keyboard")
+    }
   }
   @Test fun liveSelfNotificationPostsThroughProductionJni() {
     val code = InstrumentationRegistry.getArguments().getString("pairingCode") ?: error("fixture_bootstrap_missing")
@@ -118,7 +209,10 @@ class NodeNotificationLiveTest {
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
         withReenabledIdentityFramework(context,id,replacementCode,runtime.getString("version"),{name,args,timeout->invoke(webview,name,args,timeout)}) { nextCode->
-          exerciseGeofenceLiveFramework(context,id,nextCode){name,args,timeout->invoke(webview,name,args,timeout)}
+          exerciseGeofenceLiveFramework(context,id,nextCode,setBackground={background->
+            val state=if(background)Lifecycle.State.CREATED else Lifecycle.State.RESUMED
+            scenario.moveToState(state);assertEquals(state,scenario.state)
+          },exerciseUi={ruleId->exerciseReminderEditing(webview,scenario,ruleId)}){name,args,timeout->invoke(webview,name,args,timeout)}
         }
       } finally {
         checkpoint("live_cleanup_started")

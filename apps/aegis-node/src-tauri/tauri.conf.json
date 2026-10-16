@@ -47,7 +47,7 @@
       "icons/icon.ico"
     ],
     "android": {
-      "versionCode": 7000015
+      "versionCode": 7000016
     },
     "createUpdaterArtifacts": true
   },

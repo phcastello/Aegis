@@ -43,6 +43,8 @@ object NodeLocation {
         ?: return state.put("status","unavailable")
       val age=TimeUnit.NANOSECONDS.toMillis((SystemClock.elapsedRealtimeNanos()-result.elapsedRealtimeNanos).coerceAtLeast(0))
       if(age>if(fresh) 15000 else NodeGeoEngine.MAX_AGE_MILLIS) return state.put("status","stale")
+      if(!result.hasAccuracy() || !result.accuracy.isFinite() || result.accuracy<=0f)return state.put("status","invalid_accuracy")
+      if(!result.latitude.isFinite() || result.latitude !in -90.0..90.0 || !result.longitude.isFinite() || result.longitude !in -180.0..180.0)return state.put("status","unavailable")
       val value=observation(result).apply { if(requestId!=null) put("requestId",requestId) }
       synchronized(NodeNotificationGate.lock) {
         if(!locationScopeIsCurrent(scope,NodeNativeSession.read(context)?.nodeId))return JSONObject().put("status","superseded")

@@ -21,6 +21,7 @@ function requestClose() {
   if (props.dirty) { pending.value = 'close'; return; }
   emit('close');
 }
+function dismissPending(): boolean { if (!pending.value) return false; pending.value = null; return true; }
 function discard() {
   const destination = pending.value;
   pending.value = null;
@@ -58,7 +59,7 @@ watch(() => props.section, async (section, before) => {
   }
 }, { immediate: true });
 onBeforeUnmount(() => { dialog.value?.close(); previousFocus?.focus({ preventScroll: true }); });
-defineExpose({ requestClose, navigate });
+defineExpose({ requestClose, navigate, dismissPending });
 </script>
 <template>
   <dialog ref="dialog" class="settings-dialog" aria-labelledby="settings-title" @cancel.prevent="requestClose" @click="backdrop" @keydown="keepFocus">

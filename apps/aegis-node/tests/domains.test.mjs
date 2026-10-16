@@ -20,7 +20,7 @@ test('recurrence summaries make intervals and calendar choices visible', () => {
   assert.match(recurrenceLabel({...base,frequency:'weekly',interval:2,weekdays:[1,3,5]}),/A cada 2 semanas, seg, qua, sex/);
   assert.match(recurrenceLabel({...base,frequency:'monthly',lastDay:true,count:5}),/último dia.*5 ocorrências/);
   assert.match(recurrenceLabel({...base,frequency:'monthly',monthDay:31,untilDate:'2027-01-01'}),/dia 31.*01\/01\/2027/);
-  assert.equal(geofenceLabels.pending_sync,'Pendente de sincronização');assert.equal(geofenceLabels.waiting_initial,'Aguardando condição inicial');
+  assert.equal(geofenceLabels.pending_sync,'Pendente de sincronização');assert.equal(geofenceLabels.waiting_initial,'Aguardando confirmação de presença');
   assert.equal(localInput('invalid'),'');
 });
 

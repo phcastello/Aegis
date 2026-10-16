@@ -52,7 +52,7 @@ const permission = granted => {
 const instrumentation = (testClass, extra = []) => {
   // The live gate now includes four real GMS registrations/acquisitions plus
   // authenticated failure/recovery receipts. Keep its host watchdog explicit.
-  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?240000:180000);
+  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?300000:180000);
   // Test assertions contain only fixed phases/codes. Production logcat is never dumped.
   process.stdout.write(output);
   assert.match(output, /OK \(\d+ tests?\)/, 'Real Android framework test failed');
@@ -99,6 +99,11 @@ try {
     phases.add('residential65_adapter_fresh_accuracy_timeout_saver');
   }
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
+  if (/AegisNodeNativeTest.*phase=reminder_webview_scroll_edit_keyboard_native_back errorType=Checkpoint/.test(crash)) {
+    console.log('AegisNodeNativeTest phase=reminder_webview_scroll_edit_keyboard_native_back errorType=Checkpoint');
+    phases.add('reminder_webview_scroll_edit_keyboard_native_back');
+  }
+  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
   if(livePassed){
