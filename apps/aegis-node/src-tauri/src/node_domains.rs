@@ -123,6 +123,24 @@ pub async fn node_geofences(
     id: Option<String>,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    if matches!(operation.as_str(), "diagnostics" | "verifyPresence") {
+        #[cfg(target_os = "android")]
+        {
+            let method = if operation == "diagnostics" {
+                "geofenceDiagnostics"
+            } else {
+                "verifyGeofencePresence"
+            };
+            let result: Result<Value, _> = app
+                .state::<crate::native_notifications::AndroidBridge>()
+                .0
+                .run_mobile_plugin_async(method, ())
+                .await;
+            return result.map_err(|_| "Não foi possível verificar a presença neste celular.".into());
+        }
+        #[cfg(not(target_os = "android"))]
+        return Ok(json!({"supported":false,"rules":[]}));
+    }
     if operation == "sync" {
         #[cfg(target_os = "android")]
         {

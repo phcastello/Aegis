@@ -7,6 +7,7 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.SystemClock
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -14,6 +15,8 @@ import com.google.android.gms.tasks.Tasks
 import org.json.JSONObject
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.ExecutionException
 
 object NodeLocation {
   fun permissions(context: Context): JSONObject {
@@ -23,9 +26,9 @@ object NodeLocation {
     val manager=context.getSystemService(LocationManager::class.java)
     val enabled=if(Build.VERSION.SDK_INT>=28) manager.isLocationEnabled else manager.isProviderEnabled(LocationManager.GPS_PROVIDER)||manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     val provider=com.google.android.gms.common.GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)==com.google.android.gms.common.ConnectionResult.SUCCESS
-    return JSONObject().put("supported",true).put("providerAvailable",provider).put("granted",fine||coarse).put("foreground",fine||coarse).put("precise",fine).put("background",background).put("servicesEnabled",enabled).put("pendingActions",NodeReminderActions.pending(context))
+    return JSONObject().put("supported",true).put("providerAvailable",provider).put("granted",fine||coarse).put("foreground",fine||coarse).put("precise",fine).put("background",background).put("servicesEnabled",enabled).put("powerSaveMode",context.getSystemService(PowerManager::class.java).isPowerSaveMode).put("pendingActions",NodeReminderActions.pending(context))
   }
-  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false,durationMillis:Long=15000,expectedScope:String?=null): JSONObject {
+  fun current(context: Context,requestId: String?=null,upload: Boolean=true,fresh: Boolean=false,durationMillis:Long=15000,expectedScope:String?=null,highAccuracy:Boolean=false,acquire:((CurrentLocationRequest,CancellationTokenSource,Long)->Location?)?=null): JSONObject {
     val scope=expectedScope?:NodeNativeSession.read(context)?.nodeId
     if(expectedScope!=null && !locationScopeIsCurrent(expectedScope,NodeNativeSession.read(context)?.nodeId))return JSONObject().put("status","superseded")
     val state=permissions(context)
@@ -35,19 +38,26 @@ object NodeLocation {
     val cancel=CancellationTokenSource()
     try {
       val duration=durationMillis.coerceIn(1,15000)
-      val request=CurrentLocationRequest.Builder().setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY).setMaxUpdateAgeMillis(if(fresh) 0 else 120000).setDurationMillis(duration).build()
-      val result=Tasks.await(LocationServices.getFusedLocationProviderClient(context).getCurrentLocation(request,cancel.token),duration+1000,TimeUnit.MILLISECONDS)
+      val request=CurrentLocationRequest.Builder().setPriority(if(highAccuracy) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY).setMaxUpdateAgeMillis(if(fresh) 0 else 120000).setDurationMillis(duration).build()
+      val result=(if(acquire!=null)acquire(request,cancel,duration+1000) else Tasks.await(LocationServices.getFusedLocationProviderClient(context).getCurrentLocation(request,cancel.token),duration+1000,TimeUnit.MILLISECONDS))
         ?: return state.put("status","unavailable")
       val age=TimeUnit.NANOSECONDS.toMillis((SystemClock.elapsedRealtimeNanos()-result.elapsedRealtimeNanos).coerceAtLeast(0))
-      if(age>120000) return state.put("status","stale")
+      if(age>if(fresh) 15000 else NodeGeoEngine.MAX_AGE_MILLIS) return state.put("status","stale")
       val value=observation(result).apply { if(requestId!=null) put("requestId",requestId) }
-      val prefs=NodeNativeNotifications.prefs(context)
       synchronized(NodeNotificationGate.lock) {
         if(!locationScopeIsCurrent(scope,NodeNativeSession.read(context)?.nodeId))return JSONObject().put("status","superseded")
-        check(prefs.edit().putString("lastObservation",value.toString()).putString("observationScopeId",scope).putLong("observationMonotonic",result.elapsedRealtimeNanos).putLong("observationReceivedAt",System.currentTimeMillis()).putBoolean("observationPending",upload&&scope!=null).commit())
+        // Local presence checks must not replace a coordinate observation that
+        // is still waiting in the existing upload outbox.
+        if(upload)check(NodeNativeNotifications.prefs(context).edit().putString("lastObservation",value.toString()).putString("observationScopeId",scope).putLong("observationMonotonic",result.elapsedRealtimeNanos).putLong("observationReceivedAt",System.currentTimeMillis()).putBoolean("observationPending",scope!=null).commit())
       }
       if(upload&&scope!=null) try { flush(context,scope) } catch(_:Exception) { value.put("syncPending",true);NodeBackgroundWork.enqueue(context) }
       return value.put("status","available").put("ageSeconds",age/1000)
+    } catch(_:SecurityException) {
+      return state.put("status","permission_denied")
+    } catch(_:TimeoutException) {
+      return state.put("status","unavailable")
+    } catch(_:ExecutionException) {
+      return state.put("status","unavailable")
     } finally { cancel.cancel() }
   }
   fun queueTransition(context:Context,observation:NodeGeoEngine.Observation) {

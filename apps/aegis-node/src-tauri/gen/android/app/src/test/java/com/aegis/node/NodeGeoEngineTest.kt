@@ -71,4 +71,74 @@ class NodeGeoEngineTest {
   assertFalse(NodeGeoEngine.canConfirmAgain(1,61000,90000,true))
   assertFalse(NodeGeoEngine.canConfirmAgain(1,31000,90000,false))
  }
+ private fun meters(east:Double,accuracy:Double,at:Long=100000)=point(Math.toDegrees(east/6371000.0),at,accuracy)
+ @Test fun residentialCirclesHaveHonestConfidenceAcrossAccuracyAndPositionFixtures() {
+  val home=NodeGeoEngine.Circle(0.0,0.0,65.0)
+  val neighboring=NodeGeoEngine.Circle(0.0,Math.toDegrees(100.0/6371000.0),65.0)
+  val fixtures=listOf(
+   Triple(0.0,listOf("inside","inside","unknown","unknown","unknown"),"center"),
+   Triple(40.0,listOf("inside","unknown","unknown","unknown","unknown"),"intermediate"),
+   Triple(65.0,List(5){"unknown"},"border"),
+   Triple(200.0,listOf("outside","outside","outside","outside","unknown"),"exterior")
+  )
+  val accuracies=listOf(13.0,30.0,65.0,100.0,200.0)
+  for((east,expected,label)in fixtures)for((i,accuracy)in accuracies.withIndex())assertEquals("$label accuracy=$accuracy",expected[i],NodeGeoEngine.classify(listOf(home),meters(east,accuracy),100000))
+  for(accuracy in accuracies) {
+   assertEquals("second center accuracy=$accuracy",if(accuracy<65.0)"inside" else "unknown",NodeGeoEngine.classify(listOf(home,neighboring),meters(100.0,accuracy),100000))
+  }
+  // Crossing the overlap does not become an exit from the union. At the narrow
+  // seam, uncertain readings preserve the established presence.
+  var state=NodeGeoEngine.observe(NodeGeoEngine.State(),NodeGeoEngine.classify(listOf(home,neighboring),meters(0.0,13.0),100000),100000).state
+  for((i,east)in listOf(40.0,50.0,60.0,100.0).withIndex()) {
+   val captured=131000L+i*31000
+   val decision=NodeGeoEngine.observe(state,NodeGeoEngine.classify(listOf(home,neighboring),meters(east,13.0,captured),captured),captured)
+   assertEquals("inside",decision.state.confirmed);assertNull(decision.transition);state=decision.state
+  }
+ }
+ @Test fun largerExplicitAreasCanAccommodateWorseAccuracyWithoutChangingTheirGeometry() {
+  val larger=NodeGeoEngine.Circle(0.0,0.0,200.0)
+  for(accuracy in listOf(13.0,30.0,65.0,100.0))assertEquals("inside",NodeGeoEngine.classify(listOf(larger),meters(0.0,accuracy),100000))
+  assertEquals("unknown",NodeGeoEngine.classify(listOf(larger),meters(0.0,200.0),100000))
+  assertEquals("unknown",NodeGeoEngine.classify(listOf(larger),meters(190.0,13.0),100000))
+  assertEquals("outside",NodeGeoEngine.classify(listOf(larger),meters(500.0,200.0),100000))
+  assertEquals(200.0,larger.radiusMeters,0.0)
+ }
+ @Test fun lowAccuracyNeverBootstrapsResidentialPresenceEvenAfterTenMinutes() {
+  val home=listOf(NodeGeoEngine.Circle(0.0,0.0,65.0))
+  var state=NodeGeoEngine.State()
+  // Battery saver is an ordinary provider condition, not permission to claim
+  // more certainty. Repeated low-quality fixes do not average away its error.
+  for(i in 0..20) {
+   val at=100000L+i*31000
+   val reading=NodeGeoEngine.assess(home,meters(0.0,100.0,at),at)
+   assertEquals("accuracy_insufficient",reading.reasonCode)
+   val decision=NodeGeoEngine.observe(state,reading.classification,at)
+   assertEquals("unknown",decision.state.confirmed);assertNull(decision.transition);state=decision.state
+  }
+  val goodAt=state.lastCapturedAt+31000
+  val confirmed=NodeGeoEngine.observe(state,NodeGeoEngine.classify(home,meters(40.0,13.0,goodAt),goodAt),goodAt)
+  assertEquals("inside",confirmed.state.confirmed);assertNull(confirmed.transition)
+  val imprecise=NodeGeoEngine.observe(confirmed.state,"unknown",goodAt+31000)
+  assertEquals("inside",imprecise.state.confirmed);assertNull(imprecise.transition)
+  val exiting=NodeGeoEngine.observe(imprecise.state,NodeGeoEngine.classify(home,meters(300.0,100.0,goodAt+62000),goodAt+62000),goodAt+62000)
+  assertNull(exiting.transition)
+  assertEquals("exit",NodeGeoEngine.observe(exiting.state,"outside",goodAt+93000).transition)
+ }
+ @Test fun staleCandidatesCannotTurnIsolatedObservationsIntoPersistence() {
+  val old=NodeGeoEngine.State("inside","outside",100000,100000)
+  val afterGap=NodeGeoEngine.observe(old,"outside",1000000)
+  assertNull(afterGap.transition);assertEquals(1000000L,afterGap.state.candidateAt)
+  assertEquals("exit",NodeGeoEngine.observe(afterGap.state,"outside",1030000).transition)
+ }
+ @Test fun assessmentReasonsDistinguishUnavailableGeometryStaleAndImpreciseObservations() {
+  val home=listOf(NodeGeoEngine.Circle(0.0,0.0,65.0))
+  assertEquals("no_geometry",NodeGeoEngine.assess(emptyList(),meters(0.0,13.0),100000).reasonCode)
+  assertEquals("stale_location",NodeGeoEngine.assess(home,meters(0.0,13.0,1),200000).reasonCode)
+  assertEquals("future_location",NodeGeoEngine.assess(home,meters(0.0,13.0,200000),100000).reasonCode)
+  assertEquals("accuracy_insufficient",NodeGeoEngine.assess(home,meters(0.0,100.0),100000).reasonCode)
+  assertEquals("near_boundary",NodeGeoEngine.assess(home,meters(60.0,13.0),100000).reasonCode)
+  assertEquals("unknown",NodeGeoEngine.classify(home,NodeGeoEngine.Observation(Double.NaN,0.0,13.0,100000),100000))
+  assertEquals("unknown",NodeGeoEngine.classify(home,meters(0.0,Double.NaN),100000))
+ }
+
 }

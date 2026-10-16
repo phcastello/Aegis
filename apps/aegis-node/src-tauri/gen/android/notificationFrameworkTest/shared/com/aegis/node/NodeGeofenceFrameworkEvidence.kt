@@ -245,6 +245,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   val definition=JSONObject().put("id",ruleId).put("revision",resumed.getInt("revision")).put("placeIds",JSONArray().put(placeId)).put("text","Synthetic geographic fixture").put("transition","exit").put("repeat",true).put("status","active").put("startsAt",JSONObject.NULL).put("endsAt",JSONObject.NULL).put("leaseUntil",geoStamp(now+3600000)).put("timeZoneId","UTC").put("deliveryPolicy","allEligible")
   val manifest=JSONObject().put("revision","instrumented-${UUID.randomUUID()}").put("generatedAt",geoStamp(now)).put("leaseUntil",geoStamp(now+3600000)).put("observerNodeId",nodeId).put("places",JSONArray().put(place)).put("rules",JSONArray().put(definition))
   prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
+  exerciseResidentialLocationAdapterFramework(context,manifest,ruleId,placeId)
   val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
   fun position(longitude:Double,ago:Long,accuracy:Double=5.0)=observe.invoke(null,context,0.0,longitude,accuracy,now-ago,false)
   fun events():List<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-geofence-events-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT occurrenceId FROM events WHERE ruleId=? ORDER BY sequence",arrayOf(ruleId)).use{rows->val ids=mutableListOf<String>();while(rows.moveToNext())ids.add(rows.getString(0));ids}}
@@ -359,5 +360,76 @@ private fun exerciseGeofenceReportFailures(context:Context,nodeId:String,ruleId:
   assertTrue(after.getLong("lastCapturedAt")>=state.getLong("lastCapturedAt"))
   if(after.getLong("lastCapturedAt")==state.getLong("lastCapturedAt"))assertEquals(armed,prefs.getBoolean("armed:$ruleId",false))
   android.util.Log.i("AegisNodeNativeTest","phase=geofence_receipt_${mode}_${if(restore)"restore" else "install"} errorType=Checkpoint")
+ }
+}
+
+
+/** Framework Location objects exercise the actual bounded adapter; only provider delivery is simulated. */
+private fun exerciseResidentialLocationAdapterFramework(context:Context,original:JSONObject,ruleId:String,placeId:String) {
+ val instrumentation=InstrumentationRegistry.getInstrumentation()
+ val prefs=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
+ val runtime=geoRuntime(context)
+ val adapter=runtime.getMethod("locationAdapterFixture",Context::class.java,String::class.java,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType)
+ val diagnostics=runtime.getMethod("diagnostics",Context::class.java)
+ val observe=runtime.getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
+ val previous=prefs.all.toMap()
+ val positionPrefs=context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE)
+ val previousPosition=positionPrefs.getString("lastObservation",null)
+ val previousPending=positionPrefs.getBoolean("observationPending",false)
+ fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{descriptor->android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use{it.readText()}}
+ fun details(result:JSONObject)=(0 until result.getJSONArray("rules").length()).map{result.getJSONArray("rules").getJSONObject(it)}.single{it.getString("id")==ruleId}
+ fun acquisition(scenario:String,accuracy:Double=13.0,age:Long=0):JSONObject {
+  android.os.SystemClock.sleep(5)
+  val result=JSONObject(adapter.invoke(null,context,scenario,accuracy,age) as String)
+  val request=result.getJSONObject("fixtureRequest")
+  assertEquals(100,request.getInt("priority")) // Android HIGH_ACCURACY, a request rather than a guarantee.
+  assertEquals(0L,request.getLong("maxUpdateAgeMillis"))
+  assertEquals(12000L,request.getLong("durationMillis"));assertEquals(13000L,request.getLong("timeoutMillis"))
+  assertTrue(request.getBoolean("cancelled"))
+  assertEquals(original.getString("revision"),prefs.getString("installedRevision",null))
+  return result
+ }
+ try {
+  val home=JSONObject(original.toString())
+  home.getJSONArray("places").getJSONObject(0).put("circles",JSONArray().put(JSONObject().put("id",UUID.randomUUID().toString()).put("latitude",0).put("longitude",0).put("radiusMeters",65)).put(JSONObject().put("id",UUID.randomUUID().toString()).put("latitude",0).put("longitude",0.00045).put("radiusMeters",65)))
+  prefs.edit().putString("manifest",home.toString()).putLong("installedUntil",System.currentTimeMillis()+3600000).putBoolean("hasRegions",true).putLong("notBefore:$placeId",System.currentTimeMillis()-120000).putBoolean("armed:$ruleId",false).remove("state:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").commit()
+  val unknown=details(acquisition("available",100.0))
+  assertEquals("installed",unknown.getString("installationStatus"));assertEquals("unknown",unknown.getString("presence"));assertEquals("accuracy_insufficient",unknown.getString("reasonCode"));assertFalse(unknown.getBoolean("armed"))
+  // A fresh explicit check arms the existing registration without a reinstall.
+  val good=details(acquisition("available",13.0))
+  assertEquals("inside",good.getString("presence"));assertTrue(good.getBoolean("armed"));assertEquals(13.0,good.getDouble("accuracyMeters"),0.0)
+  val low=details(acquisition("available",100.0))
+  assertEquals("unknown",low.getString("presence"));assertEquals("inside",low.getString("confirmedPresence"));assertTrue(low.getBoolean("armed"))
+  val absent=details(acquisition("unavailable"));assertEquals("unknown",absent.getString("presence"));assertEquals("location_unavailable",absent.getString("reasonCode"))
+  assertEquals("unavailable",acquisition("timeout").getString("acquisitionStatus"))
+  assertEquals("stale",acquisition("available",13.0,30000).getString("acquisitionStatus"))
+  // Future/out-of-order deliveries cannot poison diagnostic ordering.
+  observe.invoke(null,context,0.0,0.01,13.0,System.currentTimeMillis()+3600000,false)
+  val recovered=details(acquisition("available",13.0));assertEquals("inside",recovered.getString("presence"))
+  assertTrue(recovered.getLong("lastObservationAt")<=System.currentTimeMillis())
+  assertEquals(previousPosition,positionPrefs.getString("lastObservation",null));assertEquals(previousPending,positionPrefs.getBoolean("observationPending",false))
+  // The framework adapter reports actual saver state. Provider accuracy stays
+  // uncertain even while the OS accepts a high-accuracy request.
+  shell("dumpsys battery unplug")
+  for(enabled in listOf(true,false)) {
+   shell("cmd power set-mode ${if(enabled)1 else 0}")
+   val deadline=android.os.SystemClock.elapsedRealtime()+3000
+   while(context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode!=enabled && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
+   assertEquals(enabled,context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode)
+   val state=acquisition("available",100.0)
+   assertEquals(enabled,state.getBoolean("powerSaveMode"));assertEquals("unknown",details(state).getString("presence"))
+   assertEquals("inside",details(acquisition("available",13.0)).getString("presence"))
+  }
+  // An installed fence with no observation remains unarmed and explainable.
+  prefs.edit().remove("state:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").putBoolean("armed:$ruleId",false).commit()
+  assertEquals("not_observed",details(JSONObject(diagnostics.invoke(null,context) as String)).getString("reasonCode"))
+  android.util.Log.i("AegisNodeNativeTest","phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint")
+ }finally {
+  shell("cmd power set-mode 0");shell("dumpsys battery reset")
+  val edit=prefs.edit()
+  for(key in listOf("manifest","installedUntil","hasRegions","notBefore:$placeId","armed:$ruleId","state:$placeId","diagnostic:$placeId","lastAcquisitionStatus","lastAcquisitionAt")) {
+   when(val old=previous[key]) {null->edit.remove(key);is String->edit.putString(key,old);is Long->edit.putLong(key,old);is Int->edit.putInt(key,old);is Boolean->edit.putBoolean(key,old)}
+  }
+  check(edit.commit())
  }
 }

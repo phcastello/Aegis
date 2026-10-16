@@ -93,6 +93,12 @@ try {
     if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
     if(checkpoint?.[2]==='Checkpoint')phases.add(checkpoint[1]);
   }
+  // Retain only the fixed residential adapter checkpoint, never Location data.
+  if (/AegisNodeNativeTest.*phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint/.test(crash)) {
+    console.log('AegisNodeNativeTest phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint');
+    phases.add('residential65_adapter_fresh_accuracy_timeout_saver');
+  }
+  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
   if(livePassed){

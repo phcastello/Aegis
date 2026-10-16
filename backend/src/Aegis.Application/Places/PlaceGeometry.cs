@@ -12,13 +12,17 @@ public static class PlaceGeometry
         return 6371000 * 2 * Math.Atan2(Math.Sqrt(Math.Clamp(a, 0, 1)), Math.Sqrt(Math.Clamp(1 - a, 0, 1)));
     }
     // Accuracy is a heuristic uncertainty indicator, never a physical bound/proof.
-    public static string Classify(IReadOnlyList<PlaceCircle> circles, double latitude, double longitude, double accuracyMeters, double hysteresisMeters = 30)
+    public static string Classify(IReadOnlyList<PlaceCircle> circles, double latitude, double longitude, double accuracyMeters)
     {
-        if (circles.Count == 0 || !double.IsFinite(accuracyMeters) || accuracyMeters is <= 0 or > 200) return "uncertain";
-        var confidenceMargin = hysteresisMeters + Math.Min(accuracyMeters, 100);
+        if (circles.Count == 0 || !double.IsFinite(latitude) || latitude is < -90 or > 90 ||
+            !double.IsFinite(longitude) || longitude is < -180 or > 180 ||
+            !double.IsFinite(accuracyMeters) || accuracyMeters is <= 0 or > 200) return "uncertain";
+        // Match the native confidence policy. Do not erode a small home by a second
+        // fixed 30 m margin or silently expand its Android registration geometry.
+        var confidenceMargin = Math.Max(3, accuracyMeters);
         var signedDistances = circles.Select(c => DistanceMeters(latitude, longitude, c.Latitude, c.Longitude) - c.RadiusMeters).ToArray();
-        if (signedDistances.Any(d => d <= -confidenceMargin)) return "inside";
-        if (signedDistances.All(d => d >= confidenceMargin)) return "outside";
+        if (signedDistances.Any(d => d < -confidenceMargin)) return "inside";
+        if (signedDistances.All(d => d > confidenceMargin)) return "outside";
         return "uncertain";
     }
     public static IReadOnlyList<PlaceCircle> EffectiveCircles(Place place, IReadOnlyDictionary<Guid, Place> places)
@@ -59,13 +63,13 @@ public static class GeofencePresenceMachine
 {
     public static GeofencePresenceResult Observe(GeofencePresenceState state, IReadOnlyList<PlaceCircle> circles, LocationObservationView observation, DateTimeOffset now)
     {
-        if (observation.CapturedAt > now.AddSeconds(30) || now - observation.CapturedAt > TimeSpan.FromMinutes(2) ||
+        if (observation.CapturedAt > now || now - observation.CapturedAt > TimeSpan.FromMinutes(2) ||
             state.LastCapturedAt is { } last && observation.CapturedAt <= last) return new(state, null, false);
         var classified = PlaceGeometry.Classify(circles, observation.Latitude, observation.Longitude, observation.AccuracyMeters);
         if (classified == "uncertain") return new(state with { Candidate = null, CandidateSince = null, LastCapturedAt = observation.CapturedAt }, null, true);
         if (state.Confirmed == "unknown") return new(new(classified, LastCapturedAt: observation.CapturedAt), null, false);
         if (classified == state.Confirmed) return new(state with { Candidate = null, CandidateSince = null, LastCapturedAt = observation.CapturedAt }, null, false);
-        if (state.Candidate != classified || state.CandidateSince is null) return new(state with { Candidate = classified, CandidateSince = observation.CapturedAt, LastCapturedAt = observation.CapturedAt }, null, true);
+        if (state.Candidate != classified || state.CandidateSince is null || observation.CapturedAt - state.CandidateSince > TimeSpan.FromMinutes(2)) return new(state with { Candidate = classified, CandidateSince = observation.CapturedAt, LastCapturedAt = observation.CapturedAt }, null, true);
         if (observation.CapturedAt - state.CandidateSince < TimeSpan.FromSeconds(30)) return new(state with { LastCapturedAt = observation.CapturedAt }, null, true);
         return new(new(classified, LastCapturedAt: observation.CapturedAt), classified == "inside" ? "enter" : "exit", false);
     }

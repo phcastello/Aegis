@@ -9,6 +9,8 @@ import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.os.Build
+import android.location.Location
+import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.work.*
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.Tasks
@@ -55,7 +57,9 @@ object NodeGeofences {
   if(previous!=id) {
    Store(context).use{it.writableDatabase.delete("events",null,null)}
    NodeNativeNotifications.prefs(context).edit().remove("lastObservation").remove("observationPending").remove("observationScopeId").commit()
-   check(prefs(context).edit().remove("reportPending").remove("reportError").commit())
+   val edit=prefs(context).edit().remove("reportPending").remove("reportError").remove("lastAcquisitionAt").remove("lastAcquisitionStatus")
+   for(key in prefs(context).all.keys.filter{it.startsWith("diagnostic:")})edit.remove(key)
+   check(edit.commit())
   }
   check(prefs(context).edit().putString("scopeNodeId",id).commit())
  } }
@@ -85,6 +89,64 @@ object NodeGeofences {
   try{flushEvents(context)}catch(_:Exception){}
   reconcile(context)
   return JSONObject().put("status",prefs(context).getString("status","pending_sync")).put("errorCode",prefs(context).getString("error",null)).put("syncPending",prefs(context).getBoolean("reportPending",false))
+ }
+ /** Local diagnostics contain confidence metadata, never precise coordinates. */
+ fun diagnostics(context:Context):JSONObject {
+  val permission=NodeLocation.permissions(context)
+  val result=JSONObject().put("supported",true).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)).put("rules",JSONArray())
+  val value=manifest(context) ?: return result
+  if(NodeNativeSession.read(context)?.nodeId!=value.optString("observerNodeId"))return result
+  val preferences=prefs(context)
+  val now=System.currentTimeMillis()
+  val installed=!preferences.getBoolean("needsInstall",true) && preferences.getString("installedRevision",null)==value.getString("revision") && preferences.getBoolean("hasRegions",false) && preferences.getLong("installedUntil",0)>now && stamp(value.getString("leaseUntil"))>now
+  val error=preferences.getString("error",null)
+  val installation=when {
+   installed -> "installed"
+   error in setOf("location_permission_required","precise_location_required","background_location_required") -> "permission_required"
+   preferences.getString("status",null)=="recoverable_error" -> "failed"
+   else -> "pending_sync"
+  }
+  val acquisitionAt=preferences.getLong("lastAcquisitionAt",0)
+  val acquisitionStatus=preferences.getString("lastAcquisitionStatus",null)
+  if(acquisitionStatus!=null)result.put("acquisitionStatus",acquisitionStatus)
+  val output=result.getJSONArray("rules")
+  for(rule in value.getJSONArray("rules").objects()) {
+   val id=rule.getString("id")
+   val observations=rule.getJSONArray("placeIds").strings().map{preferences.getString("diagnostic:$it",null)?.let{raw->JSONObject(raw)}?:JSONObject().put("presence","unknown").put("reasonCode","not_observed")}
+   val saved=rule.getJSONArray("placeIds").strings().map{preferences.getString("state:$it",null)?.let{raw->JSONObject(raw).optString("confirmed","unknown")}?:"unknown"}
+   fun combine(states:List<String>)=when {states.any{it=="inside"}->"inside";states.isNotEmpty()&&states.all{it=="outside"}->"outside";else->"unknown"}
+   val latest=observations.filter{it.has("lastObservationAt")}.maxByOrNull{it.optLong("lastObservationAt",0)}
+   var presence=combine(observations.map{it.optString("presence","unknown")})
+   var reason=if(presence=="unknown")observations.firstOrNull{it.optString("presence")=="unknown"}?.optString("reasonCode")?:"not_observed" else "confirmed"
+   if(latest!=null && now-latest.getLong("lastObservationAt")>NodeGeoEngine.MAX_AGE_MILLIS){presence="unknown";reason="stale_location"}
+   if(acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latest?.optLong("receivedAt",0)?:0)) {
+    presence="unknown"
+    reason=when(acquisitionStatus){"permission_denied"->"permission_required";"location_disabled"->"location_disabled";"provider_unavailable"->"provider_unavailable";"stale"->"stale_location";else->"location_unavailable"}
+   }
+   if(!permission.optBoolean("granted") || !permission.optBoolean("precise") || !permission.optBoolean("background")){presence="unknown";reason="permission_required"}
+   else if(!permission.optBoolean("servicesEnabled")){presence="unknown";reason="location_disabled"}
+   else if(!permission.optBoolean("providerAvailable")){presence="unknown";reason="provider_unavailable"}
+   else if(installation=="failed")reason="installation_failed"
+   else if(installation=="pending_sync")reason="pending_sync"
+   val armed=installed && rule.optString("status")=="active" && (rule.isNull("endsAt")||stamp(rule.getString("endsAt"))>now) && preferences.getLong("ruleRevision:$id",-1)==rule.getLong("revision") && preferences.getBoolean("armed:$id",false) && !preferences.getBoolean("completed:$id",false)
+   if(installation=="installed" && !armed && presence=="outside" && rule.optString("transition")=="exit")reason="outside_initial"
+   output.put(JSONObject().put("id",id).put("revision",rule.getLong("revision")).put("installationStatus",installation).put("presence",presence).put("confirmedPresence",combine(saved)).put("armed",armed)
+    .put("lastObservationAt",latest?.optLong("lastObservationAt")?:JSONObject.NULL).put("accuracyMeters",latest?.optDouble("accuracyMeters")?:JSONObject.NULL).put("reasonCode",reason).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)))
+  }
+  return result
+ }
+ private fun recordAcquisition(context:Context,status:String,scope:String?):Boolean = synchronized(applyGate) {
+  if(NodeNativeSession.read(context)?.nodeId!=scope)return@synchronized false
+  check(prefs(context).edit().putString("lastAcquisitionStatus",status).putLong("lastAcquisitionAt",System.currentTimeMillis()).commit())
+  true
+ }
+ /** One user-requested acquisition; no registration, continuous listener or upload. */
+ fun verifyPresence(context:Context,allowConfirmation:Boolean=true,acquire:((CurrentLocationRequest,CancellationTokenSource,Long)->Location?)?=null):JSONObject {
+  val scope=NodeNativeSession.read(context)?.nodeId
+  val observation=NodeLocation.current(context,upload=false,fresh=true,durationMillis=12000,expectedScope=scope,highAccuracy=true,acquire=acquire)
+  if(!recordAcquisition(context,observation.optString("status","unavailable"),scope))return diagnostics(context).put("acquisitionStatus","superseded")
+  if(observation.optString("status")=="available")process(context,NodeLocation.engine(observation),allowConfirmation)
+  return diagnostics(context).put("verifiedAt",System.currentTimeMillis())
  }
  private fun activeRules(value:JSONObject,now:Long=System.currentTimeMillis()):List<JSONObject> = value.getJSONArray("rules").objects().filter {
   it.optString("status")=="active" && stamp(it.getString("leaseUntil"))>now && (it.isNull("endsAt")||stamp(it.getString("endsAt"))>now)
@@ -159,7 +221,7 @@ object NodeGeofences {
     if(NodeNativeSession.read(context)?.nodeId!=value.getString("observerNodeId") || manifest(context)?.optString("revision")!=value.getString("revision"))return
     val edit=prefs(context).edit()
     // Registration establishes a fresh baseline; missed/initial events are not transitions.
-    for(placeId in placeIds)edit.putString("geometry:$placeId",geometry(value,placeId).toString()).remove("state:$placeId")
+    for(placeId in placeIds)edit.putString("geometry:$placeId",geometry(value,placeId).toString()).remove("state:$placeId").remove("diagnostic:$placeId")
     for(rule in rules) {
      val id=rule.getString("id")
      edit.putBoolean("armed:$id",false)
@@ -174,7 +236,8 @@ object NodeGeofences {
   // Neither the first acquisition nor a remote receipt can invalidate a successful
   // Google registration. A failed acquisition keeps the initial presence unknown.
   try {
-   val observation=NodeLocation.current(context,upload=true,fresh=true)
+   val observation=NodeLocation.current(context,upload=false,fresh=true)
+   if(!recordAcquisition(context,observation.optString("status","unavailable"),value.getString("observerNodeId")))return
    if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation))
   }catch(error:Exception){notificationLog("geofence_initial_position",error)}
   report(context,value)
@@ -248,7 +311,7 @@ object NodeGeofences {
   if(value.optString("observerNodeId")!=observer)return
    val now=System.currentTimeMillis()
   if(prefs(context).getBoolean("needsInstall",true)||prefs(context).getString("installedRevision",null)!=value.getString("revision"))return
-  if(stamp(value.getString("leaseUntil"))<=now || now-observation.capturedAt !in 0..300000) return
+  if(stamp(value.getString("leaseUntil"))<=now || observation.capturedAt>now) return
   val rules=activeRules(value,now).filter{prefs(context).getLong("ruleRevision:${it.getString("id")}",-1)!=it.getLong("revision") || !prefs(context).getBoolean("completed:${it.getString("id")}",false)}
   var confirm=false
   var needsSync=false
@@ -258,12 +321,22 @@ object NodeGeofences {
    if(observation.capturedAt<notBefore)continue
    val saved=prefs(context).getString("state:$placeId",null)?.let{JSONObject(it)}
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
-   val decision=NodeGeoEngine.observe(old,NodeGeoEngine.classify(geometry(value,placeId),observation,now),observation.capturedAt,notBefore)
+   if(observation.capturedAt<=old.lastCapturedAt)continue
+   val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,now)
+   // Future and stale deliveries are visible as diagnostics, but cannot replace
+   // newer state or establish temporal persistence.
+   val decision=if(assessment.reasonCode in setOf("future_location","stale_location"))NodeGeoEngine.Decision(old) else NodeGeoEngine.observe(old,assessment.classification,observation.capturedAt,notBefore)
    val state=decision.state
+   val presence=if(state.candidate!="unknown")"unknown" else assessment.classification
+   val reason=if(state.candidate!="unknown")"awaiting_confirmation" else assessment.reasonCode
    val current=synchronized(applyGate) {
     if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)false
     else {
-     if(state!=old)check(prefs(context).edit().putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString()).commit())
+     val edit=prefs(context).edit()
+     if(state!=old)edit.putString("state:$placeId",JSONObject().put("confirmed",state.confirmed).put("candidate",state.candidate).put("candidateAt",state.candidateAt).put("lastCapturedAt",state.lastCapturedAt).toString())
+     val priorDiagnostic=prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
+     if(priorDiagnostic==null || observation.capturedAt>priorDiagnostic.optLong("lastObservationAt",0))edit.putString("diagnostic:$placeId",JSONObject().put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()}?:JSONObject.NULL).put("presence",presence).put("reasonCode",reason).put("receivedAt",now).toString())
+     check(edit.commit())
      true
     }
    }
@@ -274,7 +347,7 @@ object NodeGeofences {
     if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision") || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return@synchronized
     if(prefs(context).getBoolean("completed:$id",false)) return@synchronized
     val initial=if(transition=="exit") "inside" else "outside"
-    if(state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",true).commit());needsSync=true}
+    if(assessment.classification==initial && state.confirmed==initial && !prefs(context).getBoolean("armed:$id",false)) {check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",true).commit());needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
       needsSync=true
       NodeLocation.queueTransition(context,observation)

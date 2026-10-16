@@ -110,6 +110,11 @@ public sealed class PlaceCompletionTests
         var manifest = JsonSerializer.SerializeToElement(await Service.ManifestAsync(phone.Id), new JsonSerializerOptions(JsonSerializerDefaults.Web));
         await Service.ConfirmAsync(phone.Id, new(manifest.GetProperty("revision").GetString()!, [new(rule.Id, rule.Revision, "waiting_initial")]));
         Assert.Equal("waiting_initial", (await Service.RulesAsync()).Single().SyncStatus);
+        // Installing Android regions and arming a transition are distinct receipts.
+        await Service.ConfirmAsync(phone.Id, new(manifest.GetProperty("revision").GetString()!, [new(rule.Id, rule.Revision, "installed")]));
+        Assert.Equal("installed", (await Service.RulesAsync()).Single().SyncStatus);
+        await Service.ConfirmAsync(phone.Id, new(manifest.GetProperty("revision").GetString()!, [new(rule.Id, rule.Revision, "active")]));
+        Assert.Equal("active", (await Service.RulesAsync()).Single().SyncStatus);
         var cancelled = await Service.ActOnRuleAsync(rule.Id, rule.Revision, "cancel");
         Assert.Equal("cancelled", cancelled.Status); Assert.Equal("pending_sync", cancelled.SyncStatus);
         await Service.ConfirmAsync(phone.Id, new(manifest.GetProperty("revision").GetString()!, []));

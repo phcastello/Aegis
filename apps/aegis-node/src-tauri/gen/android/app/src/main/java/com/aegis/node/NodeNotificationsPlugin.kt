@@ -42,6 +42,12 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  @Command fun syncGeofences(invoke:Invoke) {
   NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofences.sync(activity).toString()))}catch(_:Exception){invoke.reject("Sincronização pendente. Verifique a conexão e as permissões.")} }
  }
+ @Command fun geofenceDiagnostics(invoke:Invoke) {
+  NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofenceRuntime.diagnostics(activity)))}catch(_:Exception){invoke.reject("Não foi possível consultar a presença neste celular.")} }
+ }
+ @Command fun verifyGeofencePresence(invoke:Invoke) {
+  NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofenceRuntime.verifyPresence(activity)))}catch(_:Exception){invoke.reject("Localização indisponível. Tente novamente em instantes.")} }
+ }
  @Command fun queueReminderAction(invoke:Invoke) {
   try{val args=invoke.getArgs();invoke.resolve(JSObject(NodeReminderActions.enqueueUi(activity,args.getString("reminderId"),args.getJSONObject("payload"),args.getString("scopeNodeId")).toString()))}catch(_:Exception){invoke.reject("Não foi possível guardar esta ação no aparelho.")}
  }
