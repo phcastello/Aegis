@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
@@ -242,11 +244,15 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   geoRuntime(context).getMethod("deactivate",Context::class.java).invoke(null,context)
   // Direct private storage fixture, never a product RPC or claimed Google registration.
   // OS registration was independently checked above; the following proves persisted local execution.
-  val now=System.currentTimeMillis()
+  var now=System.currentTimeMillis()
   val definition=JSONObject().put("id",ruleId).put("revision",resumed.getInt("revision")).put("placeIds",JSONArray().put(placeId)).put("text","Synthetic geographic fixture").put("transition","exit").put("repeat",true).put("status","active").put("startsAt",JSONObject.NULL).put("endsAt",JSONObject.NULL).put("leaseUntil",geoStamp(now+3600000)).put("timeZoneId","UTC").put("deliveryPolicy","allEligible")
   val manifest=JSONObject().put("revision","instrumented-${UUID.randomUUID()}").put("generatedAt",geoStamp(now)).put("leaseUntil",geoStamp(now+3600000)).put("observerNodeId",nodeId).put("places",JSONArray().put(place)).put("rules",JSONArray().put(definition))
   prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
   exerciseResidentialLocationAdapterFramework(context,manifest,ruleId,placeId,setBackground)
+  // Power/lifecycle integration has its own real elapsed time. Start the
+  // deterministic trajectory afterwards, preserving the pre-activation cutoff.
+  now=System.currentTimeMillis()
+  prefs.edit().putLong("notBefore:$placeId",now-119000).remove("state:$placeId").remove("diagnostic:$placeId").putBoolean("armed:$ruleId",false).commit()
   val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
   fun position(longitude:Double,ago:Long,accuracy:Double=5.0)=observe.invoke(null,context,0.0,longitude,accuracy,now-ago,false)
   fun events():List<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-geofence-events-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT occurrenceId FROM events WHERE ruleId=? ORDER BY sequence",arrayOf(ruleId)).use{rows->val ids=mutableListOf<String>();while(rows.moveToNext())ids.add(rows.getString(0));ids}}
@@ -378,6 +384,11 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
  val previousPosition=positionPrefs.getString("lastObservation",null)
  val previousPending=positionPrefs.getBoolean("observationPending",false)
  fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{descriptor->android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use{it.readText()}}
+ val previousLowPower=shell("settings get global low_power").trim()
+ val previousSticky=shell("settings get global low_power_sticky").trim()
+ fun restorePowerSetting(name:String,value:String) {if(value in setOf("0","1"))shell("settings put global $name $value") else shell("settings delete global $name")}
+ fun batteryPlugged()=context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)?:-1
+ fun broadcastBarrier(){shell("timeout 5 am wait-for-broadcast-barrier")}
  fun details(result:JSONObject)=(0 until result.getJSONArray("rules").length()).map{result.getJSONArray("rules").getJSONObject(it)}.single{it.getString("id")==ruleId}
  fun acquisition(scenario:String,accuracy:Double=13.0,age:Long=0):JSONObject {
   android.os.SystemClock.sleep(5)
@@ -415,12 +426,22 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
   assertEquals(previousPosition,positionPrefs.getString("lastObservation",null));assertEquals(previousPending,positionPrefs.getBoolean("observationPending",false))
   // The framework adapter reports actual saver state. Provider accuracy stays
   // uncertain even while the OS accepts a high-accuracy request.
-  shell("dumpsys battery unplug")
+  // Match Android CTS setup: wait for the unplug broadcast before enabling
+  // saver, then drain broadcasts and set its global setting. A shell request
+  // made while PowerManager still sees external power can be rejected.
+  shell("cmd battery set level 50");shell("cmd battery unplug")
+  val unplugDeadline=android.os.SystemClock.elapsedRealtime()+5000
+  while(batteryPlugged()!=0 && android.os.SystemClock.elapsedRealtime()<unplugDeadline)android.os.SystemClock.sleep(50)
+  assertEquals("Emulator battery must be unplugged before saver activation",0,batteryPlugged())
+  broadcastBarrier()
   for(enabled in listOf(true,false)) {
-   shell("cmd power set-mode ${if(enabled)1 else 0}")
-   val deadline=android.os.SystemClock.elapsedRealtime()+3000
+   shell("cmd power set-mode ${if(enabled)1 else 0}");broadcastBarrier()
+   shell("settings put global low_power ${if(enabled)1 else 0}")
+   if(!enabled)shell("settings put global low_power_sticky 0")
+   broadcastBarrier()
+   val deadline=android.os.SystemClock.elapsedRealtime()+5000
    while(context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode!=enabled && android.os.SystemClock.elapsedRealtime()<deadline)android.os.SystemClock.sleep(50)
-   assertEquals(enabled,context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode)
+   assertEquals("PowerManager saver expected=$enabled plugged=${batteryPlugged()} level=50 global=${shell("settings get global low_power").trim()}",enabled,context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode)
    val state=acquisition("available",100.0)
    assertEquals(enabled,state.getBoolean("powerSaveMode"));assertEquals("unknown",details(state).getString("presence"))
    assertEquals("inside",details(acquisition("available",13.0)).getString("presence"))
@@ -440,7 +461,8 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
   android.util.Log.i("AegisNodeNativeTest","phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint")
  }finally {
   setBackground?.invoke(false)
-  shell("cmd power set-mode 0");shell("dumpsys battery reset")
+  shell("cmd power set-mode 0");shell("cmd battery reset")
+  restorePowerSetting("low_power",previousLowPower);restorePowerSetting("low_power_sticky",previousSticky)
   val edit=prefs.edit()
   for(key in listOf("manifest","installedUntil","hasRegions","notBefore:$placeId","armed:$ruleId","state:$placeId","diagnostic:$placeId","lastAcquisitionStatus","lastAcquisitionAt")) {
    when(val old=previous[key]) {null->edit.remove(key);is String->edit.putString(key,old);is Long->edit.putLong(key,old);is Int->edit.putInt(key,old);is Boolean->edit.putBoolean(key,old)}
