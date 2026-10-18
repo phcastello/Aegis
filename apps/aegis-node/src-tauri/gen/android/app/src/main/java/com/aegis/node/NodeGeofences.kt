@@ -116,11 +116,15 @@ object NodeGeofences {
    val observations=rule.getJSONArray("placeIds").strings().map{preferences.getString("diagnostic:$it",null)?.let{raw->JSONObject(raw)}?:JSONObject().put("presence","unknown").put("reasonCode","not_observed")}
    val saved=rule.getJSONArray("placeIds").strings().map{preferences.getString("state:$it",null)?.let{raw->JSONObject(raw).optString("confirmed","unknown")}?:"unknown"}
    fun combine(states:List<String>)=when {states.any{it=="inside"}->"inside";states.isNotEmpty()&&states.all{it=="outside"}->"outside";else->"unknown"}
-   val latest=observations.filter{it.has("lastObservationAt")}.maxByOrNull{it.optLong("lastObservationAt",0)}
+   // A newer native event without coordinates must not borrow an older fix's
+   // precision/time. Compare capture clocks when known, receipt only otherwise.
+   val latestEvidence=observations.maxByOrNull{it.optLong("lastObservationAt",it.optLong("receivedAt",0))}
+   val latest=latestEvidence?.takeIf{it.has("lastObservationAt")}
    var presence=combine(observations.map{it.optString("presence","unknown")})
    var reason=if(presence=="unknown")observations.firstOrNull{it.optString("presence")=="unknown"}?.optString("reasonCode")?:"not_observed" else "confirmed"
    if(latest!=null && now-latest.getLong("lastObservationAt")>NodeGeoEngine.MAX_AGE_MILLIS){presence="unknown";reason="stale_location"}
-   if(acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latest?.optLong("receivedAt",0)?:0)) {
+   if(latestEvidence!=null && latest==null){presence="unknown";reason=latestEvidence.optString("reasonCode","native_location_absent")}
+   if(acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latestEvidence?.optLong("receivedAt",0)?:0)) {
     presence="unknown"
     reason=when(acquisitionStatus){"permission_denied"->"permission_required";"location_disabled"->"location_disabled";"provider_unavailable"->"provider_unavailable";"stale"->"stale_location";"invalid_accuracy"->"accuracy_insufficient";else->"location_unavailable"}
    }
@@ -357,6 +361,24 @@ object NodeGeofences {
   val prior=prefs(context).getString("reliable:$placeId",null)?.let{JSONObject(it).optLong("lastObservationAt",0)}?:0
   if(capturedAt>prior)check(prefs(context).edit().putString("reliable:$placeId",JSONObject().put("presence",classification).put("lastObservationAt",capturedAt).toString()).commit())
  }
+ /** Coordinate diagnostics retain their acquisition clock; native receipt is not a fix. */
+ private fun recordNativeDiagnostic(context:Context,value:JSONObject,placeId:String,observation:NodeGeoEngine.Observation?,receivedAt:Long,source:String,now:Long) {
+  if(observation!=null && observation.capturedAt>now)return
+  val prior=prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
+  val priorAt=prior?.let{it.optLong("lastObservationAt",it.optLong("receivedAt",0))}?:0
+  val evidenceAt=observation?.capturedAt?:receivedAt
+  if(evidenceAt<priorAt)return
+  val diagnostic=JSONObject().put("receivedAt",receivedAt).put("source",source)
+  if(observation==null) {
+   diagnostic.put("presence","unknown").put("accuracyMeters",JSONObject.NULL).put("reasonCode","native_location_absent")
+  } else {
+   val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,if(source=="android_event")observation.capturedAt else now)
+   val stale=now-observation.capturedAt>NodeGeoEngine.MAX_AGE_MILLIS
+   diagnostic.put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL)
+    .put("presence",if(stale)"unknown" else assessment.classification).put("reasonCode",if(stale)"stale_location" else assessment.reasonCode)
+  }
+  check(prefs(context).edit().putString("diagnostic:$placeId",diagnostic.toString()).commit())
+ }
  private fun pendingEvidence(raw:JSONObject)=NodeGeoEngine.NativeEvidence(raw.getString("transition"),raw.optLong("detectedAt",0).takeIf{it>0},raw.getLong("receivedAt"),configurationId=raw.optString("configurationId").takeIf{it.isNotEmpty()},configurationRevision=raw.optString("configurationRevision").takeIf{it.isNotEmpty()},observerNodeId=raw.optString("observerNodeId").takeIf{it.isNotEmpty()})
  /** Receiver adapter only: not a command, plugin invocation or remote RPC. */
  internal fun nativeTransition(context:Context,evidence:NodeNativeTransition) = synchronized(applyGate) {
@@ -417,8 +439,10 @@ object NodeGeofences {
    val evaluated=NodeGeoEngine.native(old,native,nativeContext(context,placeId,config,union),geometry(value,placeId),now)
    val decision=if(duplicateNeedsConfirmation && evaluated.transition!=null)NodeGeoEngine.NativeDecision(old.copy(candidate=target,candidateAt=evidence.receivedAt),needsConfirmation=true,reasonCode="transition_needs_confirmation",detectedAt=regionEvidenceAt) else evaluated
    history(context,consumers,decision.reasonCode,evidence.receivedAt,transition,evidence.observation?.capturedAt,evidence.observation?.let{NodeGeoEngine.assess(geometry(value,placeId),it,it.capturedAt).classification}?:union)
+   val diagnosticRejected=decision.reasonCode in setOf("native_event_future","native_event_replaced","native_event_stale","native_event_duplicate","native_event_out_of_order","native_transition_unknown")
+   if(!diagnosticRejected && (evidence.observation!=null || decision.needsConfirmation || decision.transition!=null || decision.reasonCode=="native_event_initial"))recordNativeDiagnostic(context,value,placeId,evidence.observation,evidence.receivedAt,"android_event",now)
    val baselineAt=preferences.getLong("confirmedAt:$placeId",old.lastCapturedAt)
-   if(decision.transition!=null)changed=applyNativeRules(context,value,consumers,placeId,old,decision.state,decision.transition,native,baselineAt)||changed
+   if(decision.transition!=null)changed=applyNativeRules(context,value,consumers,placeId,old,decision.state,decision.transition,native,baselineAt,evidence.observation)||changed
    val update=preferences.edit()
    saveState(update,placeId,decision.state)
    if(decision.state.confirmed!=old.confirmed)update.putLong("confirmedAt:$placeId",evidence.observation?.capturedAt?:evidence.receivedAt)
@@ -446,8 +470,9 @@ object NodeGeofences {
   }
   return changed
  }
- private fun applyNativeRules(context:Context,value:JSONObject,rules:List<JSONObject>,placeId:String,old:NodeGeoEngine.State,next:NodeGeoEngine.State,transition:String,evidence:NodeGeoEngine.NativeEvidence,baselineAt:Long):Boolean {
+ private fun applyNativeRules(context:Context,value:JSONObject,rules:List<JSONObject>,placeId:String,old:NodeGeoEngine.State,next:NodeGeoEngine.State,transition:String,evidence:NodeGeoEngine.NativeEvidence,baselineAt:Long,observation:NodeGeoEngine.Observation?):Boolean {
   var changed=false
+  var observationQueued=false
   for(rule in rules) {
    val id=rule.getString("id")
    if(rule.getString("transition")!=transition)continue
@@ -455,6 +480,13 @@ object NodeGeofences {
    if(!prefs(context).getBoolean("armed:$id",false)){history(context,listOf(rule),"native_${transition}_unarmed",evidence.receivedAt,transition,evidence.detectedAt,next.confirmed);continue}
    val effectiveAt=evidence.detectedAt?:evidence.receivedAt
    if(!rule.isNull("startsAt") && effectiveAt<stamp(rule.getString("startsAt")))continue
+   // Preserve the existing auxiliary location outbox only for a real, fresh fix
+   // supporting an armed rule's accepted transition. Native-only evidence is not
+   // a coordinate, and a delayed native fix does not become a current location.
+   if(!observationQueued && observation!=null && NodeGeoEngine.assess(geometry(value,placeId),observation,System.currentTimeMillis()).classification==next.confirmed) {
+    NodeLocation.queueTransition(context,observation)
+    observationQueued=true
+   }
    val identity="${value.getString("observerNodeId")}:$id:${rule.getLong("revision")}:$placeId:$baselineAt:$transition"
    // Persist the idempotency key and outbox row in one SQLite transaction before
    // committing presence. A replay after process death reuses that occurrence.
@@ -487,6 +519,9 @@ object NodeGeofences {
    val evidence=pendingEvidence(raw)
    if(rules.isEmpty()){check(prefs(context).edit().remove(key).commit());continue}
    if(observation!=null && observation.capturedAt<evidence.receivedAt)continue
+   // A fresh diagnostic acquisition remains useful even if its old transition
+   // candidate expired; expiry still prevents any occurrence below.
+   if(observation!=null)recordNativeDiagnostic(context,value,placeId,observation,now,"one_shot",now)
    if(raw.getString("configurationId")!=config.getString("id") || now>raw.getLong("deadline") || observation==null) {
     val code=if(now>raw.getLong("deadline"))"transition_expired" else "confirmation_unavailable"
     history(context,rules,code,now,evidence.transition,evidence.detectedAt,source="one_shot")
@@ -505,7 +540,8 @@ object NodeGeofences {
    }
    check(membership.commit())
    val decision=NodeGeoEngine.confirmNative(old,evidence,nativeContext(context,placeId,config,"unknown"),geometry(value,placeId),observation,now)
-   if(decision.transition!=null)changed=applyNativeRules(context,value,rules,placeId,old,decision.state,decision.transition,evidence,raw.getLong("baselineAt"))||changed
+   recordNativeDiagnostic(context,value,placeId,observation,now,"one_shot",now)
+   if(decision.transition!=null)changed=applyNativeRules(context,value,rules,placeId,old,decision.state,decision.transition,evidence,raw.getLong("baselineAt"),observation)||changed
    val edit=prefs(context).edit().remove("nativePending:$placeId")
    saveState(edit,placeId,decision.state)
    if(decision.state.confirmed!=old.confirmed)edit.putLong("confirmedAt:$placeId",observation.capturedAt)

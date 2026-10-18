@@ -159,6 +159,7 @@ class NodeGeofenceReceiverFrameworkTest {
    val placeId=place.getString("id")
    val rule=request("/geofences",credential,JSONObject().put("text","Receiver geographic fixture").put("placeIds",JSONArray().put(placeId)).put("observerNodeId",nodeId).put("transition","enter").put("repeat",true).put("timeZoneId","UTC"))
    val ruleId=rule.getString("id")
+   val positionPreferences=context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE)
    val manifest=request("/geofences/manifest",credential)
    // Offline work cannot overwrite the fixture with an unrelated acquisition.
    fixtureJson("backend-offline",JSONObject().put("seconds",120))
@@ -241,11 +242,27 @@ class NodeGeofenceReceiverFrameworkTest {
     }
     // No triggeringLocation: a trusted outside baseline and complete native
     // ENTER evidence are sufficient under the documented bounded policy.
+    val previousObservation=positionPreferences.getString("lastObservation",null)
+    val previousObservationPending=positionPreferences.getBoolean("observationPending",false)
     callback(1,ids,longitude=if(saver)null else 0.0)
     await("Native ENTER creates one durable occurrence"){events(ruleId).size==before+1}
     val event=events(ruleId).last();occurrences.add(event.getString("occurrenceId"));awaitFrameworkReminder(notifications,event.getString("occurrenceId"),1)
     assertEquals("inside",JSONObject(preferences.getString("state:$placeId",null)!!).getString("confirmed"))
     assertFalse(preferences.getBoolean("armed:$ruleId",false))
+    val diagnostic=JSONObject(preferences.getString("diagnostic:$placeId",null)?:error("native_diagnostic_missing"))
+    if(saver) {
+     assertEquals("unknown",diagnostic.getString("presence"))
+     assertFalse("Receipt time cannot impersonate a missing position capture",diagnostic.has("lastObservationAt"))
+     assertTrue(diagnostic.isNull("accuracyMeters"))
+     assertTrue("A native event without coordinates cannot queue a synthetic position",previousObservation==positionPreferences.getString("lastObservation",null))
+     assertEquals(previousObservationPending,positionPreferences.getBoolean("observationPending",false))
+    } else {
+     assertEquals("inside",diagnostic.getString("presence"))
+     assertEquals(13.0,diagnostic.getDouble("accuracyMeters"),0.0)
+     assertTrue(diagnostic.getLong("lastObservationAt")<=System.currentTimeMillis())
+     assertTrue("A compatible fresh native fix queues the existing auxiliary location outbox",positionPreferences.getBoolean("observationPending",false))
+     assertEquals(13.0,JSONObject(positionPreferences.getString("lastObservation",null)?:error("native_location_outbox_missing")).getDouble("accuracyMeters"),0.0)
+    }
     // Repeated delivery and another member circle never create a second arrival.
     callback(1,ids,longitude=if(saver)null else 0.0);callback(1,listOf(ids[1]),longitude=0.00045);settled()
     assertEquals(before+1,events(ruleId).size)

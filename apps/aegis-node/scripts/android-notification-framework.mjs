@@ -76,6 +76,9 @@ try {
   // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
   const live = Boolean(bootstrap) && api >= 33;
   if (live) {
+    // The independent receiver fixture posts a real local reminder. Restore
+    // the denied state required by the existing live permission lifecycle.
+    permission(false);
     if (api < 33) permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
     // MonitoringInstrumentation otherwise destroys the last Tauri Activity before

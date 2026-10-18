@@ -44,6 +44,7 @@ const presenceReasons: Readonly<Record<string, string>> = {
   near_boundary: 'A posição está próxima da borda; ainda não há evidência suficiente de entrada ou saída.',
   stale_location: 'A última leitura está desatualizada. A presença anterior e o armamento continuam registrados.',
   location_unavailable: 'O Android não forneceu uma localização nova dentro do prazo.',
+  native_location_absent: 'O evento do Android não trouxe uma posição. A última presença confirmada continua preservada nos detalhes do monitoramento.',
   permission_required: 'Permita a localização neste celular para acompanhar esta área.',
   location_disabled: 'Ative a localização nas configurações do Android.',
   provider_unavailable: 'O provedor de localização não está disponível neste Android.',

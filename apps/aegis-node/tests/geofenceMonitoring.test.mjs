@@ -99,3 +99,7 @@ test('service decisions and local delivery sources stay distinct from location a
   assert.equal(recovery.details, 'recuperação local');
   assert.doesNotMatch(notification.details + recovery.details, /aquisição pontual/);
 });
+
+test('native event without a position explains the preserved presence history', () => {
+  assert.equal(geofencePresenceReason({ ...observed, reasonCode: 'native_location_absent' }), 'O evento do Android não trouxe uma posição. A última presença confirmada continua preservada nos detalhes do monitoramento.');
+});
