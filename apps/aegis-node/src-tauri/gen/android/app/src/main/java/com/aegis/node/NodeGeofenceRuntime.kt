@@ -15,6 +15,10 @@ object NodeGeofenceRuntime {
   require(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0)
   NodeGeofences.process(context,NodeGeoEngine.Observation(latitude,longitude,accuracyMeters,capturedAt),allowConfirmation)
  }
+ @JvmStatic fun nativeTransition(context:Context,transition:Int,regionIds:Array<String>,location:Location?,receivedAt:Long) {
+  val observation=location?.let{NodeLocation.engine(NodeLocation.observation(it))}
+  NodeGeofences.nativeTransition(context,NodeNativeTransition(transition,regionIds.toList(),observation,receivedAt))
+ }
  @JvmStatic fun bindIdentity(context:Context,id:String) {NodeGeofences.bindIdentity(context,id);NodeReminderActions.bindIdentity(context,id)}
  @JvmStatic fun diagnostics(context:Context):String = NodeGeofences.diagnostics(context).toString()
  @JvmStatic fun verifyPresence(context:Context):String = NodeGeofences.verifyPresence(context).toString()
@@ -35,6 +39,11 @@ object NodeGeofenceRuntime {
   return result.put("fixtureRequest",requestInfo.put("cancelled",cancellation?.token?.isCancellationRequested?:false)).toString()
  }
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
+ /** Complete bounded confirmation work when no usable acquisition remains. */
+ @JvmStatic fun confirmPending(context:Context) = NodeGeofences.confirmNative(context)
  @JvmStatic fun deactivate(context:Context) = NodeGeofences.clear(context)
  @JvmStatic fun restore(context:Context) = NodeGeofences.restore(context)
 }
+
+/** OS-only evidence; detection time is unknown when GMS omits its Location. */
+internal data class NodeNativeTransition(val transition:Int,val regionIds:List<String>,val observation:NodeGeoEngine.Observation?,val receivedAt:Long,val source:String="android_event")

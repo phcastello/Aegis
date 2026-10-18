@@ -14,7 +14,9 @@ const work=mkdtempSync(join(tmpdir(),'aegis-android-idle-'));const code=join(wor
 const dll=resolve(root,'backend/tests/Aegis.NodeRuntimeFixture/bin/Debug/net8.0/Aegis.NodeRuntimeFixture.dll');
 assert(existsSync(dll),'Build isolated runtime fixture before measuring');
 const done=child=>new Promise((res,rej)=>{child.once('error',rej);child.once('exit',res);});
-const api=spawn('dotnet',[dll,code],{cwd:root,env:{...process.env,AEGIS_IDLE_FIXTURE:'before'},stdio:['ignore','pipe','pipe']});
+// Both versions already include the accepted idle policy; compare this runtime
+// change under identical server heartbeat, timeout and persistence settings.
+const api=spawn('dotnet',[dll,code],{cwd:root,env:{...process.env,AEGIS_IDLE_FIXTURE:'after'},stdio:['ignore','pipe','pipe']});
 const apiDone=done(api);let test;
 async function measure(mode,apk,expectedNodeId){
  test=spawn(process.execPath,[resolve(root,'apps/aegis-node/scripts/android-idle.mjs'),mode,resolve(apk),resolve(testApk),code,join(output,`android-idle-${mode}.json`)],{cwd:root,env:{...process.env,...(expectedNodeId?{AEGIS_IDLE_EXPECT_NODE_ID:expectedNodeId}:{})},stdio:'inherit'});
@@ -42,9 +44,9 @@ try {
  assert(quiet.serverReconcilerCycles>=110,'The real server reconciler must run throughout the ten measured minutes');
  assert.equal(quiet.serverWithdrawalDispatches,0,'An acknowledged native withdrawal must stop server resend attempts');
  assert.equal(quiet.serverReconcilerFailures,0,'An idle reconciler failure cannot count as zero resends');
- // Both APKs still measure the same four quiescent phases. The accepted client
- // predates receipt support and does not claim the candidate-only preparation.
- before.withdrawalReceiptQuiet={preparedBeforeMeasurement:false,reason:'accepted_client_predates_native_withdrawal_receipts'};
+ // Both APKs measure the same four quiescent phases. Only the candidate gate
+ // prepares a withdrawal receipt; the baseline has no pending receipt workload.
+ before.withdrawalReceiptQuiet={preparedBeforeMeasurement:false,reason:'baseline_has_no_pending_withdrawal_receipt'};
  writeFileSync(join(output,'android-idle-before.json'),JSON.stringify(before,null,2)+'\n');
 }finally{
  if(test&&test.exitCode===null)test.kill('SIGTERM');

@@ -41,4 +41,6 @@ dependencies {
     implementation("androidx.test:runner:1.7.0")
     implementation("androidx.test:core:1.7.0")
     implementation("androidx.test.espresso:espresso-core:3.5.0")
+    // Only the instrumentation APK constructs GMS event parcel fixtures.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 }

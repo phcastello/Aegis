@@ -332,7 +332,7 @@ jobs:
           cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --release
           npm run tauri -- android build --debug --apk --target x86_64 --features android-framework-fixture
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
-      - name: Test real renderer then real native live path
+      - name: Test renderer, native geofence receiver fixture and native live path
         id: debug_test
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
@@ -348,7 +348,7 @@ jobs:
         run: |
           npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :notificationFrameworkTest:assembleRelease
-      - name: Test minified renderer and fixed JNI methods in real live execution
+      - name: Test minified renderer, geofence receiver fixture and fixed JNI methods
         id: release_test
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
@@ -374,8 +374,8 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
         run: |
-          git fetch origin 43650d1c2cf58a1fc188e2c33eae0af579eabcac --depth=1
-          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 43650d1c2cf58a1fc188e2c33eae0af579eabcac
+          git fetch origin 81b35fe69f182941b6037d2fb6bfc30ec26e2a0e --depth=1
+          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 81b35fe69f182941b6037d2fb6bfc30ec26e2a0e
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/packages/aegis-client"
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
           cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"

@@ -184,9 +184,11 @@ using (var scope = app.Services.CreateScope())
     var registry = scope.ServiceProvider.GetRequiredService<INodeRegistry>();
     var code = await registry.CreateCodeAsync(null);
     var replacement = await registry.CreateCodeAsync(null);
-    // Both are the existing issuerless bootstrap procedure. The reserve survives
-    // revocation of the first paired Node; no test bypass or HTTP endpoint exists.
+    var geofence = await registry.CreateCodeAsync(null);
+    // All use the existing issuerless bootstrap procedure. Separate receiver and
+    // live tests consume their own code; no test bypass or HTTP endpoint exists.
     await WriteBootstrapCode(args[0] + ".replacement", replacement.Code);
+    await WriteBootstrapCode(args[0] + ".geofence", geofence.Code);
     await WriteBootstrapCode(args[0], code.Code); // Main file is the readiness marker.
 }
 await app.RunAsync(); return 0;

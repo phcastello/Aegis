@@ -14,15 +14,17 @@ public static class PlaceGeometry
     // Accuracy is a heuristic uncertainty indicator, never a physical bound/proof.
     public static string Classify(IReadOnlyList<PlaceCircle> circles, double latitude, double longitude, double accuracyMeters)
     {
-        if (circles.Count == 0 || !double.IsFinite(latitude) || latitude is < -90 or > 90 ||
+        if (circles.Count == 0 || circles.Count > CircleUnionCoverage.MaximumCircles ||
+            circles.Any(c => !double.IsFinite(c.Latitude) || c.Latitude is < -90 or > 90 || !double.IsFinite(c.Longitude) || c.Longitude is < -180 or > 180 || !double.IsFinite(c.RadiusMeters) || c.RadiusMeters is <= 0 or > 100000) || !double.IsFinite(latitude) || latitude is < -90 or > 90 ||
             !double.IsFinite(longitude) || longitude is < -180 or > 180 ||
             !double.IsFinite(accuracyMeters) || accuracyMeters is <= 0 or > 200) return "uncertain";
         // Match the native confidence policy. Do not erode a small home by a second
         // fixed 30 m margin or silently expand its Android registration geometry.
         var confidenceMargin = Math.Max(3, accuracyMeters);
         var signedDistances = circles.Select(c => DistanceMeters(latitude, longitude, c.Latitude, c.Longitude) - c.RadiusMeters).ToArray();
-        if (signedDistances.Any(d => d < -confidenceMargin)) return "inside";
-        if (signedDistances.All(d => d > confidenceMargin)) return "outside";
+        if (signedDistances.Any(d => d < -confidenceMargin - CircleUnionCoverage.NumericMarginMeters) ||
+            CircleUnionCoverage.Covers(circles, latitude, longitude, confidenceMargin)) return "inside";
+        if (signedDistances.All(d => d > confidenceMargin + CircleUnionCoverage.NumericMarginMeters)) return "outside";
         return "uncertain";
     }
     public static IReadOnlyList<PlaceCircle> EffectiveCircles(Place place, IReadOnlyDictionary<Guid, Place> places)

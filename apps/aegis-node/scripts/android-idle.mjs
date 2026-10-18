@@ -11,7 +11,7 @@ assert(['before','after'].includes(mode)&&apk&&testApk&&bootstrap&&output,'mode 
 assert(existsSync(apk)&&existsSync(testApk),'Both APK artifacts must exist before measuring');
 const expectedNodeId=process.env.AEGIS_IDLE_EXPECT_NODE_ID;
 if(mode==='after')assert(/^[a-f0-9-]{36}$/.test(expectedNodeId??''),'Upgrade requires the previous disposable NodeId');
-const expectedVersion=mode==='before'?'0.7.0-unstable.11':JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).version;
+const expectedVersion=mode==='before'?'0.7.0-unstable.16':JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).version;
 const serial=process.env.AEGIS_TEST_EMULATOR_SERIAL??'emulator-5554';assert(/^emulator-\d{4}$/.test(serial),'Disposable emulator required');
 const adb=process.env.ANDROID_HOME?resolve(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
 const command=args=>{const r=spawnSync(adb,['-s',serial,...args],{encoding:'utf8',timeout:30000});assert.equal(r.status,0,'adb operation failed');return r.stdout;};

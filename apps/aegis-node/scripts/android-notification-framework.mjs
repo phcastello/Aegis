@@ -59,12 +59,19 @@ const instrumentation = (testClass, extra = []) => {
   assert.doesNotMatch(output, /FAILURES!!!|INSTRUMENTATION_FAILED/);
 };
 let livePassed=false;
+let receiverPassed=false;
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
   permission(true);
   instrumentation('NodeNotificationFrameworkTest');
   permission(false);
   instrumentation('NodeNotificationPermissionDeniedTest');
+  if (bootstrap) {
+    permission(true);
+    run(['reverse', 'tcp:18104', 'tcp:18104']);
+    instrumentation('NodeGeofenceReceiverFrameworkTest', ['-e','geofencePairingCode',readFileSync(bootstrap+'.geofence','utf8').trim()]);
+    receiverPassed=true;
+  }
   // API 26 additionally covers the real renderer/permission. The complete live UI/JNI
   // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
   const live = Boolean(bootstrap) && api >= 33;
@@ -88,6 +95,10 @@ try {
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   const phases=new Set();
+  if (/AegisNodeNativeTest.*phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint/.test(crash)) {
+    console.log('AegisNodeNativeTest phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint');
+    phases.add('geofence_receiver_native_transition_idempotent_saver_reconcile');
+  }
   for (const line of crash.split('\n')) {
     const checkpoint = line.includes('AegisNodeNativeTest') && line.match(/phase=(live_activity_launch|live_activity_ready|live_webview_ready|live_runtime_ready|live_paired|live_online|live_permission_denied|live_permission_granted|live_notification_active|live_cleanup_started|live_notification_cancelled|live_node_revoke_started|live_node_revoked|live_cleanup_completed|location_bridge_framework|update_archive_source_inspection|notification_live_authenticated_clock|geofence_authenticated_native_http|geofence_google_registration_task_succeeded|geofence_google_registration_unavailable|geofence_pre_activation_cache_ignored|geofence_union_offline_outbox_repeat_persisted|geofence_restore_no_duplicate|geofence_receipt_503_install|geofence_receipt_disconnect_install|geofence_receipt_503_restore|geofence_receipt_disconnect_restore|withdrawal_receipt_fcm_offline_replay_lost_response|native_identity_reenabled|native_identity_scope_reset|tao_activity_jni|runtime_state|native_bridge|notification_plugin_init|wry_webview|tauri_runtime) errorType=(Checkpoint|JavaException|NativePanic)$/);
     if (checkpoint) console.log(`AegisNodeNativeTest ${checkpoint[0]}`);
@@ -106,9 +117,10 @@ try {
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
+  if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');
   if(livePassed){
     assert(phases.has('withdrawal_receipt_fcm_offline_replay_lost_response'),'Native withdrawal receipt regression checkpoint required');
     if(phases.has('geofence_google_registration_task_succeeded'))for(const mode of ['503','disconnect'])for(const path of ['install','restore'])assert(phases.has(`geofence_receipt_${mode}_${path}`),'Installed geofence must survive backend receipt failure');
   }
 }
-console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap && api >= 33?' including native live WebSocket/JNI':''}`);
+console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap?' including native geofence receiver fixture':''}${bootstrap && api >= 33?' and native live WebSocket/JNI':''}`);
