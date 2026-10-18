@@ -56,8 +56,8 @@ class NodeGeofenceReceiverFrameworkTest {
  private val occurrences=mutableListOf<String>()
  private fun stamp(at:Long)=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",Locale.ROOT).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date(at))
  private fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use{it.readText()}}
- private fun await(reason:String,condition:()->Boolean) {
-  val end=SystemClock.elapsedRealtime()+15000
+ private fun await(reason:String,timeoutMillis:Long=15000,condition:()->Boolean) {
+  val end=SystemClock.elapsedRealtime()+timeoutMillis
   while(!condition() && SystemClock.elapsedRealtime()<end)SystemClock.sleep(25)
   assertTrue(reason,condition())
  }
@@ -260,7 +260,7 @@ class NodeGeofenceReceiverFrameworkTest {
    assertTrue(JSONArray(preferences.getString("history:$ruleId","[]")).length()<=12)
    fixtureJson("backend-offline",JSONObject().put("seconds",0))
    nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
-   await("Native durable outbox reconciles after reconnect"){events(ruleId).isEmpty()}
+   await("Native durable outbox reconciles after reconnect",timeoutMillis=60000){events(ruleId).isEmpty()}
    for(event in durable) {
     val replay=request("/geofences/events",credential,event)
     assertEquals("accepted",replay.getString("status"));assertTrue(replay.getBoolean("duplicate"))

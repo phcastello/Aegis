@@ -202,7 +202,9 @@ object NodeGeofences {
    for(circle in place.getJSONArray("circles").objects()) {
     require(circle.getDouble("radiusMeters") in 50.0..100000.0)
     val circleId=circle.getString("id")
-    val requestId="$generation:${regions.size}"
+    // Inherited geometry can belong to several logical places; register the
+    // physical circle once and retain each place binding in the allowlist.
+    val requestId=installedRegions.objects().firstOrNull{it.getString("circleId")==circleId}?.getString("requestId")?:"$generation:${regions.size}"
     installedRegions.put(JSONObject().put("requestId",requestId).put("placeId",placeId).put("circleId",circleId))
     regions[requestId]=Geofence.Builder().setRequestId(requestId)
      .setCircularRegion(circle.getDouble("latitude"),circle.getDouble("longitude"),circle.getDouble("radiusMeters").toFloat())
@@ -355,7 +357,7 @@ object NodeGeofences {
   val prior=prefs(context).getString("reliable:$placeId",null)?.let{JSONObject(it).optLong("lastObservationAt",0)}?:0
   if(capturedAt>prior)check(prefs(context).edit().putString("reliable:$placeId",JSONObject().put("presence",classification).put("lastObservationAt",capturedAt).toString()).commit())
  }
- private fun pendingEvidence(raw:JSONObject)=NodeGeoEngine.NativeEvidence(raw.getString("transition"),raw.optLong("detectedAt",0).takeIf{it>0},raw.getLong("receivedAt"))
+ private fun pendingEvidence(raw:JSONObject)=NodeGeoEngine.NativeEvidence(raw.getString("transition"),raw.optLong("detectedAt",0).takeIf{it>0},raw.getLong("receivedAt"),configurationId=raw.optString("configurationId").takeIf{it.isNotEmpty()},configurationRevision=raw.optString("configurationRevision").takeIf{it.isNotEmpty()},observerNodeId=raw.optString("observerNodeId").takeIf{it.isNotEmpty()})
  /** Receiver adapter only: not a command, plugin invocation or remote RPC. */
  internal fun nativeTransition(context:Context,evidence:NodeNativeTransition) = synchronized(applyGate) {
   val value=manifest(context) ?: return@synchronized
@@ -371,7 +373,7 @@ object NodeGeofences {
   val selected=regions.filter{it.getString("requestId") in evidence.regionIds}
   if(evidence.regionIds.isEmpty() || evidence.regionIds.size>100 || selected.map{it.getString("requestId")}.toSet()!=evidence.regionIds.toSet()){reject("native_region_unknown");return@synchronized}
   if(evidence.receivedAt<config.getLong("installedAt") || evidence.receivedAt>now || evidence.observation?.capturedAt?.let{it<config.getLong("installedAt")}==true){reject("native_configuration_stale");return@synchronized}
-  val native=NodeGeoEngine.NativeEvidence(transition,evidence.observation?.capturedAt,evidence.receivedAt,observation=evidence.observation)
+  val native=NodeGeoEngine.NativeEvidence(transition,evidence.observation?.capturedAt,evidence.receivedAt,observation=evidence.observation,configurationId=config.getString("id"),configurationRevision=config.getString("revision"),observerNodeId=config.getString("nodeId"))
   if(now-evidence.receivedAt>NodeGeoEngine.NATIVE_MAX_DELAY_MILLIS || evidence.observation?.capturedAt?.let{now-it>NodeGeoEngine.NATIVE_MAX_DELAY_MILLIS}==true){reject("native_event_stale",true);return@synchronized}
   if(evidence.observation?.capturedAt?.let{it>now}==true){reject("native_event_future",true);return@synchronized}
   val relevant=activeRules(value,now).filter{rule->preferences.getLong("ruleRevision:${rule.getString("id")}",-1)==rule.getLong("revision") && !preferences.getBoolean("completed:${rule.getString("id")}",false) && rule.getJSONArray("placeIds").strings().any{place->selected.any{it.getString("placeId")==place}}}
@@ -421,7 +423,7 @@ object NodeGeofences {
    saveState(update,placeId,decision.state)
    if(decision.state.confirmed!=old.confirmed)update.putLong("confirmedAt:$placeId",evidence.observation?.capturedAt?:evidence.receivedAt)
    if(decision.needsConfirmation) {
-    update.putString("nativePending:$placeId",JSONObject().put("transition",transition).put("receivedAt",evidence.receivedAt).put("detectedAt",evidence.observation?.capturedAt?:JSONObject.NULL).put("deadline",evidence.receivedAt+NodeGeoEngine.NATIVE_CONFIRMATION_WINDOW_MILLIS).put("baselineAt",baselineAt).put("configurationId",config.getString("id")).toString())
+    update.putString("nativePending:$placeId",JSONObject().put("transition",transition).put("receivedAt",evidence.receivedAt).put("detectedAt",evidence.observation?.capturedAt?:JSONObject.NULL).put("deadline",evidence.receivedAt+NodeGeoEngine.NATIVE_CONFIRMATION_WINDOW_MILLIS).put("baselineAt",baselineAt).put("configurationId",native.configurationId).put("configurationRevision",native.configurationRevision).put("observerNodeId",native.observerNodeId).toString())
     confirm=true
    } else update.remove("nativePending:$placeId")
    check(update.commit())
@@ -458,7 +460,7 @@ object NodeGeofences {
    // committing presence. A replay after process death reuses that occurrence.
    history(context,listOf(rule),"transition_accepted",evidence.receivedAt,transition,evidence.detectedAt,next.confirmed)
    val confirmedAt=System.currentTimeMillis()
-   val localEvidence=JSONObject().put("source","android_event").put("receivedAt",evidence.receivedAt).put("locationCapturedAt",evidence.detectedAt?:JSONObject.NULL).put("confirmedAt",confirmedAt)
+   val localEvidence=JSONObject().put("source",evidence.source).put("configurationId",evidence.configurationId).put("configurationRevision",evidence.configurationRevision).put("observerNodeId",evidence.observerNodeId).put("receivedAt",evidence.receivedAt).put("locationCapturedAt",evidence.detectedAt?:JSONObject.NULL).put("confirmedAt",confirmedAt)
    val created=createOccurrence(context,rule,confirmedAt,identity,localEvidence)
    if(created) {
     check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",false).putBoolean("completed:$id",!rule.getBoolean("repeat")).commit())

@@ -22,6 +22,7 @@ FIXTURE_MARKERS = (
     b"AegisNodeNativeTest",
     b"http://127.0.0.1:18104",
     b"Lcom/aegis/node/NodeNotificationFrameworkTest;",
+    b"Lcom/aegis/node/NodeGeofenceReceiverFrameworkTest;",
     b"Lcom/aegis/node/NodeGeofenceFrameworkEvidenceKt;",
     b"Lcom/aegis/node/NodeNotificationLiveTestKt;",
 )

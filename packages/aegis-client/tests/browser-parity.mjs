@@ -98,7 +98,7 @@ try {
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
        if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};if(args.operation==='current')return {latitude:0,longitude:0,accuracyMeters:window.fixtureAccuracyMeters??20,capturedAt:new Date().toISOString(),ageSeconds:0,source:'synthetic-fixture'};return {}; }
-       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){if(window.fixtureGeoSyncReply)return structuredClone(window.fixtureGeoSyncReply);geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
+       if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='diagnostics')return {supported:true,rules:geofences.map(item=>({id:item.id,revision:item.revision,installationStatus:item.syncStatus==='pending_sync'?'pending_sync':'installed',presence:'unknown',confirmedPresence:'unknown',armed:item.status==='active'&&item.syncStatus==='active'&&window.fixtureGeoArmed===true,monitoringState:window.fixtureGeoArmed===true?'armed':'waiting_initial',lastObservationAt:null,accuracyMeters:null,reasonCode:'not_observed',powerSaveMode:false,history:[]}))};if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){if(window.fixtureGeoSyncReply)return structuredClone(window.fixtureGeoSyncReply);geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
@@ -304,7 +304,7 @@ try {
      await panel.getByLabel('O que lembrar').fill('Evento sintético');
      await panel.getByLabel('Lugar sintético',{exact:true}).check();
      await panel.getByRole('button',{name:'Salvar',exact:true}).click();
-     await panel.getByText('Pendente de sincronização',{exact:true}).waitFor();
+     await panel.getByText('Sincronização necessária',{exact:true}).waitFor();
      const beforePendingSync=await page.evaluate(()=>{window.fixtureGeoSyncReply={status:'installed',syncPending:true};return window.reminderListRequests.length;});
      await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
      const localInstallNotice=panel.getByText('Monitoramento instalado neste celular; confirmação ao servidor pendente. A regra pode aguardar a condição inicial.',{exact:true});await localInstallNotice.waitFor();
@@ -315,7 +315,11 @@ try {
      assert.equal(await localInstallNotice.count(),0,'A failed native registration must never retain a local installed claim');
      await page.evaluate(()=>window.fixtureGeoSyncReply=null);
      await panel.getByRole('button',{name:'Sincronizar neste celular',exact:true}).click();
-     await panel.getByText('Ativo no celular',{exact:true}).waitFor();
+     await panel.getByText('Aguardando condição inicial',{exact:true}).waitFor();
+     assert.equal(await panel.getByText('Ativo — aguardando sua saída',{exact:true}).count(),0,'Installation alone does not arm the desired transition');
+     await page.evaluate(()=>window.fixtureGeoArmed=true);
+     await panel.getByRole('button',{name:'Atualizar',exact:true}).click();
+     await panel.getByText('Ativo — aguardando sua saída',{exact:true}).waitFor();
      const geographicRule=panel.locator('article').filter({hasText:'Evento sintético'});
      await geographicRule.getByRole('button',{name:'Pausar',exact:true}).click();
      await geographicRule.getByText('Pausa pendente no celular',{exact:true}).waitFor();

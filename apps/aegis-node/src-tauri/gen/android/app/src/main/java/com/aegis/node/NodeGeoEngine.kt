@@ -25,7 +25,7 @@ object NodeGeoEngine {
   data class State(val confirmed: String="unknown",val candidate: String="unknown",val candidateAt: Long=0,val lastCapturedAt: Long=0)
   data class Decision(val state: State,val transition: String?=null,val needsConfirmation: Boolean=false)
   /** Internal evidence only: region/identity/revision validation belongs to the adapter. */
-  data class NativeEvidence(val transition:String,val detectedAt:Long?,val receivedAt:Long,val initial:Boolean=false,val observation:Observation?=null)
+  data class NativeEvidence(val transition:String,val detectedAt:Long?,val receivedAt:Long,val initial:Boolean=false,val observation:Observation?=null,val configurationId:String?=null,val configurationRevision:String?=null,val observerNodeId:String?=null,val source:String="android_event")
   data class NativeContext(
     val installedAt:Long,
     val baselineReliable:Boolean,
