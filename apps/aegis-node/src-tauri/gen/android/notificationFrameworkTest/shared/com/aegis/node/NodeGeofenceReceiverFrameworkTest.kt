@@ -55,6 +55,9 @@ class NodeGeofenceReceiverFrameworkTest {
  private val occurrences=mutableListOf<String>()
  private fun stamp(at:Long)=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",Locale.ROOT).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date(at))
  private fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use{it.readText()}}
+ private fun broadcastBarrier(){shell("timeout 5 am wait-for-broadcast-barrier")}
+ private fun battery()=context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+ private fun batteryPlugged()=battery()?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)?:-1
  private fun await(reason:String,timeoutMillis:Long=15000,condition:()->Boolean) {
   val end=SystemClock.elapsedRealtime()+timeoutMillis
   while(!condition() && SystemClock.elapsedRealtime()<end)SystemClock.sleep(25)
@@ -249,12 +252,21 @@ class NodeGeofenceReceiverFrameworkTest {
    assertFalse(preferences.contains("nativePending:$placeId"));assertTrue(recorded("transition_expired"))
    assertEquals("outside",JSONObject(preferences.getString("state:$placeId",null)!!).getString("confirmed"))
    assertTrue(events(ruleId).isEmpty())
+   // Same CTS setup as the existing residential adapter test: the sticky
+   // battery Intent can update before PowerManager handles the unplug broadcast.
    shell("cmd battery set level 50");shell("cmd battery unplug")
-   await("Framework battery unplugged before enabling saver"){context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)==0}
+   await("Framework battery unplugged before enabling saver"){batteryPlugged()==0}
+   assertEquals(50,battery()?.getIntExtra(BatteryManager.EXTRA_LEVEL,-1))
+   broadcastBarrier()
    for((index,saver)in listOf(true,false).withIndex()) {
-    shell("cmd power set-mode ${if(saver)1 else 0}");shell("settings put global low_power ${if(saver)1 else 0}")
+    shell("cmd power set-mode ${if(saver)1 else 0}");broadcastBarrier()
+    shell("settings put global low_power ${if(saver)1 else 0}")
     if(!saver)shell("settings put global low_power_sticky 0")
-    await("Framework power saver state"){context.getSystemService(PowerManager::class.java).isPowerSaveMode==saver}
+    broadcastBarrier()
+    val powerManager=context.getSystemService(PowerManager::class.java)
+    val saverDeadline=SystemClock.elapsedRealtime()+15000
+    while(powerManager.isPowerSaveMode!=saver && SystemClock.elapsedRealtime()<saverDeadline)SystemClock.sleep(50)
+    assertEquals("Framework power saver level=50 plugged=${batteryPlugged()}",saver,powerManager.isPowerSaveMode)
     val before=events(ruleId).size
     if(index==0)seed("outside",true) else {
      // A repeating arrival is rearmed only by a real native EXIT from the
