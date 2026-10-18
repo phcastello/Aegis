@@ -290,13 +290,13 @@ mod tests {
     fn native_clock_counts_queue_delay_without_changing_the_external_command() {
         let command = command();
         let original = serde_json::to_value(&command).unwrap();
-        let clock = NotificationClock {
-            epoch_second: 1_000,
-            started: std::time::Instant::now() - std::time::Duration::from_secs(301),
-        };
+        let clock = NotificationClock::new(1_000);
+        // Backdating Instant can underflow on a freshly booted Windows runner.
+        // A short real queue delay exercises the same elapsed-time contract.
+        std::thread::sleep(std::time::Duration::from_millis(30));
         let native: serde_json::Value =
             serde_json::from_str(&clock.native_payload(&command).unwrap()).unwrap();
-        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_301_000);
+        assert!(native["validatedNowEpochMillis"].as_i64().unwrap() >= 1_000_030);
         assert_eq!(native["command"], original);
         assert_eq!(native.as_object().unwrap().len(), 2);
         // Neither the FCM nor live network parser accepts the private wrapper.

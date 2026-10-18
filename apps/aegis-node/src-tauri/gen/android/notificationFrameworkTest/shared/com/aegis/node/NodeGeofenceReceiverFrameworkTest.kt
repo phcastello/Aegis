@@ -82,7 +82,7 @@ class NodeGeofenceReceiverFrameworkTest {
    val header=StringBuilder()
    while(!header.endsWith("\r\n\r\n")){check(header.length<8192);header.append(input.readUnsignedByte().toChar())}
    check(header.startsWith("HTTP/1.1 101")){"receiver_fixture_websocket_upgrade_failed"}
-   val hello=JSONObject().put("protocolVersion",1).put("type","hello").put("messageId",UUID.randomUUID().toString()).put("sentAt",stamp(System.currentTimeMillis())).put("payload",JSONObject().put("appVersion","framework-fixture").put("capabilities",JSONArray().put(JSONObject().put("name","geofence.monitor").put("version",1)))).toString().toByteArray()
+   val hello=JSONObject().put("protocolVersion",1).put("type","hello").put("messageId",UUID.randomUUID().toString()).put("sentAt",stamp(System.currentTimeMillis())).put("payload",JSONObject().put("appVersion","0.0.0-framework-fixture").put("capabilities",JSONArray().put(JSONObject().put("name","geofence.monitor").put("version",1)))).toString().toByteArray()
    check(hello.size<65536)
    output.write(0x81)
    if(hello.size<126)output.write(0x80 or hello.size) else {output.write(0xfe);output.write(hello.size ushr 8);output.write(hello.size and 255)}
@@ -147,7 +147,7 @@ class NodeGeofenceReceiverFrameworkTest {
   var credential:String?=null;var nodeId:String?=null
   try {
    val attempt=UUID.randomUUID().toString()
-   val receipt=request("/pair",body=JSONObject().put("attemptId",attempt).put("code",code).put("recoveryKey",Base64.encodeToString(ByteArray(32).also{SecureRandom().nextBytes(it)},Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)).put("name","Receiver framework fixture").put("platform","android").put("appVersion","framework-fixture").put("protocolVersion",1))
+   val receipt=request("/pair",body=JSONObject().put("attemptId",attempt).put("code",code).put("recoveryKey",Base64.encodeToString(ByteArray(32).also{SecureRandom().nextBytes(it)},Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)).put("name","Receiver framework fixture").put("platform","android").put("appVersion","0.0.0-framework-fixture").put("protocolVersion",1))
    credential=receipt.getString("credential")
    val node=request("/pair/finalize",body=JSONObject().put("attemptId",attempt).put("credential",credential));nodeId=node.getString("id")
    announce(credential)

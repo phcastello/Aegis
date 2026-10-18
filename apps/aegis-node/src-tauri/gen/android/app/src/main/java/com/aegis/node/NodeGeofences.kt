@@ -78,7 +78,7 @@ object NodeGeofences {
   val revision=current.getString("revision")
   val rules=current.getJSONArray("rules")
   NodeReminderActions.reconcileRules(context,rules.objects())
-  if(prefs(context).getString("installedConfiguration",null)==null || old?.optString("revision")!=revision || prefs(context).getBoolean("needsInstall",true) || prefs(context).getString("installedRevision",null)!=revision || prefs(context).getLong("installedUntil",0)-now<TimeUnit.DAYS.toMillis(1)) install(context,current)
+  if((rules.length()>0 && prefs(context).getString("installedConfiguration",null)==null) || old?.optString("revision")!=revision || prefs(context).getBoolean("needsInstall",true) || prefs(context).getString("installedRevision",null)!=revision || prefs(context).getLong("installedUntil",0)-now<TimeUnit.DAYS.toMillis(1)) install(context,current)
   else if(rules.length()>0 || prefs(context).getBoolean("reportPending",false)) report(context,current)
   if(rules.length()>0) {
    val renewal=PeriodicWorkRequestBuilder<NodeSyncWorker>(1,TimeUnit.DAYS).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
