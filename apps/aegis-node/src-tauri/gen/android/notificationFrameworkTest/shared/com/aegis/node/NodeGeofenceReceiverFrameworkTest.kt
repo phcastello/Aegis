@@ -19,7 +19,6 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.google.android.gms.location.Geofence
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -42,7 +41,7 @@ import javax.crypto.KeyGenerator
 
 /**
  * API 26/35, including the optimized target APK, without launching an Activity.
- * Only GMS delivery and registration storage are controlled fixtures: the actual
+ * GMS delivery uses a controlled SafeParcel fixture; registration storage is seeded. The actual
  * receiver, Android Keystore, persistence, notification IPC and HTTP reconcile run.
  * This cannot prove Google's physical movement detection, latency or OEM delivery.
  */
@@ -108,14 +107,36 @@ class NodeGeofenceReceiverFrameworkTest {
   check(context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).edit().putString("nodeId",node.getString("id")).putString("origin","http://127.0.0.1:18104").commit())
   runtime.getMethod("bindIdentity",Context::class.java,String::class.java).invoke(null,context,node.getString("id"))
  }
- /** Serialize the public SDK's real Geofence, matching GeofencingEvent.fromIntent. */
+ /**
+  * Controlled wire fixture matching play-services-location 21.3.0's geofence
+  * serializer (request ID, expiry, circle, transitions, responsiveness, dwell).
+  * Android writes the actual Parcel; the target SDK decodes it in the receiver.
+  * Keep GMS classes out of the independent instrumentation APK: their original
+  * names would shadow the target's optimized GMS methods after R8.
+  */
+ private fun regionParcel(id:String):ByteArray {
+  val parcel=Parcel.obtain()
+  fun begin(field:Int):Int {parcel.writeInt(0xffff0000.toInt() or field);parcel.writeInt(0);return parcel.dataPosition()}
+  fun end(start:Int) {val finish=parcel.dataPosition();parcel.setDataPosition(start-4);parcel.writeInt(finish-start);parcel.setDataPosition(finish)}
+  fun header(field:Int,size:Int)=parcel.writeInt((size shl 16) or field)
+  try {
+   val objectStart=begin(20293)
+   val requestStart=begin(1);parcel.writeString(id);end(requestStart)
+   header(2,8);parcel.writeLong(SystemClock.elapsedRealtime()+3600000)
+   header(3,4);parcel.writeInt(1) // Circular region type, represented as a Parcel int.
+   header(4,8);parcel.writeDouble(0.0)
+   header(5,8);parcel.writeDouble(0.0)
+   header(6,4);parcel.writeFloat(65f)
+   header(7,4);parcel.writeInt(3) // ENTER | EXIT.
+   header(8,4);parcel.writeInt(0)
+   header(9,4);parcel.writeInt(-1)
+   end(objectStart)
+   return parcel.marshall()
+  }finally{parcel.recycle()}
+ }
  private fun callback(transition:Int,ids:List<String>,longitude:Double?=0.0,accuracy:Double=13.0,age:Long=0,error:Int=-1) {
   val parcels=ArrayList<ByteArray>()
-  for(id in ids) {
-   val region=Geofence.Builder().setRequestId(id).setCircularRegion(0.0,0.0,65f).setTransitionTypes(3).setExpirationDuration(3600000).build()
-   val parcel=Parcel.obtain()
-   try{(region as android.os.Parcelable).writeToParcel(parcel,0);parcels.add(parcel.marshall())}finally{parcel.recycle()}
-  }
+  for(id in ids)parcels.add(regionParcel(id))
   val intent=Intent("com.aegis.node.GEOFENCE").setClassName(context.packageName,"com.aegis.node.NodeGeofenceReceiver")
    .putExtra("gms_error_code",error).putExtra("com.google.android.location.intent.extra.transition",transition)
    .putExtra("com.google.android.location.intent.extra.geofence_list",parcels as java.io.Serializable)
