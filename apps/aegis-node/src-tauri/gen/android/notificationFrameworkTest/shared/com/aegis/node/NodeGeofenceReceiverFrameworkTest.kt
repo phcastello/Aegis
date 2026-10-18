@@ -143,6 +143,9 @@ class NodeGeofenceReceiverFrameworkTest {
  @Test fun nativeReceiverPersistsPostsAndReconcilesWithoutASecondAcquisition() {
   val code=InstrumentationRegistry.getArguments().getString("geofencePairingCode")?:error("receiver_fixture_bootstrap_missing")
   val snapshots=listOf("keyring-aegis-node-identity-v1","aegis-node-push-v1","aegis-geofences-v1").associateWith{context.getSharedPreferences(it,Context.MODE_PRIVATE).all.toMap()}
+  val vaultAlias="keyring-aegis-node-identity-v1"
+  val keyStore=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+  val previousVaultKey=keyStore.containsAlias(vaultAlias)
   val previousSaver=shell("settings get global low_power").trim();val previousSticky=shell("settings get global low_power_sticky").trim()
   var credential:String?=null;var nodeId:String?=null
   try {
@@ -290,6 +293,11 @@ class NodeGeofenceReceiverFrameworkTest {
    shell("cmd power set-mode 0");shell("cmd battery reset")
    for((key,value)in listOf("low_power" to previousSaver,"low_power_sticky" to previousSticky))if(value in setOf("0","1"))shell("settings put global $key $value") else shell("settings delete global $key")
    for((name,old)in snapshots)restore(context.getSharedPreferences(name,Context.MODE_PRIVATE),old)
+   // A fresh-install fixture creates its own temporary key. Restoring empty
+   // preferences must also restore key absence so Rust can create its vault.
+   // An existing installation key is preserved byte for byte.
+   if(!previousVaultKey && keyStore.containsAlias(vaultAlias))keyStore.deleteEntry(vaultAlias)
+   assertEquals("Receiver fixture preserves the original vault key lifecycle",previousVaultKey,keyStore.containsAlias(vaultAlias))
   }
  }
 }

@@ -39,8 +39,11 @@ object NodeGeofenceRuntime {
   return result.put("fixtureRequest",requestInfo.put("cancelled",cancellation?.token?.isCancellationRequested?:false)).toString()
  }
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
- /** Complete bounded confirmation work when no usable acquisition remains. */
- @JvmStatic fun confirmPending(context:Context) = NodeGeofences.confirmNative(context)
+ /** Instrumentation may advance a persisted deadline; distribution cannot. */
+ @JvmStatic fun confirmPending(context:Context) {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  NodeGeofences.confirmNative(context)
+ }
  @JvmStatic fun deactivate(context:Context) = NodeGeofences.clear(context)
  @JvmStatic fun restore(context:Context) = NodeGeofences.restore(context)
 }
