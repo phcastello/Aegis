@@ -32,6 +32,8 @@ pub struct NodeRuntime {
     config: Option<TransportConfig>,
     pub cancel: tokio_util::sync::CancellationToken,
     foreground: std::sync::atomic::AtomicBool,
+    #[cfg(target_os = "android")]
+    lifecycle_target: std::sync::atomic::AtomicBool,
     lifecycle_gate: tokio::sync::Mutex<()>,
     #[cfg(target_os = "android")]
     app: tauri::AppHandle,
@@ -76,6 +78,8 @@ impl NodeRuntime {
             config,
             cancel: tokio_util::sync::CancellationToken::new(),
             foreground: std::sync::atomic::AtomicBool::new(true),
+            #[cfg(target_os = "android")]
+            lifecycle_target: std::sync::atomic::AtomicBool::new(true),
             lifecycle_gate: tokio::sync::Mutex::new(()),
             #[cfg(target_os = "android")]
             app,
@@ -140,7 +144,11 @@ impl NodeRuntime {
         self.transport.shutdown();
     }
     pub async fn start(&self) {
-        if cfg!(target_os = "android") && !self.foreground.load(std::sync::atomic::Ordering::SeqCst)
+        #[cfg(target_os = "android")]
+        if !self.foreground.load(std::sync::atomic::Ordering::SeqCst)
+            || !self
+                .lifecycle_target
+                .load(std::sync::atomic::Ordering::SeqCst)
         {
             return;
         }
@@ -160,8 +168,21 @@ impl NodeRuntime {
         #[cfg(target_os = "android")]
         self.sync_push().await;
     }
+    #[cfg(target_os = "android")]
+    pub fn signal_lifecycle(&self, foreground: bool) {
+        self.lifecycle_target
+            .store(foreground, std::sync::atomic::Ordering::SeqCst);
+    }
     pub async fn lifecycle(&self, foreground: bool) {
         let _gate = self.lifecycle_gate.lock().await;
+        #[cfg(target_os = "android")]
+        if self
+            .lifecycle_target
+            .load(std::sync::atomic::Ordering::SeqCst)
+            != foreground
+        {
+            return;
+        }
         let previous = self
             .foreground
             .swap(foreground, std::sync::atomic::Ordering::SeqCst);

@@ -881,6 +881,33 @@ mod tests {
         server.abort();
     }
     #[tokio::test]
+    async fn activity_resume_restarts_the_stopped_loop_before_waking_it() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let heartbeats = Arc::new(AtomicUsize::new(0));
+        let (port, server) = fixture_at(0, None, connections.clone(), heartbeats).await;
+        let manager = NodeTransportManager::default();
+        let source = Source::paired();
+        let options = config(port);
+        assert!(manager.start(source.clone(), options.clone()));
+        until(|| manager.state().transport_state == "online").await;
+        manager.stop().await;
+        assert_eq!(manager.state().transport_state, "offline");
+        // A focus/visibility wake cannot recreate the loop stopped on Activity pause.
+        manager.reconnect();
+        tokio::task::yield_now().await;
+        assert_eq!(manager.state().transport_state, "offline");
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        // Activity resume must start the owner again before requesting reconnect.
+        assert!(manager.start(source, options));
+        manager.reconnect();
+        until(|| {
+            connections.load(Ordering::SeqCst) == 2 && manager.state().transport_state == "online"
+        })
+        .await;
+        manager.stop().await;
+        server.abort();
+    }
+    #[tokio::test]
     async fn changed_build_provider_reannounces_replacement_set_without_repairing() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();

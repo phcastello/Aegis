@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
+import java.util.Locale
 
 /** Resolve actual Google settings; never inject/replace a location provider. */
 internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String) {
@@ -25,28 +26,82 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
  }
  val serviceInfo=automation.serviceInfo
  val oldFlags=serviceInfo.flags
- automation.serviceInfo=serviceInfo.apply{flags=flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS}
+ automation.serviceInfo=serviceInfo.apply{flags=flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS}
  try {
   shell("input keyevent KEYCODE_WAKEUP")
   shell("wm dismiss-keyguard")
+  shell("input keyevent 82")
   var result=settings(true)
   if(result.optString("status")=="resolution_opened") {
    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_resolution_opened errorType=Checkpoint")
    val end=SystemClock.elapsedRealtime()+15000
    var accepted=false
-   while(!accepted && SystemClock.elapsedRealtime()<end) {
-    val root=automation.rootInActiveWindow
-    try {
-     if(root?.packageName?.toString() in setOf("com.google.android.gms","com.android.settings")) {
-      val buttons=root?.findAccessibilityNodeInfosByViewId("android:id/button1")?:emptyList()
-      try {for(button in buttons)if(button.isVisibleToUser && button.isEnabled && button.isClickable) {
-       accepted=button.performAction(AccessibilityNodeInfo.ACTION_CLICK);if(accepted)break
-      }}finally{buttons.forEach{it.recycle()}}
+   val packages=linkedSetOf<String>()
+   val viewIds=linkedSetOf<String>()
+   var windowCount=0;var visitedCount=0;var positiveCount=0;var clickableCount=0
+   val approvedPackages=setOf("com.google.android.gms","com.android.settings")
+   val positiveLabels=setOf("AGREE","I AGREE","YES","TURN ON","OK","ACCEPT")
+   fun packageCode(value:String?)=when(value) {
+    "com.google.android.gms"->"gms";"com.android.settings"->"settings";context.packageName->"target";"android"->"android";null->"none";else->"other"
+   }
+   fun selectPositive(root:AccessibilityNodeInfo):Boolean {
+    packages.add(packageCode(root.packageName?.toString()))
+    if(root.packageName?.toString() !in approvedPackages)return false
+    val buttons=root.findAccessibilityNodeInfosByViewId("android:id/button1")
+    try {for(button in buttons)if(button.isVisibleToUser && button.isEnabled && button.isClickable) {
+     positiveCount++
+     if(button.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true
+    }}finally{buttons.forEach{it.recycle()}}
+    // The original Google resolution may use an application resource instead of
+    // the framework AlertDialog button ID. Only its exact positive vocabulary
+    // is accepted, and no label is retained or included in diagnostics.
+    var visited=0
+    fun clickAncestorButton(node:AccessibilityNodeInfo,depth:Int):Boolean {
+     val parent=node.parent?:return false
+     return try {
+      if(parent.className?.toString()?.endsWith("Button")==true && parent.isVisibleToUser && parent.isEnabled && parent.isClickable)
+       parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+      else depth>1 && clickAncestorButton(parent,depth-1)
+     }finally{parent.recycle()}
+    }
+    fun visit(node:AccessibilityNodeInfo):Boolean {
+     if(++visited>256)return false
+     visitedCount++
+     val resource=node.viewIdResourceName
+     if(viewIds.size<16 && resource!=null && resource.matches(Regex("(?:android|com\\.google\\.android\\.gms|com\\.android\\.settings):id/[A-Za-z0-9_]{1,80}")))viewIds.add(resource)
+     if(node.isVisibleToUser && node.isEnabled) {
+      if(node.isClickable)clickableCount++
+      if(node.text?.toString()?.trim()?.uppercase(Locale.ROOT) in positiveLabels) {
+       positiveCount++
+       if(node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true
+       if(!node.isClickable && clickAncestorButton(node,2))return true
+      }
      }
-    }finally{root?.recycle()}
+     for(index in 0 until node.childCount) {
+      val child=node.getChild(index)?:continue
+      try{if(visit(child))return true}finally{child.recycle()}
+     }
+     return false
+    }
+    return visit(root)
+   }
+   while(!accepted && SystemClock.elapsedRealtime()<end) {
+    visitedCount=0;positiveCount=0;clickableCount=0
+    val windows=automation.windows
+    windowCount=windows.size
+    try {for(window in windows) {
+     val root=window.root?:continue
+     try{if(selectPositive(root)){accepted=true;break}}finally{root.recycle()}
+    }}finally{windows.forEach{it.recycle()}}
+    if(!accepted) {
+     val root=automation.rootInActiveWindow
+     try{if(root!=null)accepted=selectPositive(root)}finally{root?.recycle()}
+    }
     if(!accepted)SystemClock.sleep(100)
    }
-   assertTrue("The returned Google settings resolution must expose its real positive control",accepted)
+   if(!accepted)result=settings(false)
+   val ui="packages=${packages.joinToString(",")} windows=$windowCount visited=$visitedCount clickable=$clickableCount positive=$positiveCount viewIds=${viewIds.joinToString(",")}"
+   assertTrue("The returned Google settings resolution must expose its real positive control; $ui; ${masks()}; diagnostics=$result",accepted)
    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_consent_accepted errorType=Checkpoint")
    // Requery the real client after the actual positive action; a click alone
    // never certifies that the framework settings or NLP are usable.

@@ -188,12 +188,21 @@ pub fn run() {
                 let _ = window.hide();
             }
             #[cfg(target_os = "android")]
-            if matches!(event, tauri::WindowEvent::Suspended) {
+            if matches!(
+                event,
+                tauri::WindowEvent::Suspended | tauri::WindowEvent::Resumed
+            ) {
+                // Android Activity onPause/onResume are window events. The event
+                // loop's RunEvent::Resumed is a poll wake, not an Activity resume.
+                let foreground = matches!(event, tauri::WindowEvent::Resumed);
+                window
+                    .state::<node_commands::NodeRuntime>()
+                    .signal_lifecycle(foreground);
                 let handle = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
                     handle
                         .state::<node_commands::NodeRuntime>()
-                        .lifecycle(false)
+                        .lifecycle(foreground)
                         .await;
                 });
             }
@@ -241,6 +250,7 @@ pub fn run() {
         .expect("error while building Aegis")
         .run(|app, event| {
             use tauri::Manager;
+            #[cfg(not(target_os = "android"))]
             if matches!(event, tauri::RunEvent::Resumed) {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
