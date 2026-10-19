@@ -3,6 +3,8 @@ package com.aegis.node
 import android.app.NotificationManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.location.LocationManager
+import android.os.Build
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,9 +45,28 @@ internal fun exerciseHybridAdvancedFramework(context:Context,nodeId:String,crede
  val occurrenceIds=mutableSetOf<String>()
  try {
   session("reset");stopped()
+  if(Build.VERSION.SDK_INT<28) {
+   // GMS explicitly does not support geofencing in pre-P "device only" mode.
+   // The emulator's GPS can work while its network provider is disabled.
+   // The host configures high accuracy across the complete disposable fixture,
+   // including its later process-death and reboot stages.
+   val location=context.getSystemService(LocationManager::class.java)
+   await("The API 26 fixture enables GPS and network location for registration and acquisition") {
+    location.isProviderEnabled(LocationManager.GPS_PROVIDER) && location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+   }
+  }
   // This is the ordinary authenticated manifest/GMS installation, not seeded registration.
   session("synchronize")
+  val manifest=JSONObject(prefs.getString("manifest",null)?:error("hybrid_shared_manifest_missing"))
+  val manifestRules=manifest.getJSONArray("rules").let{rows->(0 until rows.length()).map{rows.getJSONObject(it).getString("id")}.toSet()}
+  assertTrue("Authenticated manifest contains every new active rule",ids.all{it in manifestRules})
+  fun closed(key:String)=prefs.getString(key,"none")?.takeIf{it.matches(Regex("[a-z_]{1,64}"))}?:"unknown"
+  val registration="status=${closed("status")} error=${closed("error")}"
+  assertFalse("Actual Google registration must complete; $registration",prefs.getBoolean("needsInstall",true))
+  assertTrue("Actual Google registration must contain active regions; $registration",prefs.getBoolean("hasRegions",false))
+  assertTrue("The installed generation must match the current authenticated manifest; $registration",prefs.getString("installedRevision",null)==manifest.getString("revision"))
   val configuration=JSONObject(prefs.getString("installedConfiguration",null)?:error("hybrid_shared_registration_missing"))
+  assertTrue("A stale allowlist cannot prove shared-region installation; $registration",configuration.getString("revision")==manifest.getString("revision"))
   fun regions(placeId:String)=configuration.getJSONArray("regions").let{rows->(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.getString("placeId")==placeId}}
   val homeId=home.getString("id");val cancelPlaceId=cancellationHome.getString("id")
   assertEquals("Three rules share two physical regions, rather than six",2,regions(homeId).size)

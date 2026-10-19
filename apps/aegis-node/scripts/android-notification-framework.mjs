@@ -67,12 +67,48 @@ const preservedCheckpoints=new Set();
 const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive','hybrid_service_lifecycle_bounded_denied_arrival','hybrid_foreground_promoted','hybrid_start_denied_before_service'];
 const hybridStartupPhases=['hybrid_scenario_outside_start','hybrid_scenario_denied_start','hybrid_scenario_start_denied_start','hybrid_scenario_provider_error_start','hybrid_scenario_inside_start'];
 const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
+// API 26's stock GMS image requires both framework providers for geofencing.
+// Change only this disposable fixture and restore even a missing original value.
+const originalLocationMode=bootstrap && api===26?run(['shell','settings','get','secure','location_mode']).trim():undefined;
+const restoreCodes={
+  restoreSignal:new Set(['boot_completed','package_replaced']),
+  restoreWorkerState:new Set(['started','retry_pending','completed','failed','retry_exhausted']),
+  restoreResult:new Set(['started','unbound','identity_unavailable','scope_changed','completed']),
+  status:new Set(['pending_sync','active','installed','recoverable_error','unavailable','disabled','waiting_baseline','ready']),
+  error:new Set(['location_provider_unavailable','location_permission_required','precise_location_required','background_location_required','location_services_disabled','native_registration_failed'])
+};
+function safeRestoreState(xml) {
+  const state={};
+  for(const name of ['restoreSignalBootCount','restoreWorkerBootCount','lastRestoreCompletedBootCount','restoreSignalAt','restoreWorkerStartedAt','lastRestoreCompletedAt']) {
+    const match=xml.match(new RegExp(`<(?:int|long) name="${name}" value="(-?\\d+)"\\s*/>`));
+    state[name]=match && Number.isSafeInteger(Number(match[1]))?Number(match[1]):-1;
+  }
+  for(const [name,allowed] of Object.entries(restoreCodes)) {
+    const value=xml.match(new RegExp(`<string name="${name}">([^<]*)</string>`))?.[1];
+    state[name]=allowed.has(value)?value:'unknown';
+  }
+  return state;
+}
+async function waitForActualBootRestore(bootCount) {
+  // Starting am instrument kills any running target process, including its boot
+  // worker. Observe durable completion through root before launching verification.
+  // Raw preferences can contain credentials/geometries and must never be printed.
+  const deadline=Date.now()+115000;
+  let state=safeRestoreState('');
+  while(true) {
+    try {state=safeRestoreState(run(['shell','cat','/data/user/0/com.aegis.node/shared_prefs/aegis-geofences-v1.xml'],5000));}catch{}
+    if(state.restoreSignal==='boot_completed' && state.restoreSignalBootCount===bootCount && state.restoreWorkerBootCount===bootCount && state.lastRestoreCompletedBootCount===bootCount && state.restoreWorkerStartedAt>=state.restoreSignalAt && state.lastRestoreCompletedAt>=state.restoreWorkerStartedAt && ['completed','retry_pending'].includes(state.restoreWorkerState))return;
+    if(Date.now()>=deadline)throw Error(`actual_boot_restore_timeout ${JSON.stringify(state)}`);
+    await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+}
 async function refreshBootstrap(kind) {
   const response=await fetch('http://127.0.0.1:18104/fixture/refresh-bootstrap', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind}),signal:AbortSignal.timeout(10000)});
   assert(response.ok,'Disposable bootstrap refresh failed');
 }
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
+  if(originalLocationMode!==undefined)run(['shell','settings','put','secure','location_mode','3']);
   permission(true);
   instrumentation('NodeNotificationFrameworkTest');
   permission(false);
@@ -98,6 +134,8 @@ try {
     const beforeBoot=run(['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','*:S']);
     for(const phase of ['geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
     const previousBoot=Number(run(['shell','settings','get','global','boot_count']).trim());
+    const userState=run(['shell','dumpsys','package','com.aegis.node']).match(/User 0:([^\r\n]*)/)?.[1];
+    assert(userState && /\bstopped=false\b/.test(userState),'Prepared fixture must be eligible for the actual boot broadcast');
     run(['reboot']);
     const bootDeadline=Date.now()+240000;
     while(true) {
@@ -107,10 +145,12 @@ try {
       assert(Date.now()<bootDeadline,'Disposable emulator reboot timeout');
       await new Promise(resolve=>setTimeout(resolve,1000));
     }
-    if(api===26){run(['root']);run(['wait-for-device']);}
+    run(['root']);run(['wait-for-device']);
     run(['reverse','tcp:18104','tcp:18104']);
     run(['shell','input','keyevent','82']);
     permission(true);
+    const currentBoot=Number(run(['shell','settings','get','global','boot_count']).trim());
+    await waitForActualBootRestore(currentBoot);
     instrumentation('NodeHybridBootRecoveryFrameworkTest#verifyAfterBoot');
     bootPassed=true;
   }
@@ -130,6 +170,7 @@ try {
     livePassed=true;
   }
 } finally {
+  if(originalLocationMode!==undefined)run(originalLocationMode==='null'?['shell','settings','delete','secure','location_mode']:['shell','settings','put','secure','location_mode',originalLocationMode]);
   permission(true);
   let logs = '';
   try { logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S']); } catch { console.log('phase=logcat_read reason=unavailable'); }

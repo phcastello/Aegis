@@ -854,23 +854,35 @@ object NodeGeofences {
   if(deadlineElapsed==Long.MAX_VALUE)recoverAccepted(context)
   }finally{eventFlushing.set(false)}
  }
- fun scheduleRestore(context:Context) {
+ /** OS restoration signals replace delayed retries from an older boot/configuration. */
+ fun scheduleRestore(context:Context,signal:String="native_error") {
+  require(signal in setOf("native_error","boot_completed","package_replaced"))
+  val boot=android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1)
+  if(signal!="native_error")check(prefs(context).edit().putString("restoreSignal",signal).putInt("restoreSignalBootCount",boot).putLong("restoreSignalAt",System.currentTimeMillis()).commit())
   val work=OneTimeWorkRequestBuilder<NodeGeofenceRestoreWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
-  WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-restore",ExistingWorkPolicy.KEEP,work)
+  WorkManager.getInstance(context).enqueueUniqueWork("aegis-geofence-restore",if(signal=="native_error")ExistingWorkPolicy.KEEP else ExistingWorkPolicy.REPLACE,work)
  }
  fun restore(context:Context) { synchronized(manifestGate) {
-  if(NodeNativeSession.read(context)==null){clear(context);return}
   val restoreBootCount=android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1)
-  check(prefs(context).edit().putLong("lastRestoreAt",System.currentTimeMillis()).putInt("lastRestoreBootCount",restoreBootCount).commit())
+  check(prefs(context).edit().putLong("lastRestoreAt",System.currentTimeMillis()).putInt("lastRestoreBootCount",restoreBootCount).putString("restoreResult","started").commit())
+  val session=NodeNativeSession.read(context)
+  if(session==null) {
+   // A temporarily missing/unreadable vault or key is not proof of revocation.
+   // Cleanup remains the authenticated unbind path; restoration preserves data.
+   val unbound=manifest(context)==null
+   check(prefs(context).edit().putString("restoreResult",if(unbound)"unbound" else "identity_unavailable").commit())
+   return
+  }
   NodeMonitoringSessions.cancelAll(context,"monitoring_interrupted")
   prefs(context).edit().putBoolean("needsInstall",true).commit()
   val current=manifest(context)
-  if(current!=null && current.optString("observerNodeId")!=NodeNativeSession.read(context)?.nodeId){clear(context);return}
+  if(current!=null && current.optString("observerNodeId")!=session.nodeId){clear(context);check(prefs(context).edit().putString("restoreResult","scope_changed").commit());return}
   if(current!=null && stamp(current.getString("leaseUntil"))>System.currentTimeMillis()) try{install(context,current)}catch(_:Exception){}
-  check(prefs(context).edit().putLong("lastRestoreCompletedAt",System.currentTimeMillis()).putInt("lastRestoreCompletedBootCount",restoreBootCount).commit())
+  check(prefs(context).edit().putLong("lastRestoreCompletedAt",System.currentTimeMillis()).putInt("lastRestoreCompletedBootCount",restoreBootCount).putString("restoreResult","completed").commit())
   NodeBackgroundWork.enqueue(context)
  }
  }
+
 }
 internal fun JSONArray.objects():List<JSONObject> =(0 until length()).map{getJSONObject(it)}
 internal fun JSONArray.strings():List<String> =(0 until length()).map{getString(it)}
@@ -914,18 +926,30 @@ class NodeGeoConfirmWorker(context:Context,params:WorkerParameters):Worker(conte
 class NodeGeofenceRestoreReceiver:BroadcastReceiver() {
  override fun onReceive(context:Context,intent:Intent) {
   if(intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED,Intent.ACTION_MY_PACKAGE_REPLACED))return
-  NodeGeofences.scheduleRestore(context)
+  NodeGeofences.scheduleRestore(context,if(intent.action==Intent.ACTION_BOOT_COMPLETED)"boot_completed" else "package_replaced")
  }
 }
 
 /** Google registration/acquisition can outlive a BroadcastReceiver's execution budget. */
 class NodeGeofenceRestoreWorker(context:Context,params:WorkerParameters):Worker(context,params) {
  override fun doWork():Result {
-  NodeGeofenceRuntime.restore(applicationContext)
   val prefs=applicationContext.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
-  val definition=prefs.getString("manifest",null)?.let{JSONObject(it)} ?: return Result.success()
-  val valid=java.time.OffsetDateTime.parse(definition.getString("leaseUntil")).toInstant().toEpochMilli()>System.currentTimeMillis()
-  return if(valid && prefs.getString("error",null)=="native_registration_failed")Result.retry()else Result.success()
+  val boot=android.provider.Settings.Global.getInt(applicationContext.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1)
+  check(prefs.edit().putInt("restoreWorkerBootCount",boot).putLong("restoreWorkerStartedAt",System.currentTimeMillis()).putString("restoreWorkerState","started").commit())
+  return try {
+   NodeGeofenceRuntime.restore(applicationContext)
+   val identityPending=prefs.getString("restoreResult",null)=="identity_unavailable"
+   val definition=prefs.getString("manifest",null)?.let{JSONObject(it)}
+   val valid=definition!=null && java.time.OffsetDateTime.parse(definition.getString("leaseUntil")).toInstant().toEpochMilli()>System.currentTimeMillis()
+   val exhausted=identityPending && runAttemptCount>=8
+   val retry=identityPending && !exhausted || valid && prefs.getString("error",null)=="native_registration_failed"
+   check(prefs.edit().putString("restoreWorkerState",if(exhausted)"retry_exhausted" else if(retry)"retry_pending" else "completed").commit())
+   if(retry)Result.retry()else if(exhausted)Result.failure()else Result.success()
+  }catch(_:Exception) {
+   val retry=runAttemptCount<8
+   check(prefs.edit().putString("restoreWorkerState",if(retry)"failed" else "retry_exhausted").commit())
+   if(retry)Result.retry()else Result.failure()
+  }
  }
 }
 

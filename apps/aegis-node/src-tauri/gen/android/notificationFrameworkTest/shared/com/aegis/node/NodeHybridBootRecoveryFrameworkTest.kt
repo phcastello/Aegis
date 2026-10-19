@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
-import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,11 +37,6 @@ class NodeHybridBootRecoveryFrameworkTest {
  private val preferenceNames=listOf(vaultAlias,"aegis-node-push-v1","aegis-geofences-v1","aegis-hybrid-sessions-v1")
  private fun bootCount()=Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)
  private fun session()=JSONObject(runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java).invoke(null,context,"snapshot","","real") as String)
- private fun await(reason:String,condition:()->Boolean) {
-  val end=SystemClock.elapsedRealtime()+100000
-  while(!condition() && SystemClock.elapsedRealtime()<end)SystemClock.sleep(100)
-  assertTrue(reason,condition())
- }
  private fun snapshotPreferences():JSONObject=JSONObject().apply {
   for(name in preferenceNames)put(name,JSONObject().apply{for((key,value)in context.getSharedPreferences(name,Context.MODE_PRIVATE).all)put(key,JSONObject().put("type",when(value){is Long->"long";is Int->"int";is Boolean->"boolean";is Float->"float";is Set<*>->"set";else->"string"}).put("value",if(value is Set<*>)JSONArray(value.toList())else value))})
  }
@@ -84,6 +78,20 @@ class NodeHybridBootRecoveryFrameworkTest {
   val rule=helper.request("/geofences",credential,JSONObject().put("text","Reboot recovery fixture").put("placeIds",JSONArray().put(placeId)).put("observerNodeId",nodeId).put("transition","enter").put("repeat",true).put("timeZoneId","UTC"))
   val ruleId=rule.getString("id");val manifest=helper.request("/geofences/manifest",credential)
   check(preferences.edit().putString("manifest",manifest.toString()).commit())
+  // An unreadable boot-time identity must not erase retained rules/configuration.
+  // Restore the encrypted record byte-for-byte even if the preservation check fails.
+  val vault=context.getSharedPreferences(vaultAlias,Context.MODE_PRIVATE)
+  val encrypted=vault.getString(vaultEntry,null)?:error("boot_fixture_vault_missing")
+  val installedBefore=preferences.getString("installedConfiguration",null)
+  val startsBefore=session().getInt("serviceStarts")
+  try {
+   check(vault.edit().putString(vaultEntry,"unreadable-fixture").commit())
+   runtime.getMethod("restore",Context::class.java).invoke(null,context)
+   assertTrue("Unreadable identity preserves the manifest",manifest.toString()==preferences.getString("manifest",null))
+   assertTrue("Unreadable identity preserves installed geometry",installedBefore==preferences.getString("installedConfiguration",null))
+   assertEquals("identity_unavailable",preferences.getString("restoreResult",null))
+   assertEquals("Unreadable identity starts no monitoring service",startsBefore,session().getInt("serviceStarts"))
+  }finally {check(vault.edit().putString(vaultEntry,encrypted).commit())}
   // Initial real GeofencingClient registration and its bounded initial FLP attempt.
   runtime.getMethod("restore",Context::class.java).invoke(null,context)
   val now=System.currentTimeMillis()
@@ -103,7 +111,15 @@ class NodeHybridBootRecoveryFrameworkTest {
    assertTrue("Android boot count proves a real reboot",currentBoot>saved.getInt("bootCount"))
    assertTrue("Node identity is preserved",saved.getString("nodeId")==context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
    assertTrue("Encrypted credential record is preserved",saved.getString("activeVault")==context.getSharedPreferences(vaultAlias,Context.MODE_PRIVATE).getString(vaultEntry,null))
-   await("The actual boot receiver and its native restore worker finish") {preferences.getInt("lastRestoreCompletedBootCount",-1)==currentBoot}
+   // The host waits read-only for completion before starting this instrumentation:
+   // am instrument itself kills an already running target/boot worker.
+   assertEquals("Actual BOOT_COMPLETED reached the receiver","boot_completed",preferences.getString("restoreSignal",null))
+   assertEquals("Receiver belongs to the new boot",currentBoot,preferences.getInt("restoreSignalBootCount",-1))
+   assertEquals("The native restore worker ran after the new boot",currentBoot,preferences.getInt("restoreWorkerBootCount",-1))
+   assertEquals("The actual boot receiver and its native restore worker finish",currentBoot,preferences.getInt("lastRestoreCompletedBootCount",-1))
+   assertTrue("Worker was started by the new OS signal",preferences.getLong("restoreWorkerStartedAt",-1)>=preferences.getLong("restoreSignalAt",Long.MAX_VALUE))
+   assertTrue("Native restoration completed after its worker started",preferences.getLong("lastRestoreCompletedAt",-1)>=preferences.getLong("restoreWorkerStartedAt",Long.MAX_VALUE))
+   assertTrue("Worker has a controlled terminal or retry result",preferences.getString("restoreWorkerState",null) in setOf("completed","retry_pending"))
    val status=preferences.getString("status",null)
    if(!preferences.getBoolean("needsInstall",true)) {
     assertEquals(saved.getString("manifestRevision"),preferences.getString("installedRevision",null))
