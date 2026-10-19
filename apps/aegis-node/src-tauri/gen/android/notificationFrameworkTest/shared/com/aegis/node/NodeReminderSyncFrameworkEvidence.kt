@@ -30,6 +30,16 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,setBack
  val manager=context.getSystemService(NotificationManager::class.java)
  val ids=mutableListOf<String>()
  fun post():String {
+  // Resume drains actions through native HTTP independently of the live socket.
+  // Its success does not mean the replacement WS has received hello_ack yet.
+  val connectedBy=SystemClock.elapsedRealtime()+30000
+  var transport=invoke("node_transport_status",JSONObject(),20000).getString("transportState")
+  while(transport!="online" && SystemClock.elapsedRealtime()<connectedBy) {
+   SystemClock.sleep(100)
+   transport=invoke("node_transport_status",JSONObject(),20000).getString("transportState")
+  }
+  assertEquals("The resumed live route must finish its authenticated handshake before the next reminder command","online",transport.takeIf{it in setOf("offline","connecting","reconnecting","online")}?:"unknown")
+  assertTrue("The reminder command still targets the active native identity",nodeId==context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
   val id=UUID.randomUUID().toString();ids.add(id)
   assertEquals("success",fixtureJson("reminder-command",JSONObject().put("nodeId",nodeId).put("reminderId",id).put("commandId",UUID.randomUUID().toString())).getString("status"))
   awaitFrameworkReminder(manager,id,1);return id

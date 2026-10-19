@@ -66,6 +66,7 @@ let interruptionPassed=false;
 let bootPassed=false;
 const preservedCheckpoints=new Set();
 const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive','hybrid_service_lifecycle_bounded_denied_arrival','hybrid_foreground_promoted','hybrid_start_denied_before_service'];
+const legacyLocationPhases=['hybrid_legacy_nlp_resolution_opened','hybrid_legacy_nlp_consent_accepted','hybrid_legacy_nlp_settings_ready'];
 const hybridStartupPhases=['hybrid_scenario_outside_start','hybrid_scenario_denied_start','hybrid_scenario_start_denied_start','hybrid_scenario_provider_error_start','hybrid_scenario_inside_start'];
 const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
 // API 26's fixture uses high accuracy for real GMS registration and acquisition.
@@ -137,7 +138,7 @@ try {
     instrumentation('NodeHybridBootRecoveryFrameworkTest#prepareBeforeBoot', ['-e','bootPairingCode',readFileSync(bootstrap+'.boot','utf8').trim()]);
     // Reboot clears logcat. Preserve only closed checkpoint names, never raw logs.
     const beforeBoot=run(['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','*:S']);
-    for(const phase of ['geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
+    for(const phase of ['geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases,...legacyLocationPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
     const previousBoot=Number(run(['shell','settings','get','global','boot_count']).trim());
     const userState=run(['shell','dumpsys','package','com.aegis.node']).match(/User 0:([^\r\n]*)/)?.[1];
     assert(userState && /\bstopped=false\b/.test(userState),'Prepared fixture must be eligible for the actual boot broadcast');
@@ -192,7 +193,7 @@ try {
   crash+='\n'+[...preservedCheckpoints].map(phase=>`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`).join('\n');
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   const phases=new Set();
-  for(const phase of [...advancedHybridPhases,...liveSyncPhases,...hybridStartupPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of [...advancedHybridPhases,...legacyLocationPhases,...liveSyncPhases,...hybridStartupPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
@@ -224,6 +225,7 @@ try {
   run(['shell','am','force-stop','com.aegis.node']);
   if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');
   if(receiverPassed)for(const phase of advancedHybridPhases)assert(phases.has(phase),'Shared session, real-boundary exit, partial occurrence outbox and active cancellation checkpoints required');
+  if(receiverPassed && api===26)assert(phases.has('hybrid_legacy_nlp_settings_ready'),'Real Google location settings and stable usable network provider required on API 26');
   if(interruptionPassed)for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered'])assert(phases.has(phase),'Actual OS permission denial and process interruption with no automatic monitoring restart required');
   if(bootPassed)assert(phases.has('hybrid_reboot_preserves_identity_no_transition'),'Actual BOOT_COMPLETED restore must preserve identity and avoid retroactive occurrences or session resurrection');
   if(livePassed){

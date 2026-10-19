@@ -43,6 +43,11 @@ object NodeGeofenceRuntime {
  /** Test-only Fused adapter: still exercises permission checks, service and cancellation. */
  @JvmStatic fun hybridSessionFixture(context:Context,operation:String,placeId:String,scenario:String):String =
   NodeMonitoringSessions.fixture(context,operation,placeId,scenario).toString()
+ /** Actual Google settings/consent resolution in the disposable legacy emulator. */
+ @JvmStatic fun legacyLocationSettingsFixture(context:Context,resolve:Boolean):String {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  return NodeLegacyLocationSettingsFixture.check(context,resolve).toString()
+ }
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
  /** Instrumentation may advance a persisted deadline; distribution cannot. */
  @JvmStatic fun confirmPending(context:Context) {

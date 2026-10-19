@@ -19,6 +19,7 @@ PACKAGE = "com.aegis.node"
 PROJECT = "aegis-1a20c"
 CERTIFICATE = "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31"
 FIXTURE_MARKERS = (
+    b"AEGIS_LEGACY_NLP_FIXTURE_V1",
     b"AegisNodeNativeTest",
     b"http://127.0.0.1:18104",
     b"Lcom/aegis/node/NodeNotificationFrameworkTest;",

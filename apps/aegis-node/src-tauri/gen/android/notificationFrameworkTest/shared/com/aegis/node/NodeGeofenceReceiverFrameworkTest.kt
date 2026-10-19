@@ -326,6 +326,7 @@ class NodeGeofenceReceiverFrameworkTest {
    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_COARSE_LOCATION)
    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_FINE_LOCATION)
    if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+   prepareLegacyLocationConsent(context,::shell)
    val hybridMethod=runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java)
    fun hybrid(operation:String,scenario:String="real")=JSONObject(hybridMethod.invoke(null,context,operation,placeId,scenario) as String)
    fun activeSession()=hybrid("snapshot").getJSONArray("sessions").optJSONObject(0)
