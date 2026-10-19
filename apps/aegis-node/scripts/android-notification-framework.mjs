@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
+import {captureLegacyLocation,enableLegacyLocation,restoreLegacyLocation,safeLegacyLocation} from './android-legacy-location.mjs';
 const [buildType = 'debug', bootstrap] = process.argv.slice(2);
 assert(['debug', 'release'].includes(buildType));
 const serial = process.env.AEGIS_TEST_EMULATOR_SERIAL ?? 'emulator-5554';
@@ -67,9 +68,9 @@ const preservedCheckpoints=new Set();
 const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive','hybrid_service_lifecycle_bounded_denied_arrival','hybrid_foreground_promoted','hybrid_start_denied_before_service'];
 const hybridStartupPhases=['hybrid_scenario_outside_start','hybrid_scenario_denied_start','hybrid_scenario_start_denied_start','hybrid_scenario_provider_error_start','hybrid_scenario_inside_start'];
 const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
-// API 26's stock GMS image requires both framework providers for geofencing.
+// API 26's fixture uses high accuracy for real GMS registration and acquisition.
 // Change only this disposable fixture and restore even a missing original value.
-const originalLocationMode=bootstrap && api===26?run(['shell','settings','get','secure','location_mode']).trim():undefined;
+const originalLocationState=bootstrap && api===26?captureLegacyLocation(run):undefined;
 const restoreCodes={
   restoreSignal:new Set(['boot_completed','package_replaced']),
   restoreWorkerState:new Set(['started','retry_pending','completed','failed','retry_exhausted']),
@@ -108,7 +109,11 @@ async function refreshBootstrap(kind) {
 }
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
-  if(originalLocationMode!==undefined)run(['shell','settings','put','secure','location_mode','3']);
+  if(originalLocationState!==undefined) {
+    console.log(`AndroidLegacyLocation before=${JSON.stringify(safeLegacyLocation(run))}`);
+    enableLegacyLocation(run,originalLocationState);
+    console.log(`AndroidLegacyLocation configured=${JSON.stringify(safeLegacyLocation(run))}`);
+  }
   permission(true);
   instrumentation('NodeNotificationFrameworkTest');
   permission(false);
@@ -158,8 +163,12 @@ try {
   // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
   const live = Boolean(bootstrap) && api >= 33;
   if (live) {
-    // The independent receiver fixture posts a real local reminder. Restore
-    // the denied state required by the existing live permission lifecycle.
+    // Earlier native fixtures grant location and post real notifications. Revoke
+    // outside instrumentation so the live permission lifecycle starts denied.
+    run(['shell','am','force-stop','com.aegis.node']);
+    if(api>=29)run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_BACKGROUND_LOCATION']);
+    run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_FINE_LOCATION']);
+    run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_COARSE_LOCATION']);
     permission(false);
     if (api < 33) permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
@@ -170,7 +179,7 @@ try {
     livePassed=true;
   }
 } finally {
-  if(originalLocationMode!==undefined)run(originalLocationMode==='null'?['shell','settings','delete','secure','location_mode']:['shell','settings','put','secure','location_mode',originalLocationMode]);
+  if(originalLocationState!==undefined)restoreLegacyLocation(run,originalLocationState);
   permission(true);
   let logs = '';
   try { logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S']); } catch { console.log('phase=logcat_read reason=unavailable'); }

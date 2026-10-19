@@ -51,7 +51,8 @@ internal fun exerciseHybridAdvancedFramework(context:Context,nodeId:String,crede
    // The host configures high accuracy across the complete disposable fixture,
    // including its later process-death and reboot stages.
    val location=context.getSystemService(LocationManager::class.java)
-   await("The API 26 fixture enables GPS and network location for registration and acquisition") {
+   val providers="gpsEnabled=${location.isProviderEnabled(LocationManager.GPS_PROVIDER)} networkEnabled=${location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)} gpsAvailable=${LocationManager.GPS_PROVIDER in location.allProviders} networkAvailable=${LocationManager.NETWORK_PROVIDER in location.allProviders}"
+   await("The API 26 fixture enables GPS and network location for registration and acquisition; $providers") {
     location.isProviderEnabled(LocationManager.GPS_PROVIDER) && location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
    }
   }
