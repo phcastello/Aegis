@@ -45,6 +45,16 @@ internal fun exerciseGeographicActionForegroundDependency(context:Context,nodeId
   assertEquals(1,events().size)
   setBackground?.invoke(true)
   fixtureJson("backend-offline",JSONObject().put("seconds",0))
+  val unavailableBefore=fixtureJson("idle").opt("geofence_event_requests")
+  var unavailable=JSONObject()
+  await{
+   unavailable=JSONObject(runtime.getMethod("transientIdentityOutboxFixture",Context::class.java,String::class.java).invoke(null,context,"occurrences") as String)
+   unavailable.getBoolean("consumed")
+  }
+  assertEquals("credential_unavailable",unavailable.getString("result"))
+  assertEquals("A temporary identity outage preserves the occurrence",1,events().size)
+  assertTrue("Its pending OK action is retained",pendingAction())
+  assertEquals("No occurrence HTTP is attempted without identity",unavailableBefore,fixtureJson("idle").opt("geofence_event_requests"))
   val started=SystemClock.elapsedRealtime()
   setBackground?.invoke(false)
   await{events().isEmpty()&&!pendingAction()}

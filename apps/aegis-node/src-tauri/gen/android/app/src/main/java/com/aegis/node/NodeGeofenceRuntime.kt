@@ -24,6 +24,11 @@ object NodeGeofenceRuntime {
  @JvmStatic fun verifyPresence(context:Context):String = NodeGeofences.verifyPresence(context).toString()
  /** Fixture-only WorkManager deferral; no network or credential can be selected. */
  @JvmStatic fun deferReminderSyncFixture(context:Context,defer:Boolean):String=NodeBackgroundWork.deferFixture(context,defer)
+ /** One call-local identity outage; the distribution build cannot enable this seam. */
+ @JvmStatic fun transientIdentityOutboxFixture(context:Context,kind:String):String {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  return NodeTransientIdentityFixture.exercise(context,kind).toString()
+ }
  /** Instrumentation-only seam: production builds cannot inject observations. */
  @JvmStatic fun locationAdapterFixture(context:Context,scenario:String,accuracyMeters:Double,ageMillis:Long):String {
   check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)

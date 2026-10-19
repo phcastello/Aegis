@@ -327,7 +327,7 @@ object NodeReminderActions {
           withdrawScoped(context,id,body.getLong("generation"),scope)
           synchronized(NodeNotificationGate.lock){if(NodeNativeSession.read(context)?.nodeId==scope)Store(context).use{finishAction(it.writableDatabase,actionId,if(response.optBoolean("applied"))"accepted" else "rejected_conflict",if(response.optBoolean("applied"))"resolved" else "failed")}}
         }catch(error:Exception) {
-          val result=when(error){is NodeNativeSession.HttpFailure->NodeReminderActionPolicy.httpResult(error.status);is org.json.JSONException,is IllegalArgumentException->"invalid_response";else->"network_unavailable"}
+          val result=when(error){is NodeNativeSession.IdentityUnavailable->"credential_unavailable";is NodeNativeSession.HttpFailure->NodeReminderActionPolicy.httpResult(error.status);is org.json.JSONException,is IllegalArgumentException->"invalid_response";else->"network_unavailable"}
           synchronized(NodeNotificationGate.lock){if(NodeNativeSession.read(context)?.nodeId==scope)Store(context).use{store->
             if(NodeReminderActionPolicy.permanent(result))finishAction(store.writableDatabase,actionId,result,"failed")
             else store.writableDatabase.update("actions",ContentValues().apply{put("lastResult",result)},"actionId=?",arrayOf(actionId))

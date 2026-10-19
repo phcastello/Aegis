@@ -56,11 +56,32 @@ object NodeNativeSession {
   } catch (_: Exception) { false }
 
   class HttpFailure(val status: Int) : Exception()
+  class IdentityUnavailable : Exception()
+  // The test hook affects one call-local identity read on its own thread only.
+  // Public read()/binding checks and concurrent workers always use the real vault.
+  private val unavailableCallIdentity=ThreadLocal<BooleanArray>()
+  internal fun withUnavailableCallIdentityFixture(block:()->Unit):Boolean {
+    check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+    check(unavailableCallIdentity.get()==null)
+    val pending=booleanArrayOf(true);unavailableCallIdentity.set(pending)
+    return try{block();!pending[0]}finally{unavailableCallIdentity.remove()}
+  }
+  private fun callIdentity(context:Context):Session? {
+    if(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE) {
+      val pending=unavailableCallIdentity.get()
+      if(pending!=null && pending[0]){pending[0]=false;return null}
+    }
+    return read(context)
+  }
   fun call(context: Context, method: String, path: String, body: JSONObject? = null, tokenOnly: Boolean = false, expectedScope:String?=null,connectTimeoutMillis:Int=10000,readTimeoutMillis:Int=15000): JSONObject {
     require(path.startsWith("/api/") && !path.contains("?") && !path.contains(".."))
-    val session = if (tokenOnly) null else read(context) ?: throw HttpFailure(401)
-    if(expectedScope!=null && (session?:read(context))?.nodeId!=expectedScope)throw HttpFailure(409)
-    val origin = session?.origin ?: NodeNativeNotifications.prefs(context).getString("origin", null) ?: throw HttpFailure(401)
+    val session = if (tokenOnly) null else callIdentity(context) ?: throw IdentityUnavailable()
+    if(expectedScope!=null) {
+      // An unreadable identity is temporary, not proof of a server conflict.
+      val current=session?:callIdentity(context)?:throw IdentityUnavailable()
+      if(current.nodeId!=expectedScope)throw HttpFailure(409)
+    }
+    val origin = session?.origin ?: NodeNativeNotifications.prefs(context).getString("origin", null) ?: throw IdentityUnavailable()
     require(validOrigin(origin, context))
     val connection = URL(origin + path).openConnection() as HttpURLConnection
     val deadline=android.os.SystemClock.elapsedRealtime()+connectTimeoutMillis+readTimeoutMillis

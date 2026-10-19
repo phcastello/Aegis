@@ -66,9 +66,9 @@ class NodeSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
    return try {
     val prefs = NodeNativeNotifications.prefs(applicationContext)
     if (session == null) {
-      NodeGeofences.clearIfUnbound(applicationContext)
-      synchronized(NodeNotificationGate.lock){if(NodeNativeSession.bindingAllowed(applicationContext,null))WorkManager.getInstance(applicationContext).cancelUniqueWork("aegis-native-renewal")}
-      Result.success()
+      // A boot-time vault/key outage is not an authenticated unbind or revocation.
+      val retained=prefs.getString("nodeId",null)!=null || applicationContext.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE).getString("manifest",null)!=null
+      if(retained)retryBounded() else Result.success()
     }
     else {
       var retry=false

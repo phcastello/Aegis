@@ -73,6 +73,24 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,setBack
   for(index in 0 until diagnostics.length())assertTrue(diagnostics.getJSONObject(index).keys().asSequence().none{it in setOf("token","reminderId","actionId","text","credential")})
   mode("reminder-action-failure","none")
 
+  // A one-read vault outage during token-only scope validation is temporary.
+  // Native scope checks recover immediately, reproducing the old false-409 loss.
+  mode("reminder-action-failure","503")
+  val unavailable=post();tap(unavailable,0)
+  await{lastResult(unavailable)=="temporary_http"}
+  mode("reminder-action-failure","none")
+  database{it.execSQL("UPDATE actions SET lastAttempt=?,nextAttempt=? WHERE reminderId=?",arrayOf<Any>(System.currentTimeMillis()-31000,System.currentTimeMillis()+3600000,unavailable))}
+  val beforeUnavailable=fixtureJson("idle").getLong("reminder_action_requests")
+  val runtime=Class.forName("com.aegis.node.NodeGeofenceRuntime",true,context.classLoader)
+  await{JSONObject(runtime.getMethod("transientIdentityOutboxFixture",Context::class.java,String::class.java).invoke(null,context,"actions") as String).getBoolean("consumed")}
+  assertEquals("A transient identity read preserves the queued action",1,count(unavailable))
+  assertEquals("A transient identity read is not a permanent conflict",0,count(unavailable,"action_history"))
+  assertEquals("credential_unavailable",lastResult(unavailable))
+  assertEquals("No HTTP is attempted without the current identity",beforeUnavailable,fixtureJson("idle").getLong("reminder_action_requests"))
+  eligibleOnReopen(unavailable)
+  await{count(unavailable)==0 && receipts(unavailable).singleOrNull()?.optBoolean("applied")==true}
+  android.util.Log.i("AegisNodeNativeTest","phase=outbox_transient_identity_no_http_retained_recovered errorType=Checkpoint")
+
   // A queued action older than seven days must be attempted, never silently deleted.
   fixtureJson("backend-offline",JSONObject().put("seconds",120))
   val old=UUID.randomUUID().toString();ids.add(old)

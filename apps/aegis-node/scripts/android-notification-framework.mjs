@@ -68,7 +68,7 @@ const preservedCheckpoints=new Set();
 const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive','hybrid_service_lifecycle_bounded_denied_arrival','hybrid_foreground_promoted','hybrid_start_denied_before_service'];
 const legacyLocationPhases=['hybrid_legacy_nlp_resolution_opened','hybrid_legacy_nlp_consent_accepted','hybrid_legacy_nlp_settings_ready'];
 const hybridStartupPhases=['hybrid_scenario_outside_start','hybrid_scenario_denied_start','hybrid_scenario_start_denied_start','hybrid_scenario_provider_error_start','hybrid_scenario_inside_start'];
-const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
+const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','outbox_transient_identity_no_http_retained_recovered','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
 // API 26's fixture uses high accuracy for real GMS registration and acquisition.
 // Change only this disposable fixture and restore even a missing original value.
 const originalLocationState=bootstrap && api===26?captureLegacyLocation(run):undefined;

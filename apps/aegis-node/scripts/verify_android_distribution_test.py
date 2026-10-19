@@ -68,6 +68,8 @@ class DistributionTests(unittest.TestCase):
             write(); guard.verify_archive(apk)
             cases = [("x86_64", b"release", b"release-dex"), ("arm64-v8a", b"AegisNodeNativeTest", b"release-dex"),
                      ("arm64-v8a", b"release", b"AEGIS_LEGACY_NLP_FIXTURE_V1"),
+                     ("arm64-v8a", b"release", b"aegis_transient_identity_outbox_fixture_v1"),
+                     ("arm64-v8a", b"release", b"Lcom/aegis/node/NodeTransientIdentityFixture;"),
                      ("arm64-v8a", b"release", b"Lcom/aegis/node/NodeNotificationFrameworkTest;"),
                      ("arm64-v8a", b"release", b"Lcom/aegis/node/NodeGeofenceReceiverFrameworkTest;"),
                      ("arm64-v8a", b"x" * (1024 * 1024 - 5) + b"http://127.0.0.1:18104", b"release-dex")]
