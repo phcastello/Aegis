@@ -60,6 +60,11 @@ object NodeLocation {
       return state.put("status","unavailable")
     } catch(_:ExecutionException) {
       return state.put("status","unavailable")
+    } catch(_:InterruptedException) {
+      Thread.currentThread().interrupt()
+      return state.put("status","cancelled")
+    } catch(_:java.util.concurrent.CancellationException) {
+      return state.put("status","cancelled")
     } finally { cancel.cancel() }
   }
   fun queueTransition(context:Context,observation:NodeGeoEngine.Observation) {

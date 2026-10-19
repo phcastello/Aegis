@@ -43,7 +43,7 @@ object NodeMonitoringSessions {
  fun active(context:Context,place:String):Boolean {recoverInterrupted(context);return synchronized(lock){rows(context).any{it.optString("placeId")==place && it.optString("status")=="active" && it.getLong("deadline")>System.currentTimeMillis()}}}
  fun status(context:Context,place:String):JSONObject? {recoverInterrupted(context);return synchronized(lock){prefs(context).getString("session:$place",null)?.let{JSONObject(it).apply{remove("scope");remove("configurationId");remove("id");remove("placeId");remove("processInstance")}}}}
  fun snapshot(context:Context):JSONObject {recoverInterrupted(context);return synchronized(lock) {
-  JSONObject().put("running",NodeMonitoringService.running).put("serviceStarts",prefs(context).getInt("serviceStarts",0)).put("serviceStops",prefs(context).getInt("serviceStops",0)).put("sessions",JSONArray(rows(context).map{it.apply{remove("scope");remove("configurationId");remove("placeId");remove("id");remove("processInstance")}}))
+  JSONObject().put("running",NodeMonitoringService.running).put("serviceStarts",prefs(context).getInt("serviceStarts",0)).put("serviceStops",prefs(context).getInt("serviceStops",0)).put("fixtureAcquisitionInFlight",prefs(context).getInt("fixtureAcquisitionInFlight",0)).put("fixtureAcquisitionsStarted",prefs(context).getInt("fixtureAcquisitionsStarted",0)).put("fixtureAcquisitionsReleased",prefs(context).getInt("fixtureAcquisitionsReleased",0)).put("fixtureCancellationObserved",prefs(context).getInt("fixtureCancellationObserved",0)).put("fixtureInterruptionsObserved",prefs(context).getInt("fixtureInterruptionsObserved",0)).put("sessions",JSONArray(rows(context).map{it.apply{remove("scope");remove("configurationId");remove("placeId");remove("id");remove("processInstance")}}))
  }}
  fun serviceLifecycle(context:Context,start:Boolean) = synchronized(lock) {
   val key=if(start)"serviceStarts" else "serviceStops"
@@ -52,7 +52,7 @@ object NodeMonitoringSessions {
  fun fixture(context:Context,operation:String,placeId:String,scenario:String):JSONObject {
   check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
   when(operation) {
-   "configure" -> {require(scenario in setOf("real","unavailable","denied","start_denied","inside","outside"));prefs(context).edit().putString("fixtureScenario",scenario).putString("fixturePlace",placeId).commit()}
+   "configure" -> {require(scenario in setOf("real","unavailable","denied","start_denied","inside","outside","blocking","provider_error"));prefs(context).edit().putString("fixtureScenario",scenario).putString("fixturePlace",placeId).commit()}
    "stop" -> cancelAll(context,"monitoring_cancelled")
    "expire" -> synchronized(lock){rows(context).filter{it.optString("status")=="active"}.forEach{record(context,it.put("deadline",System.currentTimeMillis()-1))}}
    "reset" -> {cancelAll(context,"monitoring_cancelled");prefs(context).edit().clear().commit()}
@@ -65,11 +65,27 @@ object NodeMonitoringSessions {
  }
  fun fixtureStartAllowed(context:Context):Boolean =
   !(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE) || prefs(context).getString("fixtureScenario","real")!="start_denied"
+ private fun fixtureCounter(context:Context,key:String,delta:Int=1) = synchronized(lock) {
+  prefs(context).edit().putInt(key,prefs(context).getInt(key,0)+delta).apply()
+ }
  fun fixtureLocation(context:Context,request:com.google.android.gms.location.CurrentLocationRequest,cancel:CancellationTokenSource,timeout:Long):android.location.Location? {
   val scenario=if(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)prefs(context).getString("fixtureScenario","real") else "real"
   return when(scenario) {
    "unavailable" -> null
    "denied" -> throw SecurityException("fixture_background_denied")
+   "provider_error" -> throw IllegalStateException("fixture_provider_error")
+   "blocking" -> {
+    // The actual SDK await/cancellation mechanism stays pending until the real
+    // Android service is stopped. No callback/listener or executor is retained.
+    val pending=com.google.android.gms.tasks.TaskCompletionSource<android.location.Location>(cancel.token)
+    fixtureCounter(context,"fixtureAcquisitionsStarted");fixtureCounter(context,"fixtureAcquisitionInFlight")
+    try {com.google.android.gms.tasks.Tasks.await(pending.task,timeout,java.util.concurrent.TimeUnit.MILLISECONDS)}
+    catch(interrupted:InterruptedException){fixtureCounter(context,"fixtureInterruptionsObserved");throw interrupted}
+    finally {
+     if(cancel.token.isCancellationRequested)fixtureCounter(context,"fixtureCancellationObserved")
+     fixtureCounter(context,"fixtureAcquisitionsReleased");fixtureCounter(context,"fixtureAcquisitionInFlight",-1)
+    }
+   }
    "inside","outside" -> NodeGeofences.fixtureLocation(context,prefs(context).getString("fixturePlace",null),scenario=="outside")
    else -> com.google.android.gms.tasks.Tasks.await(com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context).getCurrentLocation(request,cancel.token),timeout,java.util.concurrent.TimeUnit.MILLISECONDS)
   }
@@ -177,14 +193,30 @@ class NodeMonitoringService:Service() {
         if(destroyed)cancel.cancel()
         try{NodeMonitoringSessions.fixtureLocation(this@NodeMonitoringService,request,cancel,timeout)}finally{cancellation=null}
        })
-       if(!destroyed)for(row in reservations)NodeMonitoringSessions.result(this@NodeMonitoringService,row,observation)
+       if(!destroyed) {
+        if(observation.optString("status")=="cancelled")acquisitionFailed(reservations,"cancelled","monitoring_interrupted")
+        else for(row in reservations)NodeMonitoringSessions.result(this@NodeMonitoringService,row,observation)
+       }
       }
+     }catch(_:InterruptedException){
+      Thread.currentThread().interrupt()
+      acquisitionFailed(reservations,"cancelled","monitoring_interrupted")
+     }catch(_:java.util.concurrent.CancellationException){
+      acquisitionFailed(reservations,"cancelled","monitoring_interrupted")
      }catch(_:Exception){
-      if(!destroyed)for(row in reservations)NodeMonitoringSessions.result(this@NodeMonitoringService,row,JSONObject().put("status","unavailable"))
-     }finally{handler.post{busy=false}}
+      // Provider failures expose only closed status codes, never exception text.
+      acquisitionFailed(reservations,"provider_error","monitoring_provider_failed")
+     }finally{if(!destroyed)handler.post{busy=false}}
     }
    }
    handler.postDelayed(this,1000)
+  }
+ }
+ private fun acquisitionFailed(reservations:List<JSONObject>,status:String,reason:String) {
+  if(destroyed)return
+  for(row in reservations) {
+   NodeMonitoringSessions.result(this,row,JSONObject().put("status",status))
+   NodeMonitoringSessions.finish(this,row.getString("placeId"),reason)
   }
  }
  override fun onCreate() {

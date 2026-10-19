@@ -110,12 +110,19 @@ internal fun exerciseHybridAdvancedFramework(context:Context,nodeId:String,crede
   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_occurrence_outbox_partial_commit_recovery errorType=Checkpoint")
 
   seedOutside(cancelPlaceId,listOf(cancelling))
-  session("configure",cancelPlaceId,"outside")
+  session("configure",cancelPlaceId,"blocking")
   helper.callback(1,listOf(cancelOperational),longitude=null)
-  await("A separate place is actively acquiring before cancellation"){session("snapshot").getBoolean("running") && session("snapshot").getJSONArray("sessions").let{rows->(0 until rows.length()).map{rows.getJSONObject(it)}.any{it.optString("status")=="active" && it.optInt("acquired")>=1}}}
+  await("A cancellable SDK acquisition is pending before rule removal"){session("snapshot").getBoolean("running") && session("snapshot").getInt("fixtureAcquisitionInFlight")==1}
   val starts=session("snapshot").getInt("serviceStarts")
+  val processBeforeCancellation=android.os.Process.myPid()
   helper.request("/geofences/${cancelling.getString("id")}/actions",credential,JSONObject().put("action","cancel").put("expectedRevision",cancelling.getLong("revision")))
   session("synchronize");stopped()
+  await("Cancelling the real service releases its SDK task and acquisition thread") {
+   val value=session("snapshot")
+   value.getInt("fixtureAcquisitionInFlight")==0 && value.getInt("fixtureAcquisitionsReleased")==value.getInt("fixtureAcquisitionsStarted") && value.getInt("fixtureCancellationObserved")>=1
+  }
+  assertTrue("Cancellation does not crash or restart the Android process",processBeforeCancellation==android.os.Process.myPid())
+  android.util.Log.i("AegisNodeNativeTest","phase=hybrid_inflight_acquisition_cancelled_process_alive errorType=Checkpoint")
   val after=JSONObject(prefs.getString("installedConfiguration",null)!!).getJSONArray("regions")
   assertTrue((0 until after.length()).none{after.getJSONObject(it).getString("placeId")==cancelPlaceId})
   val backend=helper.request("/geofences",credential).getJSONArray("items").let{rows->(0 until rows.length()).map{rows.getJSONObject(it)}.single{it.getString("id")==cancelling.getString("id")}}

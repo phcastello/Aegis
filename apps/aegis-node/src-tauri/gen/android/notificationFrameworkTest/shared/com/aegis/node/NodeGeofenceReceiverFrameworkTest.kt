@@ -359,6 +359,9 @@ class NodeGeofenceReceiverFrameworkTest {
    approach("start_denied")
    await("Permission/start rejection closes the actual service safely"){activeSession()?.optString("status")=="monitoring_start_denied"}
    stopped();assertEquals(0,activeSession()?.optInt("attempts"));assertEquals(2,events(ruleId).size)
+   approach("provider_error")
+   await("Unexpected provider failure is closed and sanitized"){activeSession()?.optString("status")=="monitoring_provider_failed"}
+   stopped();assertEquals("provider_error",activeSession()?.optString("lastResult"));assertEquals(0,activeSession()?.optInt("acquired"));assertEquals(2,events(ruleId).size)
    approach("inside")
    await("Two independent bounded session fixes create one real arrival",timeoutMillis=45000){events(ruleId).size==3}
    stopped()

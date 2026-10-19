@@ -79,6 +79,7 @@ const eventLabels: Readonly<Record<string, string>> = {
   monitoring_cooldown: 'Intervalo de descanso do acompanhamento ainda ativo', monitoring_budget_exhausted: 'Limite de sessões por hora atingido',
   monitoring_session_started: 'Acompanhamento temporário iniciado', monitoring_session_expired: 'Orçamento de acompanhamento esgotado',
   monitoring_location_blocked: 'Aquisição bloqueada pelas condições do Android',
+  monitoring_provider_failed: 'Acompanhamento encerrado por falha na aquisição de localização',
   monitoring_session_start_denied: 'Android bloqueou o acompanhamento temporário', monitoring_session_interrupted: 'Acompanhamento interrompido',
   monitoring_session_superseded: 'Acompanhamento substituído por nova configuração', monitoring_session_cancelled: 'Acompanhamento encerrado por cancelamento',
   monitoring_session_transition_accepted: 'Acompanhamento encerrado após transição',
