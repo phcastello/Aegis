@@ -54,7 +54,7 @@ class NodeGeofenceReceiverFrameworkTest {
  private val runtime=Class.forName("com.aegis.node.NodeGeofenceRuntime",true,context.classLoader)
  private val occurrences=mutableListOf<String>()
  private fun stamp(at:Long)=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",Locale.ROOT).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date(at))
- private fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use{it.readText()}}
+ internal fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use{fd->android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use{it.readText()}}
  private fun broadcastBarrier(){shell("timeout 5 am wait-for-broadcast-barrier")}
  private fun battery()=context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))
  private fun batteryPlugged()=battery()?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)?:-1
@@ -63,7 +63,7 @@ class NodeGeofenceReceiverFrameworkTest {
   while(!condition() && SystemClock.elapsedRealtime()<end)SystemClock.sleep(25)
   assertTrue(reason,condition())
  }
- private fun request(path:String,credential:String?=null,body:JSONObject?=null,method:String=if(body==null)"GET" else "POST"):JSONObject {
+ internal fun request(path:String,credential:String?=null,body:JSONObject?=null,method:String=if(body==null)"GET" else "POST"):JSONObject {
   val connection=URL("http://127.0.0.1:18104/api/nodes$path").openConnection() as HttpURLConnection
   try {
    connection.requestMethod=method;connection.connectTimeout=5000;connection.readTimeout=15000;connection.instanceFollowRedirects=false
@@ -75,7 +75,7 @@ class NodeGeofenceReceiverFrameworkTest {
   }finally{connection.disconnect()}
  }
  /** Ordinary authenticated hello registers capability through the real transport. */
- private fun announce(credential:String) {
+ internal fun announce(credential:String) {
   Socket("127.0.0.1",18104).use{socket->
    socket.soTimeout=15000
    val input=java.io.DataInputStream(socket.getInputStream());val output=socket.getOutputStream()
@@ -97,7 +97,7 @@ class NodeGeofenceReceiverFrameworkTest {
    check(JSONObject(String(reply)).getString("type")=="hello_ack"){"receiver_fixture_websocket_ack_missing"}
   }
  }
- private fun vault(node:JSONObject,credential:String) {
+ internal fun vault(node:JSONObject,credential:String) {
   val alias="keyring-aegis-node-identity-v1"
   val store=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
   val key=store.getKey(alias,null)?:KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore").apply {
@@ -137,7 +137,7 @@ class NodeGeofenceReceiverFrameworkTest {
    return parcel.marshall()
   }finally{parcel.recycle()}
  }
- private fun callback(transition:Int,ids:List<String>,longitude:Double?=0.0,accuracy:Double=13.0,age:Long=0,error:Int=-1) {
+ internal fun callback(transition:Int,ids:List<String>,longitude:Double?=0.0,accuracy:Double=13.0,age:Long=0,error:Int=-1) {
   val parcels=ArrayList<ByteArray>()
   for(id in ids)parcels.add(regionParcel(id))
   val intent=Intent("com.aegis.node.GEOFENCE").setClassName(context.packageName,"com.aegis.node.NodeGeofenceReceiver")
@@ -166,7 +166,7 @@ class NodeGeofenceReceiverFrameworkTest {
  }
  @Test fun nativeReceiverPersistsPostsAndReconcilesWithoutASecondAcquisition() {
   val code=InstrumentationRegistry.getArguments().getString("geofencePairingCode")?:error("receiver_fixture_bootstrap_missing")
-  val snapshots=listOf("keyring-aegis-node-identity-v1","aegis-node-push-v1","aegis-geofences-v1").associateWith{context.getSharedPreferences(it,Context.MODE_PRIVATE).all.toMap()}
+  val snapshots=listOf("keyring-aegis-node-identity-v1","aegis-node-push-v1","aegis-geofences-v1","aegis-hybrid-sessions-v1").associateWith{context.getSharedPreferences(it,Context.MODE_PRIVATE).all.toMap()}
   val vaultAlias="keyring-aegis-node-identity-v1"
   val keyStore=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
   val previousVaultKey=keyStore.containsAlias(vaultAlias)
@@ -189,7 +189,7 @@ class NodeGeofenceReceiverFrameworkTest {
    val positionPreferences=context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE)
    val manifest=request("/geofences/manifest",credential)
    // Offline work cannot overwrite the fixture with an unrelated acquisition.
-   fixtureJson("backend-offline",JSONObject().put("seconds",120))
+   fixtureJson("backend-offline",JSONObject().put("seconds",300))
    val generation=UUID.randomUUID().toString();val ids=listOf("$generation:0","$generation:1")
    val now=System.currentTimeMillis()
    val configuration=JSONObject().put("id",generation).put("nodeId",nodeId).put("revision",manifest.getString("revision")).put("installedAt",now-7200000)
@@ -197,7 +197,7 @@ class NodeGeofenceReceiverFrameworkTest {
    check(preferences.edit().putString("manifest",manifest.toString()).putString("installedConfiguration",configuration.toString()).putString("installedRevision",manifest.getString("revision")).putLong("installedUntil",now+3600000).putBoolean("needsInstall",false).putBoolean("hasRegions",true).putLong("notBefore:$placeId",now-600000).putLong("ruleRevision:$ruleId",rule.getLong("revision")).putBoolean("armed:$ruleId",false).commit())
    fun seed(presence:String,armed:Boolean,age:Long=300000) {
     val at=System.currentTimeMillis()-age
-    check(preferences.edit().putString("state:$placeId",JSONObject().put("confirmed",presence).put("candidate","unknown").put("candidateAt",0).put("lastCapturedAt",at).toString()).putLong("confirmedAt:$placeId",at).putBoolean("armed:$ruleId",armed).remove("completed:$ruleId").remove("nativePending:$placeId").remove("diagnostic:$placeId").remove("reliable:$placeId").commit())
+    check(preferences.edit().putString("state:$placeId",JSONObject().put("confirmed",presence).put("candidate","unknown").put("candidateAt",0).put("lastCapturedAt",at).toString()).putLong("confirmedAt:$placeId",at).putBoolean("armed:$ruleId",armed).remove("completed:$ruleId").remove("nativePending:$placeId").remove("diagnostic:$placeId").remove("reliable:$placeId").remove("hybridFix:$placeId").commit())
    }
    fun settled(){SystemClock.sleep(250)}
    fun recorded(code:String):Boolean {
@@ -306,11 +306,59 @@ class NodeGeofenceReceiverFrameworkTest {
     callback(2,listOf(ids[0]),longitude=0.0008);settled()
     assertEquals("inside",JSONObject(preferences.getString("state:$placeId",null)!!).getString("confirmed"));assertFalse(preferences.getBoolean("armed:$ruleId",false))
    }
+   assertEquals(2,events(ruleId).size)
+   // Actual Android Service lifecycle + receiver path on API 26/35 and R8 target.
+   // Synthetic FLP seam isolates service permissions, cancellation and persistence;
+   // this does not certify physical Google geofence delivery or real GPS availability.
+   val hybridMethod=runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java)
+   fun hybrid(operation:String,scenario:String="real")=JSONObject(hybridMethod.invoke(null,context,operation,placeId,scenario) as String)
+   fun activeSession()=hybrid("snapshot").getJSONArray("sessions").optJSONObject(0)
+   fun stopped(){await("Temporary location service removes its foreground notification"){!hybrid("snapshot").getBoolean("running") && notifications.activeNotifications.none{it.id==7351}}}
+   val operationalId="$generation:operational"
+   configuration.getJSONArray("regions").put(JSONObject().put("requestId",operationalId).put("placeId",placeId).put("circleId","operational-$circleA").put("kind","operational"))
+   check(preferences.edit().putString("installedConfiguration",configuration.toString()).commit())
+   fun approach(scenario:String) {
+    hybrid("reset");stopped();seed("outside",true)
+    hybrid("configure",scenario)
+    check(positionPreferences.edit().remove("lastObservation").remove("observationScopeId").putBoolean("observationPending",false).commit())
+    check(preferences.edit().remove("nativeSeen").putBoolean("operationalInside:$placeId",false).putBoolean("operationalRegion:$operationalId",false).commit())
+    callback(1,listOf(operationalId),longitude=null)
+   }
+   approach("outside")
+   await("Operational ENTER starts actual location foreground service"){hybrid("snapshot").getBoolean("running") && (activeSession()?.optInt("acquired",0)?:0)>=1}
+   assertEquals("Approach alone never creates an occurrence",2,events(ruleId).size)
+   assertEquals(1,hybrid("snapshot").getInt("serviceStarts"))
+   hybrid("expire");stopped()
+   assertEquals("monitoring_session_expired",activeSession()?.getString("status"))
+   val attemptsAfterExpiry=activeSession()?.getInt("attempts")
+   callback(1,listOf(operationalId),longitude=null);settled()
+   assertFalse(hybrid("snapshot").getBoolean("running"));assertEquals(attemptsAfterExpiry,activeSession()?.getInt("attempts"))
+   // Provider/Android denial is a result, never a fictional coordinate fix.
+   approach("denied")
+   await("Denied acquisition is recorded without transition"){activeSession()?.optString("lastResult")=="permission_denied"}
+   assertEquals(0,activeSession()?.optInt("acquired"));assertEquals(2,events(ruleId).size)
+   hybrid("expire");stopped()
+   // Start denial is injected at the production permission gate. Revoking runtime
+   // permissions with pm during instrumentation kills the very target under test.
+   approach("start_denied")
+   await("Permission/start rejection closes the actual service safely"){activeSession()?.optString("status")=="monitoring_start_denied"}
+   stopped();assertEquals(0,activeSession()?.optInt("attempts"));assertEquals(2,events(ruleId).size)
+   approach("inside")
+   await("Two independent bounded session fixes create one real arrival",timeoutMillis=45000){events(ruleId).size==3}
+   stopped()
+   assertEquals("monitoring_transition_accepted",activeSession()?.getString("status"))
+   assertTrue((activeSession()?.optInt("attempts")?:100)<=6)
+   val hybridEvent=events(ruleId).last();occurrences.add(hybridEvent.getString("occurrenceId"))
+   awaitFrameworkReminder(notifications,hybridEvent.getString("occurrenceId"),1)
+   callback(1,listOf(operationalId),longitude=null);settled();assertEquals(3,events(ruleId).size)
+   assertTrue(recorded("real_area_enter_accepted"))
+   hybrid("reset");stopped()
+   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_service_lifecycle_bounded_denied_arrival errorType=Checkpoint")
    val durable=events(ruleId)
-   assertEquals(2,durable.size)
+   assertEquals(3,durable.size)
    val diagnostics=runtime.getMethod("diagnostics",Context::class.java).invoke(null,context) as String
    for(key in listOf("latitude","longitude","text","token","credential","stackTrace"))assertFalse("Private fields are absent from monitoring diagnostics",diagnostics.contains("\"$key\""))
-   assertTrue(JSONArray(preferences.getString("history:$ruleId","[]")).length()<=12)
+   assertTrue(JSONArray(preferences.getString("history:$ruleId","[]")).length()<=32)
    fixtureJson("backend-offline",JSONObject().put("seconds",0))
    nativeFcm(context,nodeId,"geofence.monitor",JSONObject().put("operation","sync"))
    await("Native durable outbox reconciles after reconnect",timeoutMillis=60000){events(ruleId).isEmpty()}
@@ -320,6 +368,9 @@ class NodeGeofenceReceiverFrameworkTest {
    }
    android.util.Log.i("AegisNodeNativeTest","phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint")
   }finally {
+   runCatching{runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java).invoke(null,context,"stop","","real")}
+   shell("pm grant ${context.packageName} android.permission.ACCESS_FINE_LOCATION")
+   if(Build.VERSION.SDK_INT>=29)shell("pm grant ${context.packageName} android.permission.ACCESS_BACKGROUND_LOCATION")
    fixtureJson("backend-offline",JSONObject().put("seconds",0))
    if(credential!=null && nodeId!=null)runCatching{request("/$nodeId/revoke",credential,JSONObject())}
    for(id in occurrences)notifications.cancel("reminder:$id:1",1)

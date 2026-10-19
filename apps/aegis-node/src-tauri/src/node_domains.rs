@@ -136,7 +136,8 @@ pub async fn node_geofences(
                 .0
                 .run_mobile_plugin_async(method, ())
                 .await;
-            return result.map_err(|_| "Não foi possível verificar a presença neste celular.".into());
+            return result
+                .map_err(|_| "Não foi possível verificar a presença neste celular.".into());
         }
         #[cfg(not(target_os = "android"))]
         return Ok(json!({"supported":false,"rules":[]}));
@@ -153,6 +154,31 @@ pub async fn node_geofences(
         }
         #[cfg(not(target_os = "android"))]
         return call(&runtime, "geofences", "sync", id, payload).await;
+    }
+    if operation == "cancel" {
+        let identifier = id.clone().ok_or("Identificador necessário.")?;
+        let mut value = call(&runtime, "geofences", &operation, id, payload).await?;
+        #[cfg(target_os = "android")]
+        {
+            let scope = runtime.scope_id().await?;
+            if scope.is_some() && scope.as_deref() == value["observerNodeId"].as_str() {
+                let removal: Result<Value, _> = app
+                    .state::<crate::native_notifications::AndroidBridge>()
+                    .0
+                    .run_mobile_plugin_async("applyGeofenceCancellation", json!({"ruleId":identifier,"ruleRevision":value["revision"],"scopeNodeId":scope}))
+                    .await;
+                let removal = removal.unwrap_or_else(|_| json!({"state":"pending","message":"Cancelamento salvo; retirada no Android ainda pendente."}));
+                if removal["state"] == "confirmed" {
+                    value["syncStatus"] = json!("removed");
+                    value["syncedRevision"] = value["revision"].clone();
+                }
+                value["localRemoval"] = removal;
+            } else {
+                value["localRemoval"] = json!({"state":"remote_node"});
+            }
+        }
+        let _ = (app, identifier);
+        return Ok(value);
     }
     let _ = app;
     call(&runtime, "geofences", &operation, id, payload).await

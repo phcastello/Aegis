@@ -35,6 +35,27 @@ class MainActivity : TauriActivity() {
     openReminder(intent)
   }
 
+  private var connectivityCallback:android.net.ConnectivityManager.NetworkCallback?=null
+  override fun onResume() {
+    super.onResume()
+    NodeBackgroundWork.actionsChanged={currentWebView?.post{currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-actions-changed'))",null)}}
+    if(connectivityCallback==null) {
+      val callback=object:android.net.ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network:android.net.Network,capabilities:android.net.NetworkCapabilities) {
+          if(capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET))NodeBackgroundWork.foregroundActions(this@MainActivity)
+        }
+      }
+      try{getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(callback);connectivityCallback=callback}catch(_:Exception){}
+    }
+    NodeBackgroundWork.foregroundActions(this)
+  }
+  override fun onPause() {
+    NodeBackgroundWork.actionsChanged=null
+    connectivityCallback?.let{try{getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it)}catch(_:Exception){}}
+    connectivityCallback=null
+    super.onPause()
+  }
+
   // Native Rust JNI only; deliberately not a JavascriptInterface or arbitrary command API.
   fun consumeReminderOpen(payload:String):String {
     val prefs=NodeNativeNotifications.prefs(this)
@@ -42,7 +63,9 @@ class MainActivity : TauriActivity() {
     prefs.edit().remove("pendingReminderOpen").commit()
     return org.json.JSONObject().put("reminderId",id ?: org.json.JSONObject.NULL).toString()
   }
-  fun nodeActionState(payload:String):String=org.json.JSONObject().put("pendingActions",NodeReminderActions.pending(this)).toString()
+  fun nodeActionState(payload:String):String {
+    return NodeReminderActions.diagnostics(this).toString()
+  }
   fun showNodeNotification(payload: String): String = NodeNativeNotifications.fromCommand(this, payload).json()
   fun showNodeNotificationLive(payload:String):String=NodeNativeNotifications.fromLiveCommand(this,payload).json()
 
@@ -70,7 +93,7 @@ class MainActivity : TauriActivity() {
           if(prefs.getString("nodeId",null)!=id || prefs.getString("origin",null)!=origin) check(prefs.edit().putString("nodeId",id).putString("origin",origin).commit())
         })return "failed"
       }
-      if(id!=null) { NodeBackgroundWork.enqueue(this); NodeBackgroundWork.scheduleRenewal(this) } else NodeGeofences.background{NodeGeofences.clearIfUnbound(this,origin)}
+      if(id!=null) { NodeBackgroundWork.enqueue(this); NodeBackgroundWork.scheduleRenewal(this); NodeBackgroundWork.foregroundActions(this) } else NodeGeofences.background{NodeGeofences.clearIfUnbound(this,origin)}
       "success"
     }
   } catch(_:Exception){"failed"} }

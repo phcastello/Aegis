@@ -52,7 +52,7 @@ const permission = granted => {
 const instrumentation = (testClass, extra = []) => {
   // The live gate now includes four real GMS registrations/acquisitions plus
   // authenticated failure/recovery receipts. Keep its host watchdog explicit.
-  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?300000:180000);
+  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?480000:180000);
   // Test assertions contain only fixed phases/codes. Production logcat is never dumped.
   process.stdout.write(output);
   assert.match(output, /OK \(\d+ tests?\)/, 'Real Android framework test failed');
@@ -60,6 +60,7 @@ const instrumentation = (testClass, extra = []) => {
 };
 let livePassed=false;
 let receiverPassed=false;
+let interruptionPassed=false;
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
   permission(true);
@@ -71,6 +72,16 @@ try {
     run(['reverse', 'tcp:18104', 'tcp:18104']);
     instrumentation('NodeGeofenceReceiverFrameworkTest', ['-e','geofencePairingCode',readFileSync(bootstrap+'.geofence','utf8').trim()]);
     receiverPassed=true;
+    // Revocation kills a target with instrumentation attached. Exercise actual OS
+    // permissions before the first interruption-test process is launched.
+    run(['shell','am','force-stop','com.aegis.node']);
+    if(api>=29)run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_BACKGROUND_LOCATION']);
+    run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_FINE_LOCATION']);
+    run(['shell','pm','revoke','com.aegis.node','android.permission.ACCESS_COARSE_LOCATION']);
+    instrumentation('NodeHybridProcessInterruptionFrameworkTest#prepareSessionBeforeProcessDeath', ['-e','processPairingCode',readFileSync(bootstrap+'.interruption','utf8').trim()]);
+    run(['shell','am','force-stop','com.aegis.node']);
+    instrumentation('NodeHybridProcessInterruptionFrameworkTest#verifyNoRestartAfterProcessDeath');
+    interruptionPassed=true;
   }
   // API 26 additionally covers the real renderer/permission. The complete live UI/JNI
   // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
@@ -98,6 +109,10 @@ try {
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   const phases=new Set();
+  for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+    console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
+    phases.add(phase);
+  }
   if (/AegisNodeNativeTest.*phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint/.test(crash)) {
     console.log('AegisNodeNativeTest phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint');
     phases.add('geofence_receiver_native_transition_idempotent_saver_reconcile');
@@ -121,6 +136,7 @@ try {
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
   if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');
+  if(interruptionPassed)for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered'])assert(phases.has(phase),'Actual OS permission denial and process interruption with no automatic monitoring restart required');
   if(livePassed){
     assert(phases.has('withdrawal_receipt_fcm_offline_replay_lost_response'),'Native withdrawal receipt regression checkpoint required');
     if(phases.has('geofence_google_registration_task_succeeded'))for(const mode of ['503','disconnect'])for(const path of ['install','restore'])assert(phases.has(`geofence_receipt_${mode}_${path}`),'Installed geofence must survive backend receipt failure');

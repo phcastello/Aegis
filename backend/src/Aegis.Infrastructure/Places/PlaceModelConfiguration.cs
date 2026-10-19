@@ -10,7 +10,8 @@ public static class PlaceModelConfiguration
         model.Entity<Place>(e => {
             e.ToTable("places"); e.HasKey(p => p.Id); e.Property(p => p.Name).HasMaxLength(100); e.Property(p => p.Type).HasMaxLength(16);
             e.Property(p => p.CirclesJson).HasColumnType("jsonb"); e.Property(p => p.AliasesJson).HasColumnType("jsonb");
-            e.Ignore(p => p.Circles); e.Ignore(p => p.Aliases);
+            e.Property(p => p.MonitoringEnvelopeJson).HasColumnType("jsonb");
+            e.Ignore(p => p.Circles); e.Ignore(p => p.Aliases); e.Ignore(p => p.MonitoringEnvelope);
             e.HasOne<Place>().WithMany().HasForeignKey(p => p.ParentId).OnDelete(DeleteBehavior.Restrict);
             e.Property(p => p.Revision).IsConcurrencyToken();
         });

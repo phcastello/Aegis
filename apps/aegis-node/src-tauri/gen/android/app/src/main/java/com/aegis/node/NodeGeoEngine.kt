@@ -5,8 +5,9 @@ import kotlin.math.*
 /**
  * The saved circles are the place, not a proxy for Android's delivery accuracy.
  * Reported accuracy is a confidence estimate, never a guaranteed physical bound.
- * A confidence disk must fit the complete union to establish presence; ambiguous
- * readings never erase an established presence or create a transition.
+ * A decision disk must fit the complete union. Its margin is a sensitivity
+ * heuristic, never a calibrated probability. Initial baselines use full accuracy;
+ * established movement may use a smaller margin with additional temporal/native evidence.
  */
 object NodeGeoEngine {
   const val MAX_AGE_MILLIS = 120000L
@@ -41,7 +42,7 @@ object NodeGeoEngine {
     val h=sin(p/2).pow(2)+cos(Math.toRadians(a))*cos(Math.toRadians(c))*sin(q/2).pow(2)
     return 6371000.0*2*atan2(sqrt(h.coerceIn(0.0,1.0)),sqrt((1-h).coerceIn(0.0,1.0)))
   }
-  fun assess(circles:List<Circle>,o:Observation,now:Long):Assessment {
+  fun assess(circles:List<Circle>,o:Observation,now:Long,accuracyFactor:Double=1.0):Assessment {
     if(circles.isEmpty())return Assessment("unknown","no_geometry")
     if(now<o.capturedAt)return Assessment("unknown","future_location")
     if(now-o.capturedAt>MAX_AGE_MILLIS)return Assessment("unknown","stale_location")
@@ -49,7 +50,8 @@ object NodeGeoEngine {
     if(circles.size>MAX_CIRCLES || circles.any{!it.latitude.isFinite() || it.latitude !in -90.0..90.0 || !it.longitude.isFinite() || it.longitude !in -180.0..180.0 || !it.radiusMeters.isFinite() || it.radiusMeters<=0.0 || it.radiusMeters>100000.0})return Assessment("unknown","invalid_geometry")
     // The floor guards implausibly optimistic providers; neither the saved
     // geometry nor the OS monitoring region is enlarged.
-    val confidence=max(3.0,o.accuracyMeters)
+    require(accuracyFactor in 0.4..1.0)
+    val confidence=max(3.0,o.accuracyMeters*accuracyFactor)
     val distances=circles.map{distance(o.latitude,o.longitude,it.latitude,it.longitude)}
     if(circles.indices.any{distances[it]+confidence+GEOMETRY_MARGIN_METERS<circles[it].radiusMeters} || coveredByUnion(circles,o,confidence))return Assessment("inside","confirmed")
     if(circles.indices.all{distances[it]-confidence>circles[it].radiusMeters+GEOMETRY_MARGIN_METERS})return Assessment("outside","confirmed")
@@ -137,7 +139,7 @@ object NodeGeoEngine {
     val expected=if(evidence.transition=="enter")"inside" else "outside"
     val associated=evidence.observation?.let {
       if(it.capturedAt<context.installedAt || it.capturedAt>now || now-it.capturedAt>NATIVE_MAX_DELAY_MILLIS)Assessment("unknown","stale_location")
-      else assess(circles,it,it.capturedAt)
+      else assess(circles,it,it.capturedAt,if(context.baselineReliable)0.4 else 1.0)
     }?:Assessment("unknown","location_absent")
     val established=if(associated.classification!="unknown")associated.classification else context.unionPresence
     if(evidence.initial || previous.confirmed=="unknown") {
@@ -172,7 +174,7 @@ object NodeGeoEngine {
     if(evidence.transition !in setOf("enter","exit"))return preserve("native_transition_unknown")
     if(now-evidence.receivedAt !in 0..NATIVE_CONFIRMATION_WINDOW_MILLIS || now-at>NATIVE_MAX_DELAY_MILLIS)return preserve("transition_expired")
     if(at<context.installedAt || observation.capturedAt<context.installedAt || observation.capturedAt<evidence.receivedAt || observation.capturedAt<previous.lastCapturedAt)return preserve("transition_confirmation_old")
-    val assessment=assess(circles,observation,now)
+    val assessment=assess(circles,observation,now,if(context.baselineReliable)0.4 else 1.0)
     val expected=if(evidence.transition=="enter")"inside" else "outside"
     if(assessment.classification=="unknown")return preserve("transition_confirmation_insufficient")
     if(assessment.classification!=expected)return preserve("transition_confirmation_contradicted")
@@ -180,6 +182,21 @@ object NodeGeoEngine {
     if(previous.confirmed==expected)return preserve("native_no_place_transition")
     if(!context.baselineReliable)return preserve("native_baseline_unreliable")
     return NativeDecision(State(expected,"unknown",0,observation.capturedAt),evidence.transition,reasonCode="transition_accepted",detectedAt=at)
+  }
+  /** Sensitivity heuristic, not a probability: relaxed margin only after a real baseline.
+   * Isolated fixes still require two captures; native inner evidence has its own policy. */
+  fun hybrid(previous:State,circles:List<Circle>,observation:Observation,now:Long,notBefore:Long):Decision {
+    val assessment=assess(circles,observation,now,if(previous.confirmed=="unknown")1.0 else 0.4)
+    if(assessment.reasonCode in setOf("future_location","stale_location","invalid_geometry","no_geometry"))return Decision(previous)
+    return observe(previous,assessment.classification,observation.capturedAt,notBefore)
+  }
+  /** Reject impossible jumps. Last local fix is private state and is never diagnostic output. */
+  fun plausible(previous:Observation?,current:Observation):Boolean {
+    if(previous==null)return true
+    val elapsed=current.capturedAt-previous.capturedAt
+    if(elapsed<=0)return false
+    val distance=distance(previous.latitude,previous.longitude,current.latitude,current.longitude)
+    return distance<=max(100.0,70.0*elapsed/1000.0+previous.accuracyMeters+current.accuracyMeters)
   }
   fun classify(circles:List<Circle>,o:Observation,now:Long):String=assess(circles,o,now).classification
   fun observe(previous: State,classification: String,capturedAt: Long,notBefore:Long=0): Decision {

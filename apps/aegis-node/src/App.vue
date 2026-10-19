@@ -7,7 +7,9 @@ import SettingsShell, { type SettingsSection } from '@aegis/client/components/Se
 import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
 import AegisMark from '@aegis/client/components/AegisMark.vue';
 import UpdateNotice from './components/UpdateNotice.vue';
-import { nodeServices, notificationServices, transportServices, type IdentityStatus } from './services/nodes';
+import ReminderActionSync from './components/ReminderActionSync.vue';
+import { pendingActionLabel } from './services/reminderActions';
+import { nodeServices, notificationServices, transportServices, type IdentityStatus, type NotificationSettings } from './services/nodes';
 import NodesPanel from './components/NodesPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import { useUpdates } from './composables/useUpdates';
@@ -19,12 +21,12 @@ const props = defineProps<{ runtime: RuntimeInfo }>();
 const section = ref<SettingsSection | null>(null); const dirty = ref(false); const activity = ref(false);
 const shell = ref<InstanceType<typeof SettingsShell> | null>(null); const focusedReminderId = ref<string | null>(null);
 const remindersPanel = ref<InstanceType<typeof RemindersPanel> | null>(null); const placesPanel = ref<InstanceType<typeof PlacesPanel> | null>(null);
-const pendingActions = ref(0);
+const pendingActions = ref(0); const actionSettings = ref<NotificationSettings | null>(null);
 const identity = ref<IdentityStatus | null>(null); const updates = useUpdates(() => checkUpdate(props.runtime.platform));
 let stopReminderListener: UnlistenFn | null = null; let disposed = false;
 let lastIdentityCheck = 0; let foregroundTimer: ReturnType<typeof setTimeout> | null = null;
 async function refreshIdentity() { try { identity.value = await nodeServices.status(); lastIdentityCheck = Date.now(); } catch { identity.value = { state: 'pairingError', node: null, error: 'Armazenamento seguro indisponível. Abra Dispositivos para verificar.' }; } }
-async function refreshPendingActions() { try {pendingActions.value = (await notificationServices.settings()).pendingActions ?? 0;} catch { /* Keep the last local outbox count. */ } }
+async function refreshPendingActions() { try {actionSettings.value = await notificationServices.settings(); pendingActions.value = actionSettings.value.pendingActions ?? 0;} catch { /* Keep the last local outbox count. */ } }
 function navigate(value: SettingsSection) { dirty.value = false; section.value = value; }
 function close() { section.value = null; dirty.value = false; void refreshIdentity(); void refreshPendingActions(); }
 function foreground() {
@@ -36,13 +38,13 @@ function showReminder(id: unknown) { if (typeof id !== 'string' || !/^[0-9a-f]{8
 function openReminder(event: Event) { showReminder((event as CustomEvent<{reminderId?:unknown}>).detail?.reminderId); }
 async function subscribeReminderOpen() { try { const unlisten = await listen<{reminderId:string}>('aegis-reminder-open', event => showReminder(event.payload.reminderId)); if (disposed) unlisten(); else stopReminderListener = unlisten; } catch { /* Android DOM bridge remains available. */ } try { const pending = await invoke<{reminderId:string|null}>('node_consume_reminder_open'); if (!disposed) showReminder(pending.reminderId); } catch { /* Older runtimes have no stored deep link. */ } }
 watch(section, value => { void invoke('node_settings_open', { open: value !== null }).catch(() => undefined); if (value === 'updates') void updates.start(); });
-onMounted(() => { void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); });
-onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
+onMounted(() => { void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); });
+onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
 </script>
 <template>
   <ChatView :app-version="runtime.version" @activity-changed="activity = $event">
     <template #global-navigation><SettingsTrigger @click="navigate('devices')" /></template>
-    <template #notice><div v-if="pendingActions" class="native-node-notice" role="status">{{ pendingActions }} ação(ões) aguardam confirmação do servidor. Adiamentos pendentes não têm horário offline garantido.<button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>Atualização da Aegis{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
+    <template #notice><div v-if="pendingActions" class="native-node-notice" role="status">{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.<button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>Atualização da Aegis{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>
   <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
     <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />
@@ -52,7 +54,7 @@ onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEv
     <section v-else-if="section === 'about'">
       <div class="about-brand"><div><AegisMark /></div><div><h2>Sobre a Aegis</h2><span class="settings-badge">{{ runtime.version }}</span></div></div>
       <p class="settings-muted">Sua assistente pessoal, com modelos acessados por API.</p>
-      <p v-if="pendingActions" class="settings-status" role="status">{{ pendingActions }} ação(ões) aguardam conexão. O reconhecimento ou adiamento será confirmado ao sincronizar.</p>
+      <ReminderActionSync :settings="actionSettings" />
       <dl><div><dt>Aplicativo</dt><dd>{{ runtime.platform === 'android' ? 'Android' : runtime.platform === 'windows' ? 'Windows' : 'Plataforma não suportada' }}</dd></div><div><dt>Identidade do dispositivo</dt><dd>{{ identity?.state === 'paired' ? 'Pareada' : 'Verificar em Dispositivos' }}</dd></div></dl>
       <div class="settings-actions"><button @click="navigate('updates')">Abrir Atualizações</button></div>
       <details><summary>Diagnóstico técnico</summary><DiagnosticsPanel /></details>

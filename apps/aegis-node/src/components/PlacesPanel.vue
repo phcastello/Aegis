@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue';
 import { placesApi, locationApi, dateLabel, type Place, type Circle, type MapConfig, type SearchResult, type LocationPermissions, type LocationObservation } from '../services/domains';
+import { suggestedMonitoringPadding, previewMonitoringEnvelope, placeAreaLabel, proximityLabel, inheritedPlaceCircles } from '../services/monitoringEnvelope';
 import type { Platform } from '../services/runtime';
 import { useLocationPermissionRefresh } from '../composables/useLocationPermissionRefresh';
 const PlaceMap = defineAsyncComponent(() => import('./PlaceMap.vue'));
@@ -14,12 +15,20 @@ const currentPosition = ref<LocationObservation | null>(null); const locationBus
 const panel = ref<HTMLElement | null>(null); const editor = ref<HTMLFormElement | null>(null); const nameInput = ref<HTMLInputElement | null>(null); const discard = ref(false);
 const baseline = ref(''); const resultPlaceId = ref<string | null>(null); let originPlaceId: string | null = null;
 const mapDraftDirty = ref(false);
+const proximityEnabled = ref(false); const proximityPadding = ref(150); const proximityConfirmed = ref(false);
+const inheritedCircles = computed(() => circles.value.length ? [] : inheritedPlaceCircles(places.value, parentId.value));
+const realCircles = computed(() => circles.value.length ? circles.value : inheritedCircles.value);
+const monitoringCircles = computed(() => previewMonitoringEnvelope(realCircles.value, proximityEnabled.value, proximityPadding.value));
+const proximityChanged = computed(() => proximityEnabled.value !== (target.value?.monitoringEnvelope?.enabled ?? false) ||
+  (proximityEnabled.value && proximityPadding.value !== (target.value?.monitoringEnvelope?.paddingMeters ?? suggestedMonitoringPadding(target.value?.circles ?? []))));
+watch(realCircles, () => { proximityConfirmed.value = false; }, { deep: true, flush: 'sync' });
+watch([proximityEnabled, proximityPadding], () => { proximityConfirmed.value = false; }, { flush: 'sync' });
 useLocationPermissionRefresh(props.platform, permissions);
 const typeLabels: Record<Place['type'], string> = { property: 'Propriedade', room: 'Cômodo', outdoor: 'Área externa', other: 'Outro lugar' };
-function snapshot() { return JSON.stringify({ name: name.value.trim(), type: type.value, parentId: parentId.value, aliases: [...new Set(aliases.value.split(',').map(alias => alias.trim()).filter(Boolean))], circles: circles.value }); }
+function snapshot() { return JSON.stringify({ name: name.value.trim(), type: type.value, parentId: parentId.value, aliases: [...new Set(aliases.value.split(',').map(alias => alias.trim()).filter(Boolean))], circles: circles.value, proximityEnabled: proximityEnabled.value, proximityPadding: proximityPadding.value }); }
 const dirty = computed(() => editing.value && (mapDraftDirty.value || snapshot() !== baseline.value));
 watch(dirty, value => emit('dirty', value));
-watch(circles, () => { areaConfirmed.value = false; }, { deep: true, flush: 'sync' });
+watch(circles, () => { areaConfirmed.value = false; proximityConfirmed.value = false; }, { deep: true, flush: 'sync' });
 const orderedPlaces = computed(() => {
   const result: { place: Place; depth: number }[] = []; const visited = new Set<string>();
   function add(parent: string | null, depth: number) { places.value.filter(place => place.parentId === parent).sort((a,b) => a.name.localeCompare(b.name)).forEach(place => { if (visited.has(place.id)) return; visited.add(place.id); result.push({ place, depth }); add(place.id, depth + 1); }); }
@@ -36,6 +45,9 @@ async function operation(action: () => Promise<unknown>) { if (busy.value) retur
 onMounted(() => { void operation(async () => { await load(); try { mapConfig.value = await placesApi<MapConfig>('config'); } catch { /* Saved places remain available without maps. */ } if (props.platform === 'android') { try { permissions.value = await locationApi<LocationPermissions>('permissions'); } catch { /* Optional native location. */ } } }); });
 async function open(place?: Place) {
   originPlaceId = place?.id ?? null; target.value = place ?? null; name.value = place?.name ?? ''; type.value = place?.type ?? 'property'; parentId.value = place?.parentId ?? null; aliases.value = place?.aliases.join(', ') ?? ''; circles.value = place ? place.circles.map(circle => ({ ...circle })) : [];
+  proximityEnabled.value = place?.monitoringEnvelope?.enabled ?? false;
+  proximityPadding.value = place?.monitoringEnvelope?.paddingMeters ?? suggestedMonitoringPadding(realCircles.value);
+  proximityConfirmed.value = !!place?.monitoringEnvelope?.approvedAt && !place?.monitoringEnvelope?.approvalRequired;
   mapCenter.value = null; currentPosition.value = null; areaConfirmed.value = !!place?.circles.length; query.value = ''; searchResults.value = []; searchMessage.value = null; locationMessage.value = null; error.value = null; notice.value = null; resultPlaceId.value = null; discard.value = false;
   mapDraftDirty.value = false; baseline.value = snapshot(); editing.value = true;
   await nextTick(); editor.value?.scrollIntoView({ block: 'start' }); nameInput.value?.focus({ preventScroll: true });
@@ -57,9 +69,15 @@ defineExpose({ requestBack });
 async function save() {
   if (!name.value.trim()) return;
   if (circles.value.length && !areaConfirmed.value) { await showError('Confirme a área escolhida no mapa antes de salvar.'); return; }
+  if (proximityChanged.value && !proximityConfirmed.value) { await showError('Confirme a alteração da detecção de proximidade antes de salvar.'); return; }
+  if (proximityEnabled.value && (!Number.isFinite(proximityPadding.value) || proximityPadding.value < 50 || proximityPadding.value > 1000)) { await showError('Use uma extensão de proximidade entre 50 m e 1 km.'); return; }
   let savedSuccessfully = false;
   await operation(async () => {
-    const payload = { ...JSON.parse(snapshot()), ...(target.value ? { expectedRevision: target.value.revision } : {}) };
+    const { proximityEnabled: _enabled, proximityPadding: _padding, ...realPlace } = JSON.parse(snapshot());
+    const approveEnvelope = proximityChanged.value || (proximityEnabled.value && proximityConfirmed.value &&
+      (target.value?.monitoringEnvelope?.approvalRequired || JSON.stringify(circles.value) !== JSON.stringify(target.value?.circles) || parentId.value !== target.value?.parentId));
+    const payload = { ...realPlace, ...(target.value ? { expectedRevision: target.value.revision } : {}),
+      ...(approveEnvelope ? { monitoringEnvelope: { enabled: proximityEnabled.value, paddingMeters: proximityPadding.value, confirmed: proximityConfirmed.value, expectedRevision: target.value?.monitoringEnvelope?.revision ?? 0 } } : {}) };
     const saved = await placesApi<Place>(target.value ? 'update' : 'create', payload, target.value?.id);
     resultPlaceId.value = saved?.id ?? target.value?.id ?? null; baseline.value = snapshot();
     savedSuccessfully = true;
@@ -125,17 +143,26 @@ async function remove() { if (!deleteTarget.value) return; const item = deleteTa
           <p v-if="locationMessage" :class="locationError ? 'settings-error' : 'settings-status'" :role="locationError ? 'alert' : 'status'">{{ locationMessage }}</p>
           <small v-if="currentPosition">Precisão estimada: {{ Math.round(currentPosition.accuracyMeters) }} m · {{ dateLabel(currentPosition.capturedAt) }}</small>
         </div>
-        <PlaceMap v-model="circles" :config="mapConfig" :center="mapCenter" :current-position="currentPosition" @draft-dirty="mapDraftDirty = $event" />
+        <PlaceMap v-model="circles" :config="mapConfig" :center="mapCenter" :current-position="currentPosition" :monitoring-circles="monitoringCircles" :inherited-circles="inheritedCircles" @draft-dirty="mapDraftDirty = $event" />
+        <small v-if="inheritedCircles.length">Área real herdada do lugar pai. Edite o pai para modificar seus círculos.</small>
         <label v-if="circles.length" class="area-confirm"><input v-model="areaConfirmed" type="checkbox" />Conferi a área que representa este lugar.</label>
       </fieldset>
-      <small v-else>Este cômodo usa a área do lugar pai. GPS não identifica cômodos.</small>
-      <details><summary>Saiba mais sobre lugares e precisão</summary><p>Círculos sobrepostos formam uma única área. A posição do celular, marcada em verde, é uma observação separada: buscar um endereço ou usar “Minha localização” apenas move o mapa.</p><p>A precisão é uma estimativa. Com economia de bateria, uma área de 65 m pode continuar incerta se a precisão for de 100 m. Confira a presença em Lembretes antes de sair.</p><p>Os círculos salvos definem o lugar e são registrados no Android com o mesmo raio. Se escolher ampliar a área para monitoramento, essa área passa a incluir o entorno e pode atrasar o aviso de saída. Não há ampliação automática nem garantia de precisão.</p><p>Cômodos podem usar a área do lugar pai; apelidos ajudam a reconhecer os nomes usados por você.</p><p v-if="mapConfig.geocodingConfigured">Ao tocar em Buscar endereço, o texto digitado é enviado a {{ mapConfig.geocoderProvider === 'photon' ? 'Photon/Komoot, com dados do OpenStreetMap' : mapConfig.geocoderProvider || 'seu provedor de busca configurado' }}.</p></details>
+      <fieldset v-if="type !== 'room' && realCircles.length" class="place-group">
+        <legend>Detecção de proximidade</legend>
+        <label class="area-confirm"><input v-model="proximityEnabled" type="checkbox" />Usar uma região de proximidade</label>
+        <small>Esta área inicia a detecção. O lembrete usa a área real.</small>
+        <template v-if="proximityEnabled"><label>Extensão além de cada círculo real, em metros<input v-model.number="proximityPadding" type="number" min="50" max="1000" required /></label><small>Área real: {{ placeAreaLabel(realCircles) }} · Proximidade: {{ placeAreaLabel(monitoringCircles) }}</small></template>
+        <label v-if="proximityEnabled || proximityChanged" class="area-confirm"><input v-model="proximityConfirmed" type="checkbox" />Confiro e aprovo {{ proximityEnabled ? 'esta região de proximidade' : 'desativar a região de proximidade' }}.</label>
+        <small v-if="proximityEnabled && !proximityConfirmed">Após uma mudança da área real, a proximidade aguarda sua aprovação. As geofences reais continuam válidas.</small>
+      </fieldset>
+      <small v-if="type === 'room' && !circles.length">Este cômodo usa a área do lugar pai. GPS não identifica cômodos.</small>
+      <details><summary>Saiba mais sobre lugares e precisão</summary><p>Círculos sobrepostos formam uma única área. A posição do celular, marcada em verde, é uma observação separada: buscar um endereço ou usar “Minha localização” apenas move o mapa.</p><p>A precisão é uma estimativa. Economia de bateria pode limitar e atrasar observações. O histórico, os eventos nativos e leituras temporárias auxiliam a decisão, sem garantir a detecção de uma residência pequena.</p><p>Os círculos salvos definem o lugar e continuam registrados no Android. A região operacional tem identidade e aprovação independentes: ela auxilia a aproximação, sem representar uma chegada ou saída da área real.</p><p>Cômodos podem usar a área do lugar pai; apelidos ajudam a reconhecer os nomes usados por você.</p><p v-if="mapConfig.geocodingConfigured">Ao tocar em Buscar endereço, o texto digitado é enviado a {{ mapConfig.geocoderProvider === 'photon' ? 'Photon/Komoot, com dados do OpenStreetMap' : mapConfig.geocoderProvider || 'seu provedor de busca configurado' }}.</p></details>
       <div class="settings-actions"><button class="settings-primary" :disabled="busy" type="submit">{{ busy ? 'Salvando…' : 'Salvar lugar' }}</button><button type="button" :disabled="busy" @click="cancel">Cancelar</button></div>
       <p v-if="error" data-place-error class="settings-error" role="alert">{{ error }}</p>
       <div v-if="discard" data-place-discard class="settings-error" role="alertdialog" aria-label="Descartar alterações do lugar?"><p>Descartar alterações do lugar?</p><div class="settings-actions"><button type="button" @click="discard = false">Continuar editando</button><button type="button" class="settings-danger" @click="returnToList()">Descartar alterações</button></div></div>
     </form>
     <p v-if="!loaded && busy" role="status">Carregando lugares…</p><div v-if="loaded && !places.length && !editing" class="settings-empty">Nenhum lugar cadastrado.</div>
-    <template v-if="!editing"><article v-for="item in orderedPlaces" :key="item.place.id" class="settings-card" :class="{'place-card-child': item.depth > 0}"><div class="settings-card-header"><div><h3>{{ item.place.name }}</h3><small>{{ typeLabels[item.place.type] }}<span v-if="item.place.parentId"> · {{ places.find(place => place.id === item.place.parentId)?.name }}</span></small></div><span class="settings-badge">{{ item.place.circles.length ? `${item.place.circles.length} círculo${item.place.circles.length > 1 ? 's' : ''}` : item.place.parentId ? 'Área herdada' : 'Sem área' }}</span></div><p v-if="item.place.aliases.length" class="settings-muted">Apelidos: {{ item.place.aliases.join(', ') }}</p><div class="settings-actions"><button :data-edit-place="item.place.id" :disabled="busy" @click="open(item.place)">Editar</button><button class="settings-danger" :disabled="busy" @click="deleteTarget = item.place">Excluir</button></div><p v-if="notice && resultPlaceId === item.place.id" class="settings-status" role="status">{{ notice }}</p><div v-if="deleteTarget?.id === item.place.id" class="settings-error" role="alertdialog" aria-label="Excluir lugar"><p>Excluir {{ item.place.name }}?</p><small>Lugares usados por regras ou com filhos precisam ser reorganizados antes da exclusão.</small><div class="settings-actions"><button class="settings-danger" :disabled="busy" @click="remove">Excluir lugar</button><button :disabled="busy" @click="deleteTarget = null">Cancelar</button></div></div></article></template>
+    <template v-if="!editing"><article v-for="item in orderedPlaces" :key="item.place.id" class="settings-card" :class="{'place-card-child': item.depth > 0}"><div class="settings-card-header"><div><h3>{{ item.place.name }}</h3><small>{{ typeLabels[item.place.type] }}<span v-if="item.place.parentId"> · {{ places.find(place => place.id === item.place.parentId)?.name }}</span></small></div><span class="settings-badge">{{ item.place.circles.length ? `${item.place.circles.length} círculo${item.place.circles.length > 1 ? 's' : ''}` : item.place.parentId ? 'Área herdada' : 'Sem área' }}</span></div><small v-if="item.place.circles.length">Área real: {{ placeAreaLabel(item.place.circles) }} · Proximidade: {{ proximityLabel(item.place) }}</small><p v-if="item.place.aliases.length" class="settings-muted">Apelidos: {{ item.place.aliases.join(', ') }}</p><div class="settings-actions"><button :data-edit-place="item.place.id" :disabled="busy" @click="open(item.place)">Editar</button><button class="settings-danger" :disabled="busy" @click="deleteTarget = item.place">Excluir</button></div><p v-if="notice && resultPlaceId === item.place.id" class="settings-status" role="status">{{ notice }}</p><div v-if="deleteTarget?.id === item.place.id" class="settings-error" role="alertdialog" aria-label="Excluir lugar"><p>Excluir {{ item.place.name }}?</p><small>Lugares usados por regras ou com filhos precisam ser reorganizados antes da exclusão.</small><div class="settings-actions"><button class="settings-danger" :disabled="busy" @click="remove">Excluir lugar</button><button :disabled="busy" @click="deleteTarget = null">Cancelar</button></div></div></article></template>
   </section>
 </template>
 <style scoped>

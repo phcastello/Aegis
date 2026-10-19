@@ -240,4 +240,36 @@ public sealed class PlaceCompletionPostgresTests
         Assert.Equal("cancelled", (await restarted.Set<GeographicReminderRule>().SingleAsync()).Status); Assert.Equal("node_authentication_required", (await new NodeRegistry(restarted, clock).AuthenticateAsync(observerCredential)).Error);
         Assert.DoesNotContain(await new NodeRegistry(restarted, clock).ListAsync(actor), n => n.Id == observer);
     });
+    [NodePostgresTests.PostgresFact]
+    public Task HybridMigrationPreservesLegacyNodeIdentityAndSmallRealGeometryUntilApproval() => WithSchema(async create => {
+        var clock = new Clock(); var placeId = Guid.NewGuid(); var circle = new PlaceCircle(Guid.NewGuid(), 10, 20, 50);
+        Guid nodeId; string credential;
+        await using (var legacy = create()) {
+            await legacy.GetService<IMigrator>().MigrateAsync("20261015154411_ReminderWithdrawalReceipts");
+            (nodeId, credential) = await Pair(legacy, clock);
+            var circles = JsonSerializer.Serialize(new[] { circle });
+            await legacy.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO places ("Id","Name","Type","ParentId","Revision","CirclesJson","AliasesJson","CreatedAt","UpdatedAt")
+                VALUES ({placeId}, 'Synthetic legacy small home', 'property', NULL, 7, {circles}::jsonb, '[]'::jsonb, {clock.Now}, {clock.Now})
+                """);
+            await legacy.Database.MigrateAsync();
+        }
+        await using (var upgraded = create()) {
+            Assert.Contains("20261019120000_HybridMonitoringEnvelope", await upgraded.Database.GetAppliedMigrationsAsync());
+            Assert.True((await new NodeRegistry(upgraded, clock).AuthenticateAsync(credential)).Authenticated);
+            var place = Assert.Single(await Places(upgraded, clock).ListAsync());
+            Assert.Equal(placeId, place.Id); Assert.Equal(7, place.Revision); Assert.Equal(circle, Assert.Single(place.Circles));
+            Assert.False(place.MonitoringEnvelope!.Enabled); Assert.True(place.MonitoringEnvelope.ApprovalRequired); Assert.Empty(place.MonitoringEnvelope.Circles);
+            place = await Places(upgraded, clock).SaveAsync(place.Id, new(place.Name, place.Type, null, place.Circles, place.Aliases, place.Revision, new(true, 150, true)));
+            Assert.Equal(7, place.Revision); Assert.Equal(200, Assert.Single(place.MonitoringEnvelope!.Circles).RadiusMeters);
+        }
+        await using (var restarted = create()) {
+            Assert.True((await new NodeRegistry(restarted, clock).AuthenticateAsync(credential)).Authenticated);
+            var place = Assert.Single(await Places(restarted, clock).ListAsync());
+            Assert.Equal(7, place.Revision); Assert.Equal(circle, Assert.Single(place.Circles)); Assert.False(place.MonitoringEnvelope!.ApprovalRequired);
+            Assert.Equal(1, place.MonitoringEnvelope.Revision); Assert.Equal(200, Assert.Single(place.MonitoringEnvelope.Circles).RadiusMeters);
+            Assert.Equal(nodeId, (await restarted.Nodes.SingleAsync()).Id);
+        }
+    }, migrate: false);
+
 }

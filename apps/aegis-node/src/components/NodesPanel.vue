@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { nodeServices, notificationDiagnosticCodes, notificationServices, transportServices, type TransportStatus, type NodeView } from '../services/nodes';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { nodeServices, notificationDiagnosticCodes, notificationServices, transportServices, type TransportStatus, type NodeView, type NotificationSettings } from '../services/nodes';
 import { locationApi, placesApi, type LocationSettings, type Place, type NodeLocation } from '../services/domains';
 import { useNodes } from '../composables/useNodes';
+import ReminderActionSync from './ReminderActionSync.vue';
 import type { Platform } from '../services/runtime';
 const props = defineProps<{ platform: Platform }>();
 const emit = defineEmits<{ dirty: [value: boolean] }>();
@@ -20,7 +21,7 @@ const notificationNodeId = ref<string | null>(null);
 const notificationResult = ref('');
 const notificationDiagnostic = ref('');
 const notificationSending = ref(false);
-const settings = ref({ granted: false, pushConfigured: false, autostart: false, pendingActions: 0 });
+const settings = ref<NotificationSettings>({ granted: false, pushConfigured: false, autostart: false, pendingActions: 0 });
 const settingsBusy = ref(false);
 const transport = ref<TransportStatus>({ transportState: 'offline', lastError: null });
 const locations = ref<LocationSettings | null>(null);
@@ -30,6 +31,8 @@ const profileBusy = ref(false);
 const visibleNodes = computed(() => nodes.value.filter(node => !node.revokedAt));
 const transportLabels: Record<string, string> = { online: 'Sessão conectada', offline: 'Sem sessão', connecting: 'Conectando', reconnecting: 'Reconectando' };
 watch(() => !!editingId.value || !!profile.value || !!code.value || !!priorityId.value || (!['paired','disabled'].includes(identity.value.state) && name.value !== (props.platform === 'android' ? 'Meu celular' : 'Meu PC')), value => emit('dirty', value));
+onMounted(() => window.addEventListener('aegis-reminder-actions-changed', loadSettings));
+onUnmounted(() => window.removeEventListener('aegis-reminder-actions-changed', loadSettings));
 async function loadSettings() { try { const value = await notificationServices.settings(); settings.value = {...value,pendingActions:value.pendingActions ?? 0}; } catch { /* Native settings may be unavailable. */ } }
 async function loadLocationSettings() {
   try { locations.value = await locationApi<LocationSettings>('settings'); } catch { locations.value = null; }
@@ -92,7 +95,7 @@ async function autostart(enabled: boolean) { if (settingsBusy.value) return; set
 <template>
   <section aria-labelledby="devices-title">
     <h2 id="devices-title">Seus dispositivos</h2><p class="settings-muted">Escolha onde receber lembretes e qual celular fornece sua localização. Uma rota disponível não garante que o aparelho esteja acordado.</p>
-    <p v-if="settings.pendingActions" class="settings-status" role="status">{{ settings.pendingActions }} ação(ões) aguardam conexão. O reconhecimento ou adiamento será confirmado após sincronizar.</p><p v-if="error && (!actionNodeId || !visibleNodes.some(node => node.id === actionNodeId))" class="settings-error" role="alert">{{ error }}</p>
+    <ReminderActionSync :settings="settings" /><p v-if="error && (!actionNodeId || !visibleNodes.some(node => node.id === actionNodeId))" class="settings-error" role="alert">{{ error }}</p>
     <p v-if="identity.state === 'disabled'" class="settings-status">Este dispositivo está desativado. Use outro dispositivo habilitado para reativá-lo.</p>
     <p v-if="identity.state === 'revoked'" class="settings-status">A identidade desta instalação deixou de ser válida. Faça um novo pareamento.</p>
     <form v-if="!['paired', 'disabled'].includes(identity.state)" class="settings-form" @submit.prevent="submitPair">

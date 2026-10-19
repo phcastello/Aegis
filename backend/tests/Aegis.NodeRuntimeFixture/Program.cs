@@ -28,6 +28,8 @@ var reminderCommands = new Dictionary<(Guid NodeId, Guid CommandId), (FixtureRem
 var backendOffline = new FixtureOfflineState(0, false);
 var geofenceSyncFailure = "none";
 var dropWithdrawalReceiptResponse = 0;
+var reminderActionFailure = "none";
+var geofenceCancellationFailure = "none";
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
 listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => metrics.Add(instrument.Name, measurement)); listener.Start();
@@ -63,6 +65,15 @@ app.Use(async (context, next) => {
     var offline = Volatile.Read(ref backendOffline);
     if (Environment.TickCount64 < offline.Until && (!offline.AllowPairing || !PairingLifecycle(context.Request))) { context.Response.StatusCode = 503; return; }
     metrics.Add("http_requests", 1); metrics.Add("http_request_body_bytes", context.Request.ContentLength ?? 0);
+    if (context.Request.Path == "/api/nodes/geofences/manifest" && Volatile.Read(ref geofenceCancellationFailure) == "manifest_503") { context.Response.StatusCode = 503; return; }
+    var isReminderAction = HttpMethods.IsPost(context.Request.Method) &&
+        (context.Request.Path.StartsWithSegments("/api/reminder-actions") || context.Request.Path.StartsWithSegments("/api/nodes/reminders") && context.Request.Path.Value!.EndsWith("/actions", StringComparison.Ordinal));
+    if (isReminderAction) {
+        metrics.Add("reminder_action_requests", 1);
+        var failure = Volatile.Read(ref reminderActionFailure);
+        if (failure is "503" or "after_drop") { context.Response.StatusCode = 503; return; }
+        if (failure == "400") { context.Response.StatusCode = 400; return; }
+    }
     if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/geofences/sync") {
         metrics.Add("geofence_sync_requests", 1);
         var failure = Volatile.Read(ref geofenceSyncFailure);
@@ -81,6 +92,9 @@ app.Use(async (context, next) => {
         await next();
         if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts" && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref dropWithdrawalReceiptResponse, -1, 1) == 1) {
             metrics.Add("withdrawal_receipt_responses_dropped", 1); context.Abort(); return;
+        }
+        if (isReminderAction && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref reminderActionFailure, "after_drop", "disconnect_after_apply") == "disconnect_after_apply") {
+            metrics.Add("reminder_action_responses_dropped", 1); context.Abort(); return;
         }
         metrics.Add("http_response_body_bytes", copy.Length); copy.Position = 0; await copy.CopyToAsync(original);
     }
@@ -106,6 +120,14 @@ app.MapPost("/fixture/geofence-sync-failure", (FixtureGeofenceSyncFailure reques
     if (request.Mode is not ("503" or "disconnect" or "none")) return Results.BadRequest();
     Volatile.Write(ref geofenceSyncFailure, request.Mode);
     return Results.Ok(new { mode = request.Mode });
+});
+app.MapPost("/fixture/reminder-action-failure", (FixtureGeofenceSyncFailure request) => {
+    if (request.Mode is not ("503" or "400" or "disconnect_after_apply" or "none")) return Results.BadRequest();
+    Volatile.Write(ref reminderActionFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
+});
+app.MapPost("/fixture/geofence-cancellation-failure", (FixtureGeofenceSyncFailure request) => {
+    if (request.Mode is not ("manifest_503" or "none")) return Results.BadRequest();
+    Volatile.Write(ref geofenceCancellationFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
 });
 app.MapPost("/fixture/withdrawal-receipt-failure", (FixtureWithdrawalReceiptFailure request) => {
     if (request.Mode is not ("disconnect_after_apply" or "none")) return Results.BadRequest();
@@ -185,10 +207,12 @@ using (var scope = app.Services.CreateScope())
     var code = await registry.CreateCodeAsync(null);
     var replacement = await registry.CreateCodeAsync(null);
     var geofence = await registry.CreateCodeAsync(null);
+    var interruption = await registry.CreateCodeAsync(null);
     // All use the existing issuerless bootstrap procedure. Separate receiver and
     // live tests consume their own code; no test bypass or HTTP endpoint exists.
     await WriteBootstrapCode(args[0] + ".replacement", replacement.Code);
     await WriteBootstrapCode(args[0] + ".geofence", geofence.Code);
+    await WriteBootstrapCode(args[0] + ".interruption", interruption.Code);
     await WriteBootstrapCode(args[0], code.Code); // Main file is the readiness marker.
 }
 await app.RunAsync(); return 0;

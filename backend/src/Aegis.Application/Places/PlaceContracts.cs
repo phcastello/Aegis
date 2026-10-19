@@ -3,8 +3,10 @@ using Aegis.Domain.Entities;
 namespace Aegis.Application.Places;
 
 public sealed record PlaceView(Guid Id, string Name, string Type, Guid? ParentId, int Revision,
-    IReadOnlyList<PlaceCircle> Circles, IReadOnlyList<string> Aliases);
-public sealed record PlaceWrite(string Name, string Type, Guid? ParentId, IReadOnlyList<PlaceCircle> Circles, IReadOnlyList<string> Aliases, int? ExpectedRevision = null);
+    IReadOnlyList<PlaceCircle> Circles, IReadOnlyList<string> Aliases, MonitoringEnvelopeView? MonitoringEnvelope = null);
+public sealed record PlaceWrite(string Name, string Type, Guid? ParentId, IReadOnlyList<PlaceCircle> Circles, IReadOnlyList<string> Aliases, int? ExpectedRevision = null, MonitoringEnvelopeWrite? MonitoringEnvelope = null);
+public sealed record MonitoringEnvelopeWrite(bool Enabled, double PaddingMeters, bool Confirmed, int ExpectedRevision = 0);
+public sealed record MonitoringEnvelopeView(bool Enabled, int Revision, double PaddingMeters, DateTimeOffset? ApprovedAt, bool ApprovalRequired, IReadOnlyList<PlaceCircle> Circles);
 public sealed record LocationSettingsWrite(Guid? SourceNodeId = null, Guid? NodeId = null, string? Mode = null, Guid? FixedPlaceId = null);
 public sealed record LocationProfileView(Guid NodeId, string Mode, Guid? FixedPlaceId);
 public sealed record LocationObservationView(Guid NodeId, double Latitude, double Longitude, double AccuracyMeters, DateTimeOffset CapturedAt,
@@ -17,7 +19,7 @@ public sealed record GeographicRuleView(Guid Id, string Text, IReadOnlyList<Guid
     bool Repeat, DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, string TimeZoneId, string DeliveryPolicy, string Status,
     string SyncStatus, DateTimeOffset LeaseUntil, DateTimeOffset? SyncedAt, string? ErrorCode);
 public sealed record GeographicSyncItem(Guid Id, int Revision, string Status, string? ErrorCode = null);
-public sealed record GeographicSyncWrite(string ManifestRevision, IReadOnlyList<GeographicSyncItem> Rules);
+public sealed record GeographicSyncWrite(string ManifestRevision, IReadOnlyList<GeographicSyncItem> Rules, bool? InstallationComplete = null);
 public sealed record GeographicEventWrite(Guid EventId, Guid OccurrenceId, Guid RuleId, int RuleRevision, string Transition, DateTimeOffset OccurredAt, long Sequence, DateTimeOffset? PostedAt = null);
 public sealed record PlaceResolution(string Status, IReadOnlyList<PlaceView> Candidates, Guid? PlaceId, string Reason, double? LocationAgeSeconds);
 public sealed record MapSearchResult(string Name, double Latitude, double Longitude);

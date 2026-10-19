@@ -207,6 +207,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
  if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
  exerciseLocationPermissionFramework(context)
  ipc("node_location","configureNode",JSONObject().put("nodeId",nodeId).put("mode","dynamic").put("sourceNodeId",nodeId))
+ exerciseReminderSyncFramework(context,nodeId,setBackground,invoke)
  val circleA=UUID.randomUUID().toString();val circleB=UUID.randomUUID().toString()
  val circles=JSONArray().put(JSONObject().put("id",circleA).put("latitude",0).put("longitude",0).put("radiusMeters",200)).put(JSONObject().put("id",circleB).put("latitude",0).put("longitude",0.002).put("radiusMeters",200))
  val place=ipc("node_places","create",JSONObject().put("name","CI synthetic union").put("type","property").put("circles",circles).put("aliases",JSONArray()))

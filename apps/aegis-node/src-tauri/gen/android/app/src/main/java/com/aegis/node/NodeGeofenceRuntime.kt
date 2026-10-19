@@ -38,6 +38,9 @@ object NodeGeofenceRuntime {
   }
   return result.put("fixtureRequest",requestInfo.put("cancelled",cancellation?.token?.isCancellationRequested?:false)).toString()
  }
+ /** Test-only Fused adapter: still exercises permission checks, service and cancellation. */
+ @JvmStatic fun hybridSessionFixture(context:Context,operation:String,placeId:String,scenario:String):String =
+  NodeMonitoringSessions.fixture(context,operation,placeId,scenario).toString()
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
  /** Instrumentation may advance a persisted deadline; distribution cannot. */
  @JvmStatic fun confirmPending(context:Context) {

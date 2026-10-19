@@ -19,21 +19,37 @@ import java.util.concurrent.TimeUnit
 internal object NodeNotificationGate { val lock=Any() }
 object NodeReminderActions {
   private val receiptFlushing=java.util.concurrent.atomic.AtomicBoolean(false)
+  private val actionFlushing=java.util.concurrent.atomic.AtomicBoolean(false)
   // SQLiteOpenHelper acquired AutoCloseable after older supported Android releases.
   // Declare Closeable here so Kotlin use() is valid on API24+ and after R8.
-  class Store(context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1), java.io.Closeable {
+  class Store(private val context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1), java.io.Closeable {
+    private val existingDatabase=context.getDatabasePath("aegis-native-reminders-v1.db").exists()
     override fun onCreate(db: SQLiteDatabase) {
       db.execSQL("CREATE TABLE presentations (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, revision INTEGER NOT NULL, token TEXT, expires INTEGER NOT NULL, commandId TEXT NOT NULL,ruleId TEXT,ruleRevision INTEGER)")
       db.execSQL("CREATE TABLE withdrawals (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,expires INTEGER NOT NULL)")
       db.execSQL("CREATE TABLE actions (actionId TEXT PRIMARY KEY, reminderId TEXT NOT NULL, revision INTEGER NOT NULL, generation INTEGER NOT NULL, action TEXT NOT NULL, token TEXT, created INTEGER NOT NULL)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Unsupported native reminder schema") }
-    override fun onOpen(db:SQLiteDatabase) {
+    override fun onOpen(db:SQLiteDatabase) { synchronized(NodeNotificationGate.lock) {
       super.onOpen(db)
+      val columns=db.rawQuery("PRAGMA table_info(actions)",null).use{rows->buildSet<String>{while(rows.moveToNext())add(rows.getString(1))}}
+      if(existingDatabase && "attempts" !in columns) {
+        val file=context.getDatabasePath("aegis-native-reminders-v1.db")
+        val backup=java.io.File(file.parentFile,file.name+".pre-action-diagnostics.bak")
+        if(!backup.exists()) {
+          db.rawQuery("PRAGMA wal_checkpoint(FULL)",null).use{while(it.moveToNext()){} }
+          db.beginTransaction();try{file.copyTo(backup,overwrite=false);db.setTransactionSuccessful()}finally{db.endTransaction()}
+        }
+      }
       db.execSQL("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
       // Additive and idempotent for installations already using schema version 1.
       db.execSQL("CREATE TABLE IF NOT EXISTS withdrawal_receipts(reminderId TEXT NOT NULL,generation INTEGER NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(reminderId,generation))")
-    }
+      for((name,definition)in listOf("attempts" to "INTEGER NOT NULL DEFAULT 0","lastAttempt" to "INTEGER","lastResult" to "TEXT NOT NULL DEFAULT 'queued'","nextAttempt" to "INTEGER NOT NULL DEFAULT 0"))if(name !in columns)db.execSQL("ALTER TABLE actions ADD COLUMN $name $definition")
+      // Terminal results leave the send queue, retaining bounded traceability without a token.
+      db.execSQL("CREATE TABLE IF NOT EXISTS action_history(actionId TEXT PRIMARY KEY,reminderId TEXT NOT NULL,revision INTEGER NOT NULL,generation INTEGER NOT NULL,action TEXT NOT NULL,created INTEGER NOT NULL,attempts INTEGER NOT NULL,lastAttempt INTEGER,lastResult TEXT NOT NULL,outcome TEXT NOT NULL,completed INTEGER NOT NULL)")
+      db.delete("action_history","completed<?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(30)).toString()))
+      db.execSQL("DELETE FROM action_history WHERE actionId NOT IN (SELECT actionId FROM action_history ORDER BY completed DESC LIMIT 100)")
+    } }
   }
   fun bindIdentity(context:Context,id:String) { synchronized(NodeNotificationGate.lock) {
     if(!NodeNativeSession.bindingAllowed(context,id))return
@@ -48,7 +64,7 @@ object NodeReminderActions {
         // Under the same gate as show(), cancel every durable accepted generation.
         for((tag,notificationId)in identityReminderTags(known,active))try{manager.cancel(tag,notificationId)}catch(error:Exception){notificationLog("scope_withdraw",error)}
         try{manager.cancel("aegis-action-pending",709)}catch(error:Exception){notificationLog("scope_withdraw",error)}
-        db.beginTransaction();try{db.delete("actions",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.delete("withdrawal_receipts",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
+        db.beginTransaction();try{db.delete("actions",null,null);db.delete("action_history",null,null);db.delete("presentations",null,null);db.delete("withdrawals",null,null);db.delete("withdrawal_receipts",null,null);db.execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('scopeId',?)",arrayOf(id));db.setTransactionSuccessful()}finally{db.endTransaction()}
       }
     }
   } }
@@ -112,7 +128,6 @@ object NodeReminderActions {
       try {
         val currentScope=db.rawQuery("SELECT value FROM metadata WHERE key='scopeId'",null).use{if(it.moveToFirst())it.getString(0)else null}
         if(currentScope!=capturedScope)return false
-        db.delete("actions","created < ?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))
         val row=db.rawQuery("SELECT revision,generation,token,expires FROM presentations WHERE id=?",arrayOf(id)).use {
           if(!it.moveToFirst() || it.getLong(0)!=revision || it.getLong(1)!=generation || it.getLong(3)<System.currentTimeMillis()) return false
           if(it.isNull(2)) null else it.getString(2)
@@ -132,6 +147,7 @@ object NodeReminderActions {
     // It is a pending synchronization, never presented as server acknowledgement or punctual offline snooze.
     pendingNotice(context,action)
     NodeBackgroundWork.enqueue(context)
+    NodeBackgroundWork.foregroundActions(context)
     return true
   }
   }
@@ -226,7 +242,6 @@ object NodeReminderActions {
       val revision=body.getLong("expectedRevision");val generation=body.getLong("generation");val action=body.getString("action")
       require(revision>0&&generation>=0&&action in setOf("acknowledge","snooze")&&body.optInt("snoozeMinutes",10)==10)
       Store(context).use{store->val db=store.writableDatabase;db.beginTransaction();try {
-        db.delete("actions","created<?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))
         db.rawQuery("SELECT actionId FROM actions WHERE reminderId=? AND revision=? AND generation=?",arrayOf(id,revision.toString(),generation.toString())).use{
           if(it.moveToFirst())return JSONObject().put("pending",true).put("applied",false)
         }
@@ -234,7 +249,7 @@ object NodeReminderActions {
         db.insertOrThrow("actions",null,ContentValues().apply{put("actionId",actionId);put("reminderId",id);put("revision",revision);put("generation",generation);put("action",action);putNull("token");put("created",System.currentTimeMillis())})
         db.setTransactionSuccessful()
       }finally{db.endTransaction()}}
-      withdraw(context,id,generation);pendingNotice(context,action);NodeBackgroundWork.enqueue(context)
+      withdraw(context,id,generation);pendingNotice(context,action);NodeBackgroundWork.enqueue(context);NodeBackgroundWork.foregroundActions(context)
       return JSONObject().put("pending",true).put("applied",false)
     }
   }
@@ -252,7 +267,11 @@ object NodeReminderActions {
     withdraw(context,id,generation)
     if(discard)discardAction(context,id)
   } }
-  fun discardAction(context:Context,id:String) {Store(context).use{it.writableDatabase.delete("actions","reminderId=?",arrayOf(id))}}
+  fun discardAction(context:Context,id:String) {synchronized(NodeNotificationGate.lock){Store(context).use{store->
+    val db=store.writableDatabase
+    val ids=db.rawQuery("SELECT actionId FROM actions WHERE reminderId=?",arrayOf(id)).use{rows->buildList<String>{while(rows.moveToNext())add(rows.getString(0))}}
+    for(actionId in ids)finishAction(db,actionId,"rejected_superseded","failed")
+  }}}
   fun reconcilePresentations(context:Context) {
     val scope=NodeNativeSession.read(context)?.nodeId ?: return
     val pendingEvents=NodeGeofences.pendingOccurrences(context)
@@ -265,32 +284,72 @@ object NodeReminderActions {
       for(item in response.getJSONArray("withdraw").objects())withdrawRemote(context,item.getString("reminderId"),item.getLong("generation"),scope)
     }
   }
-  fun flush(context: Context) {
-    val scope=NodeNativeSession.read(context)?.nodeId ?: return
-    synchronized(NodeNotificationGate.lock){if(!applyForCurrentIdentity({NodeNativeSession.bindingAllowed(context,scope)}){bindIdentity(context,scope)})return}
-    Store(context).use { store ->
-      val db=store.writableDatabase
-      db.delete("actions","created < ?",arrayOf((System.currentTimeMillis()-TimeUnit.DAYS.toMillis(7)).toString()))
-      val pending=mutableListOf<Pair<String,JSONObject>>()
-      db.rawQuery("SELECT actionId,reminderId,revision,generation,action,token FROM actions ORDER BY created LIMIT 100",null).use {
-        while(it.moveToNext()) pending.add(it.getString(1) to JSONObject().put("actionId",it.getString(0)).put("expectedRevision",it.getLong(2)).put("generation",it.getLong(3)).put("action",it.getString(4)).put("snoozeMinutes",10).apply {if(!it.isNull(5)) put("token",it.getString(5))})
-      }
+  /** Shared foreground/worker drain: one HTTP owner, four sends and at most 28 s. */
+  fun flush(context: Context,foreground:Boolean=false):Boolean {
+    if(!actionFlushing.compareAndSet(false,true))return pending(context)>0
+    val deadline=android.os.SystemClock.elapsedRealtime()+20000
+    try {
+      val scope=NodeNativeSession.read(context)?.nodeId ?: return pending(context)>0
+      synchronized(NodeNotificationGate.lock){if(!applyForCurrentIdentity({NodeNativeSession.bindingAllowed(context,scope)}){bindIdentity(context,scope)})return false}
+      val pending=Store(context).use{store->store.readableDatabase.rawQuery("SELECT actionId,reminderId,revision,generation,action,token,attempts FROM actions WHERE " + (if(foreground) "(lastAttempt IS NULL OR lastAttempt<=?)" else "nextAttempt<=?") + " ORDER BY created LIMIT 100",arrayOf((System.currentTimeMillis()-(if(foreground)30000 else 0)).toString())).use{rows->
+        buildList<Pair<String,JSONObject>>{while(rows.moveToNext())add(rows.getString(1) to JSONObject().put("actionId",rows.getString(0)).put("expectedRevision",rows.getLong(2)).put("generation",rows.getLong(3)).put("action",rows.getString(4)).put("snoozeMinutes",10).apply{if(!rows.isNull(5))put("token",rows.getString(5))})}
+      }}
       val unsynchronizedGeo=NodeGeofences.pendingOccurrences(context)
-      for((id,body) in pending) {
-        if(!body.has("token") && id in unsynchronizedGeo)continue
+      var requests=0
+      for((id,body)in pending) {
+        if(requests>=4 || android.os.SystemClock.elapsedRealtime()>=deadline || NodeNativeSession.read(context)?.nodeId!=scope)break
+        val actionId=body.getString("actionId")
+        if(!body.has("token") && id in unsynchronizedGeo) {
+          Store(context).use{it.writableDatabase.update("actions",ContentValues().apply{put("lastResult","awaiting_occurrence_sync");put("nextAttempt",System.currentTimeMillis()+30000)},"actionId=?",arrayOf(actionId))};continue
+        }
+        val attempt=synchronized(NodeNotificationGate.lock){
+          if(NodeNativeSession.read(context)?.nodeId!=scope)return false
+          Store(context).use{store->val db=store.writableDatabase
+            val previous=db.rawQuery("SELECT attempts FROM actions WHERE actionId=?",arrayOf(actionId)).use{if(it.moveToFirst())it.getInt(0)else -1}
+            if(previous<0)0 else (previous+1).also{count->db.update("actions",ContentValues().apply{put("attempts",count);put("lastAttempt",System.currentTimeMillis());put("lastResult","sending");put("nextAttempt",System.currentTimeMillis()+NodeReminderActionPolicy.delayMillis(count))},"actionId=?",arrayOf(actionId))}
+          }
+        }
+        if(attempt==0)continue
+        requests++
         try {
           val tokenOnly=body.has("token")
           val path=if(tokenOnly) "/api/reminder-actions/$id" else "/api/nodes/reminders/$id/actions"
-          val response=NodeNativeSession.call(context,"POST",path,body,tokenOnly,expectedScope=scope)
-          // A snooze response already names the next generation. Withdraw only the presentation acted on.
+          val response=NodeNativeSession.call(context,"POST",path,body,tokenOnly,expectedScope=scope,connectTimeoutMillis=3000,readTimeoutMillis=5000)
+          require(response.has("applied") && response.has("conflict"))
           withdrawScoped(context,id,body.getLong("generation"),scope)
-          db.delete("actions","actionId=?",arrayOf(body.getString("actionId")))
-        } catch(error:NodeNativeSession.HttpFailure) {
-          if(error.status in setOf(400,401,403,404,409,410)) db.delete("actions","actionId=?",arrayOf(body.getString("actionId"))) else throw error
+          synchronized(NodeNotificationGate.lock){if(NodeNativeSession.read(context)?.nodeId==scope)Store(context).use{finishAction(it.writableDatabase,actionId,if(response.optBoolean("applied"))"accepted" else "rejected_conflict",if(response.optBoolean("applied"))"resolved" else "failed")}}
+        }catch(error:Exception) {
+          val result=when(error){is NodeNativeSession.HttpFailure->NodeReminderActionPolicy.httpResult(error.status);is org.json.JSONException,is IllegalArgumentException->"invalid_response";else->"network_unavailable"}
+          synchronized(NodeNotificationGate.lock){if(NodeNativeSession.read(context)?.nodeId==scope)Store(context).use{store->
+            if(NodeReminderActionPolicy.permanent(result))finishAction(store.writableDatabase,actionId,result,"failed")
+            else store.writableDatabase.update("actions",ContentValues().apply{put("lastResult",result)},"actionId=?",arrayOf(actionId))
+          }}
         }
       }
-      db.rawQuery("SELECT COUNT(*) FROM actions",null).use{it.moveToFirst();if(it.getInt(0)==0)NotificationManagerCompat.from(context).cancel("aegis-action-pending",709)}
+      if(pending(context)==0)NotificationManagerCompat.from(context).cancel("aegis-action-pending",709)
+      return pending(context)>0
+    }finally{actionFlushing.set(false)}
+  }
+  private fun finishAction(db:SQLiteDatabase,actionId:String,result:String,outcome:String) {
+    db.beginTransaction();try {
+      db.execSQL("INSERT OR REPLACE INTO action_history(actionId,reminderId,revision,generation,action,created,attempts,lastAttempt,lastResult,outcome,completed) SELECT actionId,reminderId,revision,generation,action,created,attempts,lastAttempt,?,?,? FROM actions WHERE actionId=?",arrayOf<Any>(result,outcome,System.currentTimeMillis(),actionId))
+      db.delete("actions","actionId=?",arrayOf(actionId));db.setTransactionSuccessful()
+    }finally{db.endTransaction()}
+  }
+  /** Safe public metadata only: never IDs, token, text, or coordinates. */
+  fun diagnostics(context:Context):JSONObject {
+    val now=System.currentTimeMillis();val rows=JSONArray();var pending=0;var failed=0;var temporary=false
+    val scheduled=NodeNativeNotifications.prefs(context).getBoolean("actionsRetryScheduled",false)
+    Store(context).use{store->val db=store.readableDatabase
+      db.rawQuery("SELECT action,created,attempts,lastAttempt,lastResult,nextAttempt FROM actions ORDER BY created LIMIT 100",null).use{cursor->while(cursor.moveToNext()){
+        pending++;val result=cursor.getString(4);if(result in setOf("network_unavailable","temporary_http","credential_unavailable","invalid_response"))temporary=true
+        rows.put(JSONObject().put("type",cursor.getString(0)).put("ageSeconds",maxOf(0,(now-cursor.getLong(1))/1000)).put("attempts",cursor.getInt(2)).put("lastAttemptAt",if(cursor.isNull(3))JSONObject.NULL else cursor.getLong(3)).put("lastResult",result).put("state","pending").put("retryScheduled",scheduled).put("nextAttemptAt",cursor.getLong(5)))
+      }}
+      db.rawQuery("SELECT action,created,attempts,lastAttempt,lastResult FROM action_history WHERE outcome='failed' ORDER BY completed DESC LIMIT 100",null).use{cursor->while(cursor.moveToNext()){
+        failed++;if(rows.length()<100)rows.put(JSONObject().put("type",cursor.getString(0)).put("ageSeconds",maxOf(0,(now-cursor.getLong(1))/1000)).put("attempts",cursor.getInt(2)).put("lastAttemptAt",if(cursor.isNull(3))JSONObject.NULL else cursor.getLong(3)).put("lastResult",cursor.getString(4)).put("state","failed").put("retryScheduled",false))
+      }}
     }
+    return JSONObject().put("pendingActions",pending).put("failedActions",failed).put("actionDiagnostics",rows).put("actionSyncState",when{actionFlushing.get()->"syncing";temporary->"temporarily_unavailable";pending>0->"pending";failed>0->"permanent_failure";else->"idle"})
   }
   private fun pendingNotice(context:Context,action:String) {
     if(!NodeNativeNotifications.granted(context))return

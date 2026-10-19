@@ -46,6 +46,7 @@ public sealed class GeographicReminderRule : AuditableEntity
         LeaseUntil = now.AddDays(7); if (EndsAt is { } end && end < LeaseUntil) LeaseUntil = end;
         Touch(now);
     }
+    public void InvalidateMonitoring(DateTimeOffset now) { SyncStatus = "pending_sync"; Touch(now); }
     public void InvalidateGeometry(DateTimeOffset now) { Revision++; SyncStatus = "pending_sync"; Touch(now); }
     public void SetStatus(string action, DateTimeOffset now)
     {

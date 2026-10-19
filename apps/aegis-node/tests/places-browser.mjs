@@ -25,7 +25,7 @@ const server = await createServer({root:appRoot,configFile:false,cacheDir:join(a
 }],server:{host:'127.0.0.1',port:0,hmr:false,watch:null,fs:{allow:[repoRoot]}}});
 const screenshotDir = resolve(process.argv[2] ?? process.env.PLACES_SCREENSHOT_DIR ?? join(repoRoot, 'artifacts/v0.7.0-completion/ui/places'));
 mkdirSync(screenshotDir, { recursive: true });
-const sources=['apps/aegis-node/src/components/PlacesPanel.vue','apps/aegis-node/src/components/PlaceMap.vue','apps/aegis-node/src/services/placeMapGuidance.ts','packages/aegis-client/src/components/SettingsShell.vue','packages/aegis-client/src/styles.css'];
+const sources=['apps/aegis-node/src/components/PlacesPanel.vue','apps/aegis-node/src/components/PlaceMap.vue','apps/aegis-node/src/services/placeMapGuidance.ts','apps/aegis-node/src/services/monitoringEnvelope.ts','packages/aegis-client/src/components/SettingsShell.vue','packages/aegis-client/src/styles.css'];
 const report={rendered:'Production PlacesPanel.vue, PlaceMap.vue and SettingsShell.vue; isolated native IPC fixtures, no real backend',fontScaling:'CSS root font150/200 percent and reduced500px viewport simulate large font and keyboard; physical Android keyboard/font test remains pending',sourceHashes:Object.fromEntries(sources.map(path=>[path,createHash('sha256').update(readFileSync(join(repoRoot,path))).digest('hex')])),cases:[],pageErrors:[],failures:[]};
 let activePage;
 async function assertInViewport(locator, content) {const box=await locator.boundingBox(),view=await content.boundingBox();assert.ok(box&&view);const visible=Math.min(box.y+box.height,view.y+view.height)-Math.max(box.y,view.y);assert.ok(visible>=Math.min(44,box.height),'Feedback must be perceptible inside the scrolled viewport');}
@@ -47,7 +47,7 @@ try {
           if (args.operation === 'list') {if(window.fixture.failNextList){window.fixture.failNextList=false;throw Error('offline-after-write');}return structuredClone(places);}
           if (args.operation === 'config') return { tileUrl: null, attribution: '', geocodingConfigured: true, geocoderProvider: 'photon' };
           if (args.operation === 'search') { if (window.fixture.searchFailure) throw Error('raw-private-error'); return { configured: true, results: [{ name: 'Endereço sintético', latitude: -23.56, longitude: -46.64 }] }; }
-          if (['update','create'].includes(args.operation)) { if(window.fixture.saveDelay) await new Promise(done=>setTimeout(done,window.fixture.saveDelay)); if (window.fixture.conflict) throw Error('revision_conflict internal-private-detail'); const previous = places.find(item=>item.id===args.id); const saved = { ...args.payload, id: args.id ?? crypto.randomUUID(), revision: (previous?.revision ?? 0)+1 }; if (previous) Object.assign(previous,saved); else places.push(saved); window.fixture.saved.push(structuredClone(saved)); return structuredClone(saved); }
+          if (['update','create'].includes(args.operation)) { if(window.fixture.saveDelay) await new Promise(done=>setTimeout(done,window.fixture.saveDelay)); if (window.fixture.conflict) throw Error('revision_conflict internal-private-detail'); const previous = places.find(item=>item.id===args.id); const saved = { ...args.payload, id: args.id ?? crypto.randomUUID(), revision: (previous?.revision ?? 0)+1 }; if (args.payload.monitoringEnvelope) { const envelope=args.payload.monitoringEnvelope; saved.monitoringEnvelope={enabled:envelope.enabled,paddingMeters:envelope.paddingMeters,revision:(previous?.monitoringEnvelope?.revision??0)+1,approvedAt:new Date().toISOString(),approvalRequired:false,circles:envelope.enabled?saved.circles.map(circle=>({...circle,id:'operational-'+circle.id,radiusMeters:circle.radiusMeters+envelope.paddingMeters})):[]}; } else if(previous?.monitoringEnvelope) saved.monitoringEnvelope=structuredClone(previous.monitoringEnvelope); if (previous) Object.assign(previous,saved); else places.push(saved); window.fixture.saved.push(structuredClone(saved)); return structuredClone(saved); }
         }
         if (command === 'node_location') {
           if (args.operation === 'permissions') return { supported:true,providerAvailable:true,foreground:true,precise:true,background:true,servicesEnabled:true };
@@ -99,13 +99,14 @@ try {
     await panel.locator('[data-edit-place="place-29"]').click();
     await page.evaluate(()=>window.fixture.accuracy=100);
     await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
-    await panel.getByText(/Localização imprecisa para esta área/).waitFor();
-    await panel.getByRole('button',{name:'Avaliar área de monitoramento maior',exact:true}).click();
-    await panel.getByText(/O aviso de saída pode chegar mais longe/).waitFor();
-    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).first().inputValue(),'65','Reviewing a larger area does not apply it');
-    await panel.getByRole('button',{name:'Manter minha área',exact:true}).click();
+    await panel.getByText(/A precisão atual pode dificultar/).waitFor();
+    await panel.getByLabel('Usar uma região de proximidade',{exact:true}).check();
+    assert.equal(await panel.getByLabel('Extensão além de cada círculo real, em metros',{exact:true}).inputValue(),'135');
+    assert.ok(await panel.locator('path[stroke="#e6c578"][stroke-dasharray]').count()>=2,'Operational circles have a distinct dashed style');
+    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).first().inputValue(),'65','Reviewing operational proximity preserves the actual home');
+    await panel.getByLabel('Usar uma região de proximidade',{exact:true}).uncheck();
     for (const accuracy of [30,65,200,201]) { await page.evaluate(value=>window.fixture.accuracy=value,accuracy); await panel.getByRole('button',{name:'Minha localização',exact:true}).click(); await panel.getByText(new RegExp(`Precisão estimada: ${accuracy} m`)).waitFor(); }
-    await panel.getByText(/Localização imprecisa: acima de 200 m/).waitFor();
+    await panel.getByText(/A leitura atual está imprecisa demais/).waitFor();
     await page.evaluate(()=>window.fixture.age=600);
     await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
     await panel.getByText(/Última posição disponível, de 10 min atrás/).waitFor();
@@ -149,17 +150,22 @@ try {
     await panel.locator('[data-edit-place="place-29"]').click();
     await page.evaluate(()=>{window.fixture.unavailable=false;window.fixture.age=0;window.fixture.accuracy=100;});
     await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
-    await panel.getByRole('button',{name:'Avaliar área de monitoramento maior',exact:true}).click();
-    await panel.getByRole('button',{name:'Usar área de monitoramento de 150 m',exact:true}).click();
-    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).first().inputValue(),'150');
-    assert.equal(await panel.getByLabel('Conferi a área que representa este lugar.').isChecked(),false,'Explicit geometry change requires fresh confirmation');
+    await panel.getByLabel('Usar uma região de proximidade',{exact:true}).check();
+    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).first().inputValue(),'65');
+    assert.equal(await panel.getByLabel('Conferi a área que representa este lugar.').isChecked(),true,'Proximity edit does not invalidate the real-area approval');
     await panel.getByRole('button',{name:'Salvar lugar',exact:true}).click();
-    await panel.getByText('Confirme a área escolhida no mapa antes de salvar.',{exact:true}).waitFor();
+    await panel.getByText('Confirme a alteração da detecção de proximidade antes de salvar.',{exact:true}).waitFor();
     await assertInViewport(panel.locator('[data-place-error]'),panel.locator('.settings-content'));
-    await panel.getByLabel('Conferi a área que representa este lugar.').check();
+    await panel.getByLabel('Confiro e aprovo esta região de proximidade.').check();
+    await panel.getByLabel('Extensão além de cada círculo real, em metros',{exact:true}).fill('150');
+    assert.equal(await panel.getByLabel('Confiro e aprovo esta região de proximidade.').isChecked(),false,'Modifying operational padding requires fresh explicit approval');
+    await panel.getByLabel('Extensão além de cada círculo real, em metros',{exact:true}).fill('135');
+    await panel.getByLabel('Confiro e aprovo esta região de proximidade.').check();
     if(screenshotDir) { await map.scrollIntoViewIfNeeded(); await page.screenshot({path:`${screenshotDir}/places-${width}-font-${fontScale}.png`}); }
     await panel.getByRole('button',{name:'Salvar lugar',exact:true}).click(); await panel.getByText('Lugar salvo.',{exact:true}).waitFor();
-    assert.equal(await page.evaluate(()=>window.fixture.saved.at(-1).circles[0].radiusMeters),150);
+    assert.equal(await page.evaluate(()=>window.fixture.saved.at(-1).circles[0].radiusMeters),65);
+    assert.equal(await page.evaluate(()=>window.fixture.saved.at(-1).monitoringEnvelope.circles[0].radiusMeters),200);
+    assert.equal(await page.evaluate(()=>window.fixture.saved.at(-1).monitoringEnvelope.enabled),true);
     await panel.locator('[data-edit-place="place-29"]').click();
     await name.fill('Descartar este nome'); await panel.getByRole('button',{name:'Cancelar',exact:true}).click(); await panel.getByRole('button',{name:'Descartar alterações',exact:true}).click();
     await panel.locator('article').filter({hasText:'Lugar alterado'}).waitFor();
@@ -168,7 +174,7 @@ try {
     await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).count(),0,'My location cannot define geometry for a new place');
     await panel.getByRole('button',{name:'Adicionar no centro do mapa',exact:true}).click();
-    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'150');
+    assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'50');
     await panel.getByLabel('Raio em metros',{exact:true}).fill('65'); await panel.getByLabel('Raio em metros',{exact:true}).blur();
     await panel.getByRole('button',{name:'Adicionar círculo no mapa',exact:true}).click(); await panel.locator('.place-map').click({position:{x:60,y:140}});
     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).count(),2,'Actual map click adds a second circle');
@@ -179,7 +185,7 @@ try {
     assert.equal(await panel.getByLabel('Nome',{exact:true}).count(),0,'Accepted create closes the editor even if refreshing the list fails');
     assert.equal(await page.evaluate(()=>window.fixture.saved.filter(item=>item.name==='Novo lugar explícito').length),1,'Refresh failure cannot ask the user to submit a duplicate create');
     await panel.getByRole('button',{name:'Fechar configurações',exact:true}).click(); await panel.waitFor({state:'hidden'});
-    report.cases.push({width,fontScale,status:'pass',checks:['scrolled edit focus and return','view-only current position and search','distinct position and geometry markers','accuracy13/30/65/100/200/201','stale and unavailable','search failure safe feedback','reviewed explicit area enlargement and confirmation','dirty close/back/cancel/revert','revision conflict preserves values','save feedback and list return','actual map click adds second circle','no horizontal overflow','reduced viewport keyboard simulation']});
+    report.cases.push({width,fontScale,status:'pass',checks:['scrolled edit focus and return','view-only current position and search','distinct position and geometry markers','accuracy13/30/65/100/200/201','stale and unavailable','search failure safe feedback','independent dashed operational envelope and explicit approval','dirty close/back/cancel/revert','revision conflict preserves values','save feedback and list return','actual map click adds second circle','no horizontal overflow','reduced viewport keyboard simulation']});
     assert.deepEqual(errors,[]); console.log(`Places ${width}px, font ${fontScale}: real scrolled clicks, map/marker/search, accuracy/stale/unavailable, explicit area, save/conflict/cancel/dirty/back/keyboard PASS (native IPC fixture)`);
     await context.close();
   }

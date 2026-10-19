@@ -57,8 +57,8 @@ test('history explains whether Android delivered a transition, the decision and 
 
 test('history is bounded and renders only known diagnostic fields', () => {
   const arbitrary = 'token-secret stack latitude=10 longitude=20';
-  const rows = geofenceDiagnosticHistory(Array.from({ length: 30 }, (_, i) => ({ code: arbitrary, receivedAt: i === 29 ? NaN : now, evidenceAt: Infinity, source: arbitrary, classification: arbitrary, transition: arbitrary, regionCurrent: arbitrary, armed: arbitrary, occurrenceCreated: arbitrary, error: arbitrary })));
-  assert.equal(rows.length, 12);
+  const rows = geofenceDiagnosticHistory(Array.from({ length: 60 }, (_, i) => ({ code: arbitrary, receivedAt: i === 59 ? NaN : now, evidenceAt: Infinity, source: arbitrary, classification: arbitrary, transition: arbitrary, regionCurrent: arbitrary, armed: arbitrary, occurrenceCreated: arbitrary, error: arbitrary })));
+  assert.equal(rows.length, 32);
   assert.equal(rows[0].received, 'Instante indisponível');
   assert.equal(rows[0].label, 'Diagnóstico não reconhecido');
   assert.equal(rows[0].details, '');
@@ -102,4 +102,18 @@ test('service decisions and local delivery sources stay distinct from location a
 
 test('native event without a position explains the preserved presence history', () => {
   assert.equal(geofencePresenceReason({ ...observed, reasonCode: 'native_location_absent' }), 'O evento do Android não trouxe uma posição. A última presença confirmada continua preservada nos detalhes do monitoramento.');
+});
+
+test('hybrid proximity is a temporary verification, never an accepted arrival by itself', () => {
+  assert.equal(status({ armed: true, monitoringState: 'approaching' }), 'Aproximando-se — verificando entrada…');
+  const rows = geofenceDiagnosticHistory([
+    { code: 'operational_enter_received', source: 'android_event', receivedAt: now, transition: 'enter', occurrenceCreated: false },
+    { code: 'monitoring_session_started', source: 'monitoring_session', receivedAt: now },
+    { code: 'location_unavailable', source: 'fused_session', receivedAt: now },
+    { code: 'monitoring_session_expired', source: 'monitoring_session', receivedAt: now },
+  ]);
+  assert.match(rows[3].details, /sem nova ocorrência/);
+  assert.equal(rows[2].label, 'Acompanhamento temporário iniciado');
+  assert.equal(rows[1].label, 'Localização indisponível no prazo');
+  assert.equal(rows[0].label, 'Orçamento de acompanhamento esgotado');
 });

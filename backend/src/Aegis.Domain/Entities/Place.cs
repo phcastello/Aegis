@@ -13,6 +13,8 @@ public sealed record PlaceCircle(Guid Id, double Latitude, double Longitude, dou
     }
 }
 
+public sealed record PlaceMonitoringEnvelope(int Revision, bool Enabled, double PaddingMeters, DateTimeOffset? ApprovedAt, string GeometryFingerprint);
+
 public sealed class Place : AuditableEntity
 {
     private Place() { }
@@ -24,6 +26,16 @@ public sealed class Place : AuditableEntity
     public int Revision { get; private set; } = 1;
     public string CirclesJson { get; private set; } = "[]";
     public string AliasesJson { get; private set; } = "[]";
+    // Additive configuration: never replaces or expands the user's real geometry.
+    public string? MonitoringEnvelopeJson { get; private set; }
+    public PlaceMonitoringEnvelope? MonitoringEnvelope => MonitoringEnvelopeJson is null ? null : JsonSerializer.Deserialize<PlaceMonitoringEnvelope>(MonitoringEnvelopeJson);
+    public void ConfigureMonitoringEnvelope(bool enabled, double paddingMeters, string geometryFingerprint, DateTimeOffset now)
+    {
+        if (!double.IsFinite(paddingMeters) || paddingMeters is < 50 or > 1000)
+            throw new ArgumentException("Use uma extensão de proximidade entre 50 m e 1 km.");
+        MonitoringEnvelopeJson = JsonSerializer.Serialize(new PlaceMonitoringEnvelope((MonitoringEnvelope?.Revision ?? 0) + 1, enabled, paddingMeters, now, geometryFingerprint));
+        Touch(now);
+    }
     public IReadOnlyList<PlaceCircle> Circles => JsonSerializer.Deserialize<PlaceCircle[]>(CirclesJson)!;
     public IReadOnlyList<string> Aliases => JsonSerializer.Deserialize<string[]>(AliasesJson)!;
     public void Change(string name, string type, Guid? parentId, IReadOnlyList<PlaceCircle> circles, IReadOnlyList<string> aliases, DateTimeOffset now, bool increment = true)

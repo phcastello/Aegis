@@ -56,24 +56,35 @@ object NodeNativeSession {
   } catch (_: Exception) { false }
 
   class HttpFailure(val status: Int) : Exception()
-  fun call(context: Context, method: String, path: String, body: JSONObject? = null, tokenOnly: Boolean = false, expectedScope:String?=null): JSONObject {
+  fun call(context: Context, method: String, path: String, body: JSONObject? = null, tokenOnly: Boolean = false, expectedScope:String?=null,connectTimeoutMillis:Int=10000,readTimeoutMillis:Int=15000): JSONObject {
     require(path.startsWith("/api/") && !path.contains("?") && !path.contains(".."))
     val session = if (tokenOnly) null else read(context) ?: throw HttpFailure(401)
     if(expectedScope!=null && (session?:read(context))?.nodeId!=expectedScope)throw HttpFailure(409)
     val origin = session?.origin ?: NodeNativeNotifications.prefs(context).getString("origin", null) ?: throw HttpFailure(401)
     require(validOrigin(origin, context))
     val connection = URL(origin + path).openConnection() as HttpURLConnection
+    val deadline=android.os.SystemClock.elapsedRealtime()+connectTimeoutMillis+readTimeoutMillis
+    fun remainingReadTimeout():Int=(deadline-android.os.SystemClock.elapsedRealtime()).coerceAtMost(readTimeoutMillis.toLong()).toInt().also{if(it<=0)throw java.net.SocketTimeoutException()}
     try {
-      connection.connectTimeout = 10000; connection.readTimeout = 15000; connection.instanceFollowRedirects = false
+      connection.connectTimeout = connectTimeoutMillis.coerceIn(1000,10000); connection.readTimeout = readTimeoutMillis.coerceIn(1000,15000); connection.instanceFollowRedirects = false
       connection.requestMethod = method; connection.setRequestProperty("Accept", "application/json")
       session?.let { connection.setRequestProperty("Authorization", "AegisNode ${it.credential}") }
       if (body != null) {
         connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
         connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
       }
+      connection.readTimeout=remainingReadTimeout()
       val code = connection.responseCode
       if (code !in 200..299) throw HttpFailure(code)
-      val bytes = connection.inputStream.use { it.readBytesBounded(if(path=="/api/nodes/geofences/manifest")1048576 else 262144) }
+      val bytes = connection.inputStream.use { stream ->
+        val output=java.io.ByteArrayOutputStream();val block=ByteArray(8192)
+        while(true) {
+          connection.readTimeout=remainingReadTimeout()
+          val count=stream.read(block);if(count<0)break
+          require(output.size()+count<=(if(path=="/api/nodes/geofences/manifest")1048576 else 262144));output.write(block,0,count)
+        }
+        output.toByteArray()
+      }
       return if (bytes.isEmpty()) JSONObject() else JSONObject(String(bytes, Charsets.UTF_8))
     } finally { connection.disconnect() }
   }

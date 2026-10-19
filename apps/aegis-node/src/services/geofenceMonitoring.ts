@@ -22,6 +22,7 @@ export function geofenceMonitoringStatus(item: Geofence, state: GeofencePresence
     if (state.installationStatus === 'permission_required' || state.reasonCode === 'permission_required') return 'Precisa de permissão';
     if (state.installationStatus === 'failed') return 'Falha na instalação';
     if (state.installationStatus !== 'installed') return 'Sincronização necessária';
+    if (state.monitoringState === 'approaching') return 'Aproximando-se — verificando entrada…';
     if (state.monitoringState === 'verifying') return item.transition === 'enter' ? 'Verificando possível chegada' : 'Verificando possível saída';
     if (state.armed) return item.transition === 'enter' ? 'Ativo — aguardando sua chegada' : 'Ativo — aguardando sua saída';
     if (state.monitoringState === 'waiting_departure') return 'Aguardando você sair da área';
@@ -53,18 +54,36 @@ const presenceReasons: Readonly<Record<string, string>> = {
   outside_initial: 'A regra de saída aguarda uma entrada confirmada antes de monitorar a saída.',
   inside_initial: 'A regra de chegada aguarda uma saída confirmada antes de monitorar a chegada.',
   pending_sync: 'Sincronize a regra neste celular para instalar o monitoramento.',
+  monitoring_session_active: 'Aproximação em acompanhamento temporário.',
+  monitoring_session_expired: 'A janela temporária terminou. O celular aguarda outra evidência válida.',
+  monitoring_session_start_denied: 'O Android bloqueou o acompanhamento temporário. As geofences continuam registradas.',
+  monitoring_session_interrupted: 'O acompanhamento foi interrompido. A presença anterior continua registrada.',
   transition_needs_confirmation: 'Um evento foi recebido e precisa de confirmação complementar limitada.',
   transition_contradictory_location: 'O evento recebido conflita com a localização recente. A presença anterior foi preservada.',
 };
 
 export function geofencePresenceReason(state: GeofencePresenceDiagnostic | undefined): string {
   if (!state) return 'Confira o estado no celular observador.';
+  if (state.monitoringState === 'approaching') return 'Verificando entrada na área real por tempo limitado.';
   if (state.monitoringState === 'verifying') return 'Um evento foi recebido. O celular está buscando evidência complementar por tempo limitado.';
   return Object.prototype.hasOwnProperty.call(presenceReasons, state.reasonCode) ? presenceReasons[state.reasonCode]! : state.reasonCode === 'confirmed' ? '' : 'Confira os detalhes do monitoramento para acompanhar a última decisão do celular.';
 }
 
 // Display only known codes and typed fields, never arbitrary native payloads or errors.
 const eventLabels: Readonly<Record<string, string>> = {
+  operational_enter_received: 'Aproximação detectada pelo Android', operational_exit_received: 'Saída da região de proximidade recebida',
+  native_inner_enter_received: 'Entrada na geofence real recebida', native_inner_exit_received: 'Saída da geofence real recebida',
+  monitoring_start_denied: 'Android bloqueou o acompanhamento temporário', monitoring_interrupted: 'Acompanhamento interrompido',
+  monitoring_cancelled: 'Acompanhamento encerrado por cancelamento', monitoring_superseded: 'Acompanhamento substituído por nova configuração',
+  monitoring_transition_accepted: 'Acompanhamento encerrado após transição',
+  monitoring_cooldown: 'Intervalo de descanso do acompanhamento ainda ativo', monitoring_budget_exhausted: 'Limite de sessões por hora atingido',
+  monitoring_session_started: 'Acompanhamento temporário iniciado', monitoring_session_expired: 'Orçamento de acompanhamento esgotado',
+  monitoring_location_blocked: 'Aquisição bloqueada pelas condições do Android',
+  monitoring_session_start_denied: 'Android bloqueou o acompanhamento temporário', monitoring_session_interrupted: 'Acompanhamento interrompido',
+  monitoring_session_superseded: 'Acompanhamento substituído por nova configuração', monitoring_session_cancelled: 'Acompanhamento encerrado por cancelamento',
+  monitoring_session_transition_accepted: 'Acompanhamento encerrado após transição',
+  location_acquired: 'Nova localização obtida', location_unavailable: 'Localização indisponível no prazo', location_implausible: 'Movimento implausível descartado',
+  real_area_enter_candidate: 'Possível chegada à área real', real_area_enter_accepted: 'Chegada à área real aceita', real_area_exit_accepted: 'Saída da área real aceita',
   native_enter_accepted: 'Entrada nativa aceita', native_exit_accepted: 'Saída nativa aceita',
   native_enter_unarmed: 'Entrada recebida com regra desarmada', native_exit_unarmed: 'Saída recebida com regra desarmada',
   native_event_initial: 'Evento usado como condição inicial', native_event_stale: 'Evento descartado por atraso',
@@ -92,10 +111,12 @@ function timestamp(value: unknown): string | null {
 
 export function geofenceDiagnosticHistory(history: GeofenceDiagnosticEvent[] | undefined): { code: string; label: string; received: string; details: string }[] {
   if (!Array.isArray(history)) return [];
-  return history.slice(-12).reverse().filter(event => event && typeof event === 'object').map(event => {
+  return history.slice(-32).reverse().filter(event => event && typeof event === 'object').map(event => {
     const details: string[] = [];
     if (event.source === 'android_event') details.push('evento Android');
+    if (event.source === 'operational_event') details.push('evento de proximidade');
     if (event.source === 'one_shot') details.push('aquisição pontual');
+    if (event.source === 'monitoring_session' || event.source === 'fused_session') details.push('acompanhamento temporário');
     if (event.source === 'local_notification') details.push('apresentação da notificação');
     if (event.source === 'local_recovery') details.push('recuperação local');
     if (event.transition === 'enter') details.push('entrada');

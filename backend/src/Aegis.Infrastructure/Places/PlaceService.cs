@@ -38,10 +38,14 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
         catch (DbUpdateConcurrencyException) { db.ChangeTracker.Clear(); throw new NodeException("revision_conflict", "O registro mudou. Recarregue antes de salvar.", 409); }
         catch { db.ChangeTracker.Clear(); throw; }
     }
-    public static PlaceView View(Place p, IReadOnlyList<PlaceCircle>? geometry = null) => new(p.Id, p.Name, p.Type, p.ParentId, p.Revision, geometry ?? p.Circles, p.Aliases);
+    public static PlaceView View(Place p, IReadOnlyList<PlaceCircle>? geometry = null, IReadOnlyList<PlaceCircle>? monitoringGeometry = null) => new(p.Id, p.Name, p.Type, p.ParentId, p.Revision, geometry ?? p.Circles, p.Aliases, MonitoringEnvelopeGeometry.View(p, monitoringGeometry ?? geometry ?? p.Circles));
     private GeographicRuleView View(GeographicReminderRule r) => new(r.Id, r.Text, r.PlaceIds, r.ObserverNodeId, r.Revision, r.Transition,
         r.Repeat, r.StartsAt, r.EndsAt, r.TimeZoneId, r.DeliveryPolicy, r.Status, r.SyncStatus, r.LeaseUntil, r.SyncedAt, r.ErrorCode);
-    public async Task<IReadOnlyList<PlaceView>> ListAsync(CancellationToken ct = default) => (await Places.AsNoTracking().OrderBy(p => p.Name).ToArrayAsync(ct)).Select(p => View(p)).ToArray();
+    public async Task<IReadOnlyList<PlaceView>> ListAsync(CancellationToken ct = default)
+    {
+        var all = await Places.AsNoTracking().OrderBy(p => p.Name).ToDictionaryAsync(p => p.Id, ct);
+        return all.Values.Select(p => View(p, monitoringGeometry: PlaceGeometry.EffectiveCircles(p, all))).ToArray();
+    }
     public async Task<PlaceView> SaveAsync(Guid? id, PlaceWrite request, CancellationToken ct = default)
     {
         var affected = new HashSet<Guid>();
@@ -52,12 +56,24 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
             if (all.Count >= 500 && id is null) throw new NodeException("place_limit", "Limite de 500 lugares atingido.");
             if (request.ParentId is { } parent && !all.ContainsKey(parent)) throw new NodeException("place_not_found", "O lugar pai não existe.", 404);
             Place item;
+            var realChanged = true;
             if (id is { } target) {
                 if (!all.TryGetValue(target, out item!)) throw new NodeException("place_not_found", "Lugar não encontrado.", 404);
                 if (request.ExpectedRevision != item.Revision) throw new NodeException("revision_conflict", "O lugar mudou. Recarregue antes de salvar.", 409);
                 if (PlaceGeometry.WouldCycle(target, request.ParentId, all.ToDictionary(p => p.Key, p => p.Value.ParentId))) throw new NodeException("place_cycle", "Um lugar não pode ser descendente dele mesmo.");
-                item.Change(request.Name, request.Type, request.ParentId, request.Circles, request.Aliases, Now);
+                realChanged = item.Name != request.Name.Trim() || item.Type != request.Type || item.ParentId != request.ParentId ||
+                    !item.Circles.SequenceEqual(request.Circles) || !item.Aliases.SequenceEqual(request.Aliases.Select(a => a.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
+                if (realChanged) item.Change(request.Name, request.Type, request.ParentId, request.Circles, request.Aliases, Now);
             } else { item = new(request.Name, request.Type, request.ParentId, request.Circles, request.Aliases, Now); Places.Add(item); all[item.Id] = item; }
+            if (request.MonitoringEnvelope is { } envelope) {
+                if (envelope.ExpectedRevision != (item.MonitoringEnvelope?.Revision ?? 0)) throw new NodeException("revision_conflict", "A detecção de proximidade mudou. Reabra o lugar antes de confirmar.", 409);
+                if (!envelope.Confirmed) throw new NodeException("monitoring_approval_required", "Confirme explicitamente a região de proximidade antes de salvar.");
+                var realCircles = PlaceGeometry.EffectiveCircles(item, all);
+                if (envelope.Enabled && (realCircles.Count == 0 || item.Type == "room")) throw new NodeException("geometry_required", "A detecção de proximidade precisa de uma área real externa.");
+                if (envelope.Enabled && realCircles.Any(circle => circle.RadiusMeters + envelope.PaddingMeters > 100000))
+                    throw new NodeException("monitoring_region_too_large", "A região de proximidade ultrapassa o limite de 100 km. Reduza a extensão ou desative a proximidade.");
+                item.ConfigureMonitoringEnvelope(envelope.Enabled, envelope.PaddingMeters, MonitoringEnvelopeGeometry.Fingerprint(realCircles), Now);
+            }
             var changedPlaces = new HashSet<Guid> { item.Id };
             for (var pass = 0; pass < all.Count; pass++) {
                 var added = false; foreach (var child in all.Values.Where(p => p.ParentId is { } parent && changedPlaces.Contains(parent))) added |= changedPlaces.Add(child.Id);
@@ -67,14 +83,15 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
                 if (!rule.PlaceIds.Any(changedPlaces.Contains)) continue;
                 if (rule.PlaceIds.Any(placeId => all[placeId].Type == "room")) throw new NodeException("indoor_location_unsupported", "GPS não identifica entrada em cômodos. Cancele ou altere a regra antes de transformar seu lugar em cômodo.", 409);
                 foreach (var placeId in rule.PlaceIds) if (PlaceGeometry.EffectiveCircles(all[placeId], all).Count == 0) throw new NodeException("place_in_use", "Uma regra ativa precisa da área deste lugar. Pause/cancele ou defina outra área antes.", 409);
-                rule.InvalidateGeometry(Now); affected.Add(rule.ObserverNodeId);
+                if (realChanged) rule.InvalidateGeometry(Now); else if (request.MonitoringEnvelope is not null) rule.InvalidateMonitoring(Now);
+                affected.Add(rule.ObserverNodeId);
             }
             foreach (var observer in affected) {
                 var active = await Rules.Where(r => r.ObserverNodeId == observer && r.Status == "active").ToArrayAsync(ct);
-                if (active.SelectMany(r => r.PlaceIds).Distinct().SelectMany(p => PlaceGeometry.EffectiveCircles(all[p], all)).DistinctBy(c => c.Id).Count() > 100)
+                if (MonitoringEnvelopeGeometry.RegionCount(active.SelectMany(r => r.PlaceIds), all) > 100)
                     throw new NodeException("geofence_region_limit", "Esta edição ultrapassa 100 regiões no celular. Reduza áreas ou pause regras antes de salvar.", 409);
             }
-            return View(item);
+            return View(item, monitoringGeometry: PlaceGeometry.EffectiveCircles(item, all));
         }, ct);
         foreach (var observer in affected) await Signal(observer, "geofence.monitor", new { operation = "sync" }, ct);
         return result;
@@ -232,11 +249,11 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
     {
         var active = (await Rules.Where(r => r.ObserverNodeId == rule.ObserverNodeId && r.Status == "active").ToArrayAsync(ct)).Append(rule).DistinctBy(r => r.Id).ToArray();
         if (active.Length > 100) throw new NodeException("geofence_rule_limit", "Limite de 100 lembretes geográficos ativos por celular.", 409);
-        var regionCount = active.SelectMany(r => r.PlaceIds).Distinct().SelectMany(p => PlaceGeometry.EffectiveCircles(places[p], places)).DistinctBy(c => c.Id).Count();
+        var regionCount = MonitoringEnvelopeGeometry.RegionCount(active.SelectMany(r => r.PlaceIds), places);
         if (regionCount > 100) throw new NodeException("geofence_region_limit", "As regras deste celular ultrapassam 100 regiões. Reduza áreas ou pause regras.", 409);
     }
     private static string ManifestRevision(IEnumerable<GeographicReminderRule> rules, IEnumerable<Place> places) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        string.Join(';', rules.OrderBy(r => r.Id).Select(r => $"{r.Id}:{r.Revision}:{r.Status}")) + "/" + string.Join(';', places.OrderBy(p => p.Id).Select(p => $"{p.Id}:{p.Revision}"))))).ToLowerInvariant();
+        string.Join(';', rules.OrderBy(r => r.Id).Select(r => $"{r.Id}:{r.Revision}:{r.Status}")) + "/" + string.Join(';', places.OrderBy(p => p.Id).Select(p => $"{p.Id}:{p.Revision}:{p.MonitoringEnvelope?.Revision ?? 0}"))))).ToLowerInvariant();
     public Task<object> ManifestAsync(Guid actor, CancellationToken ct = default) => Locked<object>(async () => {
         await RequireObserver(actor, ct);
         var rules = await Rules.Where(r => r.ObserverNodeId == actor && (r.Status == "active" || r.Status == "paused") && (r.EndsAt == null || r.EndsAt > Now)).ToArrayAsync(ct);
@@ -260,7 +277,7 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
             rule.Confirm(ack.Revision, ack.Status, ack.ErrorCode, Now);
         }
         // A full replacement manifest confirms removal of cancelled rules omitted locally.
-        foreach (var rule in rules.Where(r => r.Status == "cancelled" && !request.Rules.Any(a => a.Id == r.Id))) rule.Confirm(rule.Revision, "completed", null, Now);
+        foreach (var rule in rules.Where(r => request.InstallationComplete != false && r.Status == "cancelled" && !request.Rules.Any(a => a.Id == r.Id))) rule.Confirm(rule.Revision, "completed", null, Now);
         return new { synchronized = true };
     }, ct);
     public Task<object> EventAsync(Guid actor, GeographicEventWrite request, CancellationToken ct = default) => Locked<object>(async () => {

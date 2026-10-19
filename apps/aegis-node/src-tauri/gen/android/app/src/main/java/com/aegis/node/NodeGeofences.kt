@@ -46,6 +46,8 @@ object NodeGeofences {
  fun clearIfUnbound(context:Context,origin:String?=null) = clearWhen(context){NodeNativeSession.bindingAllowed(context,null,origin)}
  fun clearForScope(context:Context,id:String,origin:String) = clearWhen(context){NodeNativeSession.scopeIsCurrent(context,id,origin)}
  private fun clearWhen(context:Context,current:()->Boolean) { synchronized(manifestGate) {
+  synchronized(applyGate){if(!current())return}
+  NodeMonitoringSessions.cancelAll(context,"monitoring_cancelled")
   val hadRegions=prefs(context).getBoolean("hasRegions",false)
   synchronized(applyGate){if(!current())return;check(prefs(context).edit().remove("manifest").remove("installedRevision").remove("installedConfiguration").remove("reportPending").remove("reportError").putBoolean("needsInstall",true).putBoolean("hasRegions",false).commit())}
   WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
@@ -56,10 +58,11 @@ object NodeGeofences {
   if(!NodeNativeSession.bindingAllowed(context,id))return
   val previous=prefs(context).getString("scopeNodeId",null) ?: manifest(context)?.optString("observerNodeId")
   if(previous!=id) {
+   NodeMonitoringSessions.cancelAll(context,"monitoring_superseded")
    Store(context).use{it.writableDatabase.delete("events",null,null);it.writableDatabase.delete("transition_keys",null,null)}
    NodeNativeNotifications.prefs(context).edit().remove("lastObservation").remove("observationPending").remove("observationScopeId").commit()
    val edit=prefs(context).edit().remove("reportPending").remove("reportError").remove("lastAcquisitionAt").remove("lastAcquisitionStatus")
-   for(key in prefs(context).all.keys.filter{it.startsWith("diagnostic:") || it.startsWith("reliable:") || it.startsWith("history:") || it.startsWith("nativePending:") || it.startsWith("accepted:") || it=="nativeSeen" || it.startsWith("lastNativeEventAt:") || it.startsWith("lastNativeTransition:")})edit.remove(key)
+   for(key in prefs(context).all.keys.filter{it.startsWith("state:") || it.startsWith("geometry:") || it.startsWith("notBefore:") || it.startsWith("confirmedAt:") || it.startsWith("hybridFix:") || it.startsWith("armed:") || it.startsWith("ruleRevision:") || it.startsWith("completed:") || it.startsWith("operationalInside:") || it.startsWith("operationalRegion:") || it.startsWith("diagnostic:") || it.startsWith("reliable:") || it.startsWith("history:") || it.startsWith("nativePending:") || it.startsWith("accepted:") || it=="nativeSeen" || it.startsWith("lastNativeEventAt:") || it.startsWith("lastNativeTransition:")})edit.remove(key)
    check(edit.commit())
   }
   check(prefs(context).edit().putString("scopeNodeId",id).commit())
@@ -86,13 +89,14 @@ object NodeGeofences {
   } else WorkManager.getInstance(context).cancelUniqueWork("aegis-geofence-lease")
  }
  }
- fun sync(context:Context):JSONObject {
-  try{flushEvents(context)}catch(_:Exception){}
+ fun sync(context:Context,flushOccurrences:Boolean=true):JSONObject {
+  if(flushOccurrences)try{flushEvents(context)}catch(_:Exception){}
   reconcile(context)
   return JSONObject().put("status",prefs(context).getString("status","pending_sync")).put("errorCode",prefs(context).getString("error",null)).put("syncPending",prefs(context).getBoolean("reportPending",false))
  }
  /** Local diagnostics contain confidence metadata, never precise coordinates. */
  fun diagnostics(context:Context):JSONObject {
+  NodeMonitoringSessions.recoverInterrupted(context)
   val permission=NodeLocation.permissions(context)
   val result=JSONObject().put("supported",true).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)).put("rules",JSONArray())
   val value=manifest(context) ?: return result
@@ -136,10 +140,11 @@ object NodeGeofences {
    val armed=installed && rule.optString("status")=="active" && (rule.isNull("endsAt")||stamp(rule.getString("endsAt"))>now) && preferences.getLong("ruleRevision:$id",-1)==rule.getLong("revision") && preferences.getBoolean("armed:$id",false) && !preferences.getBoolean("completed:$id",false)
    if(installation=="installed" && !armed && presence=="outside" && rule.optString("transition")=="exit")reason="outside_initial"
    if(installation=="installed" && !armed && combine(saved)=="inside" && rule.optString("transition")=="enter")reason="inside_initial"
+   val approaching=rule.getJSONArray("placeIds").strings().any{NodeMonitoringSessions.active(context,it)}
    val verifying=rule.getJSONArray("placeIds").strings().any{place->preferences.getString("nativePending:$place",null)?.let{JSONObject(it).optLong("deadline",0)>now}==true}
-   val monitoring=when{preferences.getBoolean("completed:$id",false)->"completed";installation!="installed"->"waiting_initial";verifying->"verifying";armed->"armed";combine(saved)=="inside" && rule.optString("transition")=="enter"->"waiting_departure";combine(saved)=="outside" && rule.optString("transition")=="exit"->"waiting_arrival";presence=="unknown"->"uncertain";else->"waiting_initial"}
+   val monitoring=when{preferences.getBoolean("completed:$id",false)->"completed";installation!="installed"->"waiting_initial";approaching->"approaching";verifying->"verifying";armed->"armed";combine(saved)=="inside" && rule.optString("transition")=="enter"->"waiting_departure";combine(saved)=="outside" && rule.optString("transition")=="exit"->"waiting_arrival";presence=="unknown"->"uncertain";else->"waiting_initial"}
    output.put(JSONObject().put("id",id).put("revision",rule.getLong("revision")).put("installationStatus",installation).put("presence",presence).put("confirmedPresence",combine(saved)).put("armed",armed)
-    .put("lastObservationAt",latest?.optLong("lastObservationAt")?:JSONObject.NULL).put("accuracyMeters",latest?.optDouble("accuracyMeters")?.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL).put("reasonCode",reason).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)).put("transition",rule.getString("transition")).put("monitoringState",monitoring).put("confirmedAt",rule.getJSONArray("placeIds").strings().maxOfOrNull{preferences.getLong("confirmedAt:$it",0)}?:JSONObject.NULL).put("lastNativeEventAt",preferences.getLong("lastNativeEventAt:$id",0).takeIf{it>0}?:JSONObject.NULL).put("lastNativeTransition",preferences.getString("lastNativeTransition:$id",null)).put("history",preferences.getString("history:$id",null)?.let{JSONArray(it)}?:JSONArray()))
+    .put("lastObservationAt",latest?.optLong("lastObservationAt")?:JSONObject.NULL).put("accuracyMeters",latest?.optDouble("accuracyMeters")?.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL).put("reasonCode",reason).put("powerSaveMode",permission.optBoolean("powerSaveMode",false)).put("transition",rule.getString("transition")).put("monitoringState",monitoring).put("confirmedAt",rule.getJSONArray("placeIds").strings().maxOfOrNull{preferences.getLong("confirmedAt:$it",0)}?:JSONObject.NULL).put("lastNativeEventAt",preferences.getLong("lastNativeEventAt:$id",0).takeIf{it>0}?:JSONObject.NULL).put("lastNativeTransition",preferences.getString("lastNativeTransition:$id",null)).put("monitoringSessions",JSONArray(rule.getJSONArray("placeIds").strings().mapNotNull{NodeMonitoringSessions.status(context,it)})).put("installedRegionKinds",prefs(context).getString("installedConfiguration",null)?.let{raw->JSONArray(JSONObject(raw).getJSONArray("regions").objects().filter{it.getString("placeId") in rule.getJSONArray("placeIds").strings()}.map{it.optString("kind","real")}.distinct())}?:JSONArray()).put("history",preferences.getString("history:$id",null)?.let{JSONArray(it)}?:JSONArray()))
   }
   return result
  }
@@ -159,12 +164,72 @@ object NodeGeofences {
  private fun activeRules(value:JSONObject,now:Long=System.currentTimeMillis()):List<JSONObject> = value.getJSONArray("rules").objects().filter {
   it.optString("status")=="active" && stamp(it.getString("leaseUntil"))>now && (it.isNull("endsAt")||stamp(it.getString("endsAt"))>now)
  }
+ private fun physicalRegions(place:JSONObject):List<JSONObject> {
+  val real=place.getJSONArray("circles").objects().map{JSONObject(it.toString()).put("kind","real")}
+  val envelope=place.optJSONObject("monitoringEnvelope")?:return real
+  if(!envelope.optBoolean("enabled") || envelope.optBoolean("approvalRequired",true) || envelope.isNull("approvedAt"))return real
+  return real+(envelope.optJSONArray("circles")?.objects()?:emptyList()).map{JSONObject(it.toString()).put("kind","operational")}
+ }
+ internal fun fixtureLocation(context:Context,placeId:String?,outside:Boolean):Location? {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  val value=manifest(context)?:return null
+  val circle=geometry(value,placeId?:return null).firstOrNull()?:return null
+  val distance=if(outside)geometry(value,placeId).maxOf{NodeGeoEngine.distance(circle.latitude,circle.longitude,it.latitude,it.longitude)+it.radiusMeters}+300 else 0.0
+  return Location("fused").apply{latitude=circle.latitude;longitude=circle.longitude+Math.toDegrees(distance/(6371000.0*kotlin.math.cos(Math.toRadians(circle.latitude))));accuracy=13f;time=System.currentTimeMillis();elapsedRealtimeNanos=android.os.SystemClock.elapsedRealtimeNanos()}
+ }
+ internal fun monitoringCurrent(context:Context,placeId:String,configurationId:String,scope:String):Boolean = synchronized(applyGate) {
+  val value=manifest(context)?:return@synchronized false
+  val config=prefs(context).getString("installedConfiguration",null)?.let{JSONObject(it)}?:return@synchronized false
+  currentDefinition(context,value) && !prefs(context).getBoolean("needsInstall",true) && config.getString("id")==configurationId && NodeNativeSession.read(context)?.nodeId==scope && stamp(value.getString("leaseUntil"))>System.currentTimeMillis() && activeRules(value).any{placeId in it.getJSONArray("placeIds").strings() && prefs(context).getLong("ruleRevision:${it.getString("id")}",-1)==it.getLong("revision") && !prefs(context).getBoolean("completed:${it.getString("id")}",false)}
+ }
+ internal fun monitoringFinished(context:Context,placeId:String) = synchronized(applyGate) {
+  val old=state(context,placeId)
+  val edit=prefs(context).edit().remove("nativePending:$placeId")
+  if(old.candidate!="unknown")saveState(edit,placeId,old.copy(candidate="unknown",candidateAt=0))
+  check(edit.commit())
+ }
+ internal fun monitoringHistory(context:Context,placeId:String,code:String) = synchronized(applyGate) {
+  val value=manifest(context)?:return@synchronized
+  history(context,value.getJSONArray("rules").objects().filter{placeId in it.getJSONArray("placeIds").strings()},code,System.currentTimeMillis(),source="monitoring_session")
+ }
+ internal fun monitoringObservation(context:Context,placeId:String,observation:NodeGeoEngine.Observation,configurationId:String,scope:String) = synchronized(applyGate) {
+  if(!monitoringCurrent(context,placeId,configurationId,scope))return@synchronized
+  val value=manifest(context)?:return@synchronized
+  val now=System.currentTimeMillis()
+  val config=JSONObject(prefs(context).getString("installedConfiguration",null)!!)
+  val old=state(context,placeId)
+  val prior=prefs(context).getString("hybridFix:$placeId",null)?.let{NodeLocation.engine(JSONObject(it))}
+  if(!NodeGeoEngine.plausible(prior,observation)){monitoringHistory(context,placeId,"location_implausible");return@synchronized}
+  val area=geometry(value,placeId)
+  val assessment=NodeGeoEngine.assess(area,observation,now,if(old.confirmed=="unknown")1.0 else 0.4)
+  if(assessment.reasonCode in setOf("future_location","stale_location","accuracy_insufficient"))return@synchronized
+  if(observation.capturedAt<=old.lastCapturedAt)return@synchronized
+  val rules=activeRules(value).filter{placeId in it.getJSONArray("placeIds").strings() && !prefs(context).getBoolean("completed:${it.getString("id")}",false)}
+  val decision=NodeGeoEngine.hybrid(old,area,observation,now,prefs(context).getLong("notBefore:$placeId",config.getLong("installedAt")))
+  recordNativeDiagnostic(context,value,placeId,observation,now,"monitoring_session",now)
+  if(assessment.classification=="inside")monitoringHistory(context,placeId,"real_area_enter_candidate")
+  val baselineAt=prefs(context).getLong("confirmedAt:$placeId",old.lastCapturedAt)
+  val evidence=NodeGeoEngine.NativeEvidence(decision.transition?:"enter",observation.capturedAt,now,observation=observation,configurationId=configurationId,configurationRevision=config.getString("revision"),observerNodeId=scope,source="monitoring_session")
+  if(decision.transition!=null) {
+   applyNativeRules(context,value,rules,placeId,old,decision.state,decision.transition,evidence,baselineAt,observation)
+   monitoringHistory(context,placeId,"real_area_${decision.transition}_accepted")
+  }
+  val edit=prefs(context).edit()
+  saveState(edit,placeId,decision.state)
+  if(decision.state.confirmed!=old.confirmed)edit.putLong("confirmedAt:$placeId",observation.capturedAt)
+  if(assessment.classification!="unknown")edit.putString("hybridFix:$placeId",JSONObject().put("latitude",observation.latitude).put("longitude",observation.longitude).put("accuracyMeters",observation.accuracyMeters).put("capturedAt",Instant.ofEpochMilli(observation.capturedAt).toString()).toString())
+  check(edit.commit())
+  recordReliable(context,placeId,assessment.classification,observation.capturedAt)
+  if(armNativeRules(context,rules,decision.state.confirmed))NodeBackgroundWork.enqueue(context)
+  if(decision.transition!=null) {NodeMonitoringSessions.finish(context,placeId,"monitoring_transition_accepted");NodeBackgroundWork.enqueue(context)}
+ }
  private fun geometry(value:JSONObject,placeId:String):List<NodeGeoEngine.Circle> {
   val place=value.getJSONArray("places").objects().firstOrNull { it.getString("id")==placeId } ?: return emptyList()
   return place.getJSONArray("circles").objects().map { NodeGeoEngine.Circle(it.getDouble("latitude"),it.getDouble("longitude"),it.getDouble("radiusMeters")) }
  }
  private fun install(context:Context,value:JSONObject) {
   synchronized(applyGate){if(!currentDefinition(context,value))return;check(reportPending(context,prefs(context).edit()).putBoolean("needsInstall",true).commit())}
+  NodeMonitoringSessions.cancelAll(context,"monitoring_superseded")
   val state=NodeLocation.permissions(context); val rules=activeRules(value).filter { rule ->
    prefs(context).getLong("ruleRevision:${rule.getString("id")}",-1)!=rule.getLong("revision") || !prefs(context).getBoolean("completed:${rule.getString("id")}",false)
   }
@@ -195,7 +260,7 @@ object NodeGeofences {
    val until=minOf(leaseUntil,if(rule.isNull("endsAt"))leaseUntil else stamp(rule.getString("endsAt")))
    for(placeId in rule.getJSONArray("placeIds").strings()) {
     val place=value.getJSONArray("places").objects().firstOrNull{it.getString("id")==placeId} ?: error("Missing place")
-    for(circle in place.getJSONArray("circles").objects()) {val id=circle.getString("id");regionUntil[id]=maxOf(regionUntil[id]?:0,until)}
+    for(circle in physicalRegions(place)) {val id=circle.getString("id");regionUntil[id]=maxOf(regionUntil[id]?:0,until)}
    }
   }
   val generation=UUID.randomUUID().toString()
@@ -203,17 +268,17 @@ object NodeGeofences {
   val regions=linkedMapOf<String,Geofence>()
   for(placeId in placeIds) {
    val place=value.getJSONArray("places").objects().firstOrNull{it.getString("id")==placeId} ?: error("Missing place")
-   for(circle in place.getJSONArray("circles").objects()) {
+   for(circle in physicalRegions(place)) {
     require(circle.getDouble("radiusMeters") in 50.0..100000.0)
     val circleId=circle.getString("id")
     // Inherited geometry can belong to several logical places; register the
     // physical circle once and retain each place binding in the allowlist.
     val requestId=installedRegions.objects().firstOrNull{it.getString("circleId")==circleId}?.getString("requestId")?:"$generation:${regions.size}"
-    installedRegions.put(JSONObject().put("requestId",requestId).put("placeId",placeId).put("circleId",circleId))
+    installedRegions.put(JSONObject().put("requestId",requestId).put("placeId",placeId).put("circleId",circleId).put("kind",circle.optString("kind","real")).put("geometryRevision",place.optLong("revision",0)).put("envelopeRevision",place.optJSONObject("monitoringEnvelope")?.optLong("revision",0)?:0))
     regions[requestId]=Geofence.Builder().setRequestId(requestId)
      .setCircularRegion(circle.getDouble("latitude"),circle.getDouble("longitude"),circle.getDouble("radiusMeters").toFloat())
      .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
-     .setNotificationResponsiveness(120000).setExpirationDuration((regionUntil.getValue(circleId)-System.currentTimeMillis()).coerceAtLeast(1)).build()
+     .setNotificationResponsiveness(30000).setExpirationDuration((regionUntil.getValue(circleId)-System.currentTimeMillis()).coerceAtLeast(1)).build()
    }
   }
   if(regions.isEmpty()||regions.size>100) {
@@ -225,7 +290,7 @@ object NodeGeofences {
    val activatedAt=System.currentTimeMillis()
    synchronized(applyGate) {
     val edit=prefs(context).edit()
-    for(placeId in placeIds)edit.putLong("notBefore:$placeId",activatedAt)
+    for(placeId in placeIds)if(prefs(context).getString("geometry:$placeId",null)!=geometry(value,placeId).toString())edit.putLong("notBefore:$placeId",activatedAt)
     check(edit.commit())
    }
    Tasks.await(client.removeGeofences(pending(context)),15,TimeUnit.SECONDS)
@@ -234,15 +299,18 @@ object NodeGeofences {
    synchronized(applyGate) {
     if(NodeNativeSession.read(context)?.nodeId!=value.getString("observerNodeId") || manifest(context)?.optString("revision")!=value.getString("revision"))return
     val edit=prefs(context).edit()
-    // GMS does not label INITIAL_TRIGGER callbacks. Disable them above and reset
-    // the baseline on every registration generation; reinstall is never movement.
+    // GMS does not label initial callbacks; disable them. Retain prior physical
+    // presence only for unchanged real geometry; registration itself is never movement.
     edit.putString("installedConfiguration",JSONObject().put("id",generation).put("nodeId",value.getString("observerNodeId")).put("revision",value.getString("revision")).put("installedAt",activatedAt).put("regions",installedRegions).toString())
-    for(key in prefs(context).all.keys.filter{it.startsWith("nativePending:") || it=="nativeSeen" || it.startsWith("lastNativeEventAt:") || it.startsWith("lastNativeTransition:") || it.startsWith("regionState:") || it.startsWith("regionAt:")})edit.remove(key)
-    for(placeId in placeIds)edit.putString("geometry:$placeId",geometry(value,placeId).toString()).remove("state:$placeId").remove("diagnostic:$placeId").remove("reliable:$placeId").remove("confirmedAt:$placeId")
+    for(key in prefs(context).all.keys.filter{it.startsWith("nativePending:") || it=="nativeSeen" || it.startsWith("lastNativeEventAt:") || it.startsWith("lastNativeTransition:") || it.startsWith("regionState:") || it.startsWith("regionAt:") || it.startsWith("operationalInside:") || it.startsWith("operationalRegion:") || it.startsWith("operationalAt:")})edit.remove(key)
+    for(placeId in placeIds) {
+     val encoded=geometry(value,placeId).toString()
+     if(prefs(context).getString("geometry:$placeId",null)!=encoded)edit.remove("state:$placeId").remove("diagnostic:$placeId").remove("reliable:$placeId").remove("confirmedAt:$placeId").remove("hybridFix:$placeId")
+     edit.putString("geometry:$placeId",encoded)
+    }
     for(rule in rules) {
      val id=rule.getString("id")
-     edit.putBoolean("armed:$id",false)
-     if(prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision"))edit.putLong("ruleRevision:$id",rule.getLong("revision")).remove("completed:$id").remove("accepted:$id")
+     if(prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision"))edit.putBoolean("armed:$id",false).putLong("ruleRevision:$id",rule.getLong("revision")).remove("completed:$id").remove("accepted:$id")
     }
     check(reportPending(context,edit).putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
    }
@@ -255,7 +323,7 @@ object NodeGeofences {
   try {
    val observation=NodeLocation.current(context,upload=false,fresh=true)
    if(!recordAcquisition(context,observation.optString("status","unavailable"),value.getString("observerNodeId")))return
-   if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation))
+   if(observation.optString("status")=="available") process(context,NodeLocation.engine(observation),allowConfirmation=false,baselineOnly=true)
   }catch(error:Exception){notificationLog("geofence_initial_position",error)}
   report(context,value)
  }
@@ -281,7 +349,7 @@ object NodeGeofences {
    }
    rules.put(JSONObject().put("id",id).put("revision",rule.getLong("revision")).put("status",status).apply { if(status=="recoverable_error") put("errorCode",prefs(context).getString("error","native_registration_failed")) })
   }
-  return JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules)
+  return JSONObject().put("manifestRevision",value.getString("revision")).put("rules",rules).put("installationComplete",!prefs(context).getBoolean("needsInstall",true) && prefs(context).getString("installedRevision",null)==value.getString("revision"))
  }
  private fun report(context:Context,value:JSONObject) {
   synchronized(applyGate) {
@@ -338,7 +406,7 @@ object NodeGeofences {
    val item=JSONObject().put("code",code).put("receivedAt",receivedAt).put("source",source).put("armed",prefs(context).getBoolean("armed:$id",false)).put("classification",classification).put("regionCurrent",regionCurrent).put("occurrenceCreated",occurrenceCreated)
    if(transition!=null)item.put("transition",transition)
    if(evidenceAt!=null)item.put("evidenceAt",evidenceAt).put("ageMillis",(receivedAt-evidenceAt).coerceAtLeast(0))
-   edit.putString("history:$id",JSONArray((previous+item).takeLast(12)).toString())
+   edit.putString("history:$id",JSONArray((previous.filter{receivedAt-it.optLong("receivedAt",0) in 0..TimeUnit.DAYS.toMillis(7)}+item).takeLast(32)).toString())
    if(source=="android_event")edit.putLong("lastNativeEventAt:$id",receivedAt).putString("lastNativeTransition:$id",transition)
   }
   check(edit.commit())
@@ -354,7 +422,7 @@ object NodeGeofences {
  private fun nativeContext(context:Context,placeId:String,config:JSONObject,unionPresence:String):NodeGeoEngine.NativeContext {
   val old=state(context,placeId)
   val diagnostic=prefs(context).getString("reliable:$placeId",null)?.let{JSONObject(it)}?:prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
-  return NodeGeoEngine.NativeContext(installedAt=config.getLong("installedAt"),baselineReliable=old.confirmed!="unknown" && prefs(context).getLong("confirmedAt:$placeId",old.lastCapturedAt)>=config.getLong("installedAt"),baselineAt=prefs(context).getLong("confirmedAt:$placeId",old.lastCapturedAt),unionPresence=unionPresence,recentReliablePresence=diagnostic?.optString("presence","unknown")?:"unknown",recentReliableAt=diagnostic?.optLong("lastObservationAt",0)?:0)
+  return NodeGeoEngine.NativeContext(installedAt=config.getLong("installedAt"),baselineReliable=old.confirmed!="unknown" && prefs(context).getLong("confirmedAt:$placeId",old.lastCapturedAt)>=prefs(context).getLong("notBefore:$placeId",config.getLong("installedAt")),baselineAt=prefs(context).getLong("confirmedAt:$placeId",old.lastCapturedAt),unionPresence=unionPresence,recentReliablePresence=diagnostic?.optString("presence","unknown")?:"unknown",recentReliableAt=diagnostic?.optLong("lastObservationAt",0)?:0)
  }
  private fun recordReliable(context:Context,placeId:String,classification:String,capturedAt:Long) {
   if(classification !in setOf("inside","outside"))return
@@ -372,7 +440,7 @@ object NodeGeofences {
   if(observation==null) {
    diagnostic.put("presence","unknown").put("accuracyMeters",JSONObject.NULL).put("reasonCode","native_location_absent")
   } else {
-   val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,if(source=="android_event")observation.capturedAt else now)
+   val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,if(source=="android_event")observation.capturedAt else now,if(state(context,placeId).confirmed!="unknown")0.4 else 1.0)
    val stale=now-observation.capturedAt>NodeGeoEngine.MAX_AGE_MILLIS
    diagnostic.put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL)
     .put("presence",if(stale)"unknown" else assessment.classification).put("reasonCode",if(stale)"stale_location" else assessment.reasonCode)
@@ -382,6 +450,7 @@ object NodeGeofences {
  private fun pendingEvidence(raw:JSONObject)=NodeGeoEngine.NativeEvidence(raw.getString("transition"),raw.optLong("detectedAt",0).takeIf{it>0},raw.getLong("receivedAt"),configurationId=raw.optString("configurationId").takeIf{it.isNotEmpty()},configurationRevision=raw.optString("configurationRevision").takeIf{it.isNotEmpty()},observerNodeId=raw.optString("observerNodeId").takeIf{it.isNotEmpty()})
  /** Receiver adapter only: not a command, plugin invocation or remote RPC. */
  internal fun nativeTransition(context:Context,evidence:NodeNativeTransition) = synchronized(applyGate) {
+  NodeMonitoringSessions.recoverInterrupted(context)
   val value=manifest(context) ?: return@synchronized
   val allRules=value.getJSONArray("rules").objects()
   if(NodeNativeSession.read(context)?.nodeId!=value.optString("observerNodeId"))return@synchronized
@@ -400,30 +469,58 @@ object NodeGeofences {
   if(evidence.observation?.capturedAt?.let{it>now}==true){reject("native_event_future",true);return@synchronized}
   val relevant=activeRules(value,now).filter{rule->preferences.getLong("ruleRevision:${rule.getString("id")}",-1)==rule.getLong("revision") && !preferences.getBoolean("completed:${rule.getString("id")}",false) && rule.getJSONArray("placeIds").strings().any{place->selected.any{it.getString("placeId")==place}}}
   if(relevant.isEmpty()){reject("native_rule_inactive",true);return@synchronized}
+  if(evidence.observation!=null && selected.map{it.getString("placeId")}.distinct().any{place->
+   val previous=preferences.getString("hybridFix:$place",null)?.let{NodeLocation.engine(JSONObject(it))}
+   previous!=null && evidence.observation.capturedAt>previous.capturedAt && !NodeGeoEngine.plausible(previous,evidence.observation)
+  }){reject("location_implausible",true);return@synchronized}
   // Android supplies no event ID or detection clock. Fingerprint captures when
   // present; receipt-only duplicates are conservatively suppressed for 10 min.
   val regionEvidenceAt=evidence.observation?.capturedAt?:evidence.receivedAt
   val fingerprint=UUID.nameUUIDFromBytes((config.getString("id")+transition+evidence.regionIds.sorted().joinToString()+ (evidence.observation?.capturedAt?.toString()?:"no_location")).toByteArray()).toString()
   val seen=preferences.getString("nativeSeen",null)?.let{JSONArray(it).objects()}?:emptyList()
   val duplicate=seen.firstOrNull{it.getString("key")==fingerprint && now-it.getLong("at")<=NodeGeoEngine.NATIVE_MAX_DELAY_MILLIS}
+  val operationalReentry=transition=="enter" && selected.any{it.optString("kind","real")=="operational" && !preferences.getBoolean("operationalInside:${it.getString("placeId")}",false)}
   val duplicateNeedsConfirmation=duplicate!=null && evidence.observation==null && selected.any{preferences.getLong("confirmedAt:${it.getString("placeId")}",0)>duplicate.getLong("at")}
-  if(duplicate!=null && !duplicateNeedsConfirmation){history(context,relevant,"native_event_duplicate",evidence.receivedAt,transition,evidence.observation?.capturedAt);return@synchronized}
+  if(duplicate!=null && !duplicateNeedsConfirmation && !operationalReentry){history(context,relevant,"native_event_duplicate",evidence.receivedAt,transition,evidence.observation?.capturedAt);return@synchronized}
+  val operational=selected.filter{it.optString("kind","real")=="operational"}
+  if(evidence.observation!=null && operational.any{preferences.getLong("operationalAt:${it.getString("requestId")}",0)>evidence.observation.capturedAt}){history(context,relevant,"native_event_out_of_order",evidence.receivedAt,transition,evidence.observation.capturedAt);return@synchronized}
+  for(placeId in operational.map{it.getString("placeId")}.distinct()) {
+   val consumers=relevant.filter{placeId in it.getJSONArray("placeIds").strings()}
+   history(context,consumers,if(transition=="enter")"operational_enter_received" else "operational_exit_received",evidence.receivedAt,transition,evidence.observation?.capturedAt,source="operational_event")
+   val key="operationalInside:$placeId"
+   val wasInside=preferences.getBoolean(key,false)
+   val regionEdit=preferences.edit()
+   for(region in operational.filter{it.getString("placeId")==placeId})regionEdit.putBoolean("operationalRegion:${region.getString("requestId")}",transition=="enter").putLong("operationalAt:${region.getString("requestId")}",regionEvidenceAt)
+   check(regionEdit.commit())
+   val isInside=regions.filter{it.optString("kind","real")=="operational" && it.getString("placeId")==placeId}.any{preferences.getBoolean("operationalRegion:${it.getString("requestId")}",false)}
+   preferences.edit().putBoolean(key,isInside).commit()
+   if(isInside && !wasInside)NodeMonitoringSessions.begin(context,placeId,config.getString("id"),config.getString("nodeId"),"operational_enter")
+   // A fix belongs to the real geometry regardless of which region woke us.
+   val cache=NodeNativeNotifications.prefs(context)
+   val compatible=evidence.observation?:cache.getString("lastObservation",null)?.takeIf{cache.getString("observationScopeId",null)==config.getString("nodeId")}?.let{NodeLocation.engine(JSONObject(it))}
+   compatible?.takeIf{now-it.capturedAt in 0..NodeGeoEngine.MAX_AGE_MILLIS}?.let{monitoringObservation(context,placeId,it,config.getString("id"),config.getString("nodeId"))}
+  }
+  val selectedReal=selected.filter{it.optString("kind","real")=="real"}
+  if(selectedReal.isEmpty()) {
+   check(preferences.edit().putString("nativeSeen",JSONArray((seen.filter{now-it.getLong("at")<=NodeGeoEngine.NATIVE_MAX_DELAY_MILLIS}+JSONObject().put("key",fingerprint).put("at",now)).takeLast(64)).toString()).commit())
+   return@synchronized
+  }
   val target=if(transition=="enter")"inside" else "outside"
   if(evidence.observation!=null && selected.any{preferences.getLong("regionAt:${it.getString("requestId")}",0)>regionEvidenceAt && preferences.getString("regionState:${it.getString("requestId")}","unknown") !in setOf("unknown",target)}){history(context,relevant,"native_event_out_of_order",evidence.receivedAt,transition,evidence.observation.capturedAt);return@synchronized}
   val edit=preferences.edit()
-  for(region in selected) {
+  for(region in selectedReal) {
    val key=region.getString("requestId")
    if(regionEvidenceAt>=preferences.getLong("regionAt:$key",0))edit.putString("regionState:$key",target).putLong("regionAt:$key",regionEvidenceAt)
   }
   check(edit.commit())
   var confirm=false;var changed=false
-  for(placeId in selected.map{it.getString("placeId")}.distinct()) {
+  for(placeId in selectedReal.map{it.getString("placeId")}.distinct()) {
    val consumers=relevant.filter{placeId in it.getJSONArray("placeIds").strings()}
    if(consumers.isEmpty())continue
    evidence.observation?.let{fix->
     val membership=preferences.edit()
     val place=value.getJSONArray("places").objects().first{it.getString("id")==placeId}
-    for(region in regions.filter{it.getString("placeId")==placeId && it.getString("requestId") !in evidence.regionIds}) {
+    for(region in regions.filter{it.optString("kind","real")=="real" && it.getString("placeId")==placeId && it.getString("requestId") !in evidence.regionIds}) {
      val key=region.getString("requestId")
      if(fix.capturedAt<preferences.getLong("regionAt:$key",0))continue
      val circle=place.getJSONArray("circles").objects().first{it.getString("id")==region.getString("circleId")}
@@ -432,8 +529,9 @@ object NodeGeofences {
     }
     check(membership.commit())
    }
-   val occupancies=regions.filter{it.getString("placeId")==placeId}.map{preferences.getString("regionState:${it.getString("requestId")}","unknown")}
+   val occupancies=regions.filter{it.optString("kind","real")=="real" && it.getString("placeId")==placeId}.map{preferences.getString("regionState:${it.getString("requestId")}","unknown")}
    val union=when{occupancies.any{it=="inside"}->"inside";occupancies.all{it=="outside"}->"outside";else->"unknown"}
+   history(context,consumers,if(transition=="enter")"native_inner_enter_received" else "native_inner_exit_received",evidence.receivedAt,transition,evidence.observation?.capturedAt)
    val old=state(context,placeId)
    evidence.observation?.let{recordReliable(context,placeId,NodeGeoEngine.assess(geometry(value,placeId),it,it.capturedAt).classification,it.capturedAt)}
    val evaluated=NodeGeoEngine.native(old,native,nativeContext(context,placeId,config,union),geometry(value,placeId),now)
@@ -442,16 +540,21 @@ object NodeGeofences {
    val diagnosticRejected=decision.reasonCode in setOf("native_event_future","native_event_replaced","native_event_stale","native_event_duplicate","native_event_out_of_order","native_transition_unknown")
    if(!diagnosticRejected && (evidence.observation!=null || decision.needsConfirmation || decision.transition!=null || decision.reasonCode=="native_event_initial"))recordNativeDiagnostic(context,value,placeId,evidence.observation,evidence.receivedAt,"android_event",now)
    val baselineAt=preferences.getLong("confirmedAt:$placeId",old.lastCapturedAt)
-   if(decision.transition!=null)changed=applyNativeRules(context,value,consumers,placeId,old,decision.state,decision.transition,native,baselineAt,evidence.observation)||changed
+   if(decision.transition!=null) {
+    changed=applyNativeRules(context,value,consumers,placeId,old,decision.state,decision.transition,native,baselineAt,evidence.observation)||changed
+    history(context,consumers,"real_area_${decision.transition}_accepted",evidence.receivedAt,transition,evidence.observation?.capturedAt,decision.state.confirmed)
+   }
    val update=preferences.edit()
    saveState(update,placeId,decision.state)
    if(decision.state.confirmed!=old.confirmed)update.putLong("confirmedAt:$placeId",evidence.observation?.capturedAt?:evidence.receivedAt)
    if(decision.needsConfirmation) {
     update.putString("nativePending:$placeId",JSONObject().put("transition",transition).put("receivedAt",evidence.receivedAt).put("detectedAt",evidence.observation?.capturedAt?:JSONObject.NULL).put("deadline",evidence.receivedAt+NodeGeoEngine.NATIVE_CONFIRMATION_WINDOW_MILLIS).put("baselineAt",baselineAt).put("configurationId",native.configurationId).put("configurationRevision",native.configurationRevision).put("observerNodeId",native.observerNodeId).toString())
-    confirm=true
+    val hybridApproved=config.getJSONArray("regions").objects().any{it.getString("placeId")==placeId && it.optString("kind","real")=="operational"}
+    if(!hybridApproved || !NodeMonitoringSessions.begin(context,placeId,config.getString("id"),config.getString("nodeId"),"real_$transition"))confirm=true
    } else update.remove("nativePending:$placeId")
    check(update.commit())
    if(decision.state.confirmed!="unknown")changed=armNativeRules(context,consumers,decision.state.confirmed)||changed
+   if(decision.transition!=null)NodeMonitoringSessions.finish(context,placeId,"monitoring_transition_accepted")
   }
   check(preferences.edit().putString("nativeSeen",JSONArray((seen.filter{now-it.getLong("at")<=NodeGeoEngine.NATIVE_MAX_DELAY_MILLIS}+JSONObject().put("key",fingerprint).put("at",now)).takeLast(64)).toString()).commit())
   if(confirm) {
@@ -532,7 +635,7 @@ object NodeGeofences {
    val old=state(context,placeId)
    recordReliable(context,placeId,NodeGeoEngine.assess(geometry(value,placeId),observation,now).classification,observation.capturedAt)
    val membership=prefs(context).edit()
-   for(region in config.getJSONArray("regions").objects().filter{it.getString("placeId")==placeId}) {
+   for(region in config.getJSONArray("regions").objects().filter{it.optString("kind","real")=="real" && it.getString("placeId")==placeId}) {
     val place=value.getJSONArray("places").objects().first{it.getString("id")==placeId}
     val circle=place.getJSONArray("circles").objects().first{it.getString("id")==region.getString("circleId")}
     val classified=NodeGeoEngine.classify(listOf(NodeGeoEngine.Circle(circle.getDouble("latitude"),circle.getDouble("longitude"),circle.getDouble("radiusMeters"))),observation,now)
@@ -553,8 +656,8 @@ object NodeGeofences {
  }
  fun nativeConfirmationPending(context:Context):Boolean=prefs(context).all.keys.any{it.startsWith("nativePending:")}
 
- fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true) = synchronized(applyGate) {
-  val nativePlaces=prefs(context).all.keys.filter{it.startsWith("nativePending:")}.map{it.removePrefix("nativePending:")}.toSet()
+ fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true,baselineOnly:Boolean=false) = synchronized(applyGate) {
+  val nativePlaces=if(baselineOnly)emptySet()else prefs(context).all.keys.filter{it.startsWith("nativePending:")}.map{it.removePrefix("nativePending:")}.toSet()
   if(nativePlaces.isNotEmpty())confirmNative(context,observation)
   val observer=NodeNativeSession.read(context)?.nodeId ?: return
   val value=manifest(context) ?: return
@@ -573,10 +676,15 @@ object NodeGeofences {
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
    if(observation.capturedAt<=old.lastCapturedAt)continue
    val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,now)
+   val previousFix=prefs(context).getString("hybridFix:$placeId",null)?.let{NodeLocation.engine(JSONObject(it))}
+   if(!NodeGeoEngine.plausible(previousFix,observation)){monitoringHistory(context,placeId,"location_implausible");continue}
+   if(assessment.classification!="unknown")check(prefs(context).edit().putString("hybridFix:$placeId",JSONObject().put("latitude",observation.latitude).put("longitude",observation.longitude).put("accuracyMeters",observation.accuracyMeters).put("capturedAt",Instant.ofEpochMilli(observation.capturedAt).toString()).toString()).commit())
    recordReliable(context,placeId,assessment.classification,observation.capturedAt)
    // Future and stale deliveries are visible as diagnostics, but cannot replace
    // newer state or establish temporal persistence.
-   val decision=if(assessment.reasonCode in setOf("future_location","stale_location"))NodeGeoEngine.Decision(old) else NodeGeoEngine.observe(old,assessment.classification,observation.capturedAt,notBefore)
+   val decision=if(assessment.reasonCode in setOf("future_location","stale_location"))NodeGeoEngine.Decision(old)
+    else if(baselineOnly)NodeGeoEngine.Decision(if(assessment.classification in setOf("inside","outside"))NodeGeoEngine.State(assessment.classification,lastCapturedAt=observation.capturedAt)else old.copy(candidate="unknown",candidateAt=0,lastCapturedAt=observation.capturedAt))
+    else NodeGeoEngine.observe(old,assessment.classification,observation.capturedAt,notBefore)
    val state=decision.state
    val presence=if(state.candidate!="unknown")"unknown" else assessment.classification
    val reason=if(state.candidate!="unknown")"awaiting_confirmation" else assessment.reasonCode
@@ -589,7 +697,7 @@ object NodeGeofences {
      val priorDiagnostic=prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
      if(priorDiagnostic==null || observation.capturedAt>priorDiagnostic.optLong("lastObservationAt",0))edit.putString("diagnostic:$placeId",JSONObject().put("lastObservationAt",observation.capturedAt).put("accuracyMeters",observation.accuracyMeters.takeIf{it.isFinite()&&it>0.0}?:JSONObject.NULL).put("presence",presence).put("reasonCode",reason).put("receivedAt",now).toString())
      prefs(context).getString("installedConfiguration",null)?.let{raw->
-      for(region in JSONObject(raw).getJSONArray("regions").objects().filter{it.getString("placeId")==placeId}) {
+      for(region in JSONObject(raw).getJSONArray("regions").objects().filter{it.optString("kind","real")=="real" && it.getString("placeId")==placeId}) {
        val place=value.getJSONArray("places").objects().first{it.getString("id")==placeId}
        val circle=place.getJSONArray("circles").objects().first{it.getString("id")==region.getString("circleId")}
        val classification=NodeGeoEngine.classify(listOf(NodeGeoEngine.Circle(circle.getDouble("latitude"),circle.getDouble("longitude"),circle.getDouble("radiusMeters"))),observation,now)
@@ -607,6 +715,7 @@ object NodeGeofences {
     if(prefs(context).getBoolean("needsInstall",true) || prefs(context).getLong("notBefore:$placeId",0)!=notBefore || prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision") || manifest(context)?.optString("revision")!=value.getString("revision") || NodeNativeSession.read(context)?.nodeId!=observer)return@synchronized
     if(prefs(context).getBoolean("completed:$id",false)) return@synchronized
     val initial=if(transition=="exit") "inside" else "outside"
+    if(baselineOnly && assessment.classification in setOf("inside","outside") && state.confirmed!=initial && prefs(context).getBoolean("armed:$id",false)) {check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",false).commit());needsSync=true}
     if(assessment.classification==initial && state.confirmed==initial && prefs(context).getString("accepted:$id",null)==null && !prefs(context).getBoolean("armed:$id",false)) {check(reportPending(context,prefs(context).edit()).putBoolean("armed:$id",true).commit());needsSync=true}
     if(decision.transition==transition && prefs(context).getBoolean("armed:$id",false) && (rule.isNull("startsAt")||observation.capturedAt>=stamp(rule.getString("startsAt")))) {
       needsSync=true
@@ -627,8 +736,8 @@ object NodeGeofences {
     val current=manifest(context)
     if(current?.optString("revision")==value.getString("revision") && prefs(context).getBoolean("hasRegions",false)) {
      val consumers=activeRules(current).filter { !prefs(context).getBoolean("completed:${it.getString("id")}",false) }.flatMap { it.getJSONArray("placeIds").strings() }.toSet()
-     val keep=current.getJSONArray("places").objects().filter{it.getString("id") in consumers}.flatMap{it.getJSONArray("circles").objects().map{circle->circle.getString("id")}}.toSet()
-     val removed=current.getJSONArray("places").objects().flatMap{it.getJSONArray("circles").objects().map{circle->circle.getString("id")}}.toSet()-keep
+     val keep=current.getJSONArray("places").objects().filter{it.getString("id") in consumers}.flatMap{physicalRegions(it).map{circle->circle.getString("id")}}.toSet()
+     val removed=current.getJSONArray("places").objects().flatMap{physicalRegions(it).map{circle->circle.getString("id")}}.toSet()-keep
      val retired=prefs(context).getString("installedConfiguration",null)?.let{JSONObject(it).getJSONArray("regions").objects().filter{region->region.getString("circleId") in removed}.map{region->region.getString("requestId")}}?:emptyList()
      if(retired.isNotEmpty())try{Tasks.await(LocationServices.getGeofencingClient(context).removeGeofences(retired),15,TimeUnit.SECONDS);if(keep.isEmpty())prefs(context).edit().putBoolean("hasRegions",false).commit()}catch(_:Exception){}
     }
@@ -738,6 +847,7 @@ object NodeGeofences {
  }
  fun restore(context:Context) { synchronized(manifestGate) {
   if(NodeNativeSession.read(context)==null){clear(context);return}
+  NodeMonitoringSessions.cancelAll(context,"monitoring_interrupted")
   prefs(context).edit().putBoolean("needsInstall",true).commit()
   val current=manifest(context)
   if(current!=null && current.optString("observerNodeId")!=NodeNativeSession.read(context)?.nodeId){clear(context);return}

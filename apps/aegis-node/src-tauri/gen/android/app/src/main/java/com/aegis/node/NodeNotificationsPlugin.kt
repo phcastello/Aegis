@@ -42,6 +42,24 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  @Command fun syncGeofences(invoke:Invoke) {
   NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofences.sync(activity).toString()))}catch(_:Exception){invoke.reject("Sincronização pendente. Verifique a conexão e as permissões.")} }
  }
+ @Command fun applyGeofenceCancellation(invoke:Invoke) {
+  val args=org.json.JSONObject(invoke.getArgs().toString())
+  NodeGeofences.background {
+   var confirmed=false
+   try {
+    val scope=args.getString("scopeNodeId")
+    val id=args.getString("ruleId");require(java.util.UUID.fromString(id).toString()==id && args.getLong("ruleRevision")>0)
+    require(NodeNativeSession.read(activity)?.nodeId==scope)
+    val state=NodeGeofences.sync(activity,flushOccurrences=false)
+    val preferences=activity.getSharedPreferences("aegis-geofences-v1",android.content.Context.MODE_PRIVATE)
+    val manifest=preferences.getString("manifest",null)?.let{org.json.JSONObject(it)}
+    val excluded=manifest!=null && manifest.optString("observerNodeId")==scope && manifest.getJSONArray("rules").objects().none{it.getString("id")==id}
+    confirmed=excluded && NodeNativeSession.read(activity)?.nodeId==scope && !preferences.getBoolean("needsInstall",true) && !state.optBoolean("syncPending",true) && state.optString("status") in setOf("installed","waiting_initial","active")
+   }catch(_:Exception){NodeBackgroundWork.enqueue(activity)}
+   if(!confirmed)NodeBackgroundWork.enqueue(activity)
+   invoke.resolve(JSObject(org.json.JSONObject().put("state",if(confirmed)"confirmed" else "pending").put("message",if(confirmed)"Cancelamento confirmado neste Android." else "Cancelamento salvo; retirada no Android ainda pendente.").toString()))
+  }
+ }
  @Command fun geofenceDiagnostics(invoke:Invoke) {
   NodeGeofences.background {try{invoke.resolve(JSObject(NodeGeofenceRuntime.diagnostics(activity)))}catch(_:Exception){invoke.reject("Não foi possível consultar a presença neste celular.")} }
  }
