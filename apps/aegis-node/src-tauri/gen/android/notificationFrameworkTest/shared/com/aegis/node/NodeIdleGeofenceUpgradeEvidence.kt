@@ -6,7 +6,6 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.os.SystemClock
-import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -29,10 +28,9 @@ private fun upgradeDomain(invoke:(String,JSONObject,Long)->JSONObject,name:Strin
  invoke(name,JSONObject().put("operation",operation).apply{payload?.let{put("payload",it)};id?.let{put("id",it)}},90000)
 
 internal fun prepareIdleGeofenceUpgrade(context:Context,nodeId:String,invoke:(String,JSONObject,Long)->JSONObject):JSONObject {
- val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
- automation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_COARSE_LOCATION)
- automation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_FINE_LOCATION)
- if(Build.VERSION.SDK_INT>=29)automation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+ grantFrameworkPermission(context,Manifest.permission.ACCESS_COARSE_LOCATION)
+ grantFrameworkPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)
+ if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
  upgradeDomain(invoke,"node_location","configureNode",JSONObject().put("nodeId",nodeId).put("sourceNodeId",nodeId).put("mode","dynamic"))
  val circle=JSONObject().put("id",UUID.randomUUID().toString()).put("latitude",0).put("longitude",0).put("radiusMeters",50)
  val place=upgradeDomain(invoke,"node_places","create",JSONObject().put("name","APK upgrade synthetic 50m home").put("type","property").put("aliases",JSONArray()).put("circles",JSONArray().put(circle)))

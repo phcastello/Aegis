@@ -323,9 +323,9 @@ class NodeGeofenceReceiverFrameworkTest {
    // Actual Android Service lifecycle + receiver path on API 26/35 and R8 target.
    // Synthetic FLP seam isolates service permissions, cancellation and persistence;
    // this does not certify physical Google geofence delivery or real GPS availability.
-   instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_COARSE_LOCATION)
-   instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_FINE_LOCATION)
-   if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+   grantFrameworkPermission(context,android.Manifest.permission.ACCESS_COARSE_LOCATION)
+   grantFrameworkPermission(context,android.Manifest.permission.ACCESS_FINE_LOCATION)
+   if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
    val hybridMethod=runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java)
    fun hybrid(operation:String,scenario:String="real")=JSONObject(hybridMethod.invoke(null,context,operation,placeId,scenario) as String)
    fun activeSession()=hybrid("snapshot").getJSONArray("sessions").optJSONObject(0)
@@ -338,12 +338,15 @@ class NodeGeofenceReceiverFrameworkTest {
     hybrid("configure",scenario)
     check(positionPreferences.edit().remove("lastObservation").remove("observationScopeId").putBoolean("observationPending",false).commit())
     check(preferences.edit().remove("nativeSeen").putBoolean("operationalInside:$placeId",false).putBoolean("operationalRegion:$operationalId",false).commit())
+    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_scenario_${scenario}_start errorType=Checkpoint")
     callback(1,listOf(operationalId),longitude=null)
    }
    approach("outside")
    await("Operational ENTER starts actual location foreground service"){hybrid("snapshot").getBoolean("running") && (activeSession()?.optInt("acquired",0)?:0)>=1}
    assertEquals("Approach alone never creates an occurrence",2,events(ruleId).size)
    assertEquals(1,hybrid("snapshot").getInt("serviceStarts"))
+   assertEquals("The actual Android service promotes before acquiring",1,hybrid("snapshot").getInt("servicePromotions"))
+   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_foreground_promoted errorType=Checkpoint")
    hybrid("expire");stopped()
    assertEquals("monitoring_session_expired",activeSession()?.getString("status"))
    val attemptsAfterExpiry=activeSession()?.getInt("attempts")
@@ -353,12 +356,15 @@ class NodeGeofenceReceiverFrameworkTest {
    approach("denied")
    await("Denied acquisition is recorded without transition"){activeSession()?.optString("lastResult")=="permission_denied"}
    assertEquals(0,activeSession()?.optInt("acquired"));assertEquals(2,events(ruleId).size)
+   assertEquals("Acquisition denial follows a real foreground promotion",1,hybrid("snapshot").getInt("servicePromotions"))
    hybrid("expire");stopped()
-   // Start denial is injected at the production permission gate. Revoking runtime
-   // permissions with pm during instrumentation kills the very target under test.
+   // Known denial is rejected before AMS receives startForegroundService. An
+   // accepted FGS request must promote even when later recovery finds no work.
    approach("start_denied")
-   await("Permission/start rejection closes the actual service safely"){activeSession()?.optString("status")=="monitoring_start_denied"}
+   await("Permission/start rejection is persisted before requesting a service"){activeSession()?.optString("status")=="monitoring_start_denied"}
    stopped();assertEquals(0,activeSession()?.optInt("attempts"));assertEquals(2,events(ruleId).size)
+   assertEquals(0,hybrid("snapshot").getInt("serviceStarts"));assertEquals(0,hybrid("snapshot").getInt("servicePromotions"))
+   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_start_denied_before_service errorType=Checkpoint")
    approach("provider_error")
    await("Unexpected provider failure is closed and sanitized"){activeSession()?.optString("status")=="monitoring_provider_failed"}
    stopped();assertEquals("provider_error",activeSession()?.optString("lastResult"));assertEquals(0,activeSession()?.optInt("acquired"));assertEquals(2,events(ruleId).size)

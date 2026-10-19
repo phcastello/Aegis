@@ -70,9 +70,9 @@ class NodeHybridBootRecoveryFrameworkTest {
   val keyStore=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
   val saved=JSONObject().put("originalPreferences",snapshotPreferences()).put("originalKeyPresent",keyStore.containsAlias(vaultAlias)).put("bootCount",bootCount())
   marker.writeText(saved.toString())
-  instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_COARSE_LOCATION)
-  instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_FINE_LOCATION)
-  if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+  grantFrameworkPermission(context,Manifest.permission.ACCESS_COARSE_LOCATION)
+  grantFrameworkPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)
+  if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
   val attempt=UUID.randomUUID().toString()
   val pair=helper.request("/pair",body=JSONObject().put("attemptId",attempt).put("code",code).put("recoveryKey",Base64.encodeToString(ByteArray(32).also{SecureRandom().nextBytes(it)},Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)).put("name","Reboot recovery fixture").put("platform","android").put("appVersion","0.0.0-framework-fixture").put("protocolVersion",1))
   val credential=pair.getString("credential")

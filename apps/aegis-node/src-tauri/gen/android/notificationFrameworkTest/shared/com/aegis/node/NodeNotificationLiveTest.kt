@@ -208,7 +208,7 @@ class NodeNotificationLiveTest {
         assertEquals("android_permission_denied", denied.getString("diagnosticCode"))
         assertTrue(manager.activeNotifications.none { it.tag == denied.getString("commandId") })
         checkpoint("live_permission_denied")
-        instrumentation.uiAutomation.grantRuntimePermission("com.aegis.node", Manifest.permission.POST_NOTIFICATIONS)
+        grantFrameworkPermission(context, Manifest.permission.POST_NOTIFICATIONS)
       }
       assertTrue(frameworkNotificationPermission(context))
       checkpoint("live_permission_granted")

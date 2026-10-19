@@ -86,7 +86,8 @@ class NodeHybridProcessInterruptionFrameworkTest {
   val now=System.currentTimeMillis();val generation=UUID.randomUUID().toString();val operational="$generation:operational"
   val configuration=JSONObject().put("id",generation).put("nodeId",nodeId).put("revision",manifest.getString("revision")).put("installedAt",now-120000).put("regions",JSONArray().put(JSONObject().put("requestId",operational).put("placeId",placeId).put("circleId",place.getJSONObject("monitoringEnvelope").getJSONArray("circles").getJSONObject(0).getString("id")).put("kind","operational")))
   check(preferences.edit().putString("manifest",manifest.toString()).putString("installedConfiguration",configuration.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",true).putLong("installedUntil",now+3600000).putLong("ruleRevision:$ruleId",rule.getLong("revision")).putBoolean("armed:$ruleId",true).putString("state:$placeId",JSONObject().put("confirmed","outside").put("candidate","unknown").put("candidateAt",0).put("lastCapturedAt",now-60000).toString()).putLong("notBefore:$placeId",now-120000).putLong("confirmedAt:$placeId",now-60000).commit())
-  // The receiver/FGS permission gate is real; no injected start-denied adapter.
+  // Actual missing Android permissions reject the receiver's FGS preflight;
+  // no service is requested and no injected start-denied adapter is involved.
   session("reset");session("configure",placeId,"real")
   helper.callback(1,listOf(operational),longitude=null)
   await("Missing Android permission closes the service with no invented fix") {
@@ -94,10 +95,11 @@ class NodeHybridProcessInterruptionFrameworkTest {
    row?.optString("status") in setOf("monitoring_start_denied","monitoring_location_blocked") && !session("snapshot").getBoolean("running")
   }
   assertEquals(0,session("snapshot").getJSONArray("sessions").getJSONObject(0).optInt("acquired"))
+  assertEquals(0,session("snapshot").getInt("serviceStarts"));assertEquals(0,session("snapshot").getInt("servicePromotions"))
   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_actual_permission_denial errorType=Checkpoint")
-  instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_COARSE_LOCATION)
-  instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_FINE_LOCATION)
-  if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(context.packageName,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+  grantFrameworkPermission(context,Manifest.permission.ACCESS_COARSE_LOCATION)
+  grantFrameworkPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)
+  if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
   session("reset");session("configure",placeId,"outside")
   check(preferences.edit().remove("nativeSeen").putBoolean("operationalInside:$placeId",false).putBoolean("operationalRegion:$operational",false).commit())
   helper.callback(1,listOf(operational),longitude=null)

@@ -67,9 +67,9 @@ class NodeIdleFrameworkTest {
    val configured=invoke(view,"node_notification_settings").optBoolean("pushConfigured")
    checkpoint("notification_settings_ready")
    if(mode=="before") {
-    instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_COARSE_LOCATION)
-    instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_FINE_LOCATION)
-    if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    grantFrameworkPermission(instrumentation.targetContext,android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    grantFrameworkPermission(instrumentation.targetContext,android.Manifest.permission.ACCESS_FINE_LOCATION)
+    if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(instrumentation.targetContext,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     invoke(view,"node_location",JSONObject().put("operation","configureNode").put("payload",JSONObject().put("nodeId",nodeId).put("sourceNodeId",nodeId).put("mode","none")))
    }
    if(mode=="after") {

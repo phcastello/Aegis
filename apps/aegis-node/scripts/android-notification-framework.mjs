@@ -64,7 +64,8 @@ let receiverPassed=false;
 let interruptionPassed=false;
 let bootPassed=false;
 const preservedCheckpoints=new Set();
-const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive'];
+const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt','hybrid_inflight_acquisition_cancelled_process_alive','hybrid_service_lifecycle_bounded_denied_arrival','hybrid_foreground_promoted','hybrid_start_denied_before_service'];
+const hybridStartupPhases=['hybrid_scenario_outside_start','hybrid_scenario_denied_start','hybrid_scenario_start_denied_start','hybrid_scenario_provider_error_start','hybrid_scenario_inside_start'];
 const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
 async function refreshBootstrap(kind) {
   const response=await fetch('http://127.0.0.1:18104/fixture/refresh-bootstrap', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind}),signal:AbortSignal.timeout(10000)});
@@ -141,7 +142,7 @@ try {
   crash+='\n'+[...preservedCheckpoints].map(phase=>`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`).join('\n');
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   const phases=new Set();
-  for(const phase of [...advancedHybridPhases,...liveSyncPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of [...advancedHybridPhases,...liveSyncPhases,...hybridStartupPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
