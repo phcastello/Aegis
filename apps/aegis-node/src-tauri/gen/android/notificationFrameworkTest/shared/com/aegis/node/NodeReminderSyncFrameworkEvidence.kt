@@ -98,4 +98,5 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,setBack
   assertEquals("removed",backendRule(partial.getString("id")).getString("syncStatus"))
   android.util.Log.i("AegisNodeNativeTest","phase=cancellation_local_receipt_and_manifest_failure_reconciliation errorType=Checkpoint")
  }finally {mode("geofence-cancellation-failure","none")}
+ exerciseGeographicActionForegroundDependency(context,nodeId,setBackground,invoke)
 }

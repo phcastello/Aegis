@@ -56,6 +56,8 @@ object NodeMonitoringSessions {
    "stop" -> cancelAll(context,"monitoring_cancelled")
    "expire" -> synchronized(lock){rows(context).filter{it.optString("status")=="active"}.forEach{record(context,it.put("deadline",System.currentTimeMillis()-1))}}
    "reset" -> {cancelAll(context,"monitoring_cancelled");prefs(context).edit().clear().commit()}
+   "synchronize" -> NodeGeofences.sync(context,flushOccurrences=false)
+   "drain" -> try{NodeGeofences.flushEvents(context)}catch(_:NodeNativeSession.HttpFailure){}
    "snapshot" -> Unit
    else -> throw IllegalArgumentException("Unknown hybrid fixture operation")
   }

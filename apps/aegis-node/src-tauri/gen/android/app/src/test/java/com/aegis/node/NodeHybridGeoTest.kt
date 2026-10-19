@@ -65,6 +65,35 @@ class NodeHybridGeoTest {
   assertNull(NodeGeoEngine.hybrid(state,home,fix(0.0,100000),300001,1).transition)
   assertNull(NodeGeoEngine.hybrid(state,home,fix(0.0,300001),100000,1).transition)
  }
+ @Test fun compareTheSameArrivalExitAndCafeTracksAcrossAllMargins() {
+  val arrival=listOf(250.0,150.0,60.0,20.0,0.0,0.0)
+  val exit=listOf(20.0,60.0,85.0,150.0,350.0,350.0)
+  val cafe=listOf(250.0,180.0,120.0,85.0,120.0,250.0)
+  fun acceptedIndex(track:List<Double>,accuracy:Double,factor:Double,initial:String,transition:String):Int? {
+   var state=NodeGeoEngine.State(initial,lastCapturedAt=70000)
+   val accepted=mutableListOf<Int>()
+   for((index,east)in track.withIndex()) {
+    // All policies see identical fresh samples, at most six acquisitions in150s.
+    val at=100000L+index*30000
+    val classification=NodeGeoEngine.assess(home,fix(east,at,accuracy),at,factor).classification
+    val decision=NodeGeoEngine.observe(state,classification,at,1)
+    if(decision.transition==transition)accepted.add(index)
+    state=decision.state
+   }
+   assertTrue("One physical trajectory cannot create duplicate transitions",accepted.size<=1)
+   return accepted.singleOrNull()
+  }
+  // Indices are zero-based; differences describe this fixture, not physical latency.
+  val expectedArrival=mapOf(65.0 to listOf(null,5,4),100.0 to listOf(null,null,5))
+  val expectedExit=mapOf(65.0 to listOf(4,4,3),100.0 to listOf(5,4,4))
+  for(accuracy in listOf(65.0,100.0))for((index,factor)in listOf(1.0,0.65,0.4).withIndex()) {
+   assertEquals("Arrival accuracy=$accuracy factor=$factor",expectedArrival.getValue(accuracy)[index],acceptedIndex(arrival,accuracy,factor,"outside","enter"))
+   assertEquals("Exit accuracy=$accuracy factor=$factor",expectedExit.getValue(accuracy)[index],acceptedIndex(exit,accuracy,factor,"inside","exit"))
+  }
+  for(accuracy in listOf(13.0,30.0,65.0,100.0,200.0))for(factor in listOf(1.0,0.65,0.4)) {
+   assertNull("Nearby cafe never counts as arrival accuracy=$accuracy factor=$factor",acceptedIndex(cafe,accuracy,factor,"outside","enter"))
+  }
+ }
  @Test fun strictSessionBudgetsCannotLoopInNeighboringCafe() {
   val start=1000000L;val deadline=start+NodeMonitoringBudget.WINDOW_MILLIS
   var attempts=0;var last=0L

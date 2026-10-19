@@ -284,10 +284,18 @@ object NodeReminderActions {
       for(item in response.getJSONArray("withdraw").objects())withdrawRemote(context,item.getString("reminderId"),item.getLong("generation"),scope)
     }
   }
+  /** Eligible tokenless actions may depend on an occurrence still in the geo outbox. */
+  fun pendingGeographicDependencies(context:Context):Set<String> {
+    val occurrences=NodeGeofences.pendingOccurrences(context)
+    if(occurrences.isEmpty())return emptySet()
+    return Store(context).use{store->store.readableDatabase.rawQuery("SELECT reminderId FROM actions WHERE token IS NULL AND (lastAttempt IS NULL OR lastAttempt<=?) ORDER BY created LIMIT 100",arrayOf((System.currentTimeMillis()-30000).toString())).use{rows->
+      buildSet<String>{while(rows.moveToNext()){val id=rows.getString(0);if(id in occurrences)add(id)}}
+    }}
+  }
   /** Shared foreground/worker drain: one HTTP owner, four sends and at most 28 s. */
-  fun flush(context: Context,foreground:Boolean=false):Boolean {
+  fun flush(context: Context,foreground:Boolean=false,deadlineElapsed:Long=android.os.SystemClock.elapsedRealtime()+20000):Boolean {
     if(!actionFlushing.compareAndSet(false,true))return pending(context)>0
-    val deadline=android.os.SystemClock.elapsedRealtime()+20000
+    val deadline=deadlineElapsed
     try {
       val scope=NodeNativeSession.read(context)?.nodeId ?: return pending(context)>0
       synchronized(NodeNotificationGate.lock){if(!applyForCurrentIdentity({NodeNativeSession.bindingAllowed(context,scope)}){bindIdentity(context,scope)})return false}

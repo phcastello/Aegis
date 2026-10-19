@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit
 object NodeGeofences {
  private val executor=Executors.newSingleThreadExecutor()
  private val eventExecutor=Executors.newSingleThreadExecutor()
+ private val eventFlushing=java.util.concurrent.atomic.AtomicBoolean(false)
  fun background(block:()->Unit){executor.execute(block)}
  fun event(block:()->Unit){eventExecutor.execute(block)}
  private val manifestGate=Any()
@@ -310,6 +311,8 @@ object NodeGeofences {
     }
     for(rule in rules) {
      val id=rule.getString("id")
+     val baselineLost=rule.getJSONArray("placeIds").strings().any{placeId->prefs(context).getString("geometry:$placeId",null)!=geometry(value,placeId).toString() || state(context,placeId).confirmed=="unknown"}
+     if(baselineLost)edit.putBoolean("armed:$id",false)
      if(prefs(context).getLong("ruleRevision:$id",-1)!=rule.getLong("revision"))edit.putBoolean("armed:$id",false).putLong("ruleRevision:$id",rule.getLong("revision")).remove("completed:$id").remove("accepted:$id")
     }
     check(reportPending(context,edit).putString("installedRevision",value.getString("revision")).putLong("installedUntil",stamp(value.getString("leaseUntil"))).putBoolean("needsInstall",false).putString("status","waiting_initial").putBoolean("hasRegions",true).remove("error").commit())
@@ -818,17 +821,26 @@ object NodeGeofences {
    }
   }
  }
- fun flushEvents(context:Context) {
+ fun flushEvents(context:Context,maxEvents:Int=100,deadlineElapsed:Long=Long.MAX_VALUE,occurrenceIds:Set<String>?=null,connectTimeoutMillis:Int=10000,readTimeoutMillis:Int=15000) {
+  require(maxEvents in 1..100)
+  if(!eventFlushing.compareAndSet(false,true))return
+  try {
   val scope=NodeNativeSession.read(context)?.nodeId ?: return
-  finishLocalPosts(context)
+  // A foreground dependency drain must spend its budget on HTTP only; pending
+  // local posts and accepted-record recovery remain the worker's separate job.
+  if(deadlineElapsed==Long.MAX_VALUE)finishLocalPosts(context)
   Store(context).use { store ->
    val db=store.writableDatabase;val events=mutableListOf<JSONObject>()
    db.rawQuery("SELECT eventId,occurrenceId,ruleId,ruleRevision,transition,occurredAt,postedAt,sequence FROM events ORDER BY sequence LIMIT 100",null).use {
     while(it.moveToNext()) events.add(JSONObject().put("eventId",it.getString(0)).put("occurrenceId",it.getString(1)).put("ruleId",it.getString(2)).put("ruleRevision",it.getLong(3)).put("transition",it.getString(4)).put("occurredAt",it.getString(5)).put("sequence",it.getLong(7)).apply{if(!it.isNull(6))put("postedAt",it.getString(6))})
    }
+   var sent=0
    for(event in events) {
+    if(occurrenceIds!=null && event.getString("occurrenceId") !in occurrenceIds)continue
+    if(sent>=maxEvents || android.os.SystemClock.elapsedRealtime()>=deadlineElapsed)break
+    sent++
     try {
-     val response=NodeNativeSession.call(context,"POST","/api/nodes/geofences/events",event,expectedScope=scope)
+     val response=NodeNativeSession.call(context,"POST","/api/nodes/geofences/events",event,expectedScope=scope,connectTimeoutMillis=connectTimeoutMillis,readTimeoutMillis=readTimeoutMillis)
      if(response.optString("status") in setOf("superseded")) {
       NodeReminderActions.withdrawScoped(context,event.getString("occurrenceId"),1,scope,true)
      }
@@ -839,7 +851,8 @@ object NodeGeofences {
      }else throw error}
    }
   }
-  recoverAccepted(context)
+  if(deadlineElapsed==Long.MAX_VALUE)recoverAccepted(context)
+  }finally{eventFlushing.set(false)}
  }
  fun scheduleRestore(context:Context) {
   val work=OneTimeWorkRequestBuilder<NodeGeofenceRestoreWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
@@ -847,11 +860,14 @@ object NodeGeofences {
  }
  fun restore(context:Context) { synchronized(manifestGate) {
   if(NodeNativeSession.read(context)==null){clear(context);return}
+  val restoreBootCount=android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1)
+  check(prefs(context).edit().putLong("lastRestoreAt",System.currentTimeMillis()).putInt("lastRestoreBootCount",restoreBootCount).commit())
   NodeMonitoringSessions.cancelAll(context,"monitoring_interrupted")
   prefs(context).edit().putBoolean("needsInstall",true).commit()
   val current=manifest(context)
   if(current!=null && current.optString("observerNodeId")!=NodeNativeSession.read(context)?.nodeId){clear(context);return}
   if(current!=null && stamp(current.getString("leaseUntil"))>System.currentTimeMillis()) try{install(context,current)}catch(_:Exception){}
+  check(prefs(context).edit().putLong("lastRestoreCompletedAt",System.currentTimeMillis()).putInt("lastRestoreCompletedBootCount",restoreBootCount).commit())
   NodeBackgroundWork.enqueue(context)
  }
  }

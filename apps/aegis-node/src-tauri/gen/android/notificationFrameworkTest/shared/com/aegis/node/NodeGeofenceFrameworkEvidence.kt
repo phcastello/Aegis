@@ -248,12 +248,12 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   var now=System.currentTimeMillis()
   val definition=JSONObject().put("id",ruleId).put("revision",resumed.getInt("revision")).put("placeIds",JSONArray().put(placeId)).put("text","Synthetic geographic fixture").put("transition","exit").put("repeat",true).put("status","active").put("startsAt",JSONObject.NULL).put("endsAt",JSONObject.NULL).put("leaseUntil",geoStamp(now+3600000)).put("timeZoneId","UTC").put("deliveryPolicy","allEligible")
   val manifest=JSONObject().put("revision","instrumented-${UUID.randomUUID()}").put("generatedAt",geoStamp(now)).put("leaseUntil",geoStamp(now+3600000)).put("observerNodeId",nodeId).put("places",JSONArray().put(place)).put("rules",JSONArray().put(definition))
-  prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
+  prefs.edit().putString("manifest",manifest.toString()).putString("installedRevision",manifest.getString("revision")).putBoolean("needsInstall",false).putBoolean("hasRegions",false).putLong("notBefore:$placeId",now-119000).putLong("ruleRevision:$ruleId",resumed.getLong("revision")).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").remove("hybridFix:$placeId").commit()
   exerciseResidentialLocationAdapterFramework(context,manifest,ruleId,placeId,setBackground)
   // Power/lifecycle integration has its own real elapsed time. Start the
   // deterministic trajectory afterwards, preserving the pre-activation cutoff.
   now=System.currentTimeMillis()
-  prefs.edit().putLong("notBefore:$placeId",now-119000).remove("state:$placeId").remove("diagnostic:$placeId").putBoolean("armed:$ruleId",false).commit()
+  prefs.edit().putLong("notBefore:$placeId",now-119000).remove("state:$placeId").remove("hybridFix:$placeId").remove("diagnostic:$placeId").putBoolean("armed:$ruleId",false).commit()
   val observe=geoRuntime(context).getMethod("observe",Context::class.java,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Double::class.javaPrimitiveType,Long::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
   fun position(longitude:Double,ago:Long,accuracy:Double=5.0)=observe.invoke(null,context,0.0,longitude,accuracy,now-ago,false)
   fun events():List<String> = SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-geofence-events-v1.db").path,null,SQLiteDatabase.OPEN_READONLY).use{db->db.rawQuery("SELECT occurrenceId FROM events WHERE ruleId=? ORDER BY sequence",arrayOf(ruleId)).use{rows->val ids=mutableListOf<String>();while(rows.moveToNext())ids.add(rows.getString(0));ids}}
@@ -265,20 +265,20 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   assertEquals("outside",JSONObject(prefs.getString("state:$placeId",null)!!).getString("confirmed"));assertTrue(events().isEmpty())
   checkpoint("geofence_pre_activation_cache_ignored")
   position(0.0,118000,1000.0);assertFalse(prefs.getBoolean("armed:$ruleId",false))
-  prefs.edit().remove("state:$placeId").commit()
+  prefs.edit().remove("state:$placeId").remove("hybridFix:$placeId").commit()
   position(0.0,117000)
   assertTrue(prefs.getBoolean("armed:$ruleId",false))
   // Outside circle A but inside circle B remains inside the logical place.
-  position(0.0028,116000)
+  position(0.0028,112000)
   assertEquals("inside",JSONObject(prefs.getString("state:$placeId",null)!!).getString("confirmed"))
-  position(0.01,115000);position(0.01,84000)
+  position(0.005,108000);position(0.005,78000)
   assertEquals(1,events().size)
   val first=events().single();occurrences.add(first)
   awaitFrameworkReminder(manager,first,1)
-  position(0.01,84000);position(0.0,90000)
+  position(0.005,78000);position(0.0,90000)
   assertEquals(listOf(first),events()) // repeated and out of order observations cannot replay.
-  position(0.0,83000);position(0.0,52000)
-  position(0.01,51000);position(0.01,20000)
+  position(0.0,70000);position(0.0,40000)
+  position(0.005,32000);position(0.005,2000)
   assertEquals(2,events().size);occurrences.addAll(events().filter{it!=first})
   assertTrue(occurrences.distinct().size==2)
   // SQLite reopened after every assertion; event/occurrence IDs survive native component recreation.
@@ -288,8 +288,8 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
   // has no remaining region consumer and must not replay its occurrence after restoration.
   definition.put("repeat",false)
   manifest.put("rules",JSONArray().put(definition))
-  prefs.edit().putString("manifest",manifest.toString()).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").commit()
-  position(0.0,117000);position(0.01,115000);position(0.01,84000)
+  prefs.edit().putString("manifest",manifest.toString()).putBoolean("armed:$ruleId",false).remove("completed:$ruleId").remove("state:$placeId").remove("hybridFix:$placeId").commit()
+  position(0.0,117000);position(0.005,108000);position(0.005,78000)
   assertTrue(prefs.getBoolean("completed:$ruleId",false))
   assertEquals(3,events().size);occurrences.addAll(events().filter{it !in occurrences})
   geoRuntime(context).getMethod("restore",Context::class.java).invoke(null,context)
@@ -348,7 +348,7 @@ private fun exerciseGeofenceReportFailures(context:Context,nodeId:String,ruleId:
   val now=System.currentTimeMillis()
   // Controlled captures cover the confirmation interval without waiting for a
   // street journey. The registration above is real; this trajectory is synthetic.
-  prefs.edit().putLong("notBefore:$placeId",now-65000).remove("state:$placeId").putBoolean("armed:$ruleId",false).commit()
+  prefs.edit().putLong("notBefore:$placeId",now-65000).remove("state:$placeId").remove("hybridFix:$placeId").putBoolean("armed:$ruleId",false).commit()
   observe.invoke(null,context,0.0,0.0,5.0,now-64000,false)
   assertTrue(prefs.getBoolean("armed:$ruleId",false))
   observe.invoke(null,context,0.0,0.01,5.0,now-32000,false)
@@ -405,7 +405,7 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
  try {
   val home=JSONObject(original.toString())
   home.getJSONArray("places").getJSONObject(0).put("circles",JSONArray().put(JSONObject().put("id",UUID.randomUUID().toString()).put("latitude",0).put("longitude",0).put("radiusMeters",65)).put(JSONObject().put("id",UUID.randomUUID().toString()).put("latitude",0).put("longitude",0.00045).put("radiusMeters",65)))
-  prefs.edit().putString("manifest",home.toString()).putLong("installedUntil",System.currentTimeMillis()+3600000).putBoolean("hasRegions",true).putLong("notBefore:$placeId",System.currentTimeMillis()-120000).putBoolean("armed:$ruleId",false).remove("state:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").commit()
+  prefs.edit().putString("manifest",home.toString()).putLong("installedUntil",System.currentTimeMillis()+3600000).putBoolean("hasRegions",true).putLong("notBefore:$placeId",System.currentTimeMillis()-120000).putBoolean("armed:$ruleId",false).remove("state:$placeId").remove("hybridFix:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").commit()
   val unknown=details(acquisition("available",100.0))
   assertEquals("installed",unknown.getString("installationStatus"));assertEquals("unknown",unknown.getString("presence"));assertEquals("accuracy_insufficient",unknown.getString("reasonCode"));assertFalse(unknown.getBoolean("armed"))
   // A fresh explicit check arms the existing registration without a reinstall.
@@ -457,7 +457,7 @@ private fun exerciseResidentialLocationAdapterFramework(context:Context,original
    }
   }
   // An installed fence with no observation remains unarmed and explainable.
-  prefs.edit().remove("state:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").putBoolean("armed:$ruleId",false).commit()
+  prefs.edit().remove("state:$placeId").remove("hybridFix:$placeId").remove("diagnostic:$placeId").remove("lastAcquisitionStatus").remove("lastAcquisitionAt").putBoolean("armed:$ruleId",false).commit()
   assertEquals("not_observed",details(JSONObject(diagnostics.invoke(null,context) as String)).getString("reasonCode"))
   android.util.Log.i("AegisNodeNativeTest","phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint")
  }finally {

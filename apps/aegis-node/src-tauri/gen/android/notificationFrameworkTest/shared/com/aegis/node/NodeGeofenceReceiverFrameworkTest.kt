@@ -204,19 +204,24 @@ class NodeGeofenceReceiverFrameworkTest {
     val rows=JSONArray(preferences.getString("history:$ruleId","[]"))
     return (0 until rows.length()).any{rows.getJSONObject(it).getString("code")==code}
    }
+   fun requireRecorded(code:String) {
+    val rows=JSONArray(preferences.getString("history:$ruleId","[]"))
+    val codes=(0 until rows.length()).map{rows.getJSONObject(it).optString("code")}.filter{it.matches(Regex("[a-z_]{1,64}"))}.joinToString(",")
+    assertTrue("Expected closed history code=$code; observed=$codes",recorded(code))
+   }
    // Initial inside, an unarmed callback and installation replay cannot fire.
    seed("inside",false);callback(1,ids);settled();assertTrue(events(ruleId).isEmpty());assertFalse(preferences.getBoolean("armed:$ruleId",false))
-   seed("outside",false);callback(1,ids);settled();assertTrue(events(ruleId).isEmpty());assertTrue(recorded("native_enter_unarmed"))
+   seed("outside",false);callback(1,ids);settled();assertTrue(events(ruleId).isEmpty());requireRecorded("native_enter_unarmed")
    seed("unknown",false);callback(1,ids);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("native_event_initial"))
+   requireRecorded("native_event_initial")
    // Unknown IDs and old-generation IDs must not be trusted as UUIDs/regions.
    seed("outside",true);callback(1,listOf(UUID.randomUUID().toString()));settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("native_region_unknown"))
+   requireRecorded("native_region_unknown")
    callback(1,listOf("${UUID.randomUUID()}:0"));settled();assertTrue(events(ruleId).isEmpty())
    configuration.put("revision","replaced-fixture-revision")
    check(preferences.edit().putString("installedConfiguration",configuration.toString()).commit())
    callback(1,ids);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("native_configuration_stale"))
+   requireRecorded("native_configuration_stale")
    configuration.put("revision",manifest.getString("revision"))
    configuration.put("nodeId",UUID.randomUUID().toString())
    check(preferences.edit().putString("installedConfiguration",configuration.toString()).commit())
@@ -229,17 +234,25 @@ class NodeGeofenceReceiverFrameworkTest {
    callback(1,ids);settled();assertTrue(events(ruleId).isEmpty())
    check(preferences.edit().putString("manifest",manifest.toString()).commit())
    callback(1,ids,error=1001);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("native_region_limit"))
+   requireRecorded("native_region_limit")
    callback(4,ids);settled();assertTrue(events(ruleId).isEmpty())
    // A location older than the native-event delivery budget cannot create a late reminder.
    callback(1,ids,age=3600000);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("native_event_stale"))
+   requireRecorded("native_event_stale")
    // Conflicting high-quality location cannot be accepted blindly.
    callback(1,ids,longitude=0.01);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("transition_contradictory_location"))
+   requireRecorded("transition_contradictory_location")
+   // Forty minutes predating the current real-area activation is not a valid
+   // baseline. Keep that protection distinct from a valid but old baseline.
    seed("outside",true,age=2400000)
    callback(1,ids,accuracy=200.0);settled();assertTrue(events(ruleId).isEmpty())
-   assertTrue(recorded("transition_needs_confirmation"))
+   requireRecorded("native_baseline_unreliable")
+   val currentNotBefore=preferences.getLong("notBefore:$placeId",0)
+   check(preferences.edit().putLong("notBefore:$placeId",configuration.getLong("installedAt")).commit())
+   seed("outside",true,age=2400000)
+   callback(1,ids,accuracy=200.0);settled();assertTrue(events(ruleId).isEmpty())
+   requireRecorded("transition_needs_confirmation")
+   check(preferences.edit().putLong("notBefore:$placeId",currentNotBefore).commit())
    // Delay the pending confirmation beyond its budget; no acquisition is required
    // for the independent high-confidence callback tested next.
    // The OS scheduler delay is represented by an expired persisted deadline;
@@ -249,7 +262,7 @@ class NodeGeofenceReceiverFrameworkTest {
    val pending=JSONObject().put("transition","enter").put("receivedAt",delayed).put("detectedAt",delayed).put("deadline",delayed+120000).put("baselineAt",now-300000).put("configurationId",generation)
    check(preferences.edit().putString("nativePending:$placeId",pending.toString()).commit())
    runtime.getMethod("confirmPending",Context::class.java).invoke(null,context)
-   assertFalse(preferences.contains("nativePending:$placeId"));assertTrue(recorded("transition_expired"))
+   assertFalse(preferences.contains("nativePending:$placeId"));requireRecorded("transition_expired")
    assertEquals("outside",JSONObject(preferences.getString("state:$placeId",null)!!).getString("confirmed"))
    assertTrue(events(ruleId).isEmpty())
    // Same CTS setup as the existing residential adapter test: the sticky
@@ -310,6 +323,9 @@ class NodeGeofenceReceiverFrameworkTest {
    // Actual Android Service lifecycle + receiver path on API 26/35 and R8 target.
    // Synthetic FLP seam isolates service permissions, cancellation and persistence;
    // this does not certify physical Google geofence delivery or real GPS availability.
+   instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_COARSE_LOCATION)
+   instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_FINE_LOCATION)
+   if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(context.packageName,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
    val hybridMethod=runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java)
    fun hybrid(operation:String,scenario:String="real")=JSONObject(hybridMethod.invoke(null,context,operation,placeId,scenario) as String)
    fun activeSession()=hybrid("snapshot").getJSONArray("sessions").optJSONObject(0)
@@ -351,7 +367,7 @@ class NodeGeofenceReceiverFrameworkTest {
    val hybridEvent=events(ruleId).last();occurrences.add(hybridEvent.getString("occurrenceId"))
    awaitFrameworkReminder(notifications,hybridEvent.getString("occurrenceId"),1)
    callback(1,listOf(operationalId),longitude=null);settled();assertEquals(3,events(ruleId).size)
-   assertTrue(recorded("real_area_enter_accepted"))
+   requireRecorded("real_area_enter_accepted")
    hybrid("reset");stopped()
    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_service_lifecycle_bounded_denied_arrival errorType=Checkpoint")
    val durable=events(ruleId)
@@ -366,6 +382,7 @@ class NodeGeofenceReceiverFrameworkTest {
     val replay=request("/geofences/events",credential,event)
     assertEquals("accepted",replay.getString("status"));assertTrue(replay.getBoolean("duplicate"))
    }
+   exerciseHybridAdvancedFramework(context,nodeId,credential,this)
    android.util.Log.i("AegisNodeNativeTest","phase=geofence_receiver_native_transition_idempotent_saver_reconcile errorType=Checkpoint")
   }finally {
    runCatching{runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java).invoke(null,context,"stop","","real")}

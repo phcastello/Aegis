@@ -106,6 +106,8 @@ test('native event without a position explains the preserved presence history', 
 
 test('hybrid proximity is a temporary verification, never an accepted arrival by itself', () => {
   assert.equal(status({ armed: true, monitoringState: 'approaching' }), 'Aproximando-se — verificando entrada…');
+  assert.equal(status({ armed: true, monitoringState: 'approaching' }, { ...rule, transition: 'exit' }), 'Verificando possível saída');
+  assert.match(geofencePresenceReason({ ...observed, monitoringState: 'approaching', transition: 'exit' }), /saída da área real/);
   const rows = geofenceDiagnosticHistory([
     { code: 'operational_enter_received', source: 'android_event', receivedAt: now, transition: 'enter', occurrenceCreated: false },
     { code: 'monitoring_session_started', source: 'monitoring_session', receivedAt: now },

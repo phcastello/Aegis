@@ -22,6 +22,8 @@ object NodeGeofenceRuntime {
  @JvmStatic fun bindIdentity(context:Context,id:String) {NodeGeofences.bindIdentity(context,id);NodeReminderActions.bindIdentity(context,id)}
  @JvmStatic fun diagnostics(context:Context):String = NodeGeofences.diagnostics(context).toString()
  @JvmStatic fun verifyPresence(context:Context):String = NodeGeofences.verifyPresence(context).toString()
+ /** Fixture-only WorkManager deferral; no network or credential can be selected. */
+ @JvmStatic fun deferReminderSyncFixture(context:Context,defer:Boolean):String=NodeBackgroundWork.deferFixture(context,defer)
  /** Instrumentation-only seam: production builds cannot inject observations. */
  @JvmStatic fun locationAdapterFixture(context:Context,scenario:String,accuracyMeters:Double,ageMillis:Long):String {
   check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)

@@ -111,8 +111,8 @@ class NodeHybridProcessInterruptionFrameworkTest {
   val saved=JSONObject(marker.readText())
   try {
    assertNotEquals("Instrumentation runs in a new OS process",saved.getInt("pid"),android.os.Process.myPid())
-   assertEquals(saved.getString("nodeId"),context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
-   assertEquals(saved.getString("activeVault"),context.getSharedPreferences(vaultAlias,Context.MODE_PRIVATE).getString(vaultEntry,null))
+   assertTrue("Node identity is preserved",saved.getString("nodeId")==context.getSharedPreferences("aegis-node-push-v1",Context.MODE_PRIVATE).getString("nodeId",null))
+   assertTrue("Encrypted credential record is preserved",saved.getString("activeVault")==context.getSharedPreferences(vaultAlias,Context.MODE_PRIVATE).getString(vaultEntry,null))
    assertEquals(saved.getString("manifest"),preferences.getString("manifest",null));assertEquals(saved.getString("configuration"),preferences.getString("installedConfiguration",null))
    val state=session("snapshot")
    assertFalse(state.getBoolean("running"));assertEquals(saved.getInt("serviceStarts"),state.getInt("serviceStarts"))

@@ -30,6 +30,8 @@ var geofenceSyncFailure = "none";
 var dropWithdrawalReceiptResponse = 0;
 var reminderActionFailure = "none";
 var geofenceCancellationFailure = "none";
+var geofenceEventFailure = "none";
+var geofenceEventFailureRequests = 0;
 using var listener = new MeterListener();
 listener.InstrumentPublished = (instrument, meterListener) => { if (instrument.Meter.Name is "Aegis.NodeTransport" or "Aegis.NodeTransport.Payload" or "Aegis.NodePushRegistration") meterListener.EnableMeasurementEvents(instrument); };
 listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => metrics.Add(instrument.Name, measurement)); listener.Start();
@@ -74,6 +76,12 @@ app.Use(async (context, next) => {
         if (failure is "503" or "after_drop") { context.Response.StatusCode = 503; return; }
         if (failure == "400") { context.Response.StatusCode = 400; return; }
     }
+    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/geofences/events") {
+        metrics.Add("geofence_event_requests", 1);
+        if (Volatile.Read(ref geofenceEventFailure) == "after_one" && Interlocked.Increment(ref geofenceEventFailureRequests) > 1) {
+            metrics.Add("geofence_event_temporary_failures", 1); context.Response.StatusCode = 503; return;
+        }
+    }
     if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/geofences/sync") {
         metrics.Add("geofence_sync_requests", 1);
         var failure = Volatile.Read(ref geofenceSyncFailure);
@@ -104,6 +112,19 @@ app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapCo
 app.MapGet("/api/health", () => new { status = "ok" });
 // Loopback test executable only; not a production endpoint or new authorization path.
 app.MapGet("/fixture/idle", () => metrics.Snapshot());
+// Long Android suites issue fresh ordinary bootstrap codes immediately before
+// their consumer. Production expiry and authentication contracts stay unchanged.
+app.MapPost("/fixture/refresh-bootstrap", async (FixtureBootstrapRefresh request, INodeRegistry registry) => {
+    if (request.Kind is not ("boot" or "live")) return Results.BadRequest();
+    var suffixes = request.Kind == "boot" ? new[] { ".boot" } : new[] { "", ".replacement" };
+    foreach (var suffix in suffixes) {
+        var fresh = await registry.CreateCodeAsync(null);
+        var temporary = args[0] + suffix + ".refresh";
+        await WriteBootstrapCode(temporary, fresh.Code);
+        File.Move(temporary, args[0] + suffix, overwrite: true);
+    }
+    return Results.Ok(new { refreshed = true });
+});
 // Test-only policy change occurs between APKs, with the same disposable database/identity.
 app.MapPost("/fixture/idle-policy", (FixtureIdlePolicy request, IOptions<NodeTransportOptions> options) => {
     if (request.Mode != "after") return Results.BadRequest();
@@ -124,6 +145,11 @@ app.MapPost("/fixture/geofence-sync-failure", (FixtureGeofenceSyncFailure reques
 app.MapPost("/fixture/reminder-action-failure", (FixtureGeofenceSyncFailure request) => {
     if (request.Mode is not ("503" or "400" or "disconnect_after_apply" or "none")) return Results.BadRequest();
     Volatile.Write(ref reminderActionFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
+});
+app.MapPost("/fixture/geofence-event-failure", (FixtureGeofenceSyncFailure request) => {
+    if (request.Mode is not ("after_one" or "none")) return Results.BadRequest();
+    Interlocked.Exchange(ref geofenceEventFailureRequests, 0);
+    Volatile.Write(ref geofenceEventFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
 });
 app.MapPost("/fixture/geofence-cancellation-failure", (FixtureGeofenceSyncFailure request) => {
     if (request.Mode is not ("manifest_503" or "none")) return Results.BadRequest();
@@ -208,11 +234,13 @@ using (var scope = app.Services.CreateScope())
     var replacement = await registry.CreateCodeAsync(null);
     var geofence = await registry.CreateCodeAsync(null);
     var interruption = await registry.CreateCodeAsync(null);
+    var boot = await registry.CreateCodeAsync(null);
     // All use the existing issuerless bootstrap procedure. Separate receiver and
     // live tests consume their own code; no test bypass or HTTP endpoint exists.
     await WriteBootstrapCode(args[0] + ".replacement", replacement.Code);
     await WriteBootstrapCode(args[0] + ".geofence", geofence.Code);
     await WriteBootstrapCode(args[0] + ".interruption", interruption.Code);
+    await WriteBootstrapCode(args[0] + ".boot", boot.Code);
     await WriteBootstrapCode(args[0], code.Code); // Main file is the readiness marker.
 }
 await app.RunAsync(); return 0;
@@ -256,6 +284,7 @@ sealed record FixtureOffline(int Seconds, bool AllowPairing = false);
 sealed record FixtureOfflineState(long Until, bool AllowPairing);
 
 sealed record FixtureIdlePolicy(string Mode);
+sealed record FixtureBootstrapRefresh(string Kind);
 
 sealed record FixtureGeofenceSyncFailure(string Mode);
 

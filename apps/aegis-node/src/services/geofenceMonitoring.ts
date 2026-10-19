@@ -22,7 +22,7 @@ export function geofenceMonitoringStatus(item: Geofence, state: GeofencePresence
     if (state.installationStatus === 'permission_required' || state.reasonCode === 'permission_required') return 'Precisa de permissão';
     if (state.installationStatus === 'failed') return 'Falha na instalação';
     if (state.installationStatus !== 'installed') return 'Sincronização necessária';
-    if (state.monitoringState === 'approaching') return 'Aproximando-se — verificando entrada…';
+    if (state.monitoringState === 'approaching') return item.transition === 'exit' ? 'Verificando possível saída' : 'Aproximando-se — verificando entrada…';
     if (state.monitoringState === 'verifying') return item.transition === 'enter' ? 'Verificando possível chegada' : 'Verificando possível saída';
     if (state.armed) return item.transition === 'enter' ? 'Ativo — aguardando sua chegada' : 'Ativo — aguardando sua saída';
     if (state.monitoringState === 'waiting_departure') return 'Aguardando você sair da área';
@@ -64,7 +64,7 @@ const presenceReasons: Readonly<Record<string, string>> = {
 
 export function geofencePresenceReason(state: GeofencePresenceDiagnostic | undefined): string {
   if (!state) return 'Confira o estado no celular observador.';
-  if (state.monitoringState === 'approaching') return 'Verificando entrada na área real por tempo limitado.';
+  if (state.monitoringState === 'approaching') return state.transition === 'exit' ? 'Verificando saída da área real por tempo limitado.' : 'Verificando entrada na área real por tempo limitado.';
   if (state.monitoringState === 'verifying') return 'Um evento foi recebido. O celular está buscando evidência complementar por tempo limitado.';
   return Object.prototype.hasOwnProperty.call(presenceReasons, state.reasonCode) ? presenceReasons[state.reasonCode]! : state.reasonCode === 'confirmed' ? '' : 'Confira os detalhes do monitoramento para acompanhar a última decisão do celular.';
 }

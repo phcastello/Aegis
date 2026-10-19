@@ -52,7 +52,8 @@ const permission = granted => {
 const instrumentation = (testClass, extra = []) => {
   // The live gate now includes four real GMS registrations/acquisitions plus
   // authenticated failure/recovery receipts. Keep its host watchdog explicit.
-  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],testClass==='NodeNotificationLiveTest'?480000:180000);
+  const timeout=testClass==='NodeNotificationLiveTest'?480000:testClass==='NodeGeofenceReceiverFrameworkTest'?420000:180000;
+  const output = run(['shell','am','instrument','-w','-r','-e','class',`com.aegis.node.${testClass}`,...extra,'com.aegis.node.test/androidx.test.runner.AndroidJUnitRunner'],timeout);
   // Test assertions contain only fixed phases/codes. Production logcat is never dumped.
   process.stdout.write(output);
   assert.match(output, /OK \(\d+ tests?\)/, 'Real Android framework test failed');
@@ -61,6 +62,14 @@ const instrumentation = (testClass, extra = []) => {
 let livePassed=false;
 let receiverPassed=false;
 let interruptionPassed=false;
+let bootPassed=false;
+const preservedCheckpoints=new Set();
+const advancedHybridPhases=['hybrid_shared_session_two_arrivals_inner_exit_50_200','hybrid_occurrence_outbox_partial_commit_recovery','hybrid_cancellation_during_active_session_removed_receipt'];
+const liveSyncPhases=['outbox_foreground_temporary_lost_response_permanent_old_action','cancellation_local_receipt_and_manifest_failure_reconciliation','outbox_geo_dependency_foreground_worker_deferred'];
+async function refreshBootstrap(kind) {
+  const response=await fetch('http://127.0.0.1:18104/fixture/refresh-bootstrap', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind}),signal:AbortSignal.timeout(10000)});
+  assert(response.ok,'Disposable bootstrap refresh failed');
+}
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
 try {
   permission(true);
@@ -82,6 +91,27 @@ try {
     run(['shell','am','force-stop','com.aegis.node']);
     instrumentation('NodeHybridProcessInterruptionFrameworkTest#verifyNoRestartAfterProcessDeath');
     interruptionPassed=true;
+    await refreshBootstrap('boot');
+    instrumentation('NodeHybridBootRecoveryFrameworkTest#prepareBeforeBoot', ['-e','bootPairingCode',readFileSync(bootstrap+'.boot','utf8').trim()]);
+    // Reboot clears logcat. Preserve only closed checkpoint names, never raw logs.
+    const beforeBoot=run(['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','*:S']);
+    for(const phase of ['geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
+    const previousBoot=Number(run(['shell','settings','get','global','boot_count']).trim());
+    run(['reboot']);
+    const bootDeadline=Date.now()+240000;
+    while(true) {
+      try {
+        if(run(['shell','getprop','sys.boot_completed']).trim()==='1' && Number(run(['shell','settings','get','global','boot_count']).trim())>previousBoot)break;
+      }catch{}
+      assert(Date.now()<bootDeadline,'Disposable emulator reboot timeout');
+      await new Promise(resolve=>setTimeout(resolve,1000));
+    }
+    if(api===26){run(['root']);run(['wait-for-device']);}
+    run(['reverse','tcp:18104','tcp:18104']);
+    run(['shell','input','keyevent','82']);
+    permission(true);
+    instrumentation('NodeHybridBootRecoveryFrameworkTest#verifyAfterBoot');
+    bootPassed=true;
   }
   // API 26 additionally covers the real renderer/permission. The complete live UI/JNI
   // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
@@ -92,6 +122,7 @@ try {
     permission(false);
     if (api < 33) permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
+    await refreshBootstrap('live');
     // MonitoringInstrumentation otherwise destroys the last Tauri Activity before
     // publishing the JUnit result, causing Tao to exit the instrumented process.
     instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim(),'-e','replacementCode',readFileSync(bootstrap+'.replacement','utf8').trim()]);
@@ -107,9 +138,14 @@ try {
   }
   let crash = '';
   try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
+  crash+='\n'+[...preservedCheckpoints].map(phase=>`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`).join('\n');
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
   const phases=new Set();
-  for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of [...advancedHybridPhases,...liveSyncPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+    console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
+    phases.add(phase);
+  }
+  for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
@@ -136,8 +172,11 @@ try {
   // External cleanup happens after instrumentation has published success/failure.
   run(['shell','am','force-stop','com.aegis.node']);
   if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');
+  if(receiverPassed)for(const phase of advancedHybridPhases)assert(phases.has(phase),'Shared session, real-boundary exit, partial occurrence outbox and active cancellation checkpoints required');
   if(interruptionPassed)for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered'])assert(phases.has(phase),'Actual OS permission denial and process interruption with no automatic monitoring restart required');
+  if(bootPassed)assert(phases.has('hybrid_reboot_preserves_identity_no_transition'),'Actual BOOT_COMPLETED restore must preserve identity and avoid retroactive occurrences or session resurrection');
   if(livePassed){
+    for(const phase of liveSyncPhases)assert(phases.has(phase),'Authenticated local cancellation, temporal outbox and foreground occurrence dependency recovery checkpoints required');
     assert(phases.has('withdrawal_receipt_fcm_offline_replay_lost_response'),'Native withdrawal receipt regression checkpoint required');
     if(phases.has('geofence_google_registration_task_succeeded'))for(const mode of ['503','disconnect'])for(const path of ['install','restore'])assert(phases.has(`geofence_receipt_${mode}_${path}`),'Installed geofence must survive backend receipt failure');
   }

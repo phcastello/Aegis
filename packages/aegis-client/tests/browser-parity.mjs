@@ -96,7 +96,12 @@ try {
          const offset=query.offset??0,seriesOffset=query.seriesOffset??0;
          return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:[window.oldReminder,...window.extraFocusedReminders].find(item=>item?.reminderId===query.focusId)??null});
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
-       if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){window.placePayloads.push(args.payload);const place={id:crypto.randomUUID(),revision:1,...args.payload};places.push(place);return place;}return {}; }
+       if(command === 'node_places') { if(args.operation==='list')return structuredClone(places);if(args.operation==='config')return {tileUrl:null,attribution:'',geocodingConfigured:false};if(args.operation==='create'){
+         window.placePayloads.push(structuredClone(args.payload));const place={id:crypto.randomUUID(),revision:1,...args.payload};
+         const envelope=args.payload.monitoringEnvelope;
+         place.monitoringEnvelope={enabled:envelope?.enabled??false,revision:envelope?1:0,paddingMeters:envelope?.paddingMeters??150,approvedAt:envelope?new Date().toISOString():null,approvalRequired:!envelope,circles:envelope?.enabled?place.circles.map(circle=>({...circle,id:'operational-'+circle.id,radiusMeters:circle.radiusMeters+envelope.paddingMeters})):[]};
+         places.push(place);return structuredClone(place);
+       }return {}; }
        if(command === 'node_location') { if(args.operation==='settings')return location;if(args.operation==='permissions')return {supported:true,foreground:true,precise:true,background:true,servicesEnabled:true};if(args.operation==='current')return {latitude:0,longitude:0,accuracyMeters:window.fixtureAccuracyMeters??20,capturedAt:new Date().toISOString(),ageSeconds:0,source:'synthetic-fixture'};return {}; }
        if(command === 'node_geofences') { if(args.operation==='list')return structuredClone(geofences);if(args.operation==='diagnostics')return {supported:true,rules:geofences.map(item=>({id:item.id,revision:item.revision,installationStatus:item.syncStatus==='pending_sync'?'pending_sync':'installed',presence:'unknown',confirmedPresence:'unknown',armed:item.status==='active'&&item.syncStatus==='active'&&window.fixtureGeoArmed===true,monitoringState:window.fixtureGeoArmed===true?'armed':'waiting_initial',lastObservationAt:null,accuracyMeters:null,reasonCode:'not_observed',powerSaveMode:false,history:[]}))};if(args.operation==='create'){geofences.push({id:crypto.randomUUID(),revision:1,...args.payload,status:'active',syncStatus:'pending_sync'});return geofences.at(-1);}if(args.operation==='sync'){if(window.fixtureGeoSyncReply)return structuredClone(window.fixtureGeoSyncReply);geofences.forEach(item=>item.syncStatus='active');return {status:'installed'};}if(args.operation==='pause'){const item=geofences.find(item=>item.id===args.id);Object.assign(item,{status:'paused',syncStatus:'pending_sync',revision:item.revision+1});return structuredClone(item);}return {}; }
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
@@ -279,26 +284,38 @@ try {
      await panel.getByLabel('Apelidos, separados por vírgula').fill('referência sintética');
      await panel.getByRole('button',{name:'Adicionar círculo no mapa',exact:true}).click();
      await panel.locator('.place-map').click({position:{x:140,y:140}});
-     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'150');
+     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'50','A new real residence starts at 50 m; Android proximity is configured separately');
      await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
      await panel.getByText(/Precisão estimada: 20 m/).waitFor();
      await page.evaluate(()=>window.fixtureAccuracyMeters=100);
      await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
      await panel.getByLabel('Raio em metros',{exact:true}).fill('50');
      await panel.getByLabel('Raio em metros',{exact:true}).blur();
-     await panel.getByText(/Localização imprecisa para esta área/).waitFor();
+     await panel.getByText(/A precisão atual pode dificultar/).waitFor();
      await page.evaluate(()=>window.fixtureAccuracyMeters=201);
      await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
-     await panel.getByText(/Localização imprecisa: acima de 200 m/).waitFor();
+     await panel.getByText(/A leitura atual está imprecisa demais/).waitFor();
      assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'50','Poor accuracy never silently expands a personal area');
      await page.evaluate(()=>window.fixtureAccuracyMeters=20);
      await panel.getByRole('button',{name:'Minha localização',exact:true}).click();
-     await panel.getByLabel('Raio em metros',{exact:true}).fill('250');
      await panel.getByLabel('Conferi a área que representa este lugar.').check();
+     await panel.getByLabel('Usar uma região de proximidade',{exact:true}).check();
+     const padding=panel.getByLabel('Extensão além de cada círculo real, em metros',{exact:true});
+     assert.equal(await padding.inputValue(),'150');
+     assert.equal(await panel.getByLabel('Raio em metros',{exact:true}).inputValue(),'50','Operational review preserves the actual 50 m home');
+     assert.equal(await panel.locator('path[stroke="#e6c578"][stroke-dasharray]').count(),1,'Operational preview is visually distinct from the real area');
+     await panel.getByRole('button',{name:'Salvar lugar',exact:true}).click();
+     await panel.getByText('Confirme a alteração da detecção de proximidade antes de salvar.',{exact:true}).waitFor();
+     const approve=panel.getByLabel('Confiro e aprovo esta região de proximidade.');
+     await approve.check();await padding.fill('175');
+     assert.equal(await approve.isChecked(),false,'Operational edits require fresh explicit approval');
+     await padding.fill('150');await approve.check();
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-place-map-mobile.png`});
      await panel.getByRole('button',{name:'Salvar lugar',exact:true}).click();
      await panel.getByText('Lugar sintético',{exact:true}).waitFor();
-     const place=await page.evaluate(()=>window.placePayloads.at(-1));assert.equal(place.circles.length,1);assert.equal(place.circles[0].radiusMeters,250);assert.deepEqual(place.aliases,['referência sintética']);
+     const place=await page.evaluate(()=>window.placePayloads.at(-1));assert.equal(place.circles.length,1);assert.equal(place.circles[0].radiusMeters,50);assert.deepEqual(place.aliases,['referência sintética']);
+     assert.deepEqual(place.monitoringEnvelope,{enabled:true,paddingMeters:150,confirmed:true,expectedRevision:0});
+     await panel.getByText('Área real: 50 m · Proximidade: 200 m',{exact:true}).waitFor();
      await panel.getByRole('button',{name:'Lembretes',exact:true}).click();
      await panel.getByRole('button',{name:'Por lugar',exact:true}).click();
      await panel.getByLabel('O que lembrar').fill('Evento sintético');

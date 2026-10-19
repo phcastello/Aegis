@@ -10,6 +10,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,10 +29,10 @@ class NodeIdleFrameworkTest {
   instrumentation.runOnMainSync{view.evaluateJavascript(script){result=it;latch.countDown()}}
   check(latch.await(10,TimeUnit.SECONDS)){"idle_webview_callback_timeout"};return result
  }
- private fun invoke(view:WebView,name:String,args:JSONObject=JSONObject()):JSONObject {
+ private fun invoke(view:WebView,name:String,args:JSONObject=JSONObject(),timeoutMillis:Long=30000):JSONObject {
   evaluate(view,"window.__aegisIdleReply=null;window.__TAURI_INTERNALS__.invoke(${JSONObject.quote(name)},$args).then(value=>window.__aegisIdleReply={ok:true,value}).catch(()=>window.__aegisIdleReply={ok:false});null")
-  val end=SystemClock.elapsedRealtime()+30000
-  while(SystemClock.elapsedRealtime()<end) {val raw=evaluate(view,"window.__aegisIdleReply");if(raw!="null"){val result=JSONObject(raw);check(result.getBoolean("ok")){"idle_native_invocation_failed"};return result.optJSONObject("value")?:JSONObject()};SystemClock.sleep(100)}
+  val end=SystemClock.elapsedRealtime()+timeoutMillis
+  while(SystemClock.elapsedRealtime()<end) {val raw=evaluate(view,"window.__aegisIdleReply");if(raw!="null"){val result=JSONObject(raw);check(result.getBoolean("ok")){"idle_native_invocation_failed"};val value=result.opt("value");return when(value){is JSONObject->value;is JSONArray->JSONObject().put("items",value);else->JSONObject()}};SystemClock.sleep(100)}
   error("idle_native_invocation_timeout")
  }
  @Test fun equivalentTenMinuteIdleWindows() {
@@ -40,7 +41,7 @@ class NodeIdleFrameworkTest {
   val duration=args.getString("phaseDurationMs")?.toLong()?:150000L;require(duration>=150000L && duration<=600000L)
   val code=if(mode=="before")args.getString("pairingCode")?:error("idle_bootstrap_missing") else null
   val expected=if(mode=="after")args.getString("expectedNodeId")?:error("idle_expected_identity_missing") else null
-  fun checkpoint(phase:String,version:String?=null,receipt:JSONObject?=null) {android.util.Log.i("AegisIdleTest",JSONObject().put("event","checkpoint").put("mode",mode).put("phase",phase).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).apply{version?.let{put("runtimeVersion",it)};receipt?.let{put("withdrawalReceipt",it)}}.toString())}
+  fun checkpoint(phase:String,version:String?=null,receipt:JSONObject?=null,geofenceUpgrade:JSONObject?=null) {android.util.Log.i("AegisIdleTest",JSONObject().put("event","checkpoint").put("mode",mode).put("phase",phase).put("elapsedRealtimeMs",SystemClock.elapsedRealtime()).apply{version?.let{put("runtimeVersion",it)};receipt?.let{put("withdrawalReceipt",it)};geofenceUpgrade?.let{put("geofenceUpgrade",it)}}.toString())}
   checkpoint("activity_launch")
   ActivityScenario.launch(notificationActivityClass()).let {scenario->
    checkpoint("activity_ready")
@@ -65,7 +66,16 @@ class NodeIdleFrameworkTest {
    checkpoint("transport_online")
    val configured=invoke(view,"node_notification_settings").optBoolean("pushConfigured")
    checkpoint("notification_settings_ready")
-   if(mode=="after")checkpoint("withdrawal_receipt_ready",receipt=prepareIdleWithdrawalReceipt(instrumentation.targetContext,nodeId){name,body->invoke(view,name,body)})
+   if(mode=="before") {
+    instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_FINE_LOCATION)
+    if(Build.VERSION.SDK_INT>=29)instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    invoke(view,"node_location",JSONObject().put("operation","configureNode").put("payload",JSONObject().put("nodeId",nodeId).put("sourceNodeId",nodeId).put("mode","none")))
+   }
+   if(mode=="after") {
+    checkpoint("geofence_upgrade_preserved",geofenceUpgrade=verifyIdleGeofenceUpgradeAndCleanup(instrumentation.targetContext,nodeId){name,body,timeout->invoke(view,name,body,timeout)})
+    checkpoint("withdrawal_receipt_ready",receipt=prepareIdleWithdrawalReceipt(instrumentation.targetContext,nodeId){name,body->invoke(view,name,body)})
+   }
    fun closePanels() {
     repeat(3){evaluate(view,"(()=>{const b=document.querySelector('[aria-label=\"Fechar configurações\"]')||[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Fechar'&&b.getClientRects().length);b?.click();return Boolean(b)})()");SystemClock.sleep(100)}
    }
@@ -97,6 +107,7 @@ class NodeIdleFrameworkTest {
    SystemClock.sleep(1000);phase("diagnostics_visible")
    closePanels();scenario.moveToState(Lifecycle.State.CREATED);SystemClock.sleep(1000);phase("background")
    scenario.moveToState(Lifecycle.State.RESUMED)
+   if(mode=="before")checkpoint("geofence_upgrade_prepared",geofenceUpgrade=prepareIdleGeofenceUpgrade(instrumentation.targetContext,nodeId){name,body,timeout->invoke(view,name,body,timeout)})
    if(mode=="after")invoke(view,"node_revoke",JSONObject().put("id",nodeId))
   }
  }

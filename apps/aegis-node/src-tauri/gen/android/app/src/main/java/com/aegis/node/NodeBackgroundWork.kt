@@ -21,10 +21,29 @@ object NodeBackgroundWork {
     if(!capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET))return
     if(!foregroundRunning.compareAndSet(false,true))return
     foregroundExecutor.execute {try {
-      // The drain skips geo actions whose occurrences are not uploaded yet;
-      // the durable worker flushes that dependency without delaying temporal actions.
-      if(NodeReminderActions.flush(app,foreground=true))enqueue(app)
+      val deadline=android.os.SystemClock.elapsedRealtime()+20000
+      val dependencies=NodeReminderActions.pendingGeographicDependencies(app)
+      // Only eligible action dependencies consume this foreground budget. A failed
+      // occurrence upload never prevents independent temporal actions from trying.
+      if(dependencies.isNotEmpty())try {
+        NodeGeofences.flushEvents(app,maxEvents=2,deadlineElapsed=deadline,occurrenceIds=dependencies,connectTimeoutMillis=3000,readTimeoutMillis=5000)
+      }catch(_:Exception){}
+      if(NodeReminderActions.flush(app,foreground=true,deadlineElapsed=deadline))enqueue(app)
     }catch(_:Exception){enqueue(app)}finally{foregroundRunning.set(false);actionsChanged?.invoke()}}
+  }
+  /** Independent release harness can defer the worker while proving the foreground path. */
+  fun deferFixture(context:Context,defer:Boolean):String {
+    check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+    val manager=WorkManager.getInstance(context)
+    // Include daily geofence and weekly renewal instances of the same worker;
+    // deferring only the one-shot name would not prove the foreground dependency path.
+    manager.cancelAllWorkByTag(NodeSyncWorker::class.java.name).result.get(5,TimeUnit.SECONDS)
+    if(defer) {
+      val delayed=OneTimeWorkRequestBuilder<NodeSyncWorker>().setInitialDelay(1,TimeUnit.DAYS).build()
+      manager.enqueueUniqueWork("aegis-native-sync",ExistingWorkPolicy.KEEP,delayed).result.get(5,TimeUnit.SECONDS)
+    }else {enqueue(context);scheduleRenewal(context)}
+    val deferred=defer && manager.getWorkInfosForUniqueWork("aegis-native-sync").get(5,TimeUnit.SECONDS).any{!it.state.isFinished && it.nextScheduleTimeMillis>System.currentTimeMillis()+60000}
+    return JSONObject().put("workerDeferred",deferred).toString()
   }
   fun enqueue(context: Context) {
     val work = OneTimeWorkRequestBuilder<NodeSyncWorker>()
