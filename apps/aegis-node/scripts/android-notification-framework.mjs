@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {safeAndroidCrashTypes,safeAndroidCrashSummaries} from './android-safe-crash.mjs';
 import {captureLegacyLocation,enableLegacyLocation,restoreLegacyLocation,safeLegacyLocation} from './android-legacy-location.mjs';
-import {adbFailure,waitForAndroidFrameworkReady,frameworkCleanup} from './android-framework-host.mjs';
+import {adbFailure,ensureAndroidFrameworkRoot,frameworkCleanup} from './android-framework-host.mjs';
 const [buildType = 'debug', bootstrap] = process.argv.slice(2);
 assert(['debug', 'release'].includes(buildType));
 const serial = process.env.AEGIS_TEST_EMULATOR_SERIAL ?? 'emulator-5554';
@@ -36,8 +36,7 @@ const api = Number(run(['shell','getprop','ro.build.version.sdk']).trim());
 assert([26,35].includes(api), 'Use a supported disposable framework test emulator');
 let appUid;
 if (api === 26) {
-  run(['root']); run(['wait-for-device']);
-  await waitForAndroidFrameworkReady(run);
+  await ensureAndroidFrameworkRoot(run);
   const installed = run(['shell','dumpsys','package','com.aegis.node']);
   appUid = installed.match(/\buserId=(\d+)\b/)?.[1];
   assert(appUid, 'Fixture package UID missing');
@@ -154,8 +153,7 @@ try {
       assert(Date.now()<bootDeadline,'Disposable emulator reboot timeout');
       await new Promise(resolve=>setTimeout(resolve,1000));
     }
-    run(['root']);run(['wait-for-device']);
-    await waitForAndroidFrameworkReady(run);
+    await ensureAndroidFrameworkRoot(run);
     run(['reverse','tcp:18104','tcp:18104']);
     run(['shell','input','keyevent','82']);
     permission(true);
