@@ -99,6 +99,28 @@ class NodeHybridProcessInterruptionFrameworkTest {
   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_actual_permission_denial errorType=Checkpoint")
   grantFrameworkPermission(context,Manifest.permission.ACCESS_COARSE_LOCATION)
   grantFrameworkPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)
+  if(Build.VERSION.SDK_INT>=29) {
+   assertEquals(PackageManager.PERMISSION_GRANTED,context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION))
+   assertEquals(PackageManager.PERMISSION_GRANTED,context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION))
+   assertEquals(PackageManager.PERMISSION_DENIED,context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+   val preserved=listOf("manifest","installedConfiguration","ruleRevision:$ruleId","state:$placeId","confirmedAt:$placeId","notBefore:$placeId","armed:$ruleId").associateWith{preferences.all[it]}
+   val occurrencesBefore=occurrenceCount()
+   session("reset");session("configure",placeId,"real")
+   check(preferences.edit().remove("nativeSeen").putBoolean("operationalInside:$placeId",false).putBoolean("operationalRegion:$operational",false).commit())
+   // Foreground location is granted, but the real background permission is not.
+   // A fresh validated operational edge must fail preflight before AMS/FLP.
+   helper.callback(1,listOf(operational),longitude=null)
+   await("Background-only permission denial preserves the armed rule without starting location") {
+    val snapshot=session("snapshot")
+    snapshot.getJSONArray("sessions").optJSONObject(0)?.optString("status")=="monitoring_start_denied" && !snapshot.getBoolean("running")
+   }
+   val denied=session("snapshot");val deniedRow=denied.getJSONArray("sessions").getJSONObject(0)
+   for(key in listOf("serviceStarts","servicePromotions"))assertEquals(0,denied.getInt(key))
+   for(key in listOf("attempts","acquired"))assertEquals(0,deniedRow.getInt(key))
+   assertEquals(occurrencesBefore,occurrenceCount())
+   for((key,value)in preserved)assertTrue("Background denial preserves the rule, baseline and arming",value==preferences.all[key])
+   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_background_permission_denial errorType=Checkpoint")
+  }
   if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
   session("reset");session("configure",placeId,"outside")
   check(preferences.edit().remove("nativeSeen").putBoolean("operationalInside:$placeId",false).putBoolean("operationalRegion:$operational",false).commit())
