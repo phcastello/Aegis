@@ -34,8 +34,10 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
   var result=settings(true)
   if(result.optString("status")=="resolution_opened") {
    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_resolution_opened errorType=Checkpoint")
-   val end=SystemClock.elapsedRealtime()+15000
+   val end=SystemClock.elapsedRealtime()+30000
    var accepted=false
+   var crashOverlayClosed=false
+   var reopenResolution=false
    val packages=linkedSetOf<String>()
    val viewIds=linkedSetOf<String>()
    var windowCount=0;var visitedCount=0;var positiveCount=0;var clickableCount=0
@@ -47,6 +49,18 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
    fun selectPositive(root:AccessibilityNodeInfo):Boolean {
     packages.add(packageCode(root.packageName?.toString()))
     if(root.packageName?.toString() !in approvedPackages)return false
+    // An unrelated legacy emulator crash dialog can cover the official Google
+    // resolution. Close only this exact system control once; it is neither a
+    // consent action nor evidence that any provider or registration succeeded.
+    if(root.packageName?.toString()=="android" && !crashOverlayClosed) {
+     val close=root.findAccessibilityNodeInfosByViewId("android:id/aerr_close")
+     try {for(button in close)if(button.isVisibleToUser && button.isEnabled && button.isClickable && button.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+      crashOverlayClosed=true;reopenResolution=true
+      if(viewIds.size<16)viewIds.add("android:id/aerr_close")
+      android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_crash_overlay_closed errorType=Checkpoint")
+      return false
+     }}finally{close.forEach{it.recycle()}}
+    }
     val buttons=root.findAccessibilityNodeInfosByViewId("android:id/button1")
     try {for(button in buttons)if(button.isVisibleToUser && button.isEnabled && button.isClickable &&
      (root.packageName?.toString()!="android" || button.text?.toString()?.trim()?.uppercase(Locale.ROOT) in positiveLabels)) {
@@ -92,18 +106,26 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
     windowCount=windows.size
     try {for(window in windows) {
      val root=window.root?:continue
-     try{if(selectPositive(root)){accepted=true;break}}finally{root.recycle()}
+     try{if(selectPositive(root)){accepted=true;break};if(reopenResolution)break}finally{root.recycle()}
     }}finally{windows.forEach{it.recycle()}}
-    if(!accepted) {
+    if(!accepted && !reopenResolution) {
      val root=automation.rootInActiveWindow
      try{if(root!=null)accepted=selectPositive(root)}finally{root?.recycle()}
+    }
+    if(reopenResolution) {
+     reopenResolution=false
+     // A SettingsClient call has at most 5s + 10s of SDK waits. Reopen at most
+     // once, only while it fits in the explicit thirty-second UI budget.
+     if(end-SystemClock.elapsedRealtime()<15000)break
+     result=settings(true)
+     if(result.optString("status")=="ready")break
     }
     if(!accepted)SystemClock.sleep(100)
    }
    if(!accepted)result=settings(false)
    val ui="packages=${packages.joinToString(",")} windows=$windowCount visited=$visitedCount clickable=$clickableCount positive=$positiveCount viewIds=${viewIds.joinToString(",")}"
-   assertTrue("The returned Google settings resolution must expose its real positive control; $ui; ${masks()}; diagnostics=$result",accepted)
-   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_consent_accepted errorType=Checkpoint")
+   assertTrue("The returned Google settings resolution must expose its real positive control or become ready after removing the crash overlay; $ui; ${masks()}; diagnostics=$result",accepted || (crashOverlayClosed && result.optString("status")=="ready"))
+   if(accepted)android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_consent_accepted errorType=Checkpoint")
    // Requery the real client after the actual positive action; a click alone
    // never certifies that the framework settings or NLP are usable.
    val settled=SystemClock.elapsedRealtime()+15000
