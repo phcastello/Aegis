@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { createNotificationControl, readyForPush, readPushRegistration, notificationFailureMessage, NotificationSetupError } from '../services/pushNotifications';
-import { getPushConfiguration, registerPushSubscription, disablePushSubscription, getPushSubscriptionStatus } from '../services/aegisApi';
+import { getPushConfiguration, registerPushSubscription, disablePushSubscription, getPushSubscriptionStatus } from '../services/pushApi';
 
 const active = ref(false);
 const busy = ref(true);

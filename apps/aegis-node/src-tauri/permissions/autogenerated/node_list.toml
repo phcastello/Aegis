@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-list"
+description = "Enables the node_list command without any pre-configured scope."
+commands.allow = ["node_list"]
+
+[[permission]]
+identifier = "deny-node-list"
+description = "Denies the node_list command without any pre-configured scope."
+commands.deny = ["node_list"]

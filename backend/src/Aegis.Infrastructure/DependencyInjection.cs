@@ -38,6 +38,8 @@ public static class DependencyInjection
         services.AddDbContext<AegisDbContext>(options =>
             options.UseNpgsql(connectionString));
 
+        services.AddScoped<Aegis.Application.Nodes.INodeTransportHistory, Aegis.Infrastructure.Nodes.NodeTransportHistory>();
+        services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
         services.AddDataProtection()
             .SetApplicationName("Aegis");
@@ -233,11 +235,14 @@ public static class DependencyInjection
             o.Subject = Read(configuration, "AEGIS_WEB_PUSH_SUBJECT", o.Subject);
             o.PublicKey = Read(configuration, "AEGIS_WEB_PUSH_PUBLIC_KEY", o.PublicKey);
             o.PrivateKey = Read(configuration, "AEGIS_WEB_PUSH_PRIVATE_KEY", o.PrivateKey);
-            o.PollSeconds = ReadInt(configuration, "AEGIS_REMINDER_POLL_SECONDS", o.PollSeconds);
-        }).Validate(o => o.PollSeconds is >= 1 and <= 60, "Reminder polling must be between 1 and 60 seconds.")
-          .Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
+        }).Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
               "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
           .ValidateOnStart();
+        services.AddOptions<ReminderOptions>().Configure(o =>
+        {
+            configuration.GetSection("Reminders").Bind(o);
+            o.PollSeconds = ReadInt(configuration, "AEGIS_REMINDER_POLL_SECONDS", o.PollSeconds);
+        }).Validate(o => o.PollSeconds is >= 1 and <= 60, "Reminder polling must be between 1 and 60 seconds.").ValidateOnStart();
         var semantic = new MemorySemanticOptions();
         configuration.GetSection("MemorySemantic").Bind(semantic);
         semantic.Enabled = ReadBool(configuration, "AEGIS_MEMORY_SEMANTIC_ENABLED", semantic.Enabled);
@@ -335,6 +340,18 @@ public static class DependencyInjection
         services.AddScoped<MemoryGraphRebuild>();
         services.AddHostedService<MemoryGraphProjectionWorker>();
         services.AddScoped<ReminderStore>();
+        services.AddScoped<ReminderSeriesStore>();
+        services.AddScoped<IReminderSeriesStore, ReminderSeriesStore>();
+        services.AddScoped<IReminderActionStore, ReminderActionStore>();
+        services.AddScoped<IReminderActionTokens, ReminderActionTokens>();
+        services.AddScoped<ReminderWithdrawalReconciler>();
+        services.AddScoped<Aegis.Application.Places.IPlaceService, Aegis.Infrastructure.Places.PlaceService>();
+        services.Configure<Aegis.Infrastructure.Places.PlaceMapOptions>(configuration.GetSection("PlaceMaps"));
+        services.AddScoped<Aegis.Infrastructure.Places.PlaceMaps>();
+        services.AddHttpClient("place-geocoder", client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
+        services.AddOptions<Aegis.Application.Places.LocationContextOptions>()
+            .Bind(configuration.GetSection("LocationContext")).Validate(o => o.IsValid(), "Invalid location context thresholds.").ValidateOnStart();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();
         services.AddScoped<IReminderInteractionTokens, ReminderInteractionTokens>();

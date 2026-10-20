@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-location"
+description = "Enables the node_location command without any pre-configured scope."
+commands.allow = ["node_location"]
+
+[[permission]]
+identifier = "deny-node-location"
+description = "Denies the node_location command without any pre-configured scope."
+commands.deny = ["node_location"]

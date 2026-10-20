@@ -78,15 +78,15 @@ public sealed class AegisToolLoop(
                     iteration,
                     callId = call.Id,
                     tool = call.Name,
-                    arguments = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? (object)"[redacted]" : call.Arguments,
+                    arguments = IsPrivateTool(call.Name) ? (object)"[redacted]" : call.Arguments,
                     result.Success,
                     result.ErrorCode,
-                    Content = call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[redacted]" : result.Content,
+                    Content = IsPrivateTool(call.Name) ? "[redacted]" : result.Content,
                     result.AuditMetadataJson
                 });
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
                 auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
-                    call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[memory_tool_output_redacted]" : result.Content));
+                    IsPrivateTool(call.Name) ? "[memory_tool_output_redacted]" : result.Content));
                 if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
                 {
                     tools.Clear();
@@ -174,7 +174,7 @@ public sealed class AegisToolLoop(
                 executions.Add(new { iteration, tool = call.Name, result.Success, result.ErrorCode, result.AuditMetadataJson });
                 inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
                 auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
-                    call.Name.StartsWith("memory_", StringComparison.Ordinal) ? "[memory_tool_output_redacted]" : result.Content));
+                    IsPrivateTool(call.Name) ? "[memory_tool_output_redacted]" : result.Content));
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(
                     category, result.Success ? "completed" : "failed",
                     result.Success ? completedLabel : "Não foi possível concluir a operação"));
@@ -193,6 +193,11 @@ public sealed class AegisToolLoop(
         "memory_search" => ("memory", "Consultando memória…", "Memória consultada"),
         "memory_update" => ("memory", "Corrigindo memória…", "Memória corrigida"),
         "memory_forget" => ("memory", "Apagando memória…", "Memória apagada"),
+        "reminder_series_create" or "geographic_reminder_create" => ("reminder", "Salvando lembrete…", "Lembrete salvo; confira ativação"),
+        "reminder_series_list" or "geographic_reminder_list" => ("reminder", "Consultando lembretes…", "Lembretes consultados"),
+        "reminder_series_change" or "reminder_action" or "geographic_reminder_change" => ("reminder", "Atualizando lembrete…", "Lembrete atualizado"),
+        "place_list" or "place_resolve" => ("reminder", "Consultando lugares…", "Lugares consultados"),
+        "location_status" => ("reminder", "Consultando localização…", "Localização consultada"),
         "reminder_create" => ("reminder", "Criando lembrete…", "Lembrete criado"),
         "reminder_list" => ("reminder", "Consultando lembretes…", "Lembretes consultados"),
         "reminder_update" => ("reminder", "Alterando lembrete…", "Lembrete alterado"),
@@ -345,8 +350,10 @@ public sealed class AegisToolLoop(
         return [.. inputItems, ToJsonElement(new { role = "developer", content = identity })];
     }
 
+    private static bool IsPrivateTool(string name) => name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) || name.StartsWith("geographic_reminder_", StringComparison.Ordinal) || name.StartsWith("place_", StringComparison.Ordinal) || name.StartsWith("location_", StringComparison.Ordinal);
+
     private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
-        calls.Any(call => call.Name.StartsWith("memory_", StringComparison.Ordinal))
+        calls.Any(call => IsPrivateTool(call.Name))
             ? "[memory_response_redacted]"
             : body;
 
@@ -373,7 +380,7 @@ public sealed class AegisToolLoop(
     {
         if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("type", out var type) &&
             type.GetString() == "function_call" && item.TryGetProperty("name", out var name) &&
-            name.GetString()?.StartsWith("memory_", StringComparison.Ordinal) == true)
+            IsPrivateTool(name.GetString() ?? ""))
             return ToJsonElement(new { type = "function_call", name = name.GetString(),
                 call_id = item.TryGetProperty("call_id", out var id) ? id.GetString() : null,
                 arguments = "[memory_tool_arguments_redacted]" });

@@ -22,6 +22,79 @@ namespace Aegis.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Aegis.Domain.Entities.AegisNode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AppVersion")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset>("PairedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("ProtocolVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("ReceiveReminders")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TargetPriority")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Enabled", "RevokedAt");
+
+                    b.ToTable("aegis_nodes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_name", "length(trim(\"Name\")) BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_node_platform", "\"Platform\" IN ('Android', 'Windows')");
+
+                            t.HasCheckConstraint("ck_node_protocol", "\"ProtocolVersion\" = 1");
+
+                            t.HasCheckConstraint("ck_node_revoked_disabled", "\"RevokedAt\" IS NULL OR NOT \"Enabled\"");
+
+                            t.HasCheckConstraint("ck_node_target_priority", "\"TargetPriority\" BETWEEN -1000 AND 1000");
+                        });
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.CalendarActionAudit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -252,6 +325,147 @@ namespace Aegis.Infrastructure.Migrations
                     b.HasIndex("UserConfirmationMessageId");
 
                     b.ToTable("email_action_audits", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.GeographicReminderEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ObserverNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OccurrenceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PostedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Result")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("RuleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RuleRevision")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ObserverNodeId");
+
+                    b.HasIndex("OccurrenceId")
+                        .IsUnique();
+
+                    b.HasIndex("RuleId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("geographic_reminder_events", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.GeographicReminderRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeliveryPolicy")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("EndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("LastEventAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("LastEventSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ObserverNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PlaceIdsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<bool>("Repeat")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("SourceConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("StartsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("SyncStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("SyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("SyncedRevision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(600)
+                        .HasColumnType("character varying(600)");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Transition")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceConversationId");
+
+                    b.HasIndex("ObserverNodeId", "Status");
+
+                    b.ToTable("geographic_reminder_rules", (string)null);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.LlmRequestAudit", b =>
@@ -889,6 +1103,260 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("message_feedback", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeCapabilitySnapshot", b =>
+                {
+                    b.Property<Guid>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer");
+
+                    b.HasKey("NodeId", "Name");
+
+                    b.ToTable("node_capabilities", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_capability_version", "\"Version\" >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeCredential", b =>
+                {
+                    b.Property<Guid>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("SecretHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("NodeId");
+
+                    b.ToTable("node_credentials", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_credential_hash", "octet_length(\"SecretHash\") = 32");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeLocationProfile", b =>
+                {
+                    b.Property<Guid>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("AccuracyMeters")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset?>("CapturedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("FixedPlaceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsUserSource")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("LastRequestId")
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("Latitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Longitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset?>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ResolvedPlaceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.HasKey("NodeId");
+
+                    b.HasIndex("FixedPlaceId");
+
+                    b.HasIndex("IsUserSource")
+                        .IsUnique()
+                        .HasFilter("\"IsUserSource\" = TRUE");
+
+                    b.HasIndex("ResolvedPlaceId");
+
+                    b.ToTable("node_location_profiles", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePairingAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AppVersion")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("CredentialHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<byte[]>("EncryptedReceipt")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PairingCodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<byte[]>("RecoveryHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("NodeId")
+                        .IsUnique();
+
+                    b.HasIndex("PairingCodeId")
+                        .IsUnique();
+
+                    b.ToTable("node_pairing_attempts", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_attempt_hashes", "octet_length(\"RecoveryHash\") = 32 AND octet_length(\"CredentialHash\") = 32");
+
+                            t.HasCheckConstraint("ck_node_attempt_platform", "\"Platform\" IN ('Android', 'Windows')");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePairingCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("CodeHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FailedAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("IssuerNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Selector")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("IssuerNodeId");
+
+                    b.HasIndex("Selector")
+                        .IsUnique();
+
+                    b.ToTable("node_pairing_codes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_code_attempts", "\"FailedAttempts\" BETWEEN 0 AND 5");
+
+                            t.HasCheckConstraint("ck_node_code_hash", "octet_length(\"CodeHash\") = 32");
+                        });
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePushRegistration", b =>
+                {
+                    b.Property<Guid>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EncryptedToken")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("NodeId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("node_push_registrations", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_node_push_hash", "octet_length(\"TokenHash\") = 32");
+
+                            t.HasCheckConstraint("ck_node_push_provider", "\"Provider\" = 'fcm'");
+                        });
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.PendingCalendarAction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1021,6 +1489,53 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("pending_email_actions", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.Place", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AliasesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("CirclesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MonitoringEnvelopeJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentId");
+
+                    b.ToTable("places", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.PushSubscription", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1088,8 +1603,26 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("DeliveryPolicy")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("allEligible");
+
+                    b.Property<DateTimeOffset?>("DeliveryUntil")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset>("DueAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Generation")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
+                    b.Property<bool>("IsException")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTimeOffset?>("LeaseExpiresAt")
                         .HasColumnType("timestamp with time zone");
@@ -1100,13 +1633,34 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("NextAttemptAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ObserverNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ObserverPostedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OccurrenceKey")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
                     b.Property<DateTimeOffset?>("OpenedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("ProcessingStartedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("Revision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("SeriesId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("SourceConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("SourceEventId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Status")
@@ -1136,11 +1690,63 @@ namespace Aegis.Infrastructure.Migrations
 
                     b.HasIndex("SourceConversationId");
 
+                    b.HasIndex("SourceEventId")
+                        .IsUnique()
+                        .HasFilter("\"SourceEventId\" IS NOT NULL");
+
+                    b.HasIndex("SeriesId", "OccurrenceKey")
+                        .IsUnique()
+                        .HasFilter("\"SeriesId\" IS NOT NULL");
+
                     b.HasIndex("Status", "LeaseExpiresAt");
 
                     b.HasIndex("Status", "NextAttemptAt");
 
                     b.ToTable("reminders", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderActionReceipt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("Applied")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ExpectedRevision")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Generation")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ReminderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ResponseJson")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)");
+
+                    b.Property<int>("SnoozeMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReminderId");
+
+                    b.ToTable("reminder_action_receipts", (string)null);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ReminderDeliveryAttempt", b =>
@@ -1158,36 +1764,203 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("AttemptedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTimeOffset?>("CommandExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("FailureReason")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
+                    b.Property<int>("Generation")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
 
-                    b.Property<int?>("HttpStatus")
-                        .HasColumnType("integer");
+                    b.Property<Guid?>("NodeId")
+                        .HasColumnType("uuid");
 
-                    b.Property<Guid>("PushSubscriptionId")
+                    b.Property<bool>("OutcomeAmbiguous")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("RecipientId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid>("ReminderId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Result")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
                     b.Property<DateTimeOffset?>("RetryAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Transport")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PushSubscriptionId");
+                    b.HasIndex("CommandId");
 
-                    b.HasIndex("ReminderId", "PushSubscriptionId", "Attempt")
+                    b.HasIndex("NodeId");
+
+                    b.HasIndex("ReminderId", "Attempt");
+
+                    b.HasIndex("ReminderId", "Generation", "NodeId", "Attempt")
                         .IsUnique();
 
-                    b.ToTable("reminder_delivery_attempts", (string)null);
+                    b.ToTable("reminder_node_delivery_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderRecipient", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("Ambiguous")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CommandExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Generation")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PostedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ProviderAcceptedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ReminderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Transport")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("WithdrawalAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<DateTimeOffset?>("WithdrawalCommandExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("WithdrawalCommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("WithdrawalNextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("WithdrawalQueuedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("WithdrawnAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NodeId");
+
+                    b.HasIndex("ReminderId", "Generation", "NodeId")
+                        .IsUnique();
+
+                    b.ToTable("reminder_recipients", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderSeries", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeliveryPolicy")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int>("GeneratedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("LastMaterializedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ResumeAfter")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RuleJson")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid?>("SourceConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(600)
+                        .HasColumnType("character varying(600)");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceConversationId");
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("reminder_series", (string)null);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ToolContextEntry", b =>
@@ -1291,6 +2064,28 @@ namespace Aegis.Infrastructure.Migrations
                     b.Navigation("Conversation");
 
                     b.Navigation("UserConfirmationMessage");
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.GeographicReminderEvent", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithMany()
+                        .HasForeignKey("ObserverNodeId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.GeographicReminderRule", null)
+                        .WithMany()
+                        .HasForeignKey("RuleId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.GeographicReminderRule", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("SourceConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.LlmRequestAudit", b =>
@@ -1435,6 +2230,69 @@ namespace Aegis.Infrastructure.Migrations
                     b.Navigation("Message");
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeCapabilitySnapshot", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithMany()
+                        .HasForeignKey("NodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeCredential", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithOne()
+                        .HasForeignKey("Aegis.Domain.Entities.NodeCredential", "NodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodeLocationProfile", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Place", null)
+                        .WithMany()
+                        .HasForeignKey("FixedPlaceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithOne()
+                        .HasForeignKey("Aegis.Domain.Entities.NodeLocationProfile", "NodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.Place", null)
+                        .WithMany()
+                        .HasForeignKey("ResolvedPlaceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePairingAttempt", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.NodePairingCode", null)
+                        .WithMany()
+                        .HasForeignKey("PairingCodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePairingCode", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithMany()
+                        .HasForeignKey("IssuerNodeId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.NodePushRegistration", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithOne()
+                        .HasForeignKey("Aegis.Domain.Entities.NodePushRegistration", "NodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.PendingCalendarAction", b =>
                 {
                     b.HasOne("Aegis.Domain.Entities.Conversation", "Conversation")
@@ -1457,27 +2315,70 @@ namespace Aegis.Infrastructure.Migrations
                     b.Navigation("Conversation");
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.Place", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Place", null)
+                        .WithMany()
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.Reminder", b =>
                 {
+                    b.HasOne("Aegis.Domain.Entities.ReminderSeries", null)
+                        .WithMany()
+                        .HasForeignKey("SeriesId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Aegis.Domain.Entities.Conversation", null)
                         .WithMany()
                         .HasForeignKey("SourceConversationId")
                         .OnDelete(DeleteBehavior.SetNull);
                 });
 
-            modelBuilder.Entity("Aegis.Domain.Entities.ReminderDeliveryAttempt", b =>
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderActionReceipt", b =>
                 {
-                    b.HasOne("Aegis.Domain.Entities.PushSubscription", null)
+                    b.HasOne("Aegis.Domain.Entities.Reminder", null)
                         .WithMany()
-                        .HasForeignKey("PushSubscriptionId")
+                        .HasForeignKey("ReminderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderDeliveryAttempt", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithMany()
+                        .HasForeignKey("NodeId")
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("Aegis.Domain.Entities.Reminder", null)
                         .WithMany()
                         .HasForeignKey("ReminderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderRecipient", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.AegisNode", null)
+                        .WithMany()
+                        .HasForeignKey("NodeId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.Reminder", null)
+                        .WithMany()
+                        .HasForeignKey("ReminderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderSeries", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("SourceConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ToolContextEntry", b =>

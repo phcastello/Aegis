@@ -1,0 +1,14 @@
+{
+  "identifier": "android-updates",
+  "description": "Fixed HTTPS Android update feed and verified private-cache installer handoff.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android"
+  ],
+  "permissions": [
+    "allow-check-android-update",
+    "allow-install-android-update"
+  ]
+}

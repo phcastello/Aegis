@@ -35,12 +35,10 @@ public sealed class NotificationApiTests
         Assert.Equal(2, f.Db.PushSubscriptions.Count());
     }
     [Fact]
-    public async Task RealSubscriptionRegistrationAndStatusUnlockReminderCreation()
+    public async Task LegacySubscriptionRegistrationAndStatusDoNotUnlockReminderCreation()
     {
         using var f = new Fixture(); using var metrics = new AegisMetrics();
-        using var http = new HttpClient();
-        var push = new WebPushService(http, Microsoft.Extensions.Options.Options.Create(f.Options), f.Clock);
-        var service = new ReminderService(new ReminderStore(f.Db), push, f.Clock, metrics);
+        var service = new ReminderService(new ReminderStore(f.Db), f.Clock, metrics);
         var conversation = new Conversation(); f.Db.Conversations.Add(conversation); await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
         var request = f.Request();
@@ -51,12 +49,12 @@ public sealed class NotificationApiTests
         var mismatch = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Status(id, new(token, request.Endpoint + "other"), default)).Value);
         Assert.False(mismatch.GetProperty("active").GetBoolean());
         Assert.IsType<NotFoundResult>(await f.Api.Status(id, new("tampered", request.Endpoint), default));
-        Assert.NotNull(await service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
+        await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
         await f.Api.Disable(id, new(token), default);
         status = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(await f.Api.Status(id, new(token, request.Endpoint), default)).Value);
         Assert.False(status.GetProperty("active").GetBoolean());
         await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
-        Assert.Single(f.Db.Reminders);
+        Assert.Empty(f.Db.Reminders);
         await f.Api.Register(request, default); f.Options.PrivateKey = "";
         await Assert.ThrowsAsync<ReminderException>(() => service.CreateAsync(conversation.Id, "X", "2026-09-27T14:00:00Z", default));
     }

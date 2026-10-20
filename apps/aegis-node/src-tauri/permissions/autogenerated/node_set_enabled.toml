@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-set-enabled"
+description = "Enables the node_set_enabled command without any pre-configured scope."
+commands.allow = ["node_set_enabled"]
+
+[[permission]]
+identifier = "deny-node-set-enabled"
+description = "Denies the node_set_enabled command without any pre-configured scope."
+commands.deny = ["node_set_enabled"]

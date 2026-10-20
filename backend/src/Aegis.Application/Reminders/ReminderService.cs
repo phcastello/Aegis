@@ -6,18 +6,18 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Reminders;
 
-public sealed class ReminderService(IReminderStore store, IWebPushClient push, TimeProvider clock, AegisMetrics metrics)
+public sealed class ReminderService(IReminderStore store, TimeProvider clock, AegisMetrics metrics)
 {
     public Task<string?> GetContextAsync(Guid conversationId, CancellationToken ct) => store.GetContextAsync(conversationId, clock.GetUtcNow(), ct);
-    public async Task<Reminder> CreateAsync(Guid conversationId, string text, string dueAt, CancellationToken ct, string? timeZoneId = null)
+    public async Task<Reminder> CreateAsync(Guid conversationId, string text, string dueAt, CancellationToken ct, string? timeZoneId = null, string deliveryPolicy = "allEligible")
     {
+        Reminder.ValidatePolicy(deliveryPolicy);
         var due = ParseInstant(dueAt);
         var zone = ValidateTimeZone(timeZoneId ?? RuntimeContextProvider.ReferenceTimeZoneId);
-        if (!push.IsConfigured)
-            throw new ReminderException("notifications_not_configured", "O envio de notificações ainda não está configurado no servidor da Aegis. Conceder permissão no navegador não resolve essa configuração; o lembrete ainda não foi criado.");
-        if (!await store.HasActiveSubscriptionAsync(ct))
-            throw new ReminderException("notifications_unavailable", "Ative notificações na Aegis para eu conseguir avisar com a aplicação fechada. Depois, peça o lembrete novamente; ele ainda não foi criado.");
+        if (!await store.HasNotificationNodeAsync(ct))
+            throw new ReminderException("notifications_unavailable", "Nenhum Node ativo tem notification.show@1. Pareie e habilite notificações em um Node da Aegis e peça o lembrete novamente; ele ainda não foi criado.");
         var reminder = new Reminder(text, due, zone, conversationId, clock.GetUtcNow());
+        reminder.SetDeliveryPolicy(deliveryPolicy);
         await store.AddAsync(reminder, ct);
         metrics.RemindersCreated.Add(1);
         return reminder;
@@ -50,6 +50,10 @@ public sealed class ReminderService(IReminderStore store, IWebPushClient push, T
         await store.RememberAsync(conversationId, [result], cancel ? "reminder_cancel" : "reminder_update", clock.GetUtcNow(), ct);
         return result;
     }
+    public async Task EnsureObservedAsync(Guid conversationId, Guid reminderId, CancellationToken ct)
+    {
+        if (!await store.WasObservedAsync(conversationId, reminderId, clock.GetUtcNow(), ct)) throw new ReminderException("invalid_tool_arguments", "Consulte reminder_list; use referência observada e esclareça ambiguidades.");
+    }
     private static string ValidateTimeZone(string zone)
     {
         if (string.IsNullOrWhiteSpace(zone) || zone.Length > 100) throw new ArgumentException("Timezone inválido.");
@@ -63,7 +67,7 @@ public sealed class ReminderService(IReminderStore store, IWebPushClient push, T
             throw new ArgumentException("Use RFC3339 com offset explícito, por exemplo 2026-10-01T18:00:00-03:00.");
         return instant.ToUniversalTime();
     }
-    public static object View(Reminder r) => new { reminderId = r.Id, text = r.Text, dueAt = r.DueAtUtc, timeZoneId = r.TimeZoneId, status = r.Status.ToString() };
+    public static object View(Reminder r) => new { reminderId = r.Id, text = r.Text, dueAt = r.DueAtUtc, timeZoneId = r.TimeZoneId, status = r.Status.ToString(), r.SeriesId, r.Revision, r.Generation, r.DeliveryPolicy, r.AcknowledgedAt, r.OpenedAt, r.TriggeredAt, r.DeliveryUntil };
 }
 public sealed class ReminderException(string code, string message) : Exception(message)
 {

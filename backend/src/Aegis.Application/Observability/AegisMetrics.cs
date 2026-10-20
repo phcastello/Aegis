@@ -60,6 +60,9 @@ public sealed class AegisMetrics : IDisposable
     public Counter<long> RemindersCancelled { get; }
     public Counter<long> RemindersTriggered { get; }
     public Counter<long> RemindersFailed { get; }
+    public Counter<long> ReminderDeliveryAttempts { get; }
+    public Counter<long> ReminderDeliveryAccepted { get; }
+    public Counter<long> ReminderDeliveryFailed { get; }
     public Counter<long> PushAttempts { get; }
     public Counter<long> PushAccepted { get; }
     public Counter<long> PushFailed { get; }
@@ -147,6 +150,9 @@ public sealed class AegisMetrics : IDisposable
         RemindersCancelled = meter.CreateCounter<long>("aegis_reminders_cancelled_total");
         RemindersTriggered = meter.CreateCounter<long>("aegis_reminders_triggered_total");
         RemindersFailed = meter.CreateCounter<long>("aegis_reminders_failed_total");
+        ReminderDeliveryAttempts = meter.CreateCounter<long>("aegis_reminder_delivery_attempts_total");
+        ReminderDeliveryAccepted = meter.CreateCounter<long>("aegis_reminder_delivery_accepted_total");
+        ReminderDeliveryFailed = meter.CreateCounter<long>("aegis_reminder_delivery_failed_total");
         PushAttempts = meter.CreateCounter<long>("aegis_push_attempts_total");
         PushAccepted = meter.CreateCounter<long>("aegis_push_accepted_total");
         PushFailed = meter.CreateCounter<long>("aegis_push_failed_total");

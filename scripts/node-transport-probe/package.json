@@ -1,0 +1,11 @@
+{
+  "name": "aegis-node-transport-probe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "probe": "node probe.mjs"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  }
+}

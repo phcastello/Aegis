@@ -1,0 +1,256 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { remindersApi, geofencesApi, placesApi, locationApi, domainError, dateLabel, localInput, recurrenceLabel, type Reminder, type ReminderPage, type ReminderDelivery, type ReminderSeries, type RecurrenceRule, type Place, type Geofence, type GeofenceDiagnostics, type LocationSettings, type LocationPermissions, type DeliveryPolicy } from '../services/domains';
+import { nodeServices, notificationServices, type NotificationSettings, type NodeView } from '../services/nodes';
+import ReminderActionSync from './ReminderActionSync.vue';
+import { mergeActionSettings } from '../services/reminderActions';
+import { placeAreaLabel, proximityLabel } from '../services/monitoringEnvelope';
+import type { Platform } from '../services/runtime';
+import { useLocationPermissionRefresh } from '../composables/useLocationPermissionRefresh';
+import { reminderEditorSnapshot } from '../services/reminderEditor';
+import { currentGeofenceDiagnostic, geofenceMonitoringStatus, geofencePresenceReason, geofenceDiagnosticHistory } from '../services/geofenceMonitoring';
+const props = defineProps<{ platform: Platform; focusedReminderId?: string | null }>();
+const emit = defineEmits<{ dirty: [value: boolean] }>();
+const panelRoot = ref<HTMLElement | null>(null);
+const reminders = ref<Reminder[]>([]); const deliveries = ref<ReminderDelivery[]>([]); const series = ref<ReminderSeries[]>([]); const geofences = ref<Geofence[]>([]);
+const hasMoreDeliveries = ref(false); const hasMore = ref(false); const nextOffset = ref(0); const seriesHasMore = ref(false); const nextSeriesOffset = ref(0);
+const occurrenceOffsets = ref([0]); const seriesOffsets = ref([0]);
+const pageLoading = ref<'occurrences' | 'series' | null>(null); const pageError = ref<{ kind: 'occurrences' | 'series'; message: string } | null>(null);
+const places = ref<Place[]>([]); const nodes = ref<NodeView[]>([]); const location = ref<LocationSettings | null>(null); const currentNodeId = ref<string | null>(null);
+const permissions = ref<LocationPermissions | null>(null);
+const actionSettings = ref<NotificationSettings | null>(null);
+const diagnostics = ref<GeofenceDiagnostics | null>(null); const diagnosticCheckedAt = ref(Date.now());
+let observationAgeTimer: ReturnType<typeof setInterval> | null = null;
+useLocationPermissionRefresh(props.platform,permissions); 
+const busy = ref(false); const error = ref<string | null>(null); const notice = ref<string | null>(null); const loaded = ref(false); const showHistory = ref(false);
+let focusReloadPending = false;
+const editor = ref<'one' | 'series' | 'geographic' | null>(null);
+const editorForm = ref<HTMLFormElement | null>(null); const editorHeading = ref<HTMLHeadingElement | null>(null);
+const editorBaseline = ref(''); const discardEditor = ref(false);
+const feedbackTarget = ref('panel');
+let returnFocus: HTMLElement | null = null; let returnScroll: { element: HTMLElement; top: number; left: number }[] = [];
+const editingReminder = ref<Reminder | null>(null); const editingSeries = ref<ReminderSeries | null>(null); const editingGeofence = ref<Geofence | null>(null);
+const text = ref(''); const due = ref(''); const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo');
+const policy = ref<DeliveryPolicy>('allEligible');
+const rule = ref<RecurrenceRule>({ frequency: 'daily', interval: 1, localTime: '08:00', startDate: new Date().toLocaleDateString('en-CA'), weekdays: [1], monthDay: 1, lastDay: false });
+const ending = ref<'never' | 'date' | 'count'>('never'); const untilDate = ref(''); const count = ref(10);
+const placeIds = ref<string[]>([]); const observer = ref(''); const transition = ref<'enter' | 'exit'>('exit'); const repeat = ref(false); const starts = ref(''); const ends = ref('');
+const weekdays = [{ id: 1, label: 'Seg' }, { id: 2, label: 'Ter' }, { id: 3, label: 'Qua' }, { id: 4, label: 'Qui' }, { id: 5, label: 'Sex' }, { id: 6, label: 'Sáb' }, { id: 7, label: 'Dom' }];
+const activeReminders = computed(() => reminders.value.filter(item => showHistory.value || (!item.acknowledgedAt && !['cancelled', 'acknowledged', 'skipped'].includes(item.status.toLowerCase()))));
+const activeSeries = computed(() => series.value.filter(item => showHistory.value || !['cancelled', 'completed'].includes(item.status.toLowerCase())));
+const activeGeofences = computed(() => geofences.value.filter(item => showHistory.value || (item.status === 'cancelled' && item.syncStatus === 'pending_sync') || !['cancelled', 'completed'].includes(item.status.toLowerCase())));
+function snapshot() { return editor.value ? reminderEditorSnapshot({ kind: editor.value, text: text.value, due: due.value, timezone: timezone.value, policy: policy.value, rule: rule.value, ending: ending.value, untilDate: untilDate.value, count: count.value, placeIds: placeIds.value, observer: observer.value, transition: transition.value, repeat: repeat.value, starts: starts.value, ends: ends.value }) : ''; }
+const isDirty = computed(() => editor.value !== null && snapshot() !== editorBaseline.value);
+watch(isDirty, value => emit('dirty', value), { immediate: true });
+const statusLabels: Record<string, string> = { scheduled: 'Agendado', processing: 'Em entrega', triggered: 'Entrega aceita', acknowledged: 'Reconhecido', cancelled: 'Cancelado', failed: 'Falhou', paused: 'Pausado', active: 'Ativo', completed: 'Concluído', skipped: 'Pulado', snoozed: 'Adiado' };
+const geofenceErrors: Record<string,string> = {location_provider_unavailable:'O provedor nativo de localização não está disponível neste Android.',location_permission_required:'Permita localização em uso neste celular.',precise_location_required:'Ative a localização precisa para detectar estas áreas.',background_location_required:'Permita localização em segundo plano para detectar transições com a Aegis fechada.',location_services_disabled:'Os serviços de localização do Android estão desligados.',geometry_required:'Confira e salve a área do lugar no mapa.',region_limit_exceeded:'O celular ultrapassou o limite de regiões. Reduza círculos ou pause outras regras.',native_registration_failed:'O Android não conseguiu registrar as áreas. Verifique os serviços e tente sincronizar novamente.',event_outbox_full:'Há eventos pendentes demais. Restabeleça a conexão e sincronize o celular.'};
+function diagnostic(item: Geofence) { return currentGeofenceDiagnostic(item, diagnostics.value?.rules, diagnosticCheckedAt.value); }
+function presenceReason(item: Geofence) { return geofencePresenceReason(diagnostic(item)); }
+function geographicStatus(item: Geofence) { return geofenceMonitoringStatus(item, diagnostic(item), diagnosticCheckedAt.value); }
+function monitoringHistory(item: Geofence) { return geofenceDiagnosticHistory(diagnostic(item)?.history); }
+function installationLabel(item: Geofence) { if (item.status === 'cancelled') return item.syncStatus === 'removed' ? 'Retirada confirmada no celular' : 'Cancelamento salvo; retirada no Android ainda pendente.'; const value=diagnostic(item)?.installationStatus; return ({installed:'Instalada no Android',pending_sync:'Pendente de sincronização',permission_required:'Precisa de permissão',failed:'Falha na instalação'} as Record<string,string>)[value ?? ''] ?? (['installed','active','waiting_initial'].includes(item.syncStatus) ? 'Instalação informada pelo celular' : 'Sem confirmação de instalação'); }
+function observationLabel(item: Geofence) { const capturedAt=diagnostic(item)?.lastObservationAt; if(!capturedAt)return 'Sem observação'; const seconds=Math.max(0,Math.floor((diagnosticCheckedAt.value-capturedAt)/1000)); return `${dateLabel(new Date(capturedAt).toISOString())} · ${seconds < 60 ? `${seconds} s` : seconds < 3600 ? `${Math.floor(seconds/60)} min` : `${Math.floor(seconds/3600)} h`} atrás`; }
+function statusLabel(status: string) { return statusLabels[status.toLowerCase()] ?? 'Estado em atualização'; }
+function editable(item: Reminder) { return !item.acknowledgedAt && !['cancelled', 'acknowledged', 'skipped'].includes(item.status.toLowerCase()); }
+function collection<T>(value: T[] | Record<string, T[]>, key: string): T[] { return Array.isArray(value) ? value : value[key] ?? []; }
+function mergeRows<T>(existing:T[],incoming:T[],key:(item:T)=>string):T[] { return [...new Map([...existing,...incoming].map(item=>[key(item),item])).values()]; }
+function withNextOccurrence(items:ReminderSeries[]):ReminderSeries[] { return items.map(item=>({...item,nextDueAt:item.nextDueAt ?? reminders.value.find(reminder=>reminder.seriesId===item.seriesId && !reminder.acknowledgedAt && reminder.status.toLowerCase()==='scheduled')?.dueAt ?? null})); }
+async function loadMore(kind:'occurrences'|'series') {
+  if (busy.value || editor.value || (kind==='occurrences' ? !hasMore.value : !seriesHasMore.value)) return;
+  busy.value=true;pageLoading.value=kind;pageError.value=null;
+  try {
+    const offset=kind==='occurrences'?nextOffset.value:nextSeriesOffset.value;
+    const result=await remindersApi<ReminderPage>('list',{offset:kind==='occurrences'?offset:0,seriesOffset:kind==='series'?offset:0});
+    if(kind==='occurrences') { reminders.value=mergeRows(reminders.value,result.reminders,item=>item.reminderId);hasMore.value=result.hasMore===true;nextOffset.value=result.nextOffset ?? 0;occurrenceOffsets.value=[...new Set([...occurrenceOffsets.value,offset])]; }
+    else { series.value=mergeRows(series.value,result.series,item=>item.seriesId);seriesHasMore.value=result.seriesHasMore===true;nextSeriesOffset.value=result.nextSeriesOffset ?? 0;seriesOffsets.value=[...new Set([...seriesOffsets.value,offset])]; }
+    deliveries.value=mergeRows(deliveries.value,result.deliveries??[],item=>`${item.reminderId}:${item.generation}:${item.nodeId??'removed'}`);
+    hasMoreDeliveries.value=hasMoreDeliveries.value || result.hasMoreDeliveries===true;
+    series.value=withNextOccurrence(series.value);
+  } catch(failure) { pageError.value={kind,message:domainError(failure,'Não foi possível carregar esta página. Os lembretes já exibidos foram preservados; tente novamente.')}; }
+  finally { pageLoading.value=null;busy.value=false; }
+}
+async function load(preservePages = false) {
+  const requestedFocusId=props.focusedReminderId;
+  const focusId=preservePages && editingReminder.value ? editingReminder.value.reminderId : requestedFocusId;focusReloadPending=false;
+  const occurrencePages=preservePages?[...occurrenceOffsets.value]:[0],seriesPages=preservePages?[...seriesOffsets.value]:[0];
+  const pages=await Promise.all(Array.from({length:Math.max(occurrencePages.length,seriesPages.length)},(_,index)=>remindersApi<ReminderPage>('list',{offset:occurrencePages[index]??0,seriesOffset:seriesPages[index]??0,...(focusId?{focusId}:{})})));
+  const result=pages[0]!,lastOccurrences=pages[occurrencePages.length-1]!,lastSeries=pages[seriesPages.length-1]!;
+  deliveries.value=mergeRows([],pages.flatMap(page=>page.deliveries??[]),item=>`${item.reminderId}:${item.generation}:${item.nodeId??'removed'}`);
+  reminders.value=mergeRows(pages.slice(0,occurrencePages.length).flatMap(page=>page.reminders),result.focusedReminder?[result.focusedReminder]:[],item=>item.reminderId);series.value=withNextOccurrence(mergeRows([],pages.slice(0,seriesPages.length).flatMap(page=>page.series),item=>item.seriesId));
+  occurrenceOffsets.value=occurrencePages;seriesOffsets.value=seriesPages;
+  hasMoreDeliveries.value=pages.some(page=>page.hasMoreDeliveries===true);hasMore.value=lastOccurrences.hasMore===true;nextOffset.value=lastOccurrences.nextOffset??0;seriesHasMore.value=lastSeries.seriesHasMore===true;nextSeriesOffset.value=lastSeries.nextSeriesOffset??0;pageError.value=null;
+  const geo = await geofencesApi<Geofence[] | { geofences: Geofence[] }>('list'); geofences.value = collection(geo, 'geofences');
+  const placeResult = await placesApi<Place[] | { places: Place[] }>('list'); places.value = collection(placeResult, 'places');
+  nodes.value = await nodeServices.list(); location.value = await locationApi<LocationSettings>('settings');
+  if(props.platform === 'android') { try { currentNodeId.value=(await nodeServices.status()).node?.id ?? null; } catch { currentNodeId.value=null; } }
+  if (!observer.value) observer.value = location.value.sourceNodeId ?? '';
+  if (props.platform === 'android') { try { permissions.value = await locationApi<LocationPermissions>('permissions'); } catch { permissions.value = null; } }
+  await loadDiagnostics();
+  await loadActionSettings();
+  loaded.value = true;
+  if (requestedFocusId && requestedFocusId===props.focusedReminderId && !editor.value && !preservePages) { showHistory.value = true; await nextTick(); if(requestedFocusId!==props.focusedReminderId || editor.value)return; const target = document.getElementById(`reminder-${requestedFocusId}`); if (target) target.focus({ preventScroll: false }); else notice.value = 'Este lembrete ainda não aparece na lista. Se o celular estava offline, aguarde a sincronização e atualize.'; }
+}
+async function operation(action: () => Promise<unknown>, message?: string, refreshAfter: boolean | 'preserve' = true, target = 'panel') {
+  if (busy.value) return; busy.value = true; error.value = null; notice.value = null; feedbackTarget.value=target;
+  try { const result = await action(); if (message) notice.value = message; if (refreshAfter && result !== false) await load(refreshAfter==='preserve'); }
+  catch (failure) { if(target==='editor' && !editor.value) { error.value=null;notice.value='Salvo, mas não foi possível atualizar a lista. Atualize quando a conexão voltar.'; } else { const message=typeof failure === 'string' ? failure : failure instanceof Error ? failure.message : ''; error.value = /revision|revisão|conflit|409|mudou/i.test(message) ? 'Este lembrete mudou em outro dispositivo. Suas alterações foram mantidas; cancele e atualize a lista antes de tentar novamente.' : target === 'editor' ? 'Não foi possível salvar. Confira os campos e a conexão e tente novamente.' : target === 'sync' ? 'Não foi possível sincronizar. Confira as permissões e a conexão e tente novamente.' : target.startsWith('geofence-') ? 'Não foi possível verificar sua presença. Confira as permissões e os serviços de localização e tente novamente.' : domainError(failure, 'Não foi possível salvar. Confira a conexão e tente novamente.'); } }
+  finally { busy.value = false; await revealFeedback(); }
+}
+async function revealFeedback() { await nextTick(); const output=Array.from(panelRoot.value?.querySelectorAll<HTMLElement>('[data-operation-feedback]') ?? []).find(element=>element.getClientRects().length>0); output?.scrollIntoView({ block:'nearest', behavior:'instant' }); }
+async function loadDiagnostics() { if(props.platform !== 'android')return; try { diagnostics.value=await geofencesApi<GeofenceDiagnostics>('diagnostics'); diagnosticCheckedAt.value=Date.now(); } catch { diagnostics.value=null; } }
+async function loadActionSettings() { try { actionSettings.value = mergeActionSettings(actionSettings.value, await notificationServices.settings()); } catch { actionSettings.value = mergeActionSettings(actionSettings.value); } }
+onMounted(() => { window.addEventListener('aegis-reminder-actions-changed', loadActionSettings); void operation(load, undefined, false); observationAgeTimer=setInterval(() => { if(document.visibilityState==='visible')diagnosticCheckedAt.value=Date.now(); },30000); });
+onUnmounted(() => { window.removeEventListener('aegis-reminder-actions-changed', loadActionSettings); if(observationAgeTimer!==null)clearInterval(observationAgeTimer); });
+function flushFocusReload() { if(!focusReloadPending || busy.value || editor.value)return;focusReloadPending=false;void operation(load,undefined,false); }
+watch(() => props.focusedReminderId, () => { focusReloadPending=true;flushFocusReload(); });
+watch([busy,editor],flushFocusReload);
+function openEditor(kind: 'one' | 'series' | 'geographic') {
+  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  returnScroll = []; for (let element = returnFocus?.parentElement; element; element = element.parentElement) { if (element.scrollHeight > element.clientHeight) returnScroll.push({ element, top: element.scrollTop, left: element.scrollLeft }); }
+  editingReminder.value = null; editingSeries.value = null; editingGeofence.value = null;
+  timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
+  rule.value = {frequency:'daily',interval:1,localTime:'08:00',startDate:new Date().toLocaleDateString('en-CA'),weekdays:[1],monthDay:1,lastDay:false}; ending.value = 'never'; untilDate.value = ''; count.value = 10;
+  editor.value = kind; text.value = ''; due.value = ''; policy.value = 'allEligible'; placeIds.value = []; starts.value = ''; ends.value = ''; repeat.value = false; transition.value = 'exit'; observer.value = location.value?.sourceNodeId ?? ''; error.value = null; notice.value = null; feedbackTarget.value = 'editor'; discardEditor.value = false;
+  editorBaseline.value = snapshot();
+  void nextTick(() => { editorHeading.value?.focus({ preventScroll: true }); editorForm.value?.scrollIntoView({ block: 'start', behavior: 'instant' }); });
+}
+function editReminder(item: Reminder) { openEditor('one'); editingReminder.value = item; text.value = item.text; due.value = localInput(item.dueAt); timezone.value = item.timeZoneId; policy.value = item.deliveryPolicy; editorBaseline.value = snapshot(); }
+function rescheduleReminder(item: Reminder) { openEditor('one'); text.value=item.text; editorBaseline.value=snapshot(); }
+function editSeries(item: ReminderSeries) { openEditor('series'); editingSeries.value = item; text.value = item.text; timezone.value = item.timeZoneId; policy.value = item.deliveryPolicy; rule.value = { ...item.rule, ...(item.rule.weekdays ? { weekdays: [...item.rule.weekdays] } : {}) }; ending.value = item.rule.untilDate ? 'date' : item.rule.count ? 'count' : 'never'; untilDate.value = item.rule.untilDate ?? ''; count.value = item.rule.count ?? 10; editorBaseline.value = snapshot(); }
+function editGeofence(item: Geofence) { openEditor('geographic'); editingGeofence.value = item; text.value = item.text; placeIds.value = [...item.placeIds]; observer.value = item.observerNodeId; transition.value = item.transition; repeat.value = item.repeat; timezone.value = item.timeZoneId ?? 'America/Sao_Paulo'; starts.value = item.startsAt ? localInput(item.startsAt) : ''; ends.value = item.endsAt ? localInput(item.endsAt) : ''; editorBaseline.value = snapshot(); }
+async function finishEditor() {
+  editor.value = null; discardEditor.value = false;
+  await nextTick();
+  for (const { element, top, left } of returnScroll) element.scrollTo({ top, left, behavior: 'instant' });
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+function cancelEditor() { if (busy.value) return; if (isDirty.value) { discardEditor.value = true; void nextTick(() => editorForm.value?.querySelector<HTMLButtonElement>('[data-continue-editing]')?.focus()); } else void finishEditor(); }
+function requestBack(): boolean { if (!editor.value) return false; if (discardEditor.value) { discardEditor.value = false; void nextTick(() => editorHeading.value?.focus({ preventScroll: true })); } else cancelEditor(); return true; }
+defineExpose({ requestBack });
+function toggleDay(day: number, checked: boolean) { rule.value.weekdays = checked ? [...(rule.value.weekdays ?? []), day].sort() : (rule.value.weekdays ?? []).filter(item => item !== day); }
+async function submit() {
+  if (!editor.value || !text.value.trim()) return;
+  feedbackTarget.value = 'editor';
+  if (editor.value === 'series' && rule.value.frequency === 'weekly' && !rule.value.weekdays?.length) { error.value = 'Escolha pelo menos um dia da semana.'; return; }
+  await operation(async () => {
+    if (editor.value === 'one') {
+      const payload = { text: text.value.trim(), dueAt: new Date(due.value).toISOString(), timeZoneId: timezone.value, ...(editingReminder.value ? { expectedRevision: editingReminder.value.revision } : { deliveryPolicy: policy.value }) };
+      await remindersApi(editingReminder.value ? 'update' : 'create', payload, editingReminder.value?.reminderId);
+    } else if (editor.value === 'series') {
+      const structuredRule: RecurrenceRule = { frequency: rule.value.frequency, interval: rule.value.interval, localTime: rule.value.localTime, startDate: rule.value.startDate, ...(rule.value.frequency === 'weekly' ? { weekdays: rule.value.weekdays } : {}), ...(rule.value.frequency === 'monthly' ? rule.value.lastDay ? { lastDay: true } : { monthDay: rule.value.monthDay } : {}), ...(ending.value === 'date' ? { untilDate: untilDate.value } : ending.value === 'count' ? { count: count.value } : {}) };
+      const payload = { text: text.value.trim(), rule: structuredRule, deliveryPolicy: policy.value, ...(editingSeries.value ? { expectedRevision: editingSeries.value.revision } : {timeZoneId:timezone.value}) };
+      await remindersApi(editingSeries.value ? 'seriesUpdate' : 'seriesCreate', payload, editingSeries.value?.seriesId);
+    } else {
+      if (!placeIds.value.length || !observer.value) { error.value='Escolha o lugar e o celular que acompanhará a transição.'; return false; }
+      const payload = { text: text.value.trim(), placeIds: placeIds.value, observerNodeId: observer.value, transition: transition.value, repeat: repeat.value, timeZoneId: timezone.value, startsAt: starts.value ? new Date(starts.value).toISOString() : null, endsAt: ends.value ? new Date(ends.value).toISOString() : null, ...(editingGeofence.value ? { expectedRevision: editingGeofence.value.revision } : {}) };
+      await geofencesApi(editingGeofence.value ? 'update' : 'create', payload, editingGeofence.value?.id);
+    }
+    const geographic = editor.value === 'geographic'; const target=editingGeofence.value ? `geofence-${editingGeofence.value.id}` : editingSeries.value ? `series-${editingSeries.value.seriesId}` : editingReminder.value ? `reminder-${editingReminder.value.reminderId}` : 'panel'; editor.value = null; discardEditor.value=false; feedbackTarget.value=target;
+    notice.value = geographic ? 'Regra salva. Confira a instalação e a ativação no celular antes de depender deste aviso.' : 'Lembrete salvo.';
+  },undefined,'preserve','editor');
+  if (!editor.value) { await finishEditor(); await revealFeedback(); }
+}
+async function action(item: Reminder, action: 'acknowledge' | 'snooze') { await operation(async () => { const result = await remindersApi<{applied:boolean; conflict:boolean;pending?:boolean}>('action', { actionId: crypto.randomUUID(), expectedRevision: item.revision, generation: item.generation, action, ...(action === 'snooze' ? { snoozeMinutes: 10 } : {}) }, item.reminderId); if (result.pending) { notice.value = action === 'snooze' ? 'Adiamento salvo neste dispositivo e aguardando conexão. Ainda não há confirmação do servidor nem garantia de aviso pontual offline.' : 'Reconhecimento salvo neste dispositivo e aguardando confirmação do servidor.'; return false; } notice.value = !result.applied ? 'Esta ocorrência mudou em outro dispositivo. Sua ação não foi aplicada. Confira o estado atualizado na lista.' : action === 'acknowledge' ? 'Reconhecimento registrado para esta ocorrência. A retirada das outras cópias depende de conexão.' : 'Esta ocorrência foi adiada. A agenda da série continua igual.'; }); }
+async function cancelGeofence(item: Geofence) {
+  await operation(async () => {
+    const result = await geofencesApi<Geofence>('cancel', { expectedRevision: item.revision }, item.id);
+    notice.value = result.localRemoval?.state === 'confirmed' ? 'Regra cancelada e retirada deste celular.' :
+      result.localRemoval?.state === 'pending' ? 'Cancelamento salvo; retirada no Android ainda pendente.' :
+      'Cancelamento salvo; aguardando retirada no celular observador.';
+    try { await load(); } catch { notice.value += ' Atualização da lista indisponível; confira quando a conexão voltar.'; }
+  }, undefined, false, 'panel');
+}
+function placeMonitoringSummary(id: string) { const place = places.value.find(item => item.id === id); return place ? `Área real: ${placeAreaLabel(place.circles)} · Proximidade configurada: ${proximityLabel(place)}` : ''; }
+function localInstalledRegionKinds(item: Geofence) {
+  const kinds = diagnostic(item)?.installedRegionKinds;
+  return item.observerNodeId === currentNodeId.value && Array.isArray(kinds) ? kinds : null;
+}
+function hasApprovedProximity(item: Geofence) {
+  return item.placeIds.some(id => {
+    const envelope = places.value.find(place => place.id === id)?.monitoringEnvelope;
+    return envelope?.enabled && !envelope.approvalRequired && !!envelope.approvedAt;
+  });
+}
+async function sync() {
+  feedbackTarget.value='sync';
+  await operation(async () => {
+    const result = await geofencesApi<{ status?: string; syncPending?: boolean; errorCode?: string }>('sync');
+    if (result.syncPending && ['installed', 'waiting_initial'].includes(result.status ?? '')) {
+      notice.value = 'Monitoramento instalado neste celular; confirmação ao servidor pendente. A regra pode aguardar a condição inicial.';
+      return false;
+    }
+    if (result.status === 'recoverable_error') {
+      error.value = result.errorCode && Object.prototype.hasOwnProperty.call(geofenceErrors, result.errorCode) ? geofenceErrors[result.errorCode] : 'Não foi possível instalar o monitoramento neste celular. Confira as permissões e tente sincronizar novamente.';
+      return false;
+    }
+    notice.value = result.status === 'installed' || result.status === 'waiting_initial' ? 'Registros instalados. Confira o estado de cada regra abaixo.' : 'Sincronização solicitada. Confira o estado de cada regra abaixo.';
+  },undefined,true,'sync');
+  await loadDiagnostics();
+}
+async function verifyPresence(item: Geofence) {
+  feedbackTarget.value=`geofence-${item.id}`;
+  await operation(async () => { diagnostics.value=await geofencesApi<GeofenceDiagnostics>('verifyPresence',undefined,item.id); diagnosticCheckedAt.value=Date.now(); const state=diagnostic(item); notice.value=state?.armed ? 'Verificação concluída. Confira o estado atualizado acima.' : state ? 'Verificação concluída; a presença continua incerta ou aguarda a condição inicial.' : 'Verificação concluída. Sincronize a regra se ela ainda não estiver instalada.'; },undefined,false,`geofence-${item.id}`);
+}
+async function requestLocation(background: boolean) { await operation(async () => { await locationApi('requestPermission', { background, precise: true }); },undefined,true,'sync'); }
+</script>
+<template>
+  <section ref="panelRoot" aria-labelledby="reminders-title"><h2 id="reminders-title">Lembretes</h2><p class="settings-muted">Horários, séries e avisos de chegada ou saída. OK significa que você reconheceu o aviso.</p>
+    <ReminderActionSync :settings="actionSettings" /><p data-operation-feedback v-if="error && feedbackTarget === 'panel'" class="settings-error" role="alert">{{ error }}</p><p data-operation-feedback v-if="notice && feedbackTarget === 'panel'" class="settings-status" role="status">{{ notice }}</p>
+    <div v-if="!editor" class="settings-actions"><button class="settings-primary" :disabled="busy" @click="openEditor('one')">Novo lembrete</button><button :disabled="busy" @click="openEditor('series')">Nova recorrência</button><button :disabled="busy" @click="openEditor('geographic')">Por lugar</button><button :disabled="busy" @click="operation(load, undefined, false)">{{ busy ? 'Atualizando…' : 'Atualizar' }}</button></div>
+    <form v-if="editor" ref="editorForm" class="settings-card settings-form reminder-editor" aria-labelledby="reminder-editor-title" :inert="busy" :aria-busy="busy" @submit.prevent="submit">
+      <h3 id="reminder-editor-title" ref="editorHeading" tabindex="-1">{{ editor === 'series' ? editingSeries ? 'Editar série' : 'Lembrete recorrente' : editor === 'geographic' ? 'Aviso por lugar' : editingReminder ? 'Editar esta ocorrência' : 'Novo lembrete' }}</h3>
+      <label>O que lembrar<textarea v-model="text" rows="2" required maxlength="2000" :disabled="busy" /></label>
+      <label v-if="editor === 'one'">Quando — horário deste dispositivo<input v-model="due" type="datetime-local" required :disabled="busy" /></label>
+      <template v-if="editor === 'series'">
+        <div class="settings-grid"><label>Repetição<select v-model="rule.frequency"><option value="daily">Diária</option><option value="weekly">Semanal</option><option value="monthly">Mensal</option></select></label><label>Intervalo<input v-model.number="rule.interval" type="number" min="1" max="365" required /></label><label>Horário local<input v-model="rule.localTime" type="time" required /></label><label>Data-base<input v-model="rule.startDate" type="date" required /></label></div>
+        <fieldset v-if="rule.frequency === 'weekly'" class="weekday-picker"><legend>Dias da semana</legend><label v-for="day in weekdays" :key="day.id"><input type="checkbox" :checked="rule.weekdays?.includes(day.id)" @change="toggleDay(day.id, ($event.target as HTMLInputElement).checked)" />{{ day.label }}</label></fieldset>
+        <template v-if="rule.frequency === 'monthly'"><label>Dia<select v-model="rule.lastDay"><option :value="false">Dia específico</option><option :value="true">Último dia do mês</option></select></label><label v-if="!rule.lastDay">Dia do mês<input v-model.number="rule.monthDay" type="number" min="1" max="31" required /><small>Meses sem esse dia são pulados. Por exemplo, dia 31 não ocorre em abril.</small></label></template>
+        <label>Encerramento<select v-model="ending"><option value="never">Sem fim</option><option value="date">Até uma data</option><option value="count">Após uma quantidade</option></select></label><label v-if="ending === 'date'">Até<input v-model="untilDate" type="date" required :min="rule.startDate" /></label><label v-if="ending === 'count'">Quantidade de ocorrências<input v-model.number="count" type="number" min="1" max="10000" required /></label>
+        <label>Fuso horário IANA<input v-model="timezone" :disabled="!!editingSeries" required placeholder="America/Sao_Paulo" /><small>O horário local permanece fixo quando houver mudança de fuso sazonal.</small></label>
+        <small v-if="editingSeries">A edição vale para ocorrências futuras; as concluídas preservam seu histórico.</small>
+      </template>
+      <template v-if="editor === 'geographic'">
+        <label>Transição<select v-model="transition"><option value="exit">Quando eu sair</option><option value="enter">Quando eu chegar</option></select></label>
+        <fieldset class="place-picker"><legend>Lugar que participa do disparo</legend><label v-for="place in places.filter(item => item.type !== 'room' && (item.circles.length || item.parentId))" :key="place.id"><input v-model="placeIds" type="checkbox" :value="place.id" />{{ place.name }}</label><small>Cômodos configuram dispositivos fixos; GPS não identifica cômodos. Para este aviso, escolha a propriedade ou uma área externa.</small><p v-if="!places.length">Cadastre o lugar na seção Lugares antes de criar este aviso.</p></fieldset>
+        <label>Celular observador<select v-model="observer" :disabled="!!editingGeofence" required><option value="" disabled>Escolha seu celular</option><option v-for="node in nodes.filter(item => item.platform === 'android' && item.enabled && !item.revokedAt)" :key="node.id" :value="node.id">{{ node.name }}{{ location?.sourceNodeId === node.id ? ' · sua fonte de localização' : '' }}</option></select></label>
+        <label class="inline-check"><input v-model="repeat" type="checkbox" />Avisar toda vez que houver uma nova transição</label><div class="settings-grid"><label>Início opcional — neste dispositivo<input v-model="starts" type="datetime-local" /></label><label>Validade opcional — neste dispositivo<input v-model="ends" type="datetime-local" /></label></div><small>O lugar de destino mencionado no texto da tarefa não participa do disparo. Uma regra salva precisa ser instalada no celular. Detecção depende do Android e dos serviços de localização.</small>
+      </template>
+      <label v-if="editor !== 'geographic' && !editingReminder">Onde entregar<select v-model="policy"><option value="allEligible">Todos os dispositivos elegíveis</option><option value="bestAvailable">Um dispositivo, pela prioridade e rota disponível</option></select></label>
+      <div class="settings-actions"><button class="settings-primary" type="submit" :disabled="busy">{{ busy ? 'Salvando…' : 'Salvar' }}</button><button type="button" :disabled="busy" @click="cancelEditor">Cancelar</button></div>
+      <p data-operation-feedback v-if="error && feedbackTarget === 'editor'" class="settings-error" role="alert">{{ error }}</p>
+      <div v-if="discardEditor" class="editor-discard" role="alertdialog" aria-labelledby="editor-discard-title"><h4 id="editor-discard-title">Descartar alterações?</h4><p>Suas alterações ainda não foram salvas.</p><div class="settings-actions"><button type="button" data-continue-editing @click="discardEditor = false; editorHeading?.focus()">Continuar editando</button><button type="button" class="settings-danger" @click="finishEditor">Descartar alterações</button></div></div>
+    </form>
+    <div v-show="!editor" class="reminder-list">
+    <p v-if="busy && !loaded" class="settings-muted" role="status">Carregando lembretes…</p>
+    <div v-if="loaded && !editor" class="settings-row"><label for="reminder-history"><input id="reminder-history" v-model="showHistory" type="checkbox" />Mostrar histórico e cancelados</label></div>
+    <p v-if="hasMoreDeliveries" class="settings-muted" role="status">Parte dos detalhes de entrega não foi carregada. Isso não altera o estado dos lembretes.</p>
+    <div v-if="loaded && !activeReminders.length && !activeSeries.length && !activeGeofences.length && !editor" class="settings-empty">Seus próximos lembretes aparecerão aqui. Crie um pela interface ou peça no chat.</div>
+    <article v-for="item in activeSeries" :key="item.seriesId" :id="`series-${item.seriesId}`" class="settings-card"><div class="settings-card-header"><h3>{{ item.text }}</h3><span class="settings-badge">{{ statusLabel(item.status) }} · Série</span></div><p>{{ recurrenceLabel(item.rule) }}</p><small>{{ item.timeZoneId }} · Próximo: {{ dateLabel(item.nextDueAt) }}</small><small>Entrega: {{ item.deliveryPolicy === 'bestAvailable' ? 'um dispositivo elegível' : 'todos os dispositivos elegíveis' }}</small><div v-if="!['cancelled','completed'].includes(item.status.toLowerCase())" class="settings-actions"><button :disabled="busy || editor !== null" @click="editSeries(item)">Editar série</button><button :disabled="busy" @click="operation(() => remindersApi(item.status.toLowerCase() === 'paused' ? 'seriesResume' : 'seriesPause', {expectedRevision:item.revision}, item.seriesId))">{{ item.status.toLowerCase() === 'paused' ? 'Retomar' : 'Pausar' }}</button><button :disabled="busy" @click="operation(() => remindersApi('seriesSkip', {expectedRevision:item.revision}, item.seriesId))">Pular próxima</button><button class="settings-danger" :disabled="busy" @click="operation(() => remindersApi('seriesCancel', {expectedRevision:item.revision}, item.seriesId))">Cancelar série</button></div><p data-operation-feedback v-if="feedbackTarget === `series-${item.seriesId}` && notice" class="settings-status" role="status">{{ notice }}</p></article>
+    <div v-if="seriesHasMore" class="settings-actions"><button :disabled="busy || !!editor" :aria-busy="pageLoading === 'series'" @click="loadMore('series')">Carregar mais séries</button></div><p v-if="pageError?.kind === 'series'" class="settings-error" role="alert">{{ pageError.message }}</p>
+    <article v-for="item in activeReminders" :key="item.reminderId" :id="`reminder-${item.reminderId}`" tabindex="-1" class="settings-card"><div class="settings-card-header"><h3>{{ item.text }}</h3><span class="settings-badge">{{ item.acknowledgedAt ? 'Reconhecido' : statusLabel(item.status) }}</span></div><p>{{ dateLabel(item.dueAt) }}</p><small v-if="item.seriesId">Uma ocorrência da série</small><small v-if="item.status.toLowerCase() === 'failed'">A entrega não foi confirmada dentro do prazo. Confira as permissões e as rotas dos dispositivos.</small><small v-if="item.triggeredAt && !item.acknowledgedAt">Aceite técnico registrado; isso não comprova leitura.</small><small v-if="item.acknowledgedAt">Reconhecido em {{ dateLabel(item.acknowledgedAt) }}</small><div v-if="editable(item)" class="settings-actions"><button v-if="item.status.toLowerCase() === 'failed'" :disabled="busy || editor !== null" @click="rescheduleReminder(item)">Agendar novamente</button><button v-if="item.triggeredAt" :disabled="busy" @click="action(item, 'acknowledge')">OK, reconheci</button><button v-if="item.triggeredAt" :disabled="busy" @click="action(item, 'snooze')">Adiar 10 min</button><button v-if="item.status.toLowerCase() === 'scheduled'" :disabled="busy || editor !== null" @click="editReminder(item)">Editar ocorrência</button><button v-if="item.status.toLowerCase() === 'scheduled'" class="settings-danger" :disabled="busy" @click="operation(() => remindersApi('cancel', {expectedRevision:item.revision}, item.reminderId))">Cancelar ocorrência</button></div><details v-if="deliveries.some(delivery => delivery.reminderId === item.reminderId)"><summary>Entregas por dispositivo</summary><ul class="delivery-list"><li v-for="(delivery,index) in deliveries.filter(delivery => delivery.reminderId === item.reminderId)" :key="index"><strong>{{ nodes.find(node => node.id === delivery.nodeId)?.name ?? 'Dispositivo removido' }}</strong><small>{{ delivery.generation !== item.generation ? 'Apresentação anterior · ' : '' }}{{ delivery.withdrawnAt ? 'Retirada confirmada' : delivery.postedAt ? 'Postagem informada pelo dispositivo' : delivery.status === 'accepted' ? 'Aceito pelo provedor; postagem não confirmada' : delivery.status === 'failed' ? 'Entrega falhou' : delivery.status === 'withdrawn' ? 'Encerrada' : 'Entrega pendente' }}</small><small v-if="delivery.providerAcceptedAt">Aceite do provedor: {{ dateLabel(delivery.providerAcceptedAt) }}</small><small v-if="delivery.postedAt">Postagem: {{ dateLabel(delivery.postedAt) }}</small></li></ul></details><p data-operation-feedback v-if="feedbackTarget === `reminder-${item.reminderId}` && notice" class="settings-status" role="status">{{ notice }}</p></article>
+    <div v-if="hasMore" class="settings-actions"><button :disabled="busy || !!editor" :aria-busy="pageLoading === 'occurrences'" @click="loadMore('occurrences')">Carregar mais ocorrências</button></div><p v-if="pageError?.kind === 'occurrences'" class="settings-error" role="alert">{{ pageError.message }}</p>
+    <section v-if="activeGeofences.length || editor === 'geographic'" class="settings-card"><h3>Ativação no celular</h3><p class="settings-muted">Sincronize no celular observador e confira o armamento de cada regra. O botão de verificação é uma ajuda opcional para conferir a presença.</p><template v-if="platform === 'android'"><small v-if="permissions?.providerAvailable === false" class="settings-error">O provedor nativo de localização não está disponível neste Android.</small><small v-if="permissions?.servicesEnabled === false" class="settings-error">Os serviços de localização do Android estão desligados. Ative-os para receber transições.</small><small>Localização em uso: {{ permissions?.foreground ? 'permitida' : 'precisa de permissão' }} · Em segundo plano: {{ permissions?.background ? 'permitida' : 'precisa de permissão' }}</small><div class="settings-actions"><button v-if="!permissions?.foreground" :disabled="busy" @click="requestLocation(false)">Permitir localização em uso</button><button v-else-if="!permissions?.precise" :disabled="busy" @click="requestLocation(false)">Permitir localização precisa</button><button v-else-if="!permissions?.background" :disabled="busy" @click="requestLocation(true)">Permitir detecção em segundo plano</button><button :disabled="busy || !permissions?.foreground || !permissions?.precise || !permissions?.background || permissions?.servicesEnabled === false || permissions?.providerAvailable === false" @click="sync">Sincronizar neste celular</button></div></template><template v-else><small>A instalação das regras é feita no Android observador. Esta tela mostra a última confirmação recebida.</small><div class="settings-actions"><button :disabled="busy" @click="sync">Solicitar sincronização no celular selecionado</button></div></template><p data-operation-feedback v-if="feedbackTarget === 'sync' && error" class="settings-error" role="alert">{{ error }}</p><p data-operation-feedback v-if="feedbackTarget === 'sync' && notice" class="settings-status" role="status">{{ notice }}</p></section>
+    <article v-for="item in activeGeofences" :key="item.id" :id="`geofence-${item.id}`" class="settings-card geofence-rule"><div class="settings-card-header"><h3>{{ item.text }}</h3><span class="settings-badge">{{ geographicStatus(item) }}</span></div><p v-if="item.errorCode && item.status !== 'cancelled'" class="settings-error">{{ geofenceErrors[item.errorCode] ?? 'O celular precisa de atenção. Confira os serviços e as permissões e tente sincronizar novamente.' }}</p><p>{{ item.transition === 'exit' ? 'Ao sair de' : 'Ao chegar em' }} {{ item.placeIds.map(id => places.find(place => place.id === id)?.name ?? 'Lugar indisponível').join(' ou ') }}</p><small v-for="id in item.placeIds" :key="id">{{ placeMonitoringSummary(id) }}</small><small v-if="item.status === 'paused'">Pausado no servidor{{ item.syncStatus === 'pending_sync' ? '; o celular ainda precisa confirmar a mudança' : '' }}.</small><small v-if="['paused','cancelled'].includes(item.status) && item.syncStatus === 'pending_sync'">O celular offline pode conservar e executar a regra anterior até sincronizar ou até a validade local expirar.</small><small>{{ item.repeat ? 'Toda nova transição' : 'Uma vez' }} · {{ nodes.find(node => node.id === item.observerNodeId)?.name ?? 'Celular observador' }}</small><small v-if="item.startsAt">Início: {{ dateLabel(item.startsAt) }}</small><small v-if="item.endsAt">Validade: {{ dateLabel(item.endsAt) }}</small><div v-if="!['cancelled','completed'].includes(item.status.toLowerCase())" class="settings-actions"><button v-if="platform === 'android' && (item.observerNodeId === currentNodeId || diagnostic(item))" :disabled="busy" @click="verifyPresence(item)">{{ busy && feedbackTarget === `geofence-${item.id}` ? 'Verificando…' : 'Verificar minha presença agora' }}</button><button :disabled="busy || editor !== null" @click="editGeofence(item)">Editar regra</button><button :disabled="busy" @click="operation(() => geofencesApi(item.status.toLowerCase() === 'paused' ? 'resume' : 'pause', {expectedRevision:item.revision}, item.id))">{{ item.status.toLowerCase() === 'paused' ? 'Retomar' : 'Pausar' }}</button><button class="settings-danger" :disabled="busy" @click="cancelGeofence(item)">Cancelar regra</button></div><p data-operation-feedback v-if="feedbackTarget === `geofence-${item.id}` && error" class="settings-error" role="alert">{{ error }}</p><p data-operation-feedback v-if="feedbackTarget === `geofence-${item.id}` && notice" class="settings-status" role="status">{{ notice }}</p><details><summary>Detalhes do monitoramento</summary><div class="presence-summary"><small>{{ installationLabel(item) }}</small><small>Presença recente: {{ diagnostic(item)?.presence === 'inside' ? 'dentro' : diagnostic(item)?.presence === 'outside' ? 'fora' : 'incerta' }}<template v-if="diagnostic(item)?.accuracyMeters != null"> · precisão ±{{ Math.round(diagnostic(item)!.accuracyMeters!) }} m</template></small><small>Última observação: {{ observationLabel(item) }}</small><p v-if="presenceReason(item)" class="settings-muted">{{ presenceReason(item) }}</p><small v-if="diagnostic(item)?.powerSaveMode">Economia de bateria ativa; o Android pode limitar a precisão e atrasar observações.</small><small v-if="diagnostic(item)?.reasonCode === 'accuracy_insufficient'">Uma leitura imprecisa pode ser inconclusiva em áreas pequenas. Eventos válidos do Android também participam da detecção.</small></div>
+        <small v-if="localInstalledRegionKinds(item) !== null">Regiões instaladas: <template v-if="localInstalledRegionKinds(item)?.length">{{ localInstalledRegionKinds(item)?.includes('real') ? 'área real' : '' }}{{ localInstalledRegionKinds(item)?.includes('operational') ? ' + proximidade aprovada' : '' }}</template><template v-else>nenhuma região</template></small><small v-else-if="hasApprovedProximity(item)">Conjunto instalado no Android: não disponível nesta conexão.</small><small v-for="(session,index) in diagnostic(item)?.monitoringSessions ?? []" :key="`session-${index}`">Acompanhamento temporário · {{ session.attempts }} tentativas · {{ session.acquired }} leituras · {{ session.unavailable }} indisponíveis</small><small>Instalar a geofence não confirma sua presença nem arma a transição desejada.</small>
+        <small v-if="diagnostic(item)">Transição armada: {{ diagnostic(item)?.armed ? 'sim' : 'não' }} · revisão {{ diagnostic(item)?.revision }}</small>
+        <small>Uma verificação solicita uma leitura nova por tempo limitado. Alta precisão não é garantida, mesmo com economia de bateria desativada.</small>
+        <small v-if="diagnostic(item)?.confirmedPresence && diagnostic(item)?.confirmedPresence !== 'unknown'">Presença anteriormente confirmada: {{ diagnostic(item)?.confirmedPresence === 'inside' ? 'dentro' : 'fora' }}<template v-if="diagnostic(item)?.confirmedAt"> · {{ dateLabel(new Date(diagnostic(item)!.confirmedAt!).toISOString()) }}</template>. Uma leitura inconclusiva preserva esse histórico.</small>
+        <small v-if="item.syncedAt">Última sincronização: {{ dateLabel(item.syncedAt) }}</small><small v-if="item.leaseUntil">Validade local: {{ dateLabel(item.leaseUntil) }}</small>
+        <small v-if="diagnostic(item)?.lastNativeEventAt">Último evento nativo recebido: {{ diagnostic(item)?.lastNativeTransition === 'enter' ? 'entrada · ' : diagnostic(item)?.lastNativeTransition === 'exit' ? 'saída · ' : '' }}{{ dateLabel(new Date(diagnostic(item)!.lastNativeEventAt!).toISOString()) }}</small>
+        <small v-else-if="diagnostic(item)">Nenhum evento nativo registrado para esta revisão.</small>
+        <small v-else>Consulte os eventos nativos locais no celular observador.</small>
+        <ol v-if="monitoringHistory(item).length" class="geofence-diagnostics" aria-label="Histórico local do monitoramento"><li v-for="(event, index) in monitoringHistory(item)" :key="index"><strong>{{ event.label }}</strong><small><code>{{ event.code }}</code> · Recebido: {{ event.received }}</small><small v-if="event.details">{{ event.details }}</small></li></ol>
+        <small v-else>O histórico local aparecerá quando houver uma decisão do monitoramento.</small>
+        <small>O histórico é limitado aos últimos eventos deste celular. Alterações offline aguardam sincronização.</small>
+      </details></article>
+    </div>
+  </section>
+</template>
+<style scoped>
+.weekday-picker,.place-picker { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 12px; display: flex; flex-wrap: wrap; gap: 12px; }
+.weekday-picker label,.place-picker label,.inline-check { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.place-picker label { flex-basis: 100%; }
+.delivery-list { list-style: none; padding: 0; }.delivery-list li { margin-block: 12px; }
+.reminder-editor,.geofence-rule { min-width: 0; }.reminder-editor :is(input,select,textarea) { min-width: 0; max-width: 100%; }.reminder-editor h3:focus { outline: none; }.editor-discard { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 12px; }.editor-discard h4 { margin: 0; }.presence-summary { margin-block: 12px; }.presence-summary p { margin-block: 6px; }.geofence-diagnostics { padding-inline-start: 20px; }.geofence-diagnostics li { margin-block: 10px; }.geofence-diagnostics strong { font-size: 0.85rem; }
+legend { padding-inline: 6px; color: var(--muted); font-size: .86rem; }
+</style>

@@ -38,6 +38,10 @@ pnpm-debug.log*
 *.nupkg
 *.snupkg
 packages/
+# Shared Vue source; keep other package restore directories ignored.
+!/packages/
+/packages/*
+!/packages/aegis-client/
 artifacts/
 *.trx
 *.coverage
@@ -109,3 +113,6 @@ temp/
 **/.obsidian
 **/aegis-ui-concepts
 voice/
+# Stage06 operational Firebase configuration (never commit backend keys/tokens).
+**/google-services.json
+.runtime-secrets/

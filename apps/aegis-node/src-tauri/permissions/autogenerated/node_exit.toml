@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-exit"
+description = "Enables the node_exit command without any pre-configured scope."
+commands.allow = ["node_exit"]
+
+[[permission]]
+identifier = "deny-node-exit"
+description = "Denies the node_exit command without any pre-configured scope."
+commands.deny = ["node_exit"]
