@@ -166,8 +166,8 @@ try {
     instrumentation('NodeHybridBootRecoveryFrameworkTest#verifyAfterBoot');
     bootPassed=true;
   }
-  // API 26 additionally covers the real renderer/permission. The complete live UI/JNI
-  // gate uses API 35; the stock legacy emulator's Activity/WebView fixture crashes.
+  // API 26 covers renderer/permissions and the native geofence/HTTP pipeline.
+  // The complete live reminder UI/JNI gate runs separately on API 35.
   const live = Boolean(bootstrap) && api >= 33;
   if (live) {
     // Earlier native fixtures grant location and post real notifications. Revoke

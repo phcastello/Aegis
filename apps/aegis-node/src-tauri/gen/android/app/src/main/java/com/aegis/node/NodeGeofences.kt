@@ -127,12 +127,15 @@ object NodeGeofences {
    // A newer native event without coordinates must not borrow an older fix's
    // precision/time. Compare capture clocks when known, receipt only otherwise.
    val latestEvidence=observations.maxByOrNull{it.optLong("lastObservationAt",it.optLong("receivedAt",0))}
-   val latest=latestEvidence?.takeIf{it.has("lastObservationAt")}
+   val unavailableAcquisition=acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latestEvidence?.optLong("receivedAt",0)?:0)
+   // A failed newer acquisition has no current fix. Keep the saved evidence for
+   // history/arming, without presenting its time or precision as this attempt's.
+   val latest=latestEvidence?.takeIf{it.has("lastObservationAt") && !unavailableAcquisition}
    var presence=combine(observations.map{it.optString("presence","unknown")})
    var reason=if(presence=="unknown")observations.firstOrNull{it.optString("presence")=="unknown"}?.optString("reasonCode")?:"not_observed" else "confirmed"
    if(latest!=null && now-latest.getLong("lastObservationAt")>NodeGeoEngine.MAX_AGE_MILLIS){presence="unknown";reason="stale_location"}
    if(latestEvidence!=null && latest==null){presence="unknown";reason=latestEvidence.optString("reasonCode","native_location_absent")}
-   if(acquisitionStatus!=null && acquisitionStatus!="available" && acquisitionAt>(latestEvidence?.optLong("receivedAt",0)?:0)) {
+   if(unavailableAcquisition) {
     presence="unknown"
     reason=when(acquisitionStatus){"permission_denied"->"permission_required";"location_disabled"->"location_disabled";"provider_unavailable"->"provider_unavailable";"stale"->"stale_location";"invalid_accuracy"->"accuracy_insufficient";else->"location_unavailable"}
    }
@@ -663,7 +666,8 @@ object NodeGeofences {
  fun nativeConfirmationPending(context:Context):Boolean=prefs(context).all.keys.any{it.startsWith("nativePending:")}
 
  fun process(context:Context,observation:NodeGeoEngine.Observation,allowConfirmation:Boolean=true,baselineOnly:Boolean=false) = synchronized(applyGate) {
-  val nativePlaces=if(baselineOnly)emptySet()else prefs(context).all.keys.filter{it.startsWith("nativePending:")}.map{it.removePrefix("nativePending:")}.toSet()
+  val validAccuracy=observation.accuracyMeters.isFinite() && observation.accuracyMeters>0.0 && observation.accuracyMeters<=200.0
+  val nativePlaces=if(baselineOnly || !validAccuracy)emptySet()else prefs(context).all.keys.filter{it.startsWith("nativePending:")}.map{it.removePrefix("nativePending:")}.toSet()
   if(nativePlaces.isNotEmpty())confirmNative(context,observation)
   val observer=NodeNativeSession.read(context)?.nodeId ?: return
   val value=manifest(context) ?: return
@@ -681,6 +685,15 @@ object NodeGeofences {
    val saved=prefs(context).getString("state:$placeId",null)?.let{JSONObject(it)}
    val old=if(saved==null) NodeGeoEngine.State() else NodeGeoEngine.State(saved.getString("confirmed"),saved.getString("candidate"),saved.getLong("candidateAt"),saved.getLong("lastCapturedAt"))
    if(observation.capturedAt<=old.lastCapturedAt)continue
+   if(!validAccuracy) {
+    // Invalid uncertainty is not evidence of movement or a teleport. Record
+    // only its ordered diagnostic, preserving presence, arming and valid fixes.
+    val prior=prefs(context).getString("diagnostic:$placeId",null)?.let{JSONObject(it)}
+    if((prior==null || observation.capturedAt>prior.optLong("lastObservationAt",prior.optLong("receivedAt",0))) && currentDefinition(context,value) && prefs(context).getLong("notBefore:$placeId",0)==notBefore) {
+     check(prefs(context).edit().putString("diagnostic:$placeId",JSONObject().put("lastObservationAt",observation.capturedAt).put("receivedAt",now).put("accuracyMeters",JSONObject.NULL).put("presence","unknown").put("reasonCode","accuracy_insufficient").toString()).commit())
+    }
+    continue
+   }
    val assessment=NodeGeoEngine.assess(geometry(value,placeId),observation,now)
    val previousFix=prefs(context).getString("hybridFix:$placeId",null)?.let{NodeLocation.engine(JSONObject(it))}
    if(!NodeGeoEngine.plausible(previousFix,observation)){monitoringHistory(context,placeId,"location_implausible");continue}
