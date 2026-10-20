@@ -126,7 +126,7 @@ class NodeReminderActionProcessRestartFrameworkTest {
   var candidate:WebView?=null
   await("The actual target WebView starts",30000){scenario.onActivity{candidate=live.findWebView(it.window.decorView)};candidate!=null}
   val webview=candidate?:error("action_webview_missing")
-  await("The real Tauri IPC initializes",30000){live.evaluate(webview,"Boolean(window.__TAURI_INTERNALS__?.invoke)")=="true"}
+  await("The real Tauri IPC initializes",30000){live.evaluate(webview,"Boolean(window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)")=="true"}
   val info=live.invoke(webview,"runtime_info")
   assertEquals("http://127.0.0.1:18104",info.getString("backendUrl"))
   val identity=live.invoke(webview,"node_pair",JSONObject().put("name","Action process restart fixture").put("code",code))
