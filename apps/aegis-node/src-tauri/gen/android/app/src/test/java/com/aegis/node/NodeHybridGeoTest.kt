@@ -94,6 +94,59 @@ class NodeHybridGeoTest {
    assertNull("Nearby cafe never counts as arrival accuracy=$accuracy factor=$factor",acceptedIndex(cafe,accuracy,factor,"outside","enter"))
   }
  }
+ private fun currentSessionOffsets():List<Long> {
+  val start=1000000L
+  var attempts=0;var last=0L
+  val offsets=mutableListOf<Long>()
+  // Keep observing the scheduler after exhaustion; it must never keep GPS alive.
+  for(offset in 0L..600000L step 1000)if(NodeMonitoringBudget.mayAcquire(start+offset,start+NodeMonitoringBudget.WINDOW_MILLIS,attempts,last)) {
+   attempts++;last=start+offset;offsets.add(offset)
+  }
+  return offsets
+ }
+ private fun boundedTrack(offsets:List<Long>,accuracy:Double,distance:(Long)->Double):List<Long> {
+  val start=1000000L
+  // A timely envelope callback is useful evidence of approach, but its 200m
+  // position is OUTSIDE the actual home. It cannot count as an inside fix.
+  var previous=fix(200.0,start-1,accuracy)
+  var state=NodeGeoEngine.hybrid(NodeGeoEngine.State("outside",lastCapturedAt=start-60000),home,previous,start,1).state
+  val accepted=mutableListOf<Long>()
+  for(offset in offsets) {
+   val observation=fix(distance(offset),start+offset,accuracy)
+   assertTrue("Synthetic walking observations remain physically plausible",NodeGeoEngine.plausible(previous,observation))
+   val decision=NodeGeoEngine.hybrid(state,home,observation,start+offset,1)
+   if(decision.transition=="enter")accepted.add(offset)
+   state=decision.state;previous=observation
+  }
+  return accepted
+ }
+ @Test fun walkingFromEnvelopeLeavesTimeForTwoRealAreaFixesWithoutInnerEnter() {
+  val oldOffsets=(0L..150000L step 30000).toList()
+  val currentOffsets=currentSessionOffsets()
+  assertEquals((0L..240000L step 30000).toList(),currentOffsets)
+  val expected=mapOf(
+   1.0 to listOf(210000L,210000L,210000L,240000L),
+   1.2 to listOf(180000L,180000L,180000L,210000L),
+   1.25 to listOf(180000L,180000L,180000L,210000L),
+   1.4 to listOf(150000L,150000L,180000L,180000L)
+  )
+  for(speed in listOf(1.0,1.2,1.25,1.4))for((index,accuracy)in listOf(13.0,30.0,65.0,100.0).withIndex()) {
+   val walking:(Long)->Double={offset->maxOf(0.0,200.0-speed*offset/1000.0)}
+   // The old six attempts usually ended with zero or just one inside fix,
+   // despite a normal arrival and a reliable outside baseline.
+   val oldAccepted=if(speed==1.4 && accuracy<=30.0)listOf(150000L)else emptyList()
+   assertEquals("Old budget speed=$speed accuracy=$accuracy",oldAccepted,boundedTrack(oldOffsets,accuracy,walking))
+   assertEquals("Bounded walking arrival speed=$speed accuracy=$accuracy",listOf(expected.getValue(speed)[index]),boundedTrack(currentOffsets,accuracy,walking))
+  }
+  for(speed in listOf(1.0,1.2,1.25,1.4))assertTrue("A longer budget cannot make 200m uncertainty sufficient",boundedTrack(currentOffsets,200.0){offset->maxOf(0.0,200.0-speed*offset/1000.0)}.isEmpty())
+ }
+ @Test fun cafeOutsideTheRealAreaExhaustsTheBudgetWithoutArrivalOrContinuousRequests() {
+  val offsets=currentSessionOffsets()
+  for(accuracy in listOf(13.0,30.0,65.0,100.0,200.0))assertTrue("A cafe inside the envelope remains outside the home",boundedTrack(offsets,accuracy){offset->maxOf(120.0,200.0-offset/1000.0)}.isEmpty())
+  assertEquals(9,offsets.size)
+  assertTrue(offsets.all{it<NodeMonitoringBudget.WINDOW_MILLIS})
+  assertFalse(NodeMonitoringBudget.mayAcquire(1000000L+600000L,1000000L+NodeMonitoringBudget.WINDOW_MILLIS,offsets.size,1000000L+offsets.last()))
+ }
  @Test fun strictSessionBudgetsCannotLoopInNeighboringCafe() {
   val start=1000000L;val deadline=start+NodeMonitoringBudget.WINDOW_MILLIS
   var attempts=0;var last=0L
@@ -101,7 +154,7 @@ class NodeHybridGeoTest {
    val now=start+offset
    if(NodeMonitoringBudget.mayAcquire(now,deadline,attempts,last)){attempts++;last=now}
   }
-  assertEquals(6,attempts)
+  assertEquals(9,attempts)
   assertFalse(NodeMonitoringBudget.mayAcquire(deadline,deadline,0,0))
   assertFalse(NodeMonitoringBudget.mayStart(start+1000,start,emptyList()))
   assertTrue(NodeMonitoringBudget.mayStart(start+900000,start,listOf(start)))

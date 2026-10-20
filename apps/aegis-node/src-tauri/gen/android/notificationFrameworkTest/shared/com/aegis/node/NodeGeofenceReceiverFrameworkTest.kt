@@ -378,7 +378,7 @@ class NodeGeofenceReceiverFrameworkTest {
    await("Two independent bounded session fixes create one real arrival",timeoutMillis=45000){events(ruleId).size==3}
    stopped()
    assertEquals("monitoring_transition_accepted",activeSession()?.getString("status"))
-   assertTrue((activeSession()?.optInt("attempts")?:100)<=6)
+   assertTrue((activeSession()?.optInt("attempts")?:100)<=9)
    val hybridEvent=events(ruleId).last();occurrences.add(hybridEvent.getString("occurrenceId"))
    awaitFrameworkReminder(notifications,hybridEvent.getString("occurrenceId"),1)
    callback(1,listOf(operationalId),longitude=null);settled();assertEquals(3,events(ruleId).size)

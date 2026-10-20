@@ -124,7 +124,7 @@ class NodeHybridEfficiencyFrameworkTest {
       val inner=(0 until regions.length()).map{regions.getJSONObject(it)}.first{it.optString("placeId")==placeId&&it.optString("kind","real")=="real"}.getString("requestId")
       helper.callback(1,listOf(inner),longitude=0.0)
      }
-     await("Session ends automatically within its hard budget",195000){!session("snapshot").optBoolean("running")}
+     await("Session ends automatically within its hard budget",285000){!session("snapshot").optBoolean("running")}
      assertTrue("Temporary notification removed",notifications.activeNotifications.none{it.id==7351})
      mark(phase,"active_end")
     }
@@ -136,8 +136,8 @@ class NodeHybridEfficiencyFrameworkTest {
     val sessions=snapshot.optJSONArray("sessions")?:JSONArray()
     for(i in 0 until sessions.length()) {
      val row=sessions.getJSONObject(i)
-     assertTrue("Acquisition budget",row.optInt("attempts")<=6)
-     assertTrue("Persisted session deadline",row.getLong("deadline")-row.getLong("startedAt")<=180000)
+     assertTrue("Acquisition budget",row.optInt("attempts")<=9)
+     assertTrue("Persisted session deadline",row.getLong("deadline")-row.getLong("startedAt")<=270000)
     }
     if(phase=="armed_stationary")assertEquals("Stationary registration starts no monitoring",0,snapshot.optInt("serviceStarts"))
    }

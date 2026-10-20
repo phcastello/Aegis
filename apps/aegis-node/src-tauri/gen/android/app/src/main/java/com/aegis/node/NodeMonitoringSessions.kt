@@ -21,8 +21,8 @@ import java.util.concurrent.Executors
 
 /** All limits survive process death. No periodic work restarts an approach. */
 object NodeMonitoringBudget {
- const val WINDOW_MILLIS=180000L
- const val MAX_ACQUISITIONS=6
+ const val WINDOW_MILLIS=270000L
+ const val MAX_ACQUISITIONS=9
  const val MIN_INTERVAL_MILLIS=30000L
  const val ACQUISITION_MILLIS=10000L
  const val COOLDOWN_MILLIS=900000L
@@ -262,7 +262,7 @@ class NodeMonitoringService:Service() {
   try {
    val manager=getSystemService(NotificationManager::class.java)
    if(Build.VERSION.SDK_INT>=26)manager.createNotificationChannel(NotificationChannel("aegis-proximity","Verificação de proximidade",NotificationManager.IMPORTANCE_LOW))
-   val notification=androidx.core.app.NotificationCompat.Builder(this,"aegis-proximity").setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Aegis · Verificando proximidade").setContentText("Verificando entrada ou saída por até 3 minutos.").setOngoing(true).setTimeoutAfter(NodeMonitoringBudget.WINDOW_MILLIS).build()
+   val notification=androidx.core.app.NotificationCompat.Builder(this,"aegis-proximity").setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Aegis · Verificando proximidade").setContentText("Verificando entrada ou saída por até 4 min 30 s.").setOngoing(true).setTimeoutAfter(NodeMonitoringBudget.WINDOW_MILLIS).build()
    if(Build.VERSION.SDK_INT>=29)startForeground(7351,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)else startForeground(7351,notification)
    promoted=true
   }catch(_:RuntimeException){failureReason="monitoring_start_denied"}

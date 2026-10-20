@@ -22,7 +22,7 @@ assert(existsSync(dll),'Build isolated backend fixture first');
 const api=spawn('dotnet',[dll,code],{cwd:root,env:{...process.env,AEGIS_IDLE_FIXTURE:'after'},stdio:['ignore','pipe','pipe']});
 const apiDone=done(api);let logs,test,watchdog;
 const boundaries=[];let chain=Promise.resolve();let outputText='';let boundaryFailure=false;let timedOut=false;
-const report={schema:1,version:JSON.parse(readFileSync(resolve(root,'apps/aegis-node/package.json'))).version,providerDelivery:'actual FLP getCurrentLocation in session_active/background_saver; controlled provider fixes in approach/control; actual Android service lifecycle',limitations:['emulator CPU, not physical battery consumption','HTTP/WS payload bytes exclude TLS/TCP and Google Play services traffic','active segment is bounded to three minutes; ten-minute window includes cleanup and idle remainder','armed regions registered through GeofencingClient; movement callbacks are controlled'],windows:[]};
+const report={schema:1,version:JSON.parse(readFileSync(resolve(root,'apps/aegis-node/package.json'))).version,providerDelivery:'actual FLP getCurrentLocation in session_active/background_saver; controlled provider fixes in approach/control; actual Android service lifecycle',limitations:['emulator CPU, not physical battery consumption','HTTP/WS payload bytes exclude TLS/TCP and Google Play services traffic','active segment is bounded to four minutes and thirty seconds; ten-minute window includes cleanup and idle remainder','armed regions registered through GeofencingClient; movement callbacks are controlled'],windows:[]};
 try {
  const deadline=Date.now()+60000;
  while(true){assert(api.exitCode===null,'Isolated backend exited');try{if(existsSync(code+'.geofence')&&(await fetch('http://127.0.0.1:18104/api/health',{signal:AbortSignal.timeout(2000)})).ok)break;}catch{}assert(Date.now()<deadline,'Fixture readiness timeout');await new Promise(r=>setTimeout(r,100));}
@@ -74,7 +74,7 @@ try {
  writeFileSync(join(output,'android-hybrid-efficiency.json'),JSON.stringify(report,null,2)+'\n');
  if(!report.instrumentationPassed)process.stdout.write(outputText.slice(-24000));
  assert(report.instrumentationPassed,'Hybrid efficiency framework test failed');assert(!boundaryFailure&&!timedOut,'Measurement lifecycle failed');assert(report.measurementsComplete,'Six complete ten-minute CPU/network windows required');
- for(const window of report.windows){assert(window.acquisitions<=6,'Acquisitions exceed session budget');assert(!window.sessionAtEnd.running,'Service must finish');}
+ for(const window of report.windows){assert(window.acquisitions<=9,'Acquisitions exceed session budget');assert(!window.sessionAtEnd.running,'Service must finish');}
  console.log('Six hybrid efficiency windows PASS; inspect active segments separately from idle remainder.');
 }finally {
  clearTimeout(watchdog);if(logs)logs.kill('SIGTERM');
