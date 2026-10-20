@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
+import {safeAndroidCrashTypes,safeAndroidCrashSummaries} from './android-safe-crash.mjs';
 import {captureLegacyLocation,enableLegacyLocation,restoreLegacyLocation,safeLegacyLocation} from './android-legacy-location.mjs';
+import {adbFailure,waitForAndroidFrameworkReady,frameworkCleanup} from './android-framework-host.mjs';
 const [buildType = 'debug', bootstrap] = process.argv.slice(2);
 assert(['debug', 'release'].includes(buildType));
 const serial = process.env.AEGIS_TEST_EMULATOR_SERIAL ?? 'emulator-5554';
@@ -12,7 +13,7 @@ assert(/^emulator-\d{4}$/.test(serial), 'Only a disposable emulator is allowed')
 const adb = process.env.ANDROID_HOME ? resolve(process.env.ANDROID_HOME, 'platform-tools/adb') : 'adb';
 const run = (args, timeout=180000) => {
   const result = spawnSync(adb, ['-s', serial, ...args], {encoding:'utf8', timeout});
-  assert.equal(result.status, 0, 'adb operation failed');
+  if(result.status!==0)throw adbFailure(args,result);
   return result.stdout;
 };
 const end = Date.now() + 900000;
@@ -36,17 +37,18 @@ assert([26,35].includes(api), 'Use a supported disposable framework test emulato
 let appUid;
 if (api === 26) {
   run(['root']); run(['wait-for-device']);
+  await waitForAndroidFrameworkReady(run);
   const installed = run(['shell','dumpsys','package','com.aegis.node']);
   appUid = installed.match(/\buserId=(\d+)\b/)?.[1];
   assert(appUid, 'Fixture package UID missing');
 }
 const permission = granted => {
-  if (api >= 33) run(['shell','pm',granted?'grant':'revoke','com.aegis.node','android.permission.POST_NOTIFICATIONS']);
+  if (api >= 33) run(['shell','pm',granted?'grant':'revoke','com.aegis.node','android.permission.POST_NOTIFICATIONS'],15000);
   else {
     // API 26 INotificationManager transaction 9 updates the actual package notification
     // ranking permission. AppOps alone does not change areNotificationsEnabled().
     // Root is available only on this disposable google_apis userdebug emulator.
-    const reply = run(['shell','service','call','notification','9','s16','com.aegis.node','i32',appUid,'i32',granted?'1':'0']);
+    const reply = run(['shell','service','call','notification','9','s16','com.aegis.node','i32',appUid,'i32',granted?'1':'0'],15000);
     assert(!/Exception|ffffffff/.test(reply), 'Framework permission update failed');
   }
 };
@@ -109,6 +111,7 @@ async function refreshBootstrap(kind) {
   assert(response.ok,'Disposable bootstrap refresh failed');
 }
 try { run(['logcat', '-c']); } catch { console.log('phase=logcat_clear reason=unavailable'); }
+let primaryError;
 try {
   if(originalLocationState!==undefined) {
     console.log(`AndroidLegacyLocation before=${JSON.stringify(safeLegacyLocation(run))}`);
@@ -152,6 +155,7 @@ try {
       await new Promise(resolve=>setTimeout(resolve,1000));
     }
     run(['root']);run(['wait-for-device']);
+    await waitForAndroidFrameworkReady(run);
     run(['reverse','tcp:18104','tcp:18104']);
     run(['shell','input','keyevent','82']);
     permission(true);
@@ -179,19 +183,22 @@ try {
     instrumentation('NodeNotificationLiveTest', ['-e','waitForActivitiesToComplete','false','-e','pairingCode',readFileSync(bootstrap,'utf8').trim(),'-e','replacementCode',readFileSync(bootstrap+'.replacement','utf8').trim()]);
     livePassed=true;
   }
+} catch(error) {
+  primaryError=error;
+  throw error;
 } finally {
-  if(originalLocationState!==undefined)restoreLegacyLocation(run,originalLocationState);
-  permission(true);
+  const cleanup=frameworkCleanup(primaryError);
   let logs = '';
-  try { logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S']); } catch { console.log('phase=logcat_read reason=unavailable'); }
+  try { logs = run(['logcat','-d','-s','AegisNodeNotification:E','*:S'],10000); } catch { console.log('phase=logcat_read reason=unavailable'); }
   for (const line of logs.split('\n')) {
     const safe = line.match(/phase=[a-z_]{1,32} errorType=[A-Za-z0-9_]{1,64}$/);
     if (safe) console.log(`AegisNodeNotification ${safe[0]}`);
   }
   let crash = '';
-  try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S']); } catch { console.log('phase=crash_type_read reason=unavailable'); }
+  try { crash = run(['logcat','-d','-b','all','-s','AndroidRuntime:E','libc:F','art:F','DEBUG:F','RustStdoutStderr:I','AegisNodeNativeTest:I','*:S'],10000); } catch { console.log('phase=crash_type_read reason=unavailable'); }
   crash+='\n'+[...preservedCheckpoints].map(phase=>`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`).join('\n');
   for (const errorType of safeAndroidCrashTypes(crash)) console.log(`AndroidNativeTest phase=activity_runtime errorType=${errorType}`);
+  for(const {processCode,errorType} of safeAndroidCrashSummaries(crash))console.log(`AndroidNativeTest phase=activity_runtime_origin processCode=${processCode} errorType=${errorType}`);
   const phases=new Set();
   for(const phase of [...advancedHybridPhases,...legacyLocationPhases,...liveSyncPhases,...hybridStartupPhases])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
@@ -215,14 +222,17 @@ try {
     console.log('AegisNodeNativeTest phase=residential65_adapter_fresh_accuracy_timeout_saver errorType=Checkpoint');
     phases.add('residential65_adapter_fresh_accuracy_timeout_saver');
   }
-  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
   if (/AegisNodeNativeTest.*phase=reminder_webview_scroll_edit_keyboard_native_back errorType=Checkpoint/.test(crash)) {
     console.log('AegisNodeNativeTest phase=reminder_webview_scroll_edit_keyboard_native_back errorType=Checkpoint');
     phases.add('reminder_webview_scroll_edit_keyboard_native_back');
   }
-  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
   // External cleanup happens after instrumentation has published success/failure.
-  run(['shell','am','force-stop','com.aegis.node']);
+  if(originalLocationState!==undefined)cleanup.attempt('restore_location',()=>restoreLegacyLocation(args=>run(args,15000),originalLocationState));
+  cleanup.attempt('restore_permission',()=>permission(true));
+  cleanup.attempt('force_stop',()=>run(['shell','am','force-stop','com.aegis.node'],10000));
+  cleanup.attempt('validate_checkpoints',()=>{
+  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
+  if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
   if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');
   if(receiverPassed)for(const phase of advancedHybridPhases)assert(phases.has(phase),'Shared session, real-boundary exit, partial occurrence outbox and active cancellation checkpoints required');
   if(receiverPassed && api===26)assert(phases.has('hybrid_legacy_nlp_settings_ready'),'Real Google location settings and stable usable network provider required on API 26');
@@ -233,5 +243,7 @@ try {
     assert(phases.has('withdrawal_receipt_fcm_offline_replay_lost_response'),'Native withdrawal receipt regression checkpoint required');
     if(phases.has('geofence_google_registration_task_succeeded'))for(const mode of ['503','disconnect'])for(const path of ['install','restore'])assert(phases.has(`geofence_receipt_${mode}_${path}`),'Installed geofence must survive backend receipt failure');
   }
+  });
+  cleanup.finish();
 }
 console.log(`Android API ${api} ${buildType}: renderer, active notification, permission and bounded diagnostics PASS${bootstrap?' including native geofence receiver fixture':''}${bootstrap && api >= 33?' and native live WebSocket/JNI':''}`);

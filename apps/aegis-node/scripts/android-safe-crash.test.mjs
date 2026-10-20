@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
+import {safeAndroidCrashTypes,safeAndroidCrashSummaries} from './android-safe-crash.mjs';
 
 test('crash evidence retains only bounded class/signal types, never arbitrary content', () => {
   const secret = 'token=private notification title /private/device/path';
@@ -16,4 +16,29 @@ test('crash evidence retains only bounded class/signal types, never arbitrary co
 `);
   assert.deepEqual(evidence, ['RuntimeException', 'UnsatisfiedLinkError', 'SIGABRT', 'JniAbort', 'IllegalArgumentException']);
   assert(!JSON.stringify(evidence).includes(secret));
+});
+
+test('GMS and target exceptions retain closed origins across interleaved process logs',()=>{
+  const privateMessage='token=private /private/device/path';
+  const evidence=safeAndroidCrashSummaries(`
+10-04 20:00:00 11223 4 E AndroidRuntime: Process: com.google.android.gms.persistent, PID: 11223
+10-04 20:00:00 44556 7 E AndroidRuntime: Process: com.aegis.node:worker, PID: 44556
+10-04 20:00:00 11223 4 E AndroidRuntime: java.lang.NullPointerException: ${privateMessage}
+10-04 20:00:00 44556 7 E AndroidRuntime: java.lang.NullPointerException: ${privateMessage}
+`);
+  assert.deepEqual(evidence,[{processCode:'gms',errorType:'NullPointerException'},{processCode:'target',errorType:'NullPointerException'}]);
+  for(const privateValue of [privateMessage,'com.google.android.gms','com.aegis.node','11223','44556'])assert(!JSON.stringify(evidence).includes(privateValue));
+});
+
+test('private unrelated processes and system origins never expose process names or identifiers',()=>{
+  const evidence=safeAndroidCrashSummaries(`
+10-04 20:00:00 10101 2 E AndroidRuntime: Process: private.customer.application:private-session, PID: 10101
+10-04 20:00:00 10101 2 E AndroidRuntime: java.lang.NullPointerException: private title
+10-04 20:00:00 20202 3 E AndroidRuntime: Process: system_server, PID: 20202
+10-04 20:00:00 20202 3 E AndroidRuntime: java.lang.IllegalStateException: private system detail
+10-04 20:00:00 30303 4 E AndroidRuntime: java.lang.RuntimeException: unknown process
+`);
+  assert.deepEqual(evidence,[{processCode:'other',errorType:'NullPointerException'},{processCode:'system',errorType:'IllegalStateException'},{processCode:'unknown',errorType:'RuntimeException'}]);
+  for(const privateValue of ['private','customer','application','system_server','10101','20202','30303'])assert(!JSON.stringify(evidence).includes(privateValue));
+  assert.deepEqual(safeAndroidCrashSummaries('AndroidRuntime: Process: android, PID: 33\nAndroidRuntime: java.lang.RuntimeException: private\nAndroidRuntime: FATAL EXCEPTION: main\nAndroidRuntime: java.lang.NullPointerException: private'),[{processCode:'system',errorType:'RuntimeException'},{processCode:'unknown',errorType:'NullPointerException'}]);
 });

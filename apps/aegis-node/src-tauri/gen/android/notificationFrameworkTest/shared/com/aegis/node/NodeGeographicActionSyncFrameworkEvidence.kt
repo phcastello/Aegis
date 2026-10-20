@@ -12,7 +12,12 @@ import java.util.UUID
 /** A real offline native occurrence + OK must drain on resume while WorkManager is deferred. */
 internal fun exerciseGeographicActionForegroundDependency(context:Context,nodeId:String,setBackground:((Boolean)->Unit)?,invoke:(String,JSONObject,Long)->JSONObject) {
  fun ipc(name:String,operation:String,payload:JSONObject?=null,id:String?=null)=invoke(name,JSONObject().put("operation",operation).apply{if(payload!=null)put("payload",payload);if(id!=null)put("id",id)},90000)
- fun await(condition:()->Boolean) {val end=SystemClock.elapsedRealtime()+45000;while(!condition()&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(50);assertTrue(condition())}
+ fun await(condition:()->Boolean) {
+  val end=SystemClock.elapsedRealtime()+45000
+  var observed=condition()
+  while(!observed && SystemClock.elapsedRealtime()<end){SystemClock.sleep(50);observed=condition()}
+  assertTrue("Expected geographic action condition before the bounded deadline",observed)
+ }
  val runtime=Class.forName("com.aegis.node.NodeGeofenceRuntime",true,context.classLoader)
  fun defer(value:Boolean)=JSONObject(runtime.getMethod("deferReminderSyncFixture",Context::class.java,Boolean::class.javaPrimitiveType).invoke(null,context,value) as String)
  val manager=context.getSystemService(NotificationManager::class.java)

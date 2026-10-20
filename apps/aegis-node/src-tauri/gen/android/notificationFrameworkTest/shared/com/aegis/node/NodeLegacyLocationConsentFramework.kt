@@ -39,7 +39,7 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
    val packages=linkedSetOf<String>()
    val viewIds=linkedSetOf<String>()
    var windowCount=0;var visitedCount=0;var positiveCount=0;var clickableCount=0
-   val approvedPackages=setOf("com.google.android.gms","com.android.settings")
+   val approvedPackages=setOf("com.google.android.gms","com.android.settings","android")
    val positiveLabels=setOf("AGREE","I AGREE","YES","TURN ON","OK","ACCEPT")
    fun packageCode(value:String?)=when(value) {
     "com.google.android.gms"->"gms";"com.android.settings"->"settings";context.packageName->"target";"android"->"android";null->"none";else->"other"
@@ -48,7 +48,8 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
     packages.add(packageCode(root.packageName?.toString()))
     if(root.packageName?.toString() !in approvedPackages)return false
     val buttons=root.findAccessibilityNodeInfosByViewId("android:id/button1")
-    try {for(button in buttons)if(button.isVisibleToUser && button.isEnabled && button.isClickable) {
+    try {for(button in buttons)if(button.isVisibleToUser && button.isEnabled && button.isClickable &&
+     (root.packageName?.toString()!="android" || button.text?.toString()?.trim()?.uppercase(Locale.ROOT) in positiveLabels)) {
      positiveCount++
      if(button.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true
     }}finally{buttons.forEach{it.recycle()}}

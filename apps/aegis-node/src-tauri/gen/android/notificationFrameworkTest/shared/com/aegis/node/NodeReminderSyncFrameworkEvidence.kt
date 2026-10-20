@@ -15,8 +15,9 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,setBack
  fun mode(endpoint:String,value:String) {fixtureJson(endpoint,JSONObject().put("mode",value))}
  fun await(condition:()->Boolean) {
   val deadline=SystemClock.elapsedRealtime()+45000
-  while(!condition() && SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(50)
-  assertTrue(condition())
+  var observed=condition()
+  while(!observed && SystemClock.elapsedRealtime()<deadline) {SystemClock.sleep(50);observed=condition()}
+  assertTrue("Expected native reminder condition before the bounded deadline",observed)
  }
  fun database(block:(SQLiteDatabase)->Unit) {SQLiteDatabase.openDatabase(context.getDatabasePath("aegis-native-reminders-v1.db").path,null,SQLiteDatabase.OPEN_READWRITE).use(block)}
  fun count(id:String,table:String="actions"):Int {var count=0;database{db->db.rawQuery("SELECT COUNT(*) FROM $table WHERE reminderId=?",arrayOf(id)).use{it.moveToFirst();count=it.getInt(0)}};return count}

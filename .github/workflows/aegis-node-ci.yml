@@ -344,7 +344,7 @@ jobs:
           script: node ../../scripts/node-transport-probe/android-native.mjs debug
       - name: Build minified release APK and instrumentation
         id: release_build
-        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.debug_test.outcome == 'success' }}
         run: |
           npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           src-tauri/gen/android/gradlew -p src-tauri/gen/android :notificationFrameworkTest:assembleRelease

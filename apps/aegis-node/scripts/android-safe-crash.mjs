@@ -12,3 +12,33 @@ export function safeAndroidCrashTypes(logcat) {
   }
   return [...types].slice(0, 8);
 }
+
+const processCode = name => /^com\.aegis\.node(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'target':
+  /^com\.google\.android\.gms(?:[.:][A-Za-z0-9_.:-]+)?$/.test(name)?'gms':
+  /^(?:system_server|android)$/.test(name)?'system':'other';
+
+// Associate exception types with Process records internally. PID/name/messages
+// never leave this function; unclassified origins remain explicitly unknown.
+export function safeAndroidCrashSummaries(logcat) {
+  const origins=new Map(),summaries=new Map();let unkeyed='unknown';
+  for(const line of logcat.split('\n')) {
+    const pid=line.match(/^\d\d-\d\d\s+\d\d:\d\d:\d\d(?:\.\d+)?\s+(\d+)\s+\d+\s+[VDIWEF]\s+/)?.[1];
+    const runtime=line.match(/AndroidRuntime\s*:\s*(.*)$/)?.[1];
+    if(runtime?.startsWith('FATAL EXCEPTION:')) {
+      if(pid)origins.set(pid,'unknown');else unkeyed='unknown';
+    }
+    const process=runtime?.match(/^Process:\s*([^,\s]+),\s*PID:\s*(\d+)\s*$/);
+    if(process) {
+      const code=processCode(process[1]);
+      if(!pid || pid===process[2])origins.set(process[2],code);
+      if(!pid)unkeyed=code;
+    }
+    if(origins.size>64)origins.delete(origins.keys().next().value);
+    for(const errorType of safeAndroidCrashTypes(line)) {
+      const code=pid?(origins.get(pid)??'unknown'):unkeyed;
+      const key=`${code}:${errorType}`;
+      if(summaries.size<16 || summaries.has(key))summaries.set(key,{processCode:code,errorType});
+    }
+  }
+  return [...summaries.values()];
+}
