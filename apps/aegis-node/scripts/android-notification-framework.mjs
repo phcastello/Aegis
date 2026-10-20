@@ -124,7 +124,11 @@ try {
   if (bootstrap) {
     permission(true);
     run(['reverse', 'tcp:18104', 'tcp:18104']);
-    instrumentation('NodeGeofenceReceiverFrameworkTest', ['-e','geofencePairingCode',readFileSync(bootstrap+'.geofence','utf8').trim()]);
+    // Legacy Google settings now uses the real Tauri Activity. As for the live
+    // test below, let the runner publish its result before the host stops it;
+    // destroying that last Activity makes Tao exit the instrumented process.
+    const receiverLifecycle=api===26?['-e','waitForActivitiesToComplete','false']:[];
+    instrumentation('NodeGeofenceReceiverFrameworkTest', [...receiverLifecycle,'-e','geofencePairingCode',readFileSync(bootstrap+'.geofence','utf8').trim()]);
     receiverPassed=true;
     // Revocation kills a target with instrumentation attached. Exercise actual OS
     // permissions before the first interruption-test process is launched.
