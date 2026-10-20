@@ -114,6 +114,23 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,peerId:
  val native=context.getSharedPreferences("aegis-geofences-v1",Context.MODE_PRIVATE)
  fun rule():JSONObject=ipc("node_geofences","create",JSONObject().put("text","Cancellation fixture").put("placeIds",JSONArray().put(place.getString("id"))).put("observerNodeId",nodeId).put("transition","enter").put("repeat",false).put("timeZoneId","UTC")).also{cancellationRules.add(it)}
  fun backendRule(id:String):JSONObject {val rows=ipc("node_geofences","list").getJSONArray("items");return (0 until rows.length()).map{rows.getJSONObject(it)}.single{it.getString("id")==id}}
+ fun preservedDefinition(previousRaw:String) {
+  // A legitimate concurrent pull renews generatedAt/leaseUntil and receipt
+  // metadata. Preserve the definition, not the bytes of that renewable lease.
+  val previousManifest=JSONObject(previousRaw)
+  val retainedManifest=JSONObject(native.getString("manifest",null)?:error("cancellation_retained_manifest_missing"))
+  assertTrue("Failed synchronization preserves manifest identity and revision",previousManifest.getString("observerNodeId")==retainedManifest.getString("observerNodeId") && previousManifest.getString("revision")==retainedManifest.getString("revision"))
+  fun keyedRows(manifest:JSONObject,key:String):Map<String,JSONObject> = manifest.getJSONArray(key).let{rows->(0 until rows.length()).map{rows.getJSONObject(it)}.associateBy{it.getString("id")}}
+  val previousRules=keyedRows(previousManifest,"rules");val retainedRules=keyedRows(retainedManifest,"rules")
+  assertTrue("Failed synchronization preserves all durable rule IDs",previousRules.keys==retainedRules.keys)
+  for((id,previous)in previousRules) {
+   val retained=retainedRules.getValue(id)
+   for(key in listOf("id","revision","observerNodeId","status","text","transition","repeat","startsAt","endsAt","timeZoneId","deliveryPolicy","placeIds"))assertTrue("Failed synchronization preserves the durable rule definition",previous.opt(key)?.toString()==retained.opt(key)?.toString())
+  }
+  val previousPlaces=keyedRows(previousManifest,"places");val retainedPlaces=keyedRows(retainedManifest,"places")
+  assertTrue("Failed synchronization preserves all real place IDs",previousPlaces.keys==retainedPlaces.keys)
+  for((id,previous)in previousPlaces)assertTrue("Failed synchronization preserves real geometry and its revision",previous.getInt("revision")==retainedPlaces.getValue(id).getInt("revision") && previous.getJSONArray("circles").toString()==retainedPlaces.getValue(id).getJSONArray("circles").toString())
+ }
  fun installed(rule:JSONObject):Pair<String,String> {
   ipc("node_geofences","sync")
   await{!native.getBoolean("needsInstall",true) && native.getBoolean("hasRegions",false)}
@@ -125,7 +142,9 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,peerId:
   assertTrue("The real installed manifest includes this active rule revision",(0 until installedRules.length()).map{installedRules.getJSONObject(it)}.any{it.getString("id")==rule.getString("id") && it.getLong("revision")==rule.getLong("revision") && it.getString("status")=="active"})
   val regions=configuration.getJSONArray("regions")
   assertTrue("Actual Google registration includes this real circle",(0 until regions.length()).map{regions.getJSONObject(it)}.any{it.getString("placeId")==place.getString("id") && it.getString("circleId")==place.getJSONArray("circles").getJSONObject(0).getString("id") && it.optString("kind","real")=="real"})
-  assertFalse("Installation receipt is already settled before cancellation",native.getBoolean("reportPending",true))
+  // reportPending coalesces newer presence/arming receipts as well. A new
+  // pending epoch cannot undo this rule/revision's accepted installation ACK.
+  await{val receipt=backendRule(rule.getString("id"));!receipt.isNull("syncedAt") && receipt.getLong("revision")==rule.getLong("revision") && receipt.getString("syncStatus") in setOf("installed","waiting_initial","active")}
   assertEquals("active",backendRule(rule.getString("id")).getString("status"))
   return configurationRaw to manifestRaw
  }
@@ -135,9 +154,9 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,peerId:
   assertFalse("The fresh removal receipt reaches the backend",backend.isNull("syncedAt"))
   assertTrue("Cancellation sends a fresh authenticated replacement receipt",fixtureJson("idle").optLong("geofence_sync_requests",0)>requestsBefore)
   assertFalse("The cancelled region is removed locally",native.getBoolean("hasRegions",true))
-  val rows=JSONObject(native.getString("manifest",null)!!).getJSONArray("rules")
+  val manifest=JSONObject(native.getString("manifest",null)!!);val rows=manifest.getJSONArray("rules")
   assertTrue("The installed manifest omits the cancelled rule",(0 until rows.length()).none{rows.getJSONObject(it).getString("id")==rule.getString("id")})
-  assertFalse("Local receipt is confirmed rather than pending",native.getBoolean("reportPending",true))
+  assertTrue("The fresh backend removal receipt corresponds to a completed local replacement",!native.getBoolean("needsInstall",true) && native.getString("installedRevision",null)==manifest.getString("revision"))
  }
  try {
   // Preserve the immediate create/cancel empty-manifest regression. No explicit
@@ -162,7 +181,7 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,peerId:
   assertEquals("pending_sync",backendRule(partial.getString("id")).getString("syncStatus"))
   assertTrue("Manifest HTTP failure was actually exercised",fixtureJson("idle").optLong("geofence_cancellation_manifest_failures",0)>failedManifests)
   assertTrue("A failed manifest fetch preserves the installed configuration",beforePartial.first==native.getString("installedConfiguration",null))
-  assertTrue("A failed manifest fetch cannot silently discard the old rule",beforePartial.second==native.getString("manifest",null))
+  preservedDefinition(beforePartial.second)
   val partialBefore=fixtureJson("idle").optLong("geofence_sync_requests",0)
   mode("geofence-cancellation-failure","none")
   ipc("node_geofences","sync")
@@ -201,21 +220,7 @@ internal fun exerciseReminderSyncFramework(context:Context,nodeId:String,peerId:
   val stillActive=backendRule(disconnected.getString("id"))
   assertEquals("active",stillActive.getString("status"));assertEquals(disconnected.getLong("revision"),stillActive.getLong("revision"))
   assertTrue("Unavailable cancellation preserves the local registered region",beforeDisconnect.first==native.getString("installedConfiguration",null))
-  // A legitimate concurrent pull renews generatedAt/leaseUntil and receipt
-  // metadata. Preserve the definition, not the bytes of that renewable lease.
-  val previousManifest=JSONObject(beforeDisconnect.second)
-  val retainedManifest=JSONObject(native.getString("manifest",null)?:error("cancellation_retained_manifest_missing"))
-  assertTrue("Unavailable cancellation preserves manifest identity and revision",previousManifest.getString("observerNodeId")==retainedManifest.getString("observerNodeId") && previousManifest.getString("revision")==retainedManifest.getString("revision"))
-  fun keyedRows(manifest:JSONObject,key:String):Map<String,JSONObject> = manifest.getJSONArray(key).let{rows->(0 until rows.length()).map{rows.getJSONObject(it)}.associateBy{it.getString("id")}}
-  val previousRules=keyedRows(previousManifest,"rules");val retainedRules=keyedRows(retainedManifest,"rules")
-  assertTrue("Unavailable cancellation preserves all durable rule IDs",previousRules.keys==retainedRules.keys)
-  for((id,previous)in previousRules) {
-   val retained=retainedRules.getValue(id)
-   for(key in listOf("id","revision","observerNodeId","status","text","transition","repeat","startsAt","endsAt","timeZoneId","deliveryPolicy","placeIds"))assertTrue("Unavailable cancellation preserves the durable rule definition",previous.opt(key)?.toString()==retained.opt(key)?.toString())
-  }
-  val previousPlaces=keyedRows(previousManifest,"places");val retainedPlaces=keyedRows(retainedManifest,"places")
-  assertTrue("Unavailable cancellation preserves all real place IDs",previousPlaces.keys==retainedPlaces.keys)
-  for((id,previous)in previousPlaces)assertTrue("Unavailable cancellation preserves real geometry and its revision",previous.getInt("revision")==retainedPlaces.getValue(id).getInt("revision") && previous.getJSONArray("circles").toString()==retainedPlaces.getValue(id).getJSONArray("circles").toString())
+  preservedDefinition(beforeDisconnect.second)
   ipc("node_geofences","sync");installed(disconnected)
   val retryBefore=fixtureJson("idle").optLong("geofence_sync_requests",0)
   val retried=ipc("node_geofences","cancel",JSONObject().put("expectedRevision",stillActive.getLong("revision")),disconnected.getString("id"))
