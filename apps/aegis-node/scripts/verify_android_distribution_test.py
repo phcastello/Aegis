@@ -92,6 +92,31 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.VerificationError, "firebase_client_mismatch"): guard.firebase_expected(configuration)
         with self.assertRaises(guard.VerificationError): guard.firebase_expected({})
 
+    def test_fixture_failure_identifies_only_closed_marker_entry_and_abi_codes(self):
+        private = b"private-token-and-personal-location-must-not-be-printed"
+        with tempfile.TemporaryDirectory() as temporary:
+            apk = Path(temporary) / "private-owner-artifact.apk"
+            cases = [
+                (b"release", private + b"AEGIS_LEGACY_NLP_FIXTURE_V1", "legacy_nlp", "dex", "none"),
+                (private + b"x" * (1024 * 1024 - len(private) - 5) + b"http://127.0.0.1:18104", b"release", "loopback_endpoint", "native", "arm64_v8a"),
+                (b"AegisNodeNativeTest" + private, b"release", "native_log", "native", "arm64_v8a"),
+                # A retained empty class shell must still be rejected even if
+                # R8 removed all methods and the helper's diagnostic strings.
+                (b"release", b"Lcom/aegis/node/fixture/NodeTransientIdentityFixture;", "transient_identity_subpackage_class", "dex", "none"),
+                (b"release", b"Lcom/aegis/node/NodeLegacyLocationSettingsFixture;", "legacy_nlp_class", "dex", "none"),
+                (b"release", b"Lcom/aegis/node/fixture/NodeLegacyLocationSettingsFixture;", "legacy_nlp_subpackage_class", "dex", "none"),
+            ]
+            for native, dex, code, kind, abi in cases:
+                with zipfile.ZipFile(apk, "w") as archive:
+                    archive.writestr("lib/arm64-v8a/lib-private-personal-name.so", native)
+                    archive.writestr("classes2.dex", dex)
+                with self.assertRaises(guard.VerificationError) as caught:
+                    guard.verify_archive(apk)
+                message = str(caught.exception)
+                self.assertEqual(f"fixture_marker_in_distribution:marker={code}:entry={kind}:abi={abi}", message)
+                for sensitive in (private.decode(), "private-owner", "lib-private-personal-name", "127.0.0.1", "AegisNodeNativeTest", "AEGIS_LEGACY_NLP_FIXTURE_V1"):
+                    self.assertNotIn(sensitive, message)
+
     def test_cli_verifies_all_inputs_and_never_prints_firebase_values_on_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); apk = root / "app.apk"

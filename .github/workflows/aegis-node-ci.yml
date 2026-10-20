@@ -24,14 +24,18 @@ on:
         type: choice
         options: ['all', '26', '35']
         default: 'all'
+      android_distribution_only:
+        description: Only the ARM64 release distribution gate with an isolated CI key; no framework or idle runs
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && 'android-distribution' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
   cancel-in-progress: true
 jobs:
   regression:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_framework_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_framework_only && !inputs.android_distribution_only) }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -164,11 +168,11 @@ jobs:
           path: artifacts/v0.7.0-completion/ui
           retention-days: 7
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && (!inputs.android_framework_only || inputs.windows_only)) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && (inputs.android_distribution_only || !inputs.android_framework_only || inputs.windows_only)) }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only && '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"}]' || '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"},{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && '[{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]' || github.event_name == 'workflow_dispatch' && inputs.windows_only && '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"}]' || '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"},{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -271,9 +275,10 @@ jobs:
           retention-days: 14
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
-      - if: matrix.android == 'true'
+      - if: matrix.android == 'true' && !inputs.android_distribution_only
         run: npm run build:android
       - if: matrix.android == 'true'
+        id: android_distribution_build
         name: Compile minified Android release with isolated CI signing key
         run: |
           AEGIS_CI_KEYSTORE="$RUNNER_TEMP/aegis-node-ci.p12"
@@ -283,18 +288,46 @@ jobs:
           export ANDROID_KEYSTORE_PASSWORD=ci-test-only ANDROID_KEY_ALIAS=aegis-ci ANDROID_KEY_PASSWORD=ci-test-only
           npm run build:android:release
       - if: matrix.android == 'true'
+        id: android_distribution_guard
+        name: Verify ARM64 production flags and fixture exclusion before distribution
+        run: |
+          python3 -m unittest discover -s scripts -p verify_android_distribution_test.py
+          python3 - <<'PYTHON'
+          import importlib.util, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('distribution', 'scripts/verify-android-distribution.py')
+          guard = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(guard)
+          try:
+              guard.verify_build_config(Path('src-tauri/gen/android/app/build/generated/source/buildConfig/universal/release/com/aegis/node/BuildConfig.java').read_text())
+              guard.verify_archive(Path('src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk'))
+          except guard.VerificationError as error:
+              print('Android ARM64 CI distribution rejected: ' + str(error), file=sys.stderr)
+              raise SystemExit(1)
+          print('Android ARM64 CI production flags and fixture exclusion PASS.')
+          PYTHON
+      - if: ${{ failure() && matrix.android == 'true' && steps.android_distribution_guard.outcome == 'failure' }}
+        name: Quarantine rejected CI-signed ARM64 release for inspection only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Aegis-Android-Distribution-Quarantine-${{ github.run_id }}
+          path: apps/aegis-node/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+          if-no-files-found: error
+          retention-days: 1
+      - if: matrix.android == 'true' && !inputs.android_distribution_only
         name: Android native payload validation unit tests
         run: src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
-      - if: matrix.android == 'true'
+      - if: matrix.android == 'true' && !inputs.android_distribution_only
         run: node scripts/package-artifacts.mjs android --debug
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ !inputs.android_distribution_only }}
         with:
           name: Aegis-CI-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
           path: apps/aegis-node/release-assets/*
   android-notification-framework:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_distribution_only) }}
     name: Android framework API ${{ matrix.api }} (debug + minified release)
     runs-on: ubuntu-24.04
     strategy:

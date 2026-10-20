@@ -28,6 +28,15 @@ FIXTURE_MARKERS = (
     b"Lcom/aegis/node/NodeGeofenceReceiverFrameworkTest;",
     b"Lcom/aegis/node/NodeGeofenceFrameworkEvidenceKt;",
     b"Lcom/aegis/node/NodeNotificationLiveTestKt;",
+    b"Lcom/aegis/node/fixture/NodeTransientIdentityFixture;",
+    b"Lcom/aegis/node/NodeLegacyLocationSettingsFixture;",
+    b"Lcom/aegis/node/fixture/NodeLegacyLocationSettingsFixture;",
+)
+FIXTURE_MARKER_CODES = (
+    "legacy_nlp", "transient_identity", "transient_identity_class", "native_log",
+    "loopback_endpoint", "notification_test_class", "receiver_test_class",
+    "geographic_evidence_class", "notification_live_evidence_class",
+    "transient_identity_subpackage_class", "legacy_nlp_class", "legacy_nlp_subpackage_class",
 )
 
 
@@ -96,7 +105,13 @@ def verify_archive(apk):
                     carry = b""
                     while chunk := stream.read(1024 * 1024):
                         data = carry + chunk
-                        require(not any(marker in data for marker in FIXTURE_MARKERS), "fixture_marker_in_distribution")
+                        for marker, code in zip(FIXTURE_MARKERS, FIXTURE_MARKER_CODES, strict=True):
+                            if marker in data:
+                                # Closed codes only: never emit the entry name,
+                                # marker bytes or their potentially private context.
+                                kind = "dex" if re.fullmatch(r"classes\d*\.dex", item.filename) else "native"
+                                abi = "none" if kind == "dex" else "arm64_v8a"
+                                raise VerificationError(f"fixture_marker_in_distribution:marker={code}:entry={kind}:abi={abi}")
                         carry = data[-max(map(len, FIXTURE_MARKERS)):]
     except (zipfile.BadZipFile, OSError):
         raise VerificationError("invalid_apk_archive") from None
