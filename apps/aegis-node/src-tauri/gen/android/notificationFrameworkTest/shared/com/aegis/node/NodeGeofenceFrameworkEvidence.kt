@@ -103,7 +103,7 @@ private fun assertFrameworkIdentityBinding(context:Context,nodeId:String) {
 }
 
 /** Peer credentials remain solely in the instrumentation process and never enter its WebView. */
-internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserveCode:String,appVersion:String,invoke:(String,JSONObject,Long)->JSONObject,exercise:(String)->Unit) {
+internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserveCode:String,appVersion:String,invoke:(String,JSONObject,Long)->JSONObject,exercise:(String,String,String)->Unit) {
  val attempt=UUID.randomUUID().toString()
  val recovery=ByteArray(32).also{java.security.SecureRandom().nextBytes(it)}
  val receipt=fixtureNodeRequest("/pair",body=JSONObject().put("attemptId",attempt).put("code",reserveCode).put("recoveryKey",android.util.Base64.encodeToString(recovery,android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)).put("name","Android framework peer").put("platform","android").put("appVersion",appVersion).put("protocolVersion",1))
@@ -133,7 +133,7 @@ internal fun withReenabledIdentityFramework(context:Context,nodeId:String,reserv
   assertEquals("installed",invoke("node_geofences",JSONObject().put("operation","sync"),20000).getString("status"))
   android.util.Log.i("AegisNodeNativeTest","phase=native_identity_reenabled errorType=Checkpoint")
   exerciseWithdrawalReceiptFramework(context,nodeId,credential)
-  exercise(replacementCode)
+  exercise(replacementCode,peer,credential)
  }finally {
   fixtureOffline(0)
   fixtureNodeRequest("/$peer/revoke",credential,JSONObject())
@@ -195,7 +195,7 @@ private fun exerciseWithdrawalReceiptFramework(context:Context,nodeId:String,pee
 }
 
 /** Authenticated Kotlin HTTP and real Google Task are separate from seeded deterministic state tests. */
-internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,setBackground:((Boolean)->Unit)?=null,exerciseUi:((String)->Unit)?=null,invoke:(String,JSONObject,Long)->JSONObject):String {
+internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replacementCode:String,peerId:String,peerCredential:String,setBackground:((Boolean)->Unit)?=null,exerciseUi:((String)->Unit)?=null,invoke:(String,JSONObject,Long)->JSONObject):String {
  fun ipc(name:String,operation:String,payload:JSONObject?=null,id:String?=null,timeout:Long=20000):JSONObject=invoke(name,JSONObject().put("operation",operation).apply{if(payload!=null)put("payload",payload);if(id!=null)put("id",id)},timeout)
  fun checkpoint(phase:String)=android.util.Log.i("AegisNodeNativeTest","phase=$phase errorType=Checkpoint")
  // This empty-manifest round trip must read the actual Rust keyring credential in Kotlin.
@@ -207,7 +207,7 @@ internal fun exerciseGeofenceLiveFramework(context:Context,nodeId:String,replace
  if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION)
  exerciseLocationPermissionFramework(context)
  ipc("node_location","configureNode",JSONObject().put("nodeId",nodeId).put("mode","dynamic").put("sourceNodeId",nodeId))
- exerciseReminderSyncFramework(context,nodeId,setBackground,invoke)
+ exerciseReminderSyncFramework(context,nodeId,peerId,peerCredential,setBackground,invoke)
  val circleA=UUID.randomUUID().toString();val circleB=UUID.randomUUID().toString()
  val circles=JSONArray().put(JSONObject().put("id",circleA).put("latitude",0).put("longitude",0).put("radiusMeters",200)).put(JSONObject().put("id",circleB).put("latitude",0).put("longitude",0.002).put("radiusMeters",200))
  val place=ipc("node_places","create",JSONObject().put("name","CI synthetic union").put("type","property").put("circles",circles).put("aliases",JSONArray()))

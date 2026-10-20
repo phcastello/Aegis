@@ -28,19 +28,19 @@ import java.util.concurrent.TimeUnit
 class NodeNotificationLiveTest {
   private val instrumentation = InstrumentationRegistry.getInstrumentation()
   private fun checkpoint(phase: String) = android.util.Log.i("AegisNodeNativeTest", "phase=$phase errorType=Checkpoint")
-  private fun findWebView(view: View): WebView? {
+  internal fun findWebView(view: View): WebView? {
     if (view is WebView) return view
     if (view is ViewGroup) for (i in 0 until view.childCount) findWebView(view.getChildAt(i))?.let { return it }
     return null
   }
-  private fun evaluate(webview: WebView, js: String): String {
+  internal fun evaluate(webview: WebView, js: String): String {
     val done = CountDownLatch(1)
     var output = "null"
     instrumentation.runOnMainSync { webview.evaluateJavascript(js) { output = it; done.countDown() } }
     check(done.await(10, TimeUnit.SECONDS)) { "webview_callback_timeout" }
     return output
   }
-  private fun invoke(webview: WebView, name: String, args: JSONObject = JSONObject(), timeout:Long=20000): JSONObject {
+  internal fun invoke(webview: WebView, name: String, args: JSONObject = JSONObject(), timeout:Long=20000): JSONObject {
     evaluate(webview, "window.__aegisNotificationTest=null;window.__TAURI_INTERNALS__.invoke(${JSONObject.quote(name)},$args).then(value=>{window.__aegisNotificationTest={ok:true,value}}).catch(()=>{window.__aegisNotificationTest={ok:false}});null")
     val end = SystemClock.elapsedRealtime() + timeout
     while (SystemClock.elapsedRealtime() < end) {
@@ -222,8 +222,8 @@ class NodeNotificationLiveTest {
         while (manager.activeNotifications.none { it.tag == commandId && it.id == 1 } && SystemClock.elapsedRealtime() < activeEnd) SystemClock.sleep(50)
         assertTrue(manager.activeNotifications.any { it.tag == commandId && it.id == 1 })
         checkpoint("live_notification_active")
-        withReenabledIdentityFramework(context,id,replacementCode,runtime.getString("version"),{name,args,timeout->invoke(webview,name,args,timeout)}) { nextCode->
-          exerciseGeofenceLiveFramework(context,id,nextCode,setBackground={background->
+        withReenabledIdentityFramework(context,id,replacementCode,runtime.getString("version"),{name,args,timeout->invoke(webview,name,args,timeout)}) { nextCode,peerId,peerCredential->
+          exerciseGeofenceLiveFramework(context,id,nextCode,peerId,peerCredential,setBackground={background->
             val state=if(background)Lifecycle.State.CREATED else Lifecycle.State.RESUMED
             scenario.moveToState(state);assertEquals(state,scenario.state)
           },exerciseUi={ruleId->exerciseReminderEditing(webview,scenario,ruleId)}){name,args,timeout->invoke(webview,name,args,timeout)}

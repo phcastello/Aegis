@@ -67,7 +67,14 @@ app.Use(async (context, next) => {
     var offline = Volatile.Read(ref backendOffline);
     if (Environment.TickCount64 < offline.Until && (!offline.AllowPairing || !PairingLifecycle(context.Request))) { context.Response.StatusCode = 503; return; }
     metrics.Add("http_requests", 1); metrics.Add("http_request_body_bytes", context.Request.ContentLength ?? 0);
-    if (context.Request.Path == "/api/nodes/geofences/manifest" && Volatile.Read(ref geofenceCancellationFailure) == "manifest_503") { context.Response.StatusCode = 503; return; }
+    if (context.Request.Path == "/api/nodes/geofences/manifest" && Volatile.Read(ref geofenceCancellationFailure) == "manifest_503") { metrics.Add("geofence_cancellation_manifest_failures", 1); context.Response.StatusCode = 503; return; }
+    var isGeofenceCancellation = HttpMethods.IsPost(context.Request.Method) && context.Request.Path.StartsWithSegments("/api/nodes/geofences") && context.Request.Path.Value!.EndsWith("/actions", StringComparison.Ordinal);
+    if (isGeofenceCancellation) {
+        metrics.Add("geofence_cancellation_requests", 1);
+        // Fail before authentication/controller/domain execution, on every
+        // transparent retry. This is transport loss, never a committed cancel.
+        if (Volatile.Read(ref geofenceCancellationFailure) == "cancel_before_commit_disconnect") { metrics.Add("geofence_cancellation_precommit_disconnects", 1); context.Abort(); return; }
+    }
     var isReminderAction = HttpMethods.IsPost(context.Request.Method) &&
         (context.Request.Path.StartsWithSegments("/api/reminder-actions") || context.Request.Path.StartsWithSegments("/api/nodes/reminders") && context.Request.Path.Value!.EndsWith("/actions", StringComparison.Ordinal));
     if (isReminderAction) {
@@ -98,6 +105,7 @@ app.Use(async (context, next) => {
     var original = context.Response.Body; await using var copy = new MemoryStream(); context.Response.Body = copy;
     try {
         await next();
+        if (isGeofenceCancellation && context.Response.StatusCode is >= 200 and < 300) metrics.Add("geofence_cancellation_commits", 1);
         if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/api/nodes/reminders/withdrawals/receipts" && context.Response.StatusCode is >= 200 and < 300 && Interlocked.CompareExchange(ref dropWithdrawalReceiptResponse, -1, 1) == 1) {
             metrics.Add("withdrawal_receipt_responses_dropped", 1); context.Abort(); return;
         }
@@ -115,8 +123,8 @@ app.MapGet("/fixture/idle", () => metrics.Snapshot());
 // Long Android suites issue fresh ordinary bootstrap codes immediately before
 // their consumer. Production expiry and authentication contracts stay unchanged.
 app.MapPost("/fixture/refresh-bootstrap", async (FixtureBootstrapRefresh request, INodeRegistry registry) => {
-    if (request.Kind is not ("boot" or "live")) return Results.BadRequest();
-    var suffixes = request.Kind == "boot" ? new[] { ".boot" } : new[] { "", ".replacement" };
+    if (request.Kind is not ("boot" or "live" or "actions")) return Results.BadRequest();
+    var suffixes = request.Kind == "boot" ? new[] { ".boot" } : request.Kind == "actions" ? new[] { ".actions" } : new[] { "", ".replacement" };
     foreach (var suffix in suffixes) {
         var fresh = await registry.CreateCodeAsync(null);
         var temporary = args[0] + suffix + ".refresh";
@@ -152,7 +160,7 @@ app.MapPost("/fixture/geofence-event-failure", (FixtureGeofenceSyncFailure reque
     Volatile.Write(ref geofenceEventFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
 });
 app.MapPost("/fixture/geofence-cancellation-failure", (FixtureGeofenceSyncFailure request) => {
-    if (request.Mode is not ("manifest_503" or "none")) return Results.BadRequest();
+    if (request.Mode is not ("manifest_503" or "cancel_before_commit_disconnect" or "none")) return Results.BadRequest();
     Volatile.Write(ref geofenceCancellationFailure, request.Mode); return Results.Ok(new { mode = request.Mode });
 });
 app.MapPost("/fixture/withdrawal-receipt-failure", (FixtureWithdrawalReceiptFailure request) => {
@@ -235,12 +243,14 @@ using (var scope = app.Services.CreateScope())
     var geofence = await registry.CreateCodeAsync(null);
     var interruption = await registry.CreateCodeAsync(null);
     var boot = await registry.CreateCodeAsync(null);
+    var actions = await registry.CreateCodeAsync(null);
     // All use the existing issuerless bootstrap procedure. Separate receiver and
     // live tests consume their own code; no test bypass or HTTP endpoint exists.
     await WriteBootstrapCode(args[0] + ".replacement", replacement.Code);
     await WriteBootstrapCode(args[0] + ".geofence", geofence.Code);
     await WriteBootstrapCode(args[0] + ".interruption", interruption.Code);
     await WriteBootstrapCode(args[0] + ".boot", boot.Code);
+    await WriteBootstrapCode(args[0] + ".actions", actions.Code);
     await WriteBootstrapCode(args[0], code.Code); // Main file is the readiness marker.
 }
 await app.RunAsync(); return 0;
