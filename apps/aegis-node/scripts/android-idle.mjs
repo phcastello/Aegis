@@ -6,6 +6,7 @@ import {resolve} from 'node:path';
 import {safeAndroidCrashTypes} from './android-safe-crash.mjs';
 import {idleInstrumentationArguments} from './android-idle-arguments.mjs';
 import {captureIdleBoundary} from './android-idle-boundary.mjs';
+import {adbFailure,ensureAndroidFrameworkRoot} from './android-framework-host.mjs';
 const [mode,apk,testApk,bootstrap,output]=process.argv.slice(2);
 assert(['before','after'].includes(mode)&&apk&&testApk&&bootstrap&&output,'mode APK TEST_APK bootstrap outputJSON required');
 assert(existsSync(apk)&&existsSync(testApk),'Both APK artifacts must exist before measuring');
@@ -14,15 +15,16 @@ if(mode==='after')assert(/^[a-f0-9-]{36}$/.test(expectedNodeId??''),'Upgrade req
 const expectedVersion=mode==='before'?'0.7.0-unstable.17':JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).version;
 const serial=process.env.AEGIS_TEST_EMULATOR_SERIAL??'emulator-5554';assert(/^emulator-\d{4}$/.test(serial),'Disposable emulator required');
 const adb=process.env.ANDROID_HOME?resolve(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
-const command=args=>{const r=spawnSync(adb,['-s',serial,...args],{encoding:'utf8',timeout:30000});assert.equal(r.status,0,'adb operation failed');return r.stdout;};
+const command=(args,timeout=30000)=>{const r=spawnSync(adb,['-s',serial,...args],{encoding:'utf8',timeout});if(r.status!==0)throw adbFailure(args,r);return r.stdout;};
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const api=Number(command(['shell','getprop','ro.build.version.sdk']).trim());assert.equal(api,35,'Idle comparison uses the same API35 emulator');
-let rooted=false;try{rooted=!/cannot run as root/i.test(command(['root']));command(['wait-for-device']);}catch{}
 if(mode==='before'){
  try{command(['uninstall','com.aegis.node.test']);}catch{}
  try{command(['uninstall','com.aegis.node']);}catch{}
 }
 command(['install','-r',resolve(apk)]);command(['install','-r',resolve(testApk)]);
+await ensureAndroidFrameworkRoot(command);
+const rooted=true;
 command(['reverse','tcp:18104','tcp:18104']);command(['shell','pm','grant','com.aegis.node','android.permission.POST_NOTIFICATIONS']);command(['logcat','-c']);
 let ticksPerSecond=100;try{const value=Number(command(['shell','getconf','CLK_TCK']).trim());if(value>0)ticksPerSecond=value;}catch{}
 const machine={api,rooted,ticksPerSecond,model:command(['shell','getprop','ro.product.model']).trim(),hardware:command(['shell','getprop','ro.hardware']).trim(),abis:command(['shell','getprop','ro.product.cpu.abilist']).trim(),logicalCpus:command(['shell','getconf','_NPROCESSORS_ONLN']).trim()};

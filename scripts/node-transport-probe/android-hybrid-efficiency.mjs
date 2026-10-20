@@ -5,6 +5,7 @@ import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync}
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {adbFailure,ensureAndroidFrameworkRoot} from '../../apps/aegis-node/scripts/android-framework-host.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const [apk,testApk,outputDirectory]=process.argv.slice(2);
 for(const file of [apk,testApk])assert(file&&existsSync(file),'Candidate and instrumentation APKs required');
@@ -13,7 +14,7 @@ const output=resolve(outputDirectory);mkdirSync(output,{recursive:true});
 const serial=process.env.AEGIS_TEST_EMULATOR_SERIAL??'emulator-5554';
 assert(/^emulator-\d{4}$/.test(serial),'Disposable emulator required');
 const adb=process.env.ANDROID_HOME?resolve(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
-const command=args=>{const r=spawnSync(adb,['-s',serial,...args],{encoding:'utf8',timeout:30000});assert.equal(r.status,0,'Emulator operation failed');return r.stdout;};
+const command=(args,timeout=30000)=>{const r=spawnSync(adb,['-s',serial,...args],{encoding:'utf8',timeout});if(r.status!==0)throw adbFailure(args,r);return r.stdout;};
 const done=child=>new Promise((res,rej)=>{child.once('error',rej);child.once('exit',res);});
 const work=mkdtempSync(join(tmpdir(),'aegis-hybrid-efficiency-'));const code=join(work,'bootstrap.txt');
 const dll=resolve(root,'backend/tests/Aegis.NodeRuntimeFixture/bin/Debug/net8.0/Aegis.NodeRuntimeFixture.dll');
@@ -26,10 +27,10 @@ try {
  const deadline=Date.now()+60000;
  while(true){assert(api.exitCode===null,'Isolated backend exited');try{if(existsSync(code+'.geofence')&&(await fetch('http://127.0.0.1:18104/api/health',{signal:AbortSignal.timeout(2000)})).ok)break;}catch{}assert(Date.now()<deadline,'Fixture readiness timeout');await new Promise(r=>setTimeout(r,100));}
  assert.equal(Number(command(['shell','getprop','ro.build.version.sdk']).trim()),35,'Use API35 for the six efficiency windows');
- command(['root']);command(['wait-for-device']);
  try{command(['uninstall','com.aegis.node.test']);}catch{}
  try{command(['uninstall','com.aegis.node']);}catch{}
  command(['install','-r',resolve(apk)]);command(['install','-r',resolve(testApk)]);
+ await ensureAndroidFrameworkRoot(command);
  command(['emu','geo','fix','0.01','0']);
  command(['reverse','tcp:18104','tcp:18104']);command(['shell','pm','grant','com.aegis.node','android.permission.POST_NOTIFICATIONS']);command(['logcat','-c']);
  const ticksPerSecond=Number(command(['shell','getconf','CLK_TCK']).trim())||100;
