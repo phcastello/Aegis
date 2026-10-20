@@ -1,8 +1,9 @@
-package com.aegis.node
+package com.aegis.node.fixture
 
 import android.app.Activity
 import android.content.Context
 import android.os.Looper
+import com.aegis.node.BuildConfig
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.LocationRequest

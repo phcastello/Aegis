@@ -3,6 +3,8 @@ package com.aegis.node
 import android.content.Context
 import android.location.Location
 import android.os.SystemClock
+import com.aegis.node.fixture.NodeLegacyLocationSettingsFixture
+import com.aegis.node.fixture.NodeTransientIdentityFixture
 import org.json.JSONObject
 import com.google.android.gms.tasks.CancellationTokenSource
 import java.util.concurrent.TimeoutException

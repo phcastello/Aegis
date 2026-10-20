@@ -1,7 +1,11 @@
-package com.aegis.node
+package com.aegis.node.fixture
 
 import android.content.Context
 import android.os.SystemClock
+import com.aegis.node.BuildConfig
+import com.aegis.node.NodeGeofences
+import com.aegis.node.NodeNativeSession
+import com.aegis.node.NodeReminderActions
 import org.json.JSONObject
 
 /** Independent instrumentation seam; unreachable in ordinary distribution builds. */
