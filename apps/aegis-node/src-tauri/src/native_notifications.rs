@@ -139,6 +139,8 @@ pub struct NotificationSettings {
     pub failed_actions: u32,
     pub action_sync_state: String,
     pub action_diagnostics: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_diagnostics_available: Option<bool>,
 }
 // Private, fixed JNI calls only. The upstream plugin callback unwraps send() after a
 // dropped receiver, so bounded/cancelable operations use this safe oneshot adapter.
@@ -264,20 +266,17 @@ pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings 
         let state = push_state(&app).await.unwrap_or_default();
         let actions = android_call(&app, "nodeActionState", "{}".into())
             .await
-            .ok()
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
-            .unwrap_or_default();
+            .ok();
+        let actions = crate::node_notification::reminder_action_snapshot(actions.as_deref());
         NotificationSettings {
             granted: state.granted,
             push_configured: state.configured,
             autostart: false,
-            pending_actions: actions["pendingActions"].as_u64().unwrap_or(0) as u32,
-            failed_actions: actions["failedActions"].as_u64().unwrap_or(0) as u32,
-            action_sync_state: actions["actionSyncState"].as_str().unwrap_or("idle").into(),
-            action_diagnostics: actions["actionDiagnostics"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            pending_actions: actions.pending_actions,
+            failed_actions: actions.failed_actions,
+            action_sync_state: actions.action_sync_state,
+            action_diagnostics: actions.action_diagnostics,
+            action_diagnostics_available: Some(actions.available),
         }
     }
     #[cfg(windows)]
@@ -291,6 +290,7 @@ pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings 
             failed_actions: 0,
             action_sync_state: "idle".into(),
             action_diagnostics: vec![],
+            action_diagnostics_available: None,
         }
     }
     #[cfg(not(any(windows, target_os = "android")))]
@@ -304,6 +304,7 @@ pub async fn node_notification_settings(app: AppHandle) -> NotificationSettings 
             failed_actions: 0,
             action_sync_state: "idle".into(),
             action_diagnostics: vec![],
+            action_diagnostics_available: None,
         }
     }
 }

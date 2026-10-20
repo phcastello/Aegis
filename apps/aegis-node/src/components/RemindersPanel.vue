@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { remindersApi, geofencesApi, placesApi, locationApi, domainError, dateLabel, localInput, recurrenceLabel, type Reminder, type ReminderPage, type ReminderDelivery, type ReminderSeries, type RecurrenceRule, type Place, type Geofence, type GeofenceDiagnostics, type LocationSettings, type LocationPermissions, type DeliveryPolicy } from '../services/domains';
 import { nodeServices, notificationServices, type NotificationSettings, type NodeView } from '../services/nodes';
 import ReminderActionSync from './ReminderActionSync.vue';
+import { mergeActionSettings } from '../services/reminderActions';
 import { placeAreaLabel, proximityLabel } from '../services/monitoringEnvelope';
 import type { Platform } from '../services/runtime';
 import { useLocationPermissionRefresh } from '../composables/useLocationPermissionRefresh';
@@ -97,7 +98,7 @@ async function operation(action: () => Promise<unknown>, message?: string, refre
 }
 async function revealFeedback() { await nextTick(); const output=Array.from(panelRoot.value?.querySelectorAll<HTMLElement>('[data-operation-feedback]') ?? []).find(element=>element.getClientRects().length>0); output?.scrollIntoView({ block:'nearest', behavior:'instant' }); }
 async function loadDiagnostics() { if(props.platform !== 'android')return; try { diagnostics.value=await geofencesApi<GeofenceDiagnostics>('diagnostics'); diagnosticCheckedAt.value=Date.now(); } catch { diagnostics.value=null; } }
-async function loadActionSettings() { try { actionSettings.value = await notificationServices.settings(); } catch { /* Keep last confirmed local outbox diagnostics. */ } }
+async function loadActionSettings() { try { actionSettings.value = mergeActionSettings(actionSettings.value, await notificationServices.settings()); } catch { actionSettings.value = mergeActionSettings(actionSettings.value); } }
 onMounted(() => { window.addEventListener('aegis-reminder-actions-changed', loadActionSettings); void operation(load, undefined, false); observationAgeTimer=setInterval(() => { if(document.visibilityState==='visible')diagnosticCheckedAt.value=Date.now(); },30000); });
 onUnmounted(() => { window.removeEventListener('aegis-reminder-actions-changed', loadActionSettings); if(observationAgeTimer!==null)clearInterval(observationAgeTimer); });
 function flushFocusReload() { if(!focusReloadPending || busy.value || editor.value)return;focusReloadPending=false;void operation(load,undefined,false); }

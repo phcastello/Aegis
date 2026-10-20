@@ -1,36 +1,70 @@
 package com.aegis.node
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Context
+import android.content.Intent
 import android.location.LocationManager
 import android.os.Build
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
 import java.util.Locale
+
+// As in the live framework test, closing the last Tauri Activity exits its
+// process. Keep the real Activity alive until AndroidJUnitRunner publishes its
+// result; the disposable host then stops that process between test stages.
+private var legacyResolutionScenario:ActivityScenario<out Activity>?=null
 
 /** Resolve actual Google settings; never inject/replace a location provider. */
 internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String) {
  if(Build.VERSION.SDK_INT>=28)return
  val instrumentation=InstrumentationRegistry.getInstrumentation()
  val automation=instrumentation.uiAutomation
+ shell("input keyevent KEYCODE_WAKEUP")
+ shell("wm dismiss-keyguard")
+ shell("input keyevent 82")
  val runtime=Class.forName("com.aegis.node.NodeGeofenceRuntime",true,context.classLoader)
  val method=runtime.getMethod("legacyLocationSettingsFixture",Context::class.java,Boolean::class.javaPrimitiveType)
- fun settings(resolve:Boolean)=JSONObject(method.invoke(null,context,resolve) as String)
+ val resolution=runtime.getMethod("legacyLocationResolutionFixture",Activity::class.java,String::class.java)
+ val scenario=legacyResolutionScenario?:ActivityScenario.launch(notificationActivityClass()).also{legacyResolutionScenario=it}
+ lateinit var activity:Activity
+ scenario.onActivity{activity=it}
+ fun settings(resolve:Boolean):JSONObject {
+  var result=JSONObject(method.invoke(null,activity,resolve) as String)
+  if(resolve && result.optString("status")=="resolution_prepared")instrumentation.runOnMainSync {
+   result=JSONObject(resolution.invoke(null,activity,"open") as String)
+  }
+  return result
+ }
  val manager=context.getSystemService(LocationManager::class.java)
+ val home=context.packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),0)?.activityInfo?.packageName
+ fun packageCode(value:String?)=when(value) {
+  "com.google.android.gms"->"gms";"com.android.settings"->"settings";context.packageName->"target";"android"->"android"
+  "com.android.systemui"->"keyguard"
+  "com.android.packageinstaller","com.google.android.packageinstaller","com.android.permissioncontroller","com.google.android.permissioncontroller"->"permissioncontroller"
+  "com.google.android.gsf","com.google.process.gapps"->"googleframework";"com.google.android.location"->"googlelocation"
+  "com.android.launcher","com.android.launcher2","com.android.launcher3","com.google.android.apps.nexuslauncher"->"launcher"
+  null->"none";else->if(home!=null && value==home)"launcher" else "other"
+ }
+ fun resumedCode():String=try {
+  val value=Regex("(?:mResumedActivity|mFocusedActivity):\\s*ActivityRecord\\{[^\\n]*?\\su\\d+\\s+([A-Za-z0-9_.]+)/").find(shell("dumpsys activity activities"))?.groupValues?.get(1)
+  packageCode(value)
+ }catch(_:Exception){"unavailable"}
  fun masks():String {
   val allowed=shell("settings get secure location_providers_allowed").trim().split(',').toSet()
-  return "gpsAllowed=${"gps" in allowed} networkAllowed=${"network" in allowed} gpsEnabled=${manager.isProviderEnabled(LocationManager.GPS_PROVIDER)} networkEnabled=${manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)} saver=${context.getSystemService(android.os.PowerManager::class.java).isPowerSaveMode}"
+  val keyguard=context.getSystemService(KeyguardManager::class.java)
+  val power=context.getSystemService(android.os.PowerManager::class.java)
+  return "gpsAllowed=${"gps" in allowed} networkAllowed=${"network" in allowed} gpsEnabled=${manager.isProviderEnabled(LocationManager.GPS_PROVIDER)} networkEnabled=${manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)} saver=${power.isPowerSaveMode} interactive=${power.isInteractive} keyguardLocked=${keyguard.isKeyguardLocked} deviceLocked=${keyguard.isDeviceLocked}"
  }
  val serviceInfo=automation.serviceInfo
  val oldFlags=serviceInfo.flags
  automation.serviceInfo=serviceInfo.apply{flags=flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS}
  try {
-  shell("input keyevent KEYCODE_WAKEUP")
-  shell("wm dismiss-keyguard")
-  shell("input keyevent 82")
   var result=settings(true)
   if(result.optString("status")=="resolution_opened") {
    android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_resolution_opened errorType=Checkpoint")
@@ -38,14 +72,12 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
    var accepted=false
    var crashOverlayClosed=false
    var reopenResolution=false
+   var reopenStatus="not_requested"
    val packages=linkedSetOf<String>()
    val viewIds=linkedSetOf<String>()
    var windowCount=0;var visitedCount=0;var positiveCount=0;var clickableCount=0
    val approvedPackages=setOf("com.google.android.gms","com.android.settings","android")
    val positiveLabels=setOf("AGREE","I AGREE","YES","TURN ON","OK","ACCEPT")
-   fun packageCode(value:String?)=when(value) {
-    "com.google.android.gms"->"gms";"com.android.settings"->"settings";context.packageName->"target";"android"->"android";null->"none";else->"other"
-   }
    fun selectPositive(root:AccessibilityNodeInfo):Boolean {
     packages.add(packageCode(root.packageName?.toString()))
     if(root.packageName?.toString() !in approvedPackages)return false
@@ -118,12 +150,13 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
      // once, only while it fits in the explicit thirty-second UI budget.
      if(end-SystemClock.elapsedRealtime()<15000)break
      result=settings(true)
+     reopenStatus=result.optString("status").takeIf{it in setOf("ready","resolution_opened","resolution_required","resolution_unavailable","activity_unavailable","settings_unavailable","interrupted")}?:"unknown"
      if(result.optString("status")=="ready")break
     }
     if(!accepted)SystemClock.sleep(100)
    }
    if(!accepted)result=settings(false)
-   val ui="packages=${packages.joinToString(",")} windows=$windowCount visited=$visitedCount clickable=$clickableCount positive=$positiveCount viewIds=${viewIds.joinToString(",")}"
+   val ui="packages=${packages.joinToString(",")} resumed=${resumedCode()} reopen=$reopenStatus windows=$windowCount visited=$visitedCount clickable=$clickableCount positive=$positiveCount viewIds=${viewIds.joinToString(",")}"
    assertTrue("The returned Google settings resolution must expose its real positive control or become ready after removing the crash overlay; $ui; ${masks()}; diagnostics=$result",accepted || (crashOverlayClosed && result.optString("status")=="ready"))
    if(accepted)android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_consent_accepted errorType=Checkpoint")
    // Requery the real client after the actual positive action; a click alone
@@ -149,5 +182,8 @@ internal fun prepareLegacyLocationConsent(context:Context,shell:(String)->String
   }
   assertTrue("Actual framework providers remain enabled for three seconds; ${masks()}",stableSince>0 && SystemClock.elapsedRealtime()-stableSince>=3000)
   android.util.Log.i("AegisNodeNativeTest","phase=hybrid_legacy_nlp_settings_ready errorType=Checkpoint")
- }finally{automation.serviceInfo=serviceInfo.apply{flags=oldFlags}}
+ }finally{
+  resolution.invoke(null,null,"clear")
+  automation.serviceInfo=serviceInfo.apply{flags=oldFlags}
+ }
 }

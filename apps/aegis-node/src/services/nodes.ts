@@ -43,7 +43,7 @@ export const transportServices = {
 };
 
 export interface ReminderActionDiagnostic { type: 'acknowledge' | 'snooze'; ageSeconds: number; attempts: number; lastAttemptAt?: string | number | null; lastResult?: string | null; state: string; retryScheduled: boolean }
-export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean; pendingActions?: number; failedActions?: number; actionDiagnostics?: ReminderActionDiagnostic[]; actionSyncState?: 'idle' | 'syncing' | 'temporarily_unavailable' | 'pending' | 'permanent_failure' }
+export interface NotificationSettings { granted: boolean; pushConfigured: boolean; autostart: boolean; pendingActions?: number; failedActions?: number; actionDiagnostics?: ReminderActionDiagnostic[]; actionDiagnosticsAvailable?: boolean; actionSyncState?: 'idle' | 'syncing' | 'temporarily_unavailable' | 'pending' | 'permanent_failure' | 'unavailable' }
 export interface NotificationResult { node: {id:string;name:string}|null; reachability: string; transport: string|null; status:string; commandId:string|null; diagnosticCode?:string }
 export const notificationServices = {
  test: (id:string):Promise<NotificationResult> => invoke('node_test_notification',{id}),

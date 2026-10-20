@@ -53,6 +53,10 @@ object NodeGeofenceRuntime {
   check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
   return NodeLegacyLocationSettingsFixture.check(context,resolve).toString()
  }
+ @JvmStatic fun legacyLocationResolutionFixture(activity:android.app.Activity?,operation:String):String {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  return NodeLegacyLocationSettingsFixture.resolve(activity,operation).toString()
+ }
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
  /** Instrumentation may advance a persisted deadline; distribution cannot. */
  @JvmStatic fun confirmPending(context:Context) {

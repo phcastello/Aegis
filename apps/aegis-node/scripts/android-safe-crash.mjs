@@ -15,6 +15,12 @@ export function safeAndroidCrashTypes(logcat) {
 
 const processCode = name => /^com\.aegis\.node(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'target':
   /^com\.google\.android\.gms(?:[.:][A-Za-z0-9_.:-]+)?$/.test(name)?'gms':
+  /^com\.android\.settings(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'settings':
+  /^com\.android\.systemui(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'systemui':
+  /^(?:com\.android\.launcher[23]?|com\.google\.android\.apps\.nexuslauncher)(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'launcher':
+  /^(?:com\.(?:android|google\.android)\.(?:packageinstaller|permissioncontroller))(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'permissioncontroller':
+  /^(?:com\.google\.android\.gsf|com\.google\.process\.gapps)(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'googleframework':
+  /^com\.google\.android\.location(?::[A-Za-z0-9_.:-]+)?$/.test(name)?'googlelocation':
   /^(?:system_server|android)$/.test(name)?'system':'other';
 
 // Associate exception types with Process records internally. PID/name/messages

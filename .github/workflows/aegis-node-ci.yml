@@ -19,10 +19,15 @@ on:
         description: Android framework checks without idle windows; Windows-only takes precedence; full matrix remains required
         type: boolean
         default: false
+      android_framework_api:
+        description: API for a focused Android framework run; ignored by the full candidate matrix
+        type: choice
+        options: ['all', '26', '35']
+        default: 'all'
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && 'android-framework' || 'all' }}
+  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
   cancel-in-progress: true
 jobs:
   regression:
@@ -295,7 +300,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [26, 35]
+        api: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '26' && '[26]' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '35' && '[35]' || '[26,35]') }}
     defaults:
       run:
         shell: bash

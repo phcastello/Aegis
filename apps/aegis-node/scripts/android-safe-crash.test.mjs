@@ -42,3 +42,12 @@ test('private unrelated processes and system origins never expose process names 
   for(const privateValue of ['private','customer','application','system_server','10101','20202','30303'])assert(!JSON.stringify(evidence).includes(privateValue));
   assert.deepEqual(safeAndroidCrashSummaries('AndroidRuntime: Process: android, PID: 33\nAndroidRuntime: java.lang.RuntimeException: private\nAndroidRuntime: FATAL EXCEPTION: main\nAndroidRuntime: java.lang.NullPointerException: private'),[{processCode:'system',errorType:'RuntimeException'},{processCode:'unknown',errorType:'NullPointerException'}]);
 });
+
+test('legacy emulator UI and Google provider crashes retain only recognized origin enums',()=>{
+  const processes=[['com.android.settings','settings'],['com.android.systemui','systemui'],['com.android.launcher3','launcher'],['com.google.android.apps.nexuslauncher','launcher'],['com.android.packageinstaller','permissioncontroller'],['com.google.android.permissioncontroller','permissioncontroller'],['com.google.process.gapps','googleframework'],['com.google.android.gsf','googleframework'],['com.google.android.location','googlelocation'],['com.android.settings.private','other']];
+  for(const [process,code] of processes) {
+    const evidence=safeAndroidCrashSummaries(`AndroidRuntime: Process: ${process}:fixture, PID: 1234\nAndroidRuntime: java.lang.NullPointerException: private`);
+    assert.deepEqual(evidence,[{processCode:code,errorType:'NullPointerException'}]);
+    for(const privateValue of [process,'fixture','1234','private'])assert(!JSON.stringify(evidence).includes(privateValue));
+  }
+});

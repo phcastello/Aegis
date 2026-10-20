@@ -40,7 +40,8 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 
 /**
- * API 26/35, including the optimized target APK, without launching an Activity.
+ * API 26/35, including the optimized target APK. API 26 prepares official Google
+ * settings with a real foreground Activity before pairing or queuing any data.
  * GMS delivery uses a controlled SafeParcel fixture; registration storage is seeded. The actual
  * receiver, Android Keystore, persistence, notification IPC and HTTP reconcile run.
  * This cannot prove Google's physical movement detection, latency or OEM delivery.
@@ -173,6 +174,11 @@ class NodeGeofenceReceiverFrameworkTest {
   val previousSaver=shell("settings get global low_power").trim();val previousSticky=shell("settings get global low_power_sticky").trim()
   var credential:String?=null;var nodeId:String?=null
   try {
+   if(Build.VERSION.SDK_INT<28) {
+    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_FINE_LOCATION)
+    prepareLegacyLocationConsent(context,::shell)
+   }
    val attempt=UUID.randomUUID().toString()
    val receipt=request("/pair",body=JSONObject().put("attemptId",attempt).put("code",code).put("recoveryKey",Base64.encodeToString(ByteArray(32).also{SecureRandom().nextBytes(it)},Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)).put("name","Receiver framework fixture").put("platform","android").put("appVersion","0.0.0-framework-fixture").put("protocolVersion",1))
    credential=receipt.getString("credential")
@@ -326,7 +332,6 @@ class NodeGeofenceReceiverFrameworkTest {
    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_COARSE_LOCATION)
    grantFrameworkPermission(context,android.Manifest.permission.ACCESS_FINE_LOCATION)
    if(Build.VERSION.SDK_INT>=29)grantFrameworkPermission(context,android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-   prepareLegacyLocationConsent(context,::shell)
    val hybridMethod=runtime.getMethod("hybridSessionFixture",Context::class.java,String::class.java,String::class.java,String::class.java)
    fun hybrid(operation:String,scenario:String="real")=JSONObject(hybridMethod.invoke(null,context,operation,placeId,scenario) as String)
    fun activeSession()=hybrid("snapshot").getJSONArray("sessions").optJSONObject(0)

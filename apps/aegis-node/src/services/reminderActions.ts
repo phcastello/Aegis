@@ -1,5 +1,22 @@
 import type { NotificationSettings } from './nodes.js';
 
+export function actionDiagnosticsUnavailable(settings: NotificationSettings | null | undefined): boolean {
+  return settings?.actionDiagnosticsAvailable === false || settings?.actionSyncState === 'unavailable';
+}
+// Failed reads preserve only the last observed action data, never a fallback zero.
+// Older Nodes without the availability field keep their existing semantics.
+export function mergeActionSettings(previous: NotificationSettings | null | undefined, incoming?: NotificationSettings): NotificationSettings {
+  if (incoming && !actionDiagnosticsUnavailable(incoming)) return incoming;
+  return {
+    ...(incoming ?? previous ?? { granted: false, pushConfigured: false, autostart: false }),
+    pendingActions: previous?.pendingActions,
+    failedActions: previous?.failedActions,
+    actionDiagnostics: previous?.actionDiagnostics,
+    actionDiagnosticsAvailable: false,
+    actionSyncState: 'unavailable',
+  };
+}
+
 export function pendingActionLabel(count: number): string {
   return `${count} ${count === 1 ? 'ação pendente' : 'ações pendentes'} de reconhecimento ou adiamento`;
 }

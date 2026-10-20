@@ -2,6 +2,40 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, future::Future, pin::Pin};
 use tokio::sync::Mutex;
+/// A missing JNI reply is distinct from a successfully read, empty outbox.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderActionSnapshot {
+    pub pending_actions: u32,
+    pub failed_actions: u32,
+    pub action_sync_state: String,
+    pub action_diagnostics: Vec<serde_json::Value>,
+    #[serde(skip)]
+    pub available: bool,
+}
+pub fn reminder_action_snapshot(reply: Option<&str>) -> ReminderActionSnapshot {
+    reply
+        .and_then(|reply| serde_json::from_str::<ReminderActionSnapshot>(reply).ok())
+        .filter(|snapshot| {
+            matches!(
+                snapshot.action_sync_state.as_str(),
+                "idle" | "syncing" | "temporarily_unavailable" | "pending" | "permanent_failure"
+            )
+        })
+        .map(|mut snapshot| {
+            snapshot.available = true;
+            snapshot
+        })
+        .unwrap_or_else(|| ReminderActionSnapshot {
+            // Retain the numeric wire fields for older consumers. Availability
+            // and state explicitly prevent treating these placeholders as a read.
+            pending_actions: 0,
+            failed_actions: 0,
+            action_sync_state: "unavailable".into(),
+            action_diagnostics: vec![],
+            available: false,
+        })
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationInput {
@@ -265,6 +299,34 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    #[test]
+    fn action_snapshot_distinguishes_unavailable_from_confirmed_empty_and_recovers() {
+        for reply in [
+            None,
+            Some("not json"),
+            Some("{}"),
+            Some(r#"{"pendingActions":0,"failedActions":0,"actionSyncState":"idle"}"#),
+            Some(
+                r#"{"pendingActions":-1,"failedActions":0,"actionSyncState":"idle","actionDiagnostics":[]}"#,
+            ),
+        ] {
+            let snapshot = reminder_action_snapshot(reply);
+            assert!(!snapshot.available);
+            assert_eq!(snapshot.action_sync_state, "unavailable");
+        }
+        let pending = reminder_action_snapshot(Some(
+            r#"{"pendingActions":2,"failedActions":1,"actionSyncState":"pending","actionDiagnostics":[{"type":"snooze"}]}"#,
+        ));
+        assert!(pending.available);
+        assert_eq!((pending.pending_actions, pending.failed_actions), (2, 1));
+        assert_eq!(pending.action_diagnostics.len(), 1);
+        let empty = reminder_action_snapshot(Some(
+            r#"{"pendingActions":0,"failedActions":0,"actionSyncState":"idle","actionDiagnostics":[]}"#,
+        ));
+        assert!(empty.available);
+        assert_eq!(empty.action_sync_state, "idle");
+        assert_eq!((empty.pending_actions, empty.failed_actions), (0, 0));
+    }
     struct Mock(Arc<AtomicUsize>);
     impl NotificationSink for Mock {
         fn show<'a>(

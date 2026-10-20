@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import ChatView from '@aegis/client/views/ChatView.vue';
@@ -8,7 +8,7 @@ import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
 import AegisMark from '@aegis/client/components/AegisMark.vue';
 import UpdateNotice from './components/UpdateNotice.vue';
 import ReminderActionSync from './components/ReminderActionSync.vue';
-import { pendingActionLabel } from './services/reminderActions';
+import { actionDiagnosticsUnavailable, mergeActionSettings, pendingActionLabel } from './services/reminderActions';
 import { nodeServices, notificationServices, transportServices, type IdentityStatus, type NotificationSettings } from './services/nodes';
 import NodesPanel from './components/NodesPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
@@ -21,12 +21,14 @@ const props = defineProps<{ runtime: RuntimeInfo }>();
 const section = ref<SettingsSection | null>(null); const dirty = ref(false); const activity = ref(false);
 const shell = ref<InstanceType<typeof SettingsShell> | null>(null); const focusedReminderId = ref<string | null>(null);
 const remindersPanel = ref<InstanceType<typeof RemindersPanel> | null>(null); const placesPanel = ref<InstanceType<typeof PlacesPanel> | null>(null);
-const pendingActions = ref(0); const actionSettings = ref<NotificationSettings | null>(null);
+const actionSettings = ref<NotificationSettings | null>(null);
+const pendingActions = computed(() => actionSettings.value?.pendingActions ?? 0);
+const actionStatusUnavailable = computed(() => actionDiagnosticsUnavailable(actionSettings.value));
 const identity = ref<IdentityStatus | null>(null); const updates = useUpdates(() => checkUpdate(props.runtime.platform));
 let stopReminderListener: UnlistenFn | null = null; let disposed = false;
 let lastIdentityCheck = 0; let foregroundTimer: ReturnType<typeof setTimeout> | null = null;
 async function refreshIdentity() { try { identity.value = await nodeServices.status(); lastIdentityCheck = Date.now(); } catch { identity.value = { state: 'pairingError', node: null, error: 'Armazenamento seguro indisponível. Abra Dispositivos para verificar.' }; } }
-async function refreshPendingActions() { try {actionSettings.value = await notificationServices.settings(); pendingActions.value = actionSettings.value.pendingActions ?? 0;} catch { /* Keep the last local outbox count. */ } }
+async function refreshPendingActions() { try { actionSettings.value = mergeActionSettings(actionSettings.value, await notificationServices.settings()); } catch { actionSettings.value = mergeActionSettings(actionSettings.value); } }
 function navigate(value: SettingsSection) { dirty.value = false; section.value = value; }
 function close() { section.value = null; dirty.value = false; void refreshIdentity(); void refreshPendingActions(); }
 function foreground() {
@@ -44,7 +46,7 @@ onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEv
 <template>
   <ChatView :app-version="runtime.version" @activity-changed="activity = $event">
     <template #global-navigation><SettingsTrigger @click="navigate('devices')" /></template>
-    <template #notice><div v-if="pendingActions" class="native-node-notice" role="status">{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.<button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>Atualização da Aegis{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
+    <template #notice><div v-if="pendingActions || actionStatusUnavailable" class="native-node-notice" role="status"><template v-if="actionStatusUnavailable">Consulta das ações locais temporariamente indisponível. Não foi possível confirmar as pendências.<template v-if="pendingActions"> Última leitura: {{ pendingActionLabel(pendingActions) }}.</template></template><template v-else>{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.</template><button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>Atualização da Aegis{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>
   <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
     <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />

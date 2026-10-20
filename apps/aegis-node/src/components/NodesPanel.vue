@@ -4,6 +4,7 @@ import { nodeServices, notificationDiagnosticCodes, notificationServices, transp
 import { locationApi, placesApi, type LocationSettings, type Place, type NodeLocation } from '../services/domains';
 import { useNodes } from '../composables/useNodes';
 import ReminderActionSync from './ReminderActionSync.vue';
+import { mergeActionSettings } from '../services/reminderActions';
 import type { Platform } from '../services/runtime';
 const props = defineProps<{ platform: Platform }>();
 const emit = defineEmits<{ dirty: [value: boolean] }>();
@@ -21,7 +22,7 @@ const notificationNodeId = ref<string | null>(null);
 const notificationResult = ref('');
 const notificationDiagnostic = ref('');
 const notificationSending = ref(false);
-const settings = ref<NotificationSettings>({ granted: false, pushConfigured: false, autostart: false, pendingActions: 0 });
+const settings = ref<NotificationSettings>({ granted: false, pushConfigured: false, autostart: false });
 const settingsBusy = ref(false);
 const transport = ref<TransportStatus>({ transportState: 'offline', lastError: null });
 const locations = ref<LocationSettings | null>(null);
@@ -33,7 +34,7 @@ const transportLabels: Record<string, string> = { online: 'Sessão conectada', o
 watch(() => !!editingId.value || !!profile.value || !!code.value || !!priorityId.value || (!['paired','disabled'].includes(identity.value.state) && name.value !== (props.platform === 'android' ? 'Meu celular' : 'Meu PC')), value => emit('dirty', value));
 onMounted(() => window.addEventListener('aegis-reminder-actions-changed', loadSettings));
 onUnmounted(() => window.removeEventListener('aegis-reminder-actions-changed', loadSettings));
-async function loadSettings() { try { const value = await notificationServices.settings(); settings.value = {...value,pendingActions:value.pendingActions ?? 0}; } catch { /* Native settings may be unavailable. */ } }
+async function loadSettings() { try { settings.value = mergeActionSettings(settings.value, await notificationServices.settings()); } catch { settings.value = mergeActionSettings(settings.value); } }
 async function loadLocationSettings() {
   try { locations.value = await locationApi<LocationSettings>('settings'); } catch { locations.value = null; }
   try { const result = await placesApi<Place[] | { places: Place[] }>('list'); places.value = Array.isArray(result) ? result : result.places; } catch { places.value = []; }
