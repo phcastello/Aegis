@@ -143,7 +143,9 @@ try {
   };
   page = await reloadReadyWindowsPage(measurementPage, () => appExit === undefined);
   const runtime = await invoke('runtime_info'); assert.equal(runtime.platform, 'windows'); assert.equal(runtime.backendUrl, origin);
-  const expectedVersion = label === 'before' ? '0.7.0-unstable.11' : JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
+  const baselineVersion = process.env.AEGIS_IDLE_BASELINE_VERSION ?? '0.7.0-unstable.11';
+  assert.ok(['0.7.0-unstable.11', '0.7.0-unstable.19'].includes(baselineVersion), 'Only immutable audited baselines are supported.');
+  const expectedVersion = label === 'before' ? baselineVersion : JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
   assert.equal(runtime.version, expectedVersion, 'The immutable accepted baseline and candidate must not accidentally run the same executable.');
   // Previous isolated steps may have left a revoked vault record. Native status
   // authenticates and discards any record from the preceding disposable API.
@@ -240,10 +242,10 @@ try {
     assert.ok(!sample.renderer.after.ipcObservation.fetchFailed || sample.renderer.after.ipcObservation.bridgeWrapped, 'IPC fallback must remain observable; missing instrumentation is not zero polling.');
     assert.equal(sample.nativeTransportState, 'online', `${sample.state}: a quiet but disconnected app is not a valid idle-delivery baseline.`);
     assert.ok(Number.isFinite(sample.rendererTaskSeconds), 'Missing renderer CPU metrics cannot be reported as zero consumption.');
-    if(label==='before'&&sample.state==='devices_open')assert.ok((sample.renderer.after.ipc.node_list??0)>0,'The accepted visible panel must expose its real polling to the IPC observer.');
+    if(label==='before'&&baselineVersion==='0.7.0-unstable.11'&&sample.state==='devices_open')assert.ok((sample.renderer.after.ipc.node_list??0)>0,'The accepted visible panel must expose its real polling to the IPC observer.');
     assert.ok((sample.fixtureCounters.node_transport_heartbeats_total ?? 0) > 0, `${sample.state}: the real negotiated channel must remain healthy and instrumented.`);
   }
-  if (label === 'after') for (const sample of states) {
+  if (label === 'after' || baselineVersion === '0.7.0-unstable.19') for (const sample of states) {
     if (sample.state !== 'devices_open') assert.equal(sample.renderer.after.ipc.node_list ?? 0, 0, `${sample.state}: closed settings must not poll the device inventory.`);
     assert.equal(sample.renderer.after.runningAnimations.filter(animation => animation.iterations === 'Infinity').length, 0, `${sample.state}: quiet UI must not animate indefinitely.`);
     assert.ok((sample.fixtureCounters.node_transport_connections_total ?? 0) <= 1, `${sample.state}: stable networking must not cause a reconnect loop.`);

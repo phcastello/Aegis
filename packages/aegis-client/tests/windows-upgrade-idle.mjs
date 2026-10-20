@@ -70,7 +70,7 @@ export async function installedSmoke(executable, version, profile, sentinel, fir
 }
 async function runIdle(executable, label, output, plan, bootstrap, expectedNodeId) {
   const child = spawn(process.execPath, [join(repository, 'packages/aegis-client/tests/windows-idle.mjs'), executable, label, output, '600'], { stdio: 'inherit', env: { ...process.env,
-    AEGIS_IDLE_EXTERNAL_FIXTURE: '1', AEGIS_IDLE_BOOTSTRAP_FILE: bootstrap,
+    AEGIS_IDLE_EXTERNAL_FIXTURE: '1', AEGIS_IDLE_BOOTSTRAP_FILE: bootstrap, AEGIS_IDLE_BASELINE_VERSION: acceptedVersion,
     AEGIS_IDLE_KEEP_IDENTITY: label === 'before' ? '1' : '0', AEGIS_IDLE_REUSE_IDENTITY: label === 'after' ? '1' : '0',
     AEGIS_IDLE_EXPECT_NODE_ID: expectedNodeId ?? '', AEGIS_IDLE_WEBVIEW_PROFILE: plan.profile,
     AEGIS_IDLE_STORAGE_VALUE: plan.sentinel, AEGIS_IDLE_UPGRADE_VERIFY: label === 'after' ? '1' : '0' } });
