@@ -29,3 +29,17 @@ test('unstable metadata binds the new preview signature and increasing Android c
   assert.ok(result.platforms['windows-x86_64'].url.includes('/node-v0.7.0-unstable.11/'));
   assert.throws(() => metadata('0.7.0-unstable.12', signature, '2026-10-07T00:00:00Z'), /exact version/);
 });
+
+
+test('stable metadata upgrades unstable.19 with the reserved versionCode and signed immutable URLs', () => {
+  const signature = Buffer.from(Buffer.from(signed, 'base64').toString('utf8').replace('0.7.0-stage.2', '0.7.0')).toString('base64');
+  const result = metadata('0.7.0', signature, '2026-10-20T00:00:00Z');
+  assert.equal(result.version, '0.7.0');
+  assert.equal(result.android.aarch64.versionCode, 7000999);
+  assert.equal(result.platforms['windows-x86_64'].signature, signature);
+  assert.equal(result.android.aarch64.url, 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Android-arm64.apk');
+  assert.equal(result.platforms['windows-x86_64'].url, 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Windows-x86_64-Setup.exe');
+  assert.match(result.notes, /Aegis v0\.7\.0 — It's Not Stalking\. It's a Feature\./);
+  assert.match(result.notes, /releases\/tag\/v0\.7\.0/);
+  assert.throws(() => metadata('0.7.0-unstable.19', signature, '2026-10-20T00:00:00Z'), /exact version/);
+});

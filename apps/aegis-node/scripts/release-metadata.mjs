@@ -15,7 +15,9 @@ export function metadata(version, signature, date) {
   if (Number.isNaN(Date.parse(date))) throw new Error('Invalid release date.');
   const base = `https://github.com/phcastello/Aegis/releases/download/node-v${version}/`;
   return {
-    version, notes: `Aegis ${version}`, pub_date: new Date(date).toISOString(),
+    version, notes: version === '0.7.0'
+      ? `Aegis v0.7.0 — It's Not Stalking. It's a Feature.\nhttps://github.com/phcastello/Aegis/releases/tag/v0.7.0`
+      : `Aegis ${version}`, pub_date: new Date(date).toISOString(),
     platforms: {
       'windows-x86_64': { url: base + 'Aegis-Windows-x86_64-Setup.exe', signature: signature.trim() }
     },

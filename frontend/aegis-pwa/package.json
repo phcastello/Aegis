@@ -1,7 +1,7 @@
 {
   "name": "aegis-pwa",
   "private": true,
-  "version": "0.7.0-unstable.19",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -11,14 +11,14 @@
     "test": "node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs"
   },
   "dependencies": {
+    "@aegis/client": "file:../../packages/aegis-client",
     "dompurify": "^3.4.8",
-    "markdown-it": "^14.2.0",
+    "markdown-it": "14.3.3",
     "vue": "^3.5.22",
     "workbox-background-sync": "^7.4.1",
     "workbox-core": "^7.4.1",
     "workbox-precaching": "^7.4.1",
-    "workbox-routing": "^7.4.1",
-    "@aegis/client": "file:../../packages/aegis-client"
+    "workbox-routing": "^7.4.1"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

@@ -1,74 +1,76 @@
-# Aegis v0.7.0 — preview integrada
+# Aegis v0.7.0 — "It's Not Stalking. It's a Feature."
 
-Aegis é uma assistente pessoal com modelos acessados por API. A candidata revisada **0.7.0-unstable.16** é destinada a **Android ARM64 e Windows x86_64**, mantendo chat, voz, memória, histórico e integrações. A versão estável continua sendo v0.6.1 até o aceite final do proprietário; [checklist, evidências e limitações da conclusão v0.7.0](docs/v0.7.0-completion.md).
+Aegis é uma assistente pessoal com chat, voz, memória, histórico e integrações com Gmail e Google Calendar, usando modelos acessados por API. A **v0.7.0 estável** leva essa experiência a aplicativos nativos para **Android ARM64 e Windows x86_64**, com Nodes pareados, notificações, lembretes recorrentes, lugares e regras de chegada e saída. O Web Client/PWA continua disponível.
 
-Stages 01–07 foram aceitos pelo proprietário, incluindo cerca de uma semana de uso cotidiano do Stage 07 sem lembretes perdidos relatados. Isso não comprova todos os casos extremos físicos. A conclusão acrescenta séries/ocorrências, entrega por dispositivo, OK/adiamento, lugares contextuais e execução geográfica nativa Android. O Web Client/PWA continua disponível; esta versão não distribui aplicativos Linux, iOS ou macOS.
+[Release oficial e changelog completo](https://github.com/phcastello/Aegis/releases/tag/v0.7.0) · [Distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0) · [Notas da v0.7.0](docs/v0.7.0-release-notes.md) · [Verificação técnica do lançamento](docs/v0.7.0-release-verification.md)
+
+A versão reúne a fundação nativa, a arquitetura de Nodes e a conclusão integrada dos Stages 01–12. Os [relatórios dos Stages 01–07](docs/v0.7.0-stage01-tauri-foundation.md) e o [registro de conclusão](docs/v0.7.0-completion.md) preservam contratos, decisões, evidências e limites das previews. Esta versão não distribui aplicativos Linux, iOS ou macOS.
 
 ## Download Aegis
 
-A unstable.13 não foi aprovada. A revisão corrige R01–R03/R05–R06 e melhora descoberta/diagnóstico do updater (R04); a causa física anterior continua desconhecida. O proprietário confirmou que o fluxo do updater **para unstable.14 funcionou no aparelho**. A preservação de NodeId, credential, dados, lugares, regras e permissões não foi informada; essas verificações e o campo integrado continuam pendentes. **Não desinstale para atualizar.**
-
-**Candidata integrada: 0.7.0-unstable.16**, para teste e aceite final do proprietário. [Notas e arquivos oficiais da candidata](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0-unstable.16). A v0.7.0 estável ainda depende desse aceite.
-
-A 16 corrige a confirmação inicial de presença, acrescenta diagnóstico/verificação local e reorganiza Lugares e os editores de Lembretes. Círculos de 65 m com precisão de 100 m continuam incertos; uma área maior exige escolha explícita e pode atrasar o lembrete de saída.
-
 | Plataforma | Download oficial |
 | --- | --- |
-| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.16/Aegis-Android-arm64.apk) |
-| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.16/Aegis-Windows-x86_64-Setup.exe) |
+| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Android-arm64.apk) |
+| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Windows-x86_64-Setup.exe) |
 
-O Web Client/PWA permanece disponível. Esta versão não distribui aplicativos Linux, iOS ou macOS. Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente.
+Os instaladores e seus hashes SHA-256 estão na [distribuição nativa oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0). Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente. **Instale a atualização sobre a versão existente; não desinstale para atualizar.**
 
 ### Android
 
 1. No celular, baixe o APK oficial acima.
 2. Autorize a instalação pelo navegador quando o Android solicitar e confirme no instalador do sistema.
-3. Abra a Aegis. Se já usa uma versão release, instale a atualização por cima: **não desinstale a Aegis para atualizar**.
+3. Abra a Aegis. Se já usa uma versão release, instale a atualização por cima, preservando os dados do aplicativo.
 
-A distribuição Android é por APK, fora da Play Store. Use **Configurações → Atualizações → Verificar atualizações**; o aviso no chat abre essa seção, que concentra download/instalação e Agora não. Sobre exibe versão e informações. A consulta volta a ocorrer por abertura/retorno ao app após intervalo limitado, sem polling periódico; o resultado, data e código seguro de falha ficam em Atualizações. Os novos APKs desse fluxo ficam no cache privado da Aegis, são verificados por pacote, versão e certificado e seguem para confirmação no instalador do Android. O updater oficial do Tauri não suporta Android; esse caminho usa o adaptador nativo da Aegis.
+A distribuição Android é por APK, fora da Play Store. Use **Configurações → Atualizações → Verificar atualizações**; o aviso no chat abre essa seção, que concentra download, instalação e diagnóstico de falhas. Sobre exibe a versão. A consulta também ocorre ao abrir ou retornar ao app, com intervalo limitado e sem polling periódico. Falha de rede é apresentada como erro de consulta.
 
-Na 15, o aviso mobile usa título curto, versão secundária e as ações juntas abaixo do texto, empilhando quando necessário. O aviso da 14 oferecendo a 15 ainda usa o layout antigo; o novo layout passa a valer após instalar a 15.
+O updater nativo da Aegis baixa para o cache privado, verifica pacote, versão e certificado e solicita confirmação no instalador Android. A v0.7.0 usa `versionName = 0.7.0` e `versionCode = 7000999`, posterior ao `7000019` da preview `.19`. O mesmo pacote e certificado permitem a atualização normal preservando identidade do Node, dados e configurações. O feed `node-preview/latest.json` continua servindo as instalações já distribuídas; seus downloads apontam para a release estável imutável.
 
-**Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK `unstable.16` oficial e instale sobre a release existente uma vez, sem desinstalar. Pacote, certificado de distribuição e identidade do Node permanecem os mesmos. Previews seguintes usam `0.7.0-unstable.N`, independentemente dos Stages. O versionCode da candidata é 7000016; o estável 0.7.0 reserva 7000999.
+**Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK estável oficial e instale sobre a release existente uma vez, sem desinstalar. Previews `unstable.N`, incluindo `.19`, reconhecem a versão estável pelo fluxo de atualização existente. APKs debug antigos podem usar outro certificado e precisam de uma migração específica; não apague dados para contornar um conflito de assinatura.
 
-APKs debug antigos podem usar outro certificado e precisam de uma migração específica; não apague dados para contornar um conflito de assinatura. APKs baixados anteriormente pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos. Você pode removê-los manualmente, se desejar.
+Geofencing exige Google Play Services, serviços de localização e permissões de localização precisa e em background. Notificações também dependem da permissão correspondente. Recusar localização mantém chat e lembretes temporais disponíveis. Não é necessário desativar a economia de bateria para habilitar a arquitetura híbrida, mas Android e fabricantes podem atrasar ou limitar a execução.
+
+APKs baixados anteriormente pelo navegador continuam nos Downloads: a Aegis não varre nem apaga esses arquivos. Você pode removê-los manualmente.
 
 ### Windows
 
 1. Baixe e execute o instalador oficial acima.
-2. Instale sobre a versão atual e abra a Aegis. A atualização normal preserva o cofre nativo e a identidade do Node.
-3. Nas próximas atualizações, escolha Baixar atualização e depois confirme Instalar e reiniciar quando seu trabalho terminar. A instalação não acontece silenciosamente.
+2. Instale sobre a versão atual e abra a Aegis. A atualização normal preserva o cofre nativo, as credenciais, o perfil local e a identidade do Node.
+3. Nas próximas atualizações, escolha Baixar atualização e confirme Instalar e reiniciar quando seu trabalho terminar.
 
-O instalador não possui certificado comercial de editor Windows; o SmartScreen pode informar editor desconhecido. Confira a origem na release deste repositório e mantenha as proteções do Windows ativadas. A assinatura de atualização do Tauri é uma proteção separada do certificado de editor Windows.
+A assinatura do updater é verificada com a chave pública já distribuída. O instalador não possui certificado comercial de editor Windows; o SmartScreen pode informar editor desconhecido. Confira a origem na release deste repositório. A assinatura do updater e o certificado de editor Windows são mecanismos diferentes.
 
-### Aceite ainda pendente
+### Nodes e pareamento
 
-O proprietário confirmou o fluxo de atualização Android para unstable.14 no hardware de uso. Permanecem pendentes as verificações detalhadas de preservação de identidade/dados e o único roteiro integrado de campo das geofences Android. CI, emulador e trajetórias sintéticas validam os caminhos implementados; não comprovam precisão ou latência física em casa/campus. [Checklist e limitações da candidata](docs/v0.7.0-completion.md).
-
-### Pair this installation as a Node
+Cada instalação pareada é um **Node**, com identidade persistente, nome, capacidades e estado de disponibilidade. Comunicação autenticada, reconexão e seleção de destinos permitem executar ações no dispositivo elegível. Credenciais permanentes ficam no armazenamento nativo; o chat não precisa recebê-las.
 
 Abra **Configurações → Dispositivos**, escolha o nome e informe um código temporário. Um dispositivo pareado pode gerar um código em **Adicionar dispositivo**. O chat continua disponível sem pareamento. Desativar é reversível; Remover invalida a identidade e retira o cadastro operacional, preservando o histórico dos lembretes. Um dispositivo removido precisa de novo pareamento.
 
-For the first device (or recovery after losing the last active Node), the server administrator generates a one-time code locally after deploying the Stage 03 backend and its migration:
+Para o primeiro dispositivo ou recuperação após perder o último Node ativo, o administrador gera um código de uso único localmente, com o backend e as migrations correspondentes instalados:
 
 ```bash
 docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll migrate
 docker compose exec -T aegis-api dotnet node-admin/Aegis.NodeAdmin.dll pairing-code
 ```
 
-O código expira após dez minutos. Use-o somente no dispositivo pretendido e não o inclua em logs compartilhados. A identidade sobrevive a reinícios e atualizações normais. Desativar o celular também pausa suas regras geográficas. Depois de reativá-lo por outro dispositivo habilitado, abra a Aegis no celular para reconectar e retome explicitamente as regras em Lembretes. Em aparelho offline, a pausa fica pendente de sincronização ou expiração local. O [relatório do Stage 03](docs/v0.7.0-stage03-node-identity-pairing.md) documenta o bootstrap e a recuperação originais.
+O código expira após dez minutos. Use-o somente no dispositivo pretendido e não o inclua em logs compartilhados. A identidade sobrevive a reinícios e atualizações normais. Desativar o celular também pausa suas regras geográficas. Depois de reativá-lo por outro dispositivo habilitado, abra a Aegis no celular para reconectar e retome explicitamente as regras em Lembretes. Em aparelho offline, a pausa fica pendente de sincronização ou expiração local. O [relatório do Stage 03](docs/v0.7.0-stage03-node-identity-pairing.md) documenta bootstrap e recuperação.
 
 ### Lembretes e lugares
 
-Lembretes pessoais usam **todos os dispositivos elegíveis** por padrão; a opção de destino único mantém a prioridade configurada. Cada destinatário possui seu resultado de entrega. Sessão conhecida ou token FCM não prova que o aparelho está acordado, nem que o usuário leu. OK reconhece somente a ocorrência; Adiar muda somente aquela apresentação, preservando a próxima data da série. As ações são globais e cópias offline são reconciliadas quando voltam. Sem rede, a ação fica pendente: não há promessa de adiamento pontual antes da confirmação.
+Lembretes pessoais chegam às notificações nativas de **todos os dispositivos elegíveis** por padrão; a opção de destino único usa a prioridade configurada. Windows recebe pelo canal nativo; Android também recebe em background por Firebase Cloud Messaging. Cada destinatário possui seu resultado de entrega. Sessão conhecida ou token FCM não comprova que o aparelho está acordado ou que o usuário leu.
 
-As ações nativas e a retirada automática de cópias exigem clientes com as novas capabilities de lembretes. Um OK reconhecido pelo servidor encerra novas tentativas globalmente; uma cópia em cliente antigo sem suporte à retirada pode permanecer até ser dispensada manualmente.
+Séries diárias, semanais e mensais usam horário local e timezone IANA, com intervalos, dias selecionados e encerramento. Pausar, retomar ou pular a próxima ocorrência não produz uma coleção de avisos vencidos. **OK** reconhece a ocorrência; **Adiar** muda somente aquela apresentação, preservando o calendário da série. As ações são globais e cópias offline são reconciliadas quando voltam. Sem rede, a ação fica pendente; não há promessa de adiamento pontual antes da confirmação. Clientes antigos sem suporte à retirada podem conservar uma cópia até a dispensa manual.
 
-Séries diárias, semanais e mensais usam horário local e timezone IANA, com intervalo, dias selecionados e encerramento. Dia 31 pula meses sem esse dia; último dia é uma regra própria. Pausa/retomada não produz uma coleção de avisos vencidos. A janela de entrega temporal é de dez minutos; eventos geográficos antigos não geram distribuição após cinco minutos.
+Em **Lugares**, confirme a posição e ajuste um ou vários círculos no mapa: a união define a área real, conservando sobreposições e lacunas. Cômodos descrevem o contexto fixo de Nodes; GPS não identifica entrada em cômodos. Escolha explicitamente o celular que informa a posição pessoal. Apelidos como “casa” podem representar várias residências e usar contexto recente desse celular; PC/RDP não muda a posição do usuário.
 
-Em Lugares, confirme o ponto e ajuste um ou vários círculos no mapa. Cômodos servem à localização fixa de Nodes e herdam contexto da propriedade; GPS não identifica entrada em cômodos. Escolha explicitamente o celular que informa a posição pessoal. Apelidos como “casa” podem representar várias residências e são resolvidos por contexto recente do celular; PC/RDP não muda a posição do usuário. Cada lembrete criado fixa seu lugar.
+O geofencing híbrido Android combina eventos nativos das regiões com aquisições temporárias de localização. Uma área de proximidade aprovada separadamente pode iniciar uma verificação limitada a quatro minutos e meio e nove pedidos; ela não amplia o lugar real nem conta como chegada. Saída é avaliada contra a área real. Não há GPS permanentemente ativo nem acompanhamento de cada movimento em tempo real.
 
-Geofences Android dependem do Google Play Services, dos serviços de localização e das permissões disponíveis. Precisam de localização em uso e, ao habilitar monitoramento, permissão de background. Recusar localização mantém chat e lembretes temporais. **Salvo** e **ativo no celular** são estados distintos. O Android pode notificar com o backend indisponível, usando a definição sincronizada; detecção depende dos serviços nativos, permissões e condições de localização. Force Stop, localização desligada ou falta total de conectividade podem impedir eventos. Uma regra offline tem validade renovável de até sete dias; cancelamento/remoção não é instantâneo em aparelho offline. O teste de campo integrado permanece no checklist.
+**Salvo** e **ativo no celular** são estados distintos. O Android pode notificar com o backend indisponível usando a definição sincronizada e reconciliar depois. Registro, atualização e reboot não contam como cruzamento de área. Force Stop, localização desligada ou dependências indisponíveis podem impedir eventos. Uma regra offline tem validade renovável de até sete dias; cancelamento e remoção não são instantâneos em aparelho offline.
+
+### Aceite físico e limitações
+
+O proprietário aprovou um percurso físico específico da **preview `.19`, com economia de bateria ativada**: a saída da faculdade foi identificada e dois lembretes chegaram aproximadamente um quarteirão depois; passar perto de casa, aproximar-se da porta e circular nas proximidades não antecipou a chegada; a entrada efetiva foi seguida de duas notificações. Esse relato apoia o aceite da arquitetura híbrida, sem garantir precisão, latência ou comportamento em qualquer fabricante Android. As medições e os testes das previews continuam atribuídos aos respectivos binários no [registro de conclusão](docs/v0.7.0-completion.md).
+
+Foi relatada falha de captura de microfone em um computador Windows; a correção não foi comprovada. Uma gravação codificada silenciosa ainda pode chegar ao STT. O percurso geográfico aprovado não substitui testes físicos de voz, bateria prolongada, cancelamento ou reconciliação em todas as condições. Consulte as [limitações da release](docs/v0.7.0-release-notes.md#known-limitations) e as [verificações finais de distribuição e atualização](docs/v0.7.0-release-verification.md).
 
 ### Mapas, busca e privacidade
 
@@ -98,6 +100,7 @@ Version history:
 - v0.5.1 — criação de séries recorrentes reais no Google Calendar.
 - v0.6.0 — "Yeah, I know." — memória canônica, extração automática, histórico temporal, projeções semântica/relacional e recuperação híbrida.
 - v0.6.1 — "Yeah, I know." — presença conversacional, busca casual, recuperação de integrações e histórico completo no chat.
+- v0.7.0 — "It's Not Stalking. It's a Feature." — aplicativos Android/Windows, Nodes, notificações e lembretes recorrentes, lugares e geofencing híbrido, atualização assinada e recuperação nativa.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 
@@ -507,7 +510,7 @@ The PWA prefers `audio/webm;codecs=opus`, then `audio/webm`, and uses an MP4/AAC
 
 ## Histórico: reminders e Web Push da v0.5.0 — "Knock Knock"
 
-Esta seção registra os contratos e testes da v0.5.0. Recorrência, adiamento, entrega nativa e retirada de cópias foram ampliados na candidata v0.7.0; consulte [Lembretes e lugares](#lembretes-e-lugares) e o [checklist atual](docs/v0.7.0-completion.md) para o comportamento desta versão.
+Esta seção registra os contratos e testes da v0.5.0. Recorrência, adiamento, entrega nativa e retirada de cópias foram ampliados na v0.7.0 estável; consulte [Lembretes e lugares](#lembretes-e-lugares) e o [checklist atual](docs/v0.7.0-completion.md) para o comportamento desta versão.
 
 Reminders are Aegis entities, independent of Google Calendar and of the conversation that created them. Chat supports `reminder_create`, `reminder_list`, `reminder_update` and `reminder_cancel`. Explicit requests execute immediately; no second-turn Google mutation confirmation is used. Mentioning a deadline or casually wanting to remember something does not authorize creation. Updates/cancellation require a real reference observed in the same conversation, valid for 30 minutes. The latest list's order is preserved for requests such as “cancel the second”. Lists return at most 50 reminders and expose `hasMore`; optional time bounds use an exclusive upper bound. Text is limited to 600 characters to keep encrypted push payloads bounded.
 
@@ -571,4 +574,4 @@ Only the scenarios with recorded evidence above are marked as physically validat
 
 Web Push cannot guarantee exactly-once delivery: a crash after external acceptance but before committing `AcceptedAt` remains ambiguous. Accepted push does not prove visual receipt, and absence of `AcknowledgedAt` does not mean the user ignored the notification. Already displayed notifications on another device are not removed remotely. Without local management credentials, an old subscription may not be identifiable immediately; permission changes while the PWA is closed are reconciled when the app can next observe them or the push service rejects the subscription.
 
-O escopo original da v0.5.0 excluía recorrência, adiamento e condições geográficas, agora tratados pela candidata v0.7.0. Permanecem fora desta entrega aprendizado comportamental, escalonamento autônomo e Automation Engine genérico. Recorrência de eventos do Google Calendar continua independente dos lembretes da Aegis.
+O escopo original da v0.5.0 excluía recorrência, adiamento e condições geográficas, agora tratados pela v0.7.0 estável. Permanecem fora desta entrega aprendizado comportamental, escalonamento autônomo e Automation Engine genérico. Recorrência de eventos do Google Calendar continua independente dos lembretes da Aegis.

@@ -168,6 +168,7 @@ mod tests {
             "0.7.0-unstable.12",
             "0.7.0-unstable.13",
             "0.7.0-unstable.14",
+            "0.7.0-unstable.19",
             "0.7.0",
         ];
         for pair in versions.windows(2) {
@@ -190,6 +191,15 @@ mod tests {
             .unwrap()
             .is_none());
         }
+    }
+    #[test]
+    fn stable_upgrade_from_preview19_and_installed_stable_is_current() {
+        let url = format!("{RELEASE_ROOT}0.7.0/Aegis-Android-arm64.apk");
+        let stable = manifest("0.7.0", 7000999, &url);
+        let update = interpret(&stable, "0.7.0-unstable.19").unwrap().unwrap();
+        assert_eq!(update.version_code, 7000999);
+        assert_eq!(update.version, "0.7.0");
+        assert!(interpret(&stable, "0.7.0").unwrap().is_none());
     }
     #[test]
     fn rejects_unallocated_versions() {
@@ -215,6 +225,18 @@ mod desktop_tests {
             "platforms": { "windows-x86_64": { "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.11/Aegis-Windows-x86_64-Setup.exe", "signature": "fixture" } }
         })).unwrap();
         assert!(release.version > semver::Version::parse("0.7.0-stage.10").unwrap());
+    }
+    #[test]
+    fn official_desktop_updater_accepts_stable_after_preview19_and_rejects_downgrade() {
+        let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(serde_json::json!({
+            "version": "0.7.0",
+            "platforms": { "windows-x86_64": { "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Windows-x86_64-Setup.exe", "signature": "fixture" } }
+        })).unwrap();
+        let preview = semver::Version::parse("0.7.0-unstable.19").unwrap();
+        let installed = semver::Version::parse("0.7.0").unwrap();
+        assert!(release.version > preview);
+        assert_eq!(release.version, installed);
+        assert!(preview < installed);
     }
     #[test]
     fn official_updater_accepts_manifest_with_separate_android_extension() {

@@ -33,13 +33,15 @@ export function synchronize(write = false) {
     const manifestPath = new URL('package.json', directory), lockPath = new URL('package-lock.json', directory);
     return { manifestPath, lockPath, manifest: JSON.parse(readFileSync(manifestPath, 'utf8')), lock: JSON.parse(readFileSync(lockPath, 'utf8')) };
   });
-  const valid = config.version === '../package.json' && config.bundle.android.versionCode === versionCode &&
+  const linkedLocks = [npmLock, ...companions.map(({ lock }) => lock)].filter(lock => lock.packages['../../packages/aegis-client']);
+  const valid = linkedLocks.every(lock => lock.packages['../../packages/aegis-client'].version === version) && config.version === '../package.json' && config.bundle.android.versionCode === versionCode &&
     cargo === nextCargo && cargoLock === nextCargoLock && npmLock.version === version && npmLock.packages[''].version === version &&
     companions.every(({ manifest, lock }) => manifest.version === version && lock.version === version && lock.packages[''].version === version);
   if (write) {
     config.version = '../package.json';
     config.bundle.android = { ...config.bundle.android, versionCode };
     npmLock.version = npmLock.packages[''].version = version;
+    for (const lock of linkedLocks) lock.packages['../../packages/aegis-client'].version = version;
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
     writeFileSync(cargoPath, nextCargo);
     writeFileSync(cargoLockPath, nextCargoLock);

@@ -14,9 +14,9 @@ import { reloadReadyWindowsPage } from './windows-webview-ready.mjs';
 
 if (process.platform !== 'win32') throw Error('Requires an isolated real Windows runner.');
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
-const acceptedVersion = '0.7.0-unstable.11';
-const acceptedInstallerUrl = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.11/Aegis-Windows-x86_64-Setup.exe';
-const acceptedInstallerSha256 = 'd1edc78d8ffda6aaae86b270413099805164ec8c9256d737d7ad24349e3c56a2';
+const acceptedVersion = '0.7.0-unstable.19';
+const acceptedInstallerUrl = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.19/Aegis-Windows-x86_64-Setup.exe';
+const acceptedInstallerSha256 = '3e62a0359a4865e3bad7b03df8745a33641f5eb6b50919f50e4a55e1503e748b';
 const candidateVersion = JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
 const origin = 'http://127.0.0.1:18104';
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -26,19 +26,19 @@ async function waitUntil(action, milliseconds = 120000) {
   const deadline = Date.now() + milliseconds;
   while (!(await action())) { if (Date.now() >= deadline) throw Error('Windows upgrade fixture readiness timed out.'); await sleep(150); }
 }
-function install(installer, destination) {
+export function install(installer, destination) {
   // Pass paths as environment values, without interpolating them into shell code.
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     '$ErrorActionPreference="Stop"; $p=Start-Process -FilePath $env:AEGIS_CI_INSTALLER -ArgumentList @("/S", "/D=$env:AEGIS_CI_INSTALL_DESTINATION") -Wait -PassThru; exit $p.ExitCode'],
   { env: { ...process.env, AEGIS_CI_INSTALLER: installer, AEGIS_CI_INSTALL_DESTINATION: destination }, encoding: 'utf8', timeout: 180000 });
   assert.equal(result.status, 0, 'The actual NSIS installer must complete successfully.');
 }
-function installedExecutable(destination) {
+export function installedExecutable(destination) {
   const executables = readdirSync(destination).filter(name => /\.exe$/i.test(name) && !/uninstall/i.test(name));
   assert.equal(executables.length, 1, 'The installed executable must be unambiguous.');
   return join(destination, executables[0]);
 }
-async function installedSmoke(executable, version, profile, sentinel, first) {
+export async function installedSmoke(executable, version, profile, sentinel, first) {
   const app = spawn(executable, [], { env: { ...process.env,
     // Only this WebView is offline until CDP supplies private API responses. This
     // changes no host file, TLS validation, system proxy or production endpoint.
@@ -89,6 +89,7 @@ async function runIdle(executable, label, output, plan, bootstrap, expectedNodeI
   assert.equal(code, 0, `The ${label} native idle and upgrade checks must pass.`);
   return JSON.parse(readFileSync(output, 'utf8'));
 }
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
 const [mode, ...args] = process.argv.slice(2);
 if (mode === 'install-before') {
   const [candidateDirectoryArgument, destinationArgument, planArgument] = args;
@@ -112,7 +113,7 @@ if (mode === 'install-before') {
   save(planPath, plan);
   assert.ok(process.env.GITHUB_ENV, 'This preparation step is intended for the isolated CI workflow.');
   appendFileSync(process.env.GITHUB_ENV, `AEGIS_INSTALLED_EXE=${executable}\nAEGIS_UPGRADE_PLAN=${planPath}\n`, 'utf8');
-  console.log('Public accepted NSIS digest, actual installation and Windows version 11 smoke PASS; no Node paired to production.');
+  console.log('Public accepted NSIS digest, actual installation and Windows version 19 smoke PASS; no Node paired to production.');
 } else if (mode === 'compare') {
   const [planArgument, beforeArgument, afterArgument, outputArgument] = args;
   assert.ok(planArgument && beforeArgument && afterArgument && outputArgument, 'Usage: compare PLAN.json BEFORE_DEBUG.exe AFTER_DEBUG.exe OUTPUT_DIR');
@@ -137,9 +138,11 @@ if (mode === 'install-before') {
       sameDisposableBackendProcess: true, sameOsVault: 'com.aegis.node.identity.v1 / installation', samePrivateWebViewProfile: true, usesActualAppLocalDataDirectory: true,
       idleSecondsBefore: before.states.reduce((sum, state) => sum + state.durationSeconds, 0), idleSecondsAfter: after.states.reduce((sum, state) => sum + state.durationSeconds, 0),
       limits: ['Actual public accepted NSIS and candidate NSIS are installed sequentially to the same path; their installed runtime versions and the actual app local data directory are checked. The CI runner is isolated; app storage is never broadly deleted.', 'The published runtime keeps its production HTTPS origin and is never paired. Its WebView uses a process-only offline proxy and private CDP API responses.', 'Authentication and NodeId continuity use the immutable accepted and candidate debug executables compiled for one loopback API and in-memory database. No production Node credential is read or written.', 'This does not exercise signed updater feed/download/install, owner data, physical toast interaction or Windows display scaling. Physical upgrade acceptance remains pending.'] });
-    console.log('Actual NSIS 11 -> candidate installation, shared storage, same native NodeId/OS vault/database without a second pairing, and equivalent ten-minute idle windows PASS.');
+    console.log('Actual NSIS 19 -> candidate installation, shared storage, same native NodeId/OS vault/database without a second pairing, and equivalent ten-minute idle windows PASS.');
   } finally {
     if (fixtureExit === undefined) spawnSync('taskkill', ['/PID', String(fixture.pid), '/T', '/F'], { stdio: 'ignore' });
     rmSync(plan.work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 } else throw Error('Choose install-before or compare.');
+
+}

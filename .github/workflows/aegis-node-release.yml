@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing immutable tag, e.g. node-v0.7.0-unstable.11
+        description: Existing immutable tag, e.g. node-v0.7.0 or node-v0.7.0-unstable.19
         required: true
         type: string
 permissions:
@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - name: Validate tag and required signing secrets
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -47,7 +48,9 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
+          const { releaseKind } = await import('./scripts/publish-release.mjs');
           const version = JSON.parse(readFileSync('package.json')).version;
+          releaseKind(version);
           if (process.env.RELEASE_TAG !== `node-v${version}`) throw new Error('Tag must match package.json: node-v' + version);
           const required = process.env.BUILD_ANDROID === 'true'
             ? ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'FIREBASE_ANDROID_CONFIG_B64']
@@ -55,6 +58,15 @@ jobs:
           const missing = required.filter(name => !process.env[name]);
           if (missing.length) throw new Error('Missing GitHub signing secrets: ' + missing.join(', '));
           JS
+      - name: Verify stable tags identify the same integrated commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ "$RELEASE_TAG" =~ ^node-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            git fetch origin refs/heads/main:refs/remotes/origin/main "refs/tags/${RELEASE_TAG#node-}:refs/tags/${RELEASE_TAG#node-}"
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "${RELEASE_TAG#node-}^{commit}")"
+            git merge-base --is-ancestor HEAD origin/main
+          fi
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: ${{ matrix.android }}
@@ -93,6 +105,17 @@ jobs:
           args: --target x86_64-pc-windows-msvc
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows --signed
+      - if: matrix.android == 'false' && (inputs.tag || github.ref_name) == 'node-v0.7.0'
+        name: Verify signed unstable.19 upgrade preserves installed version and application profile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node ../../packages/aegis-client/tests/windows-release-upgrade.mjs release-assets/Aegis-Windows-x86_64-Setup.exe
+      - if: matrix.android == 'false' && (inputs.tag || github.ref_name) == 'node-v0.7.0'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Windows-release-upgrade-evidence
+          if-no-files-found: error
+          path: artifacts/v0.7.0-completion/windows-release-upgrade.json
       - if: matrix.android == 'true'
         name: Decode private Android keystore without logging credentials
         env:
@@ -145,6 +168,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -194,7 +218,7 @@ jobs:
           cargo run --quiet --manifest-path "$verifier/Cargo.toml" -- \
             "$PWD/release-assets/Aegis-Windows-x86_64-Setup.exe" \
             "$verifier/updater.pub" "$verifier/installer.sig" "$version"
-      - name: Generate deterministic metadata and publish preview releases
+      - name: Generate deterministic metadata and publish immutable native distribution
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
