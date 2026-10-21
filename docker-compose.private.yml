@@ -1,0 +1,6 @@
+# Usar junto de docker-compose.yml, mantendo o mesmo projeto e os volumes existentes.
+# Aplicar migrations pelo NodeAdmin antes de iniciar esta API; veja docs/operacao-privada.md.
+services:
+  aegis-api:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production

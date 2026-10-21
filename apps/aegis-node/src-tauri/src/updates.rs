@@ -47,13 +47,23 @@ fn version_code(version: &semver::Version) -> Result<u32, String> {
     )
 }
 
+// Both platforms use the historical compatibility feed as their stable channel.
+// Filtering here defends new clients; the publisher must also protect old clients.
+pub fn stable_update_eligible(installed: &semver::Version, next: &semver::Version) -> bool {
+    next.pre.is_empty()
+        && next.build.is_empty()
+        && next > installed
+        && matches!((version_code(installed), version_code(next)), (Ok(current), Ok(candidate)) if candidate > current)
+}
+
 pub fn interpret(body: &str, current: &str) -> Result<Option<AndroidUpdate>, String> {
     let manifest: Manifest = serde_json::from_str(body).map_err(|_| "update_metadata_invalid")?;
     let version =
         semver::Version::parse(&manifest.version).map_err(|_| "update_metadata_invalid")?;
     let installed = semver::Version::parse(current).map_err(|_| "update_metadata_invalid")?;
     let next_code = version_code(&version)?;
-    if version <= installed || next_code <= version_code(&installed)? {
+    version_code(&installed)?;
+    if !stable_update_eligible(&installed, &version) {
         return Ok(None);
     }
     let asset = manifest
@@ -107,11 +117,21 @@ pub async fn check(current: &str) -> Result<Option<AndroidUpdate>, String> {
         .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .send()
         .await
-        .map_err(|error| if error.is_timeout() { "update_timeout" } else { "update_feed_unavailable" })?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                "update_timeout"
+            } else {
+                "update_feed_unavailable"
+            }
+        })?;
     // A missing published channel must never be presented as "up to date".
     validate_feed_status(response.status())?;
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "update_feed_unavailable")? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "update_feed_unavailable")?
+    {
         if bytes.len() + chunk.len() > 65536 {
             return Err("update_metadata_invalid".into());
         }
@@ -130,66 +150,57 @@ mod tests {
     }
     #[test]
     fn missing_or_failed_channel_is_never_reported_as_up_to_date() {
-        assert_eq!(validate_feed_status(reqwest::StatusCode::NOT_FOUND).unwrap_err(), "update_feed_missing");
-        assert_eq!(validate_feed_status(reqwest::StatusCode::SERVICE_UNAVAILABLE).unwrap_err(), "update_feed_unavailable");
+        assert_eq!(
+            validate_feed_status(reqwest::StatusCode::NOT_FOUND).unwrap_err(),
+            "update_feed_missing"
+        );
+        assert_eq!(
+            validate_feed_status(reqwest::StatusCode::SERVICE_UNAVAILABLE).unwrap_err(),
+            "update_feed_unavailable"
+        );
         assert!(validate_feed_status(reqwest::StatusCode::OK).is_ok());
     }
     #[test]
-    fn accepts_only_newer_correctly_versioned_official_apk() {
-        let url = format!("{RELEASE_ROOT}0.7.0-stage.3/Aegis-Android-arm64.apk");
-        assert!(
-            interpret(&manifest("0.7.0-stage.3", 7000003, &url), "0.7.0-stage.2")
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            interpret(&manifest("0.7.0-stage.3", 7000003, &url), "0.7.0-stage.3")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            interpret(&manifest("0.7.0-stage.3", 7000003, &url), "0.7.0")
-                .unwrap()
-                .is_none()
-        );
-        assert!(interpret(&manifest("0.7.0-stage.3", 7000004, &url), "0.7.0-stage.2").is_err());
+    fn accepts_only_newer_correctly_versioned_official_stable_apk() {
+        let url = format!("{RELEASE_ROOT}0.7.2/Aegis-Android-arm64.apk");
+        let stable = manifest("0.7.2", 7002999, &url);
+        assert!(interpret(&stable, "0.7.1").unwrap().is_some());
+        assert!(interpret(&stable, "0.7.2-unstable.1").unwrap().is_some());
+        for current in ["0.7.2", "0.7.3", "0.8.0-unstable.1"] {
+            assert!(interpret(&stable, current).unwrap().is_none());
+        }
+        assert!(interpret(&manifest("0.7.2", 7002001, &url), "0.7.1").is_err());
         assert!(interpret(
-            &manifest("0.7.0-stage.3", 7000003, "https://evil.example/app.apk"),
-            "0.7.0-stage.2"
+            &manifest("0.7.2", 7002999, "https://evil.example/app.apk"),
+            "0.7.1"
         )
         .is_err());
-        assert!(interpret("not json", "0.7.0-stage.2").is_err());
+        assert!(interpret("not json", "0.7.1").is_err());
     }
     #[test]
-    fn preview_channel_migration_and_followups_are_newer() {
+    fn stable_feed_never_offers_previews_even_to_installed_previews() {
+        for version in ["0.7.2-unstable.1", "0.7.2-stage.1"] {
+            let parsed = semver::Version::parse(version).unwrap();
+            let url = format!("{RELEASE_ROOT}{version}/Aegis-Android-arm64.apk");
+            let preview = manifest(version, version_code(&parsed).unwrap(), &url);
+            for current in ["0.7.1", "0.7.2-unstable.1", "0.7.0-stage.10"] {
+                assert!(interpret(&preview, current).unwrap().is_none());
+            }
+        }
+    }
+    #[test]
+    fn legacy_preview_allocations_still_parse_for_migration_to_stable() {
         let versions = [
             "0.7.0-stage.10",
             "0.7.0-unstable.11",
-            "0.7.0-unstable.12",
-            "0.7.0-unstable.13",
-            "0.7.0-unstable.14",
             "0.7.0-unstable.19",
             "0.7.0",
         ];
         for pair in versions.windows(2) {
             let installed = semver::Version::parse(pair[0]).unwrap();
             let next = semver::Version::parse(pair[1]).unwrap();
-            assert!(next > installed); // The same comparison used by the official desktop updater.
+            assert!(next > installed);
             assert!(version_code(&next).unwrap() > version_code(&installed).unwrap());
-            let url = format!("{RELEASE_ROOT}{}/Aegis-Android-arm64.apk", pair[1]);
-            assert!(interpret(
-                &manifest(pair[1], version_code(&next).unwrap(), &url),
-                pair[0]
-            )
-            .unwrap()
-            .is_some());
-            let old_url = format!("{RELEASE_ROOT}{}/Aegis-Android-arm64.apk", pair[0]);
-            assert!(interpret(
-                &manifest(pair[0], version_code(&installed).unwrap(), &old_url),
-                pair[1]
-            )
-            .unwrap()
-            .is_none());
         }
     }
     #[test]
@@ -218,6 +229,28 @@ mod tests {
 
 #[cfg(all(test, windows, feature = "native-runtime"))]
 mod desktop_tests {
+    #[test]
+    fn configured_windows_comparator_rejects_preview_and_accepts_stable_promotion() {
+        for (current, next, eligible) in [
+            ("0.7.1", "0.7.2-unstable.1", false),
+            ("0.7.2-unstable.1", "0.7.2", true),
+            ("0.7.1", "0.7.2", true),
+            ("0.7.2", "0.7.2", false),
+            ("0.7.2", "0.7.1", false),
+        ] {
+            let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(serde_json::json!({
+                "version": next,
+                "platforms": { "windows-x86_64": { "url": format!("https://github.com/phcastello/Aegis/releases/download/node-v{next}/Aegis-Windows-x86_64-Setup.exe"), "signature": "fixture" } }
+            })).unwrap();
+            assert_eq!(
+                super::stable_update_eligible(
+                    &semver::Version::parse(current).unwrap(),
+                    &release.version
+                ),
+                eligible
+            );
+        }
+    }
     #[test]
     fn official_desktop_updater_orders_unstable_above_published_stage10() {
         let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(serde_json::json!({

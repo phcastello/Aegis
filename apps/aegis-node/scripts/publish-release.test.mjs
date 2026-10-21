@@ -66,7 +66,7 @@ function fixture(t, version = '0.7.0') {
   return { directory, releases, calls, addRelease, publish, runGh, setFail: value => { fail = value; } };
 }
 
-for (const version of ['0.7.0-unstable.20', '0.7.0', '0.7.1']) {
+for (const version of ['0.7.0', '0.7.1']) {
   test(`${version}: publishes verified immutable assets before advancing feed, without becoming Latest`, t => {
     const f = fixture(t, version);
     if (version === '0.7.1') f.addRelease('node-preview', { version: '0.7.0' });
@@ -122,11 +122,40 @@ test('rejects tag/package mismatch, unsupported legacy channel and absent commit
   assert.equal(f.calls.length, 0);
 });
 
-test('rejects preview after stable without creating or replacing assets', t => {
-  const f = fixture(t, '0.7.0-unstable.20');
-  f.addRelease('node-preview', { version: '0.7.0' });
-  assert.throws(f.publish, /downgrade/);
-  assert.ok(!f.calls.some(args => ['create', 'upload', 'edit'].includes(args[1])));
+test('preview only publishes versioned manual assets and never inspects or mutates the stable feed', t => {
+  const f = fixture(t, '0.7.2-unstable.1');
+  f.addRelease('node-preview', { version: '0.7.1' });
+  const before = f.releases.get('node-preview').files.get('latest.json');
+  f.setFail(args => args.some(arg => arg.includes('/tags/node-preview')) ? { status: 1, stderr: 'feed must not be read' } : null);
+  assert.equal(f.publish().compatibilityFeed, 'unchanged');
+  assert.equal(f.releases.get('node-v0.7.2-unstable.1').draft, false);
+  assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'), before);
+  assert.ok(!f.calls.some(args => args[2] === 'node-preview'));
+});
+
+test('preview does not create an absent compatibility feed', t => {
+  const f = fixture(t, '0.7.2-unstable.1');
+  f.releases.delete('node-preview');
+  f.publish();
+  assert.ok(!f.releases.has('node-preview'));
+});
+
+test('future preview does not block a maintained stable patch', t => {
+  const f = fixture(t, '0.7.2');
+  f.addRelease('node-preview', { version: '0.7.1' });
+  f.addRelease('node-v0.8.0-unstable.1', { version: '0.8.0-unstable.1', prerelease: true });
+  f.publish();
+  assert.equal(JSON.parse(f.releases.get('node-preview').files.get('latest.json')).version, '0.7.2');
+});
+
+test('stable promotion from the corresponding preview advances only verified stable metadata', t => {
+  const f = fixture(t, '0.7.2');
+  f.addRelease('node-preview', { version: '0.7.1' });
+  f.addRelease('node-v0.7.2-unstable.1', { version: '0.7.2-unstable.1' });
+  f.publish();
+  const next = JSON.parse(f.releases.get('node-preview').files.get('latest.json'));
+  assert.equal(next.version, '0.7.2');
+  assert.equal(next.android.aarch64.versionCode, 7002999);
 });
 
 test('rejects a newer published distribution even if feed is stale', t => {
@@ -209,4 +238,46 @@ test('published-only tag lookup discovers newly created and partial drafts throu
   assert.ok(beforePublication.some(args => args[0] === 'api' && args[1].endsWith('/releases?per_page=100')));
   assert.ok(beforePublication.some(args => args[1] === 'download' && args[2] === 'node-v0.7.0'));
   assert.equal(f.calls.filter(args => args[1] === 'create' && args[2] === 'node-v0.7.0').length, 1);
+});
+
+test('interruption after publishing stable assets leaves old feed intact and retry advances it', t => {
+  const f = fixture(t, '0.7.2');
+  f.addRelease('node-preview', { version: '0.7.1' });
+  const before = f.releases.get('node-preview').files.get('latest.json');
+  f.setFail(args => args[1] === 'upload' && args[2] === 'node-preview' ? { status: 1, stderr: 'feed upload interrupted' } : null);
+  assert.throws(f.publish, /feed upload interrupted/);
+  assert.equal(f.releases.get('node-v0.7.2').draft, false);
+  assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'), before);
+  f.setFail(null);
+  f.calls.length = 0;
+  f.publish();
+  assert.ok(!f.calls.some(args => args[2] === 'node-v0.7.2' && ['create', 'upload', 'edit'].includes(args[1])));
+  assert.equal(JSON.parse(f.releases.get('node-preview').files.get('latest.json')).version, '0.7.2');
+});
+
+test('a historical future preview in the compatibility feed does not block a maintained stable patch', t => {
+  const f = fixture(t, '0.7.2');
+  f.addRelease('node-preview', { version: '0.8.0-unstable.1' });
+  f.addRelease('node-v0.8.0-unstable.1', { version: '0.8.0-unstable.1', prerelease: true });
+  f.publish();
+  assert.equal(JSON.parse(f.releases.get('node-preview').files.get('latest.json')).version, '0.7.2');
+});
+
+test('a newer stable compatibility feed still blocks a downgrade', t => {
+  const f = fixture(t, '0.7.2');
+  f.addRelease('node-preview', { version: '0.7.3' });
+  assert.throws(f.publish, /downgrade the current stable/);
+  assert.ok(!f.calls.some(args => ['create', 'upload', 'edit'].includes(args[1])));
+});
+
+test('public assets are reverified before any stable feed mutation', t => {
+  const f = fixture(t);
+  const previous = f.releases.get('node-preview').files.get('latest.json');
+  f.setFail(args => {
+    if (args[1] === 'edit') f.releases.get('node-v0.7.0').files.set(releaseFiles[0], Buffer.from('unexpected public bytes'));
+    return null;
+  });
+  assert.throws(f.publish, /Immutable release asset differs/);
+  assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'), previous);
+  assert.ok(!f.calls.some(args => args[1] === 'upload' && args[2] === 'node-preview'));
 });

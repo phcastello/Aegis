@@ -229,15 +229,6 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds + 2));
         });
         services.AddHostedService<ConversationTitleWorker>();
-        services.AddOptions<WebPushOptions>().Configure(o =>
-        {
-            configuration.GetSection("WebPush").Bind(o);
-            o.Subject = Read(configuration, "AEGIS_WEB_PUSH_SUBJECT", o.Subject);
-            o.PublicKey = Read(configuration, "AEGIS_WEB_PUSH_PUBLIC_KEY", o.PublicKey);
-            o.PrivateKey = Read(configuration, "AEGIS_WEB_PUSH_PRIVATE_KEY", o.PrivateKey);
-        }).Validate(o => string.IsNullOrEmpty(o.Subject) && string.IsNullOrEmpty(o.PublicKey) && string.IsNullOrEmpty(o.PrivateKey) || o.IsConfigured,
-              "Configure a valid WebPush subject and VAPID key pair, or leave all three empty.")
-          .ValidateOnStart();
         services.AddOptions<ReminderOptions>().Configure(o =>
         {
             configuration.GetSection("Reminders").Bind(o);
@@ -354,10 +345,7 @@ public static class DependencyInjection
             .Bind(configuration.GetSection("LocationContext")).Validate(o => o.IsValid(), "Invalid location context thresholds.").ValidateOnStart();
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();
-        services.AddScoped<IReminderInteractionTokens, ReminderInteractionTokens>();
-        services.AddHttpClient<IWebPushClient, WebPushService>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
-            .RemoveAllLoggers();
+        services.AddScoped<ILegacyReminderInteractionTokens, LegacyReminderInteractionTokens>();
         services.AddHostedService<ReminderWorker>();
 
         return services;

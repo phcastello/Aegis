@@ -1,12 +1,17 @@
 name: Aegis Release Identity
 on:
+  push:
+    branches: [main]
   pull_request:
-    paths:
-      - 'apps/aegis-node/src/**'
-      - 'apps/aegis-node/package*.json'
-      - 'packages/aegis-client/**'
-      - 'frontend/aegis-pwa/**'
-      - '.github/workflows/aegis-release-identity-ci.yml'
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact immutable release ref for acceptance; defaults to the triggering ref
+        type: string
+        default: ''
+      full_matrix:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       windows_only:
@@ -16,16 +21,38 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-identity-${{ github.head_ref || github.ref_name }}
+  group: release-identity-${{ inputs.ref || github.head_ref || github.ref_name }}-${{ inputs.ref && 'release-acceptance' || 'checks' }}
   cancel-in-progress: true
 jobs:
+  selection:
+    runs-on: ubuntu-24.04
+    outputs:
+      identity: ${{ steps.select.outputs.identity }}
+      windows: ${{ steps.select.outputs.identity == 'true' || (github.event_name == 'workflow_dispatch' && inputs.windows_only) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: node --test .github/scripts/select-node-ci.test.mjs
+      - id: select
+        env:
+          CI_INPUTS: ${{ toJSON(inputs) }}
+        run: node .github/scripts/select-node-ci.mjs
   web:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    needs: selection
+    if: ${{ needs.selection.outputs.identity == 'true' }}
     name: Shared and host identity regression
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -39,17 +66,9 @@ jobs:
           npm ci --prefix packages/aegis-client
           npm ci --prefix apps/aegis-node
           npm ci --prefix frontend/aegis-pwa
-      - name: Validate versions, shared behavior and native host contracts
-        run: |
-          npm run version:check --prefix apps/aegis-node
-          npm test --prefix packages/aegis-client
-          npm run check --prefix apps/aegis-node
-          npm run test:release --prefix apps/aegis-node
-          npm test --prefix apps/aegis-node
-      - name: Build and test both hosts
+      - name: Build both hosts for real identity App chains
         run: |
           npm run build --prefix frontend/aegis-pwa
-          npm test --prefix frontend/aegis-pwa
           npm run build --prefix apps/aegis-node
       - name: Install Chromium for the real App chains
         working-directory: packages/aegis-client
@@ -75,6 +94,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   windows:
+    needs: selection
+    if: ${{ needs.selection.outputs.windows == 'true' }}
     name: Installed Windows WebView2 identity
     runs-on: windows-2022
     timeout-minutes: 30
@@ -84,6 +105,9 @@ jobs:
         working-directory: apps/aegis-node
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
       - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         with:
@@ -114,7 +138,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   android:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    needs: selection
+    if: ${{ needs.selection.outputs.identity == 'true' }}
     name: Installed Android WebView identity (x86_64 emulator)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -124,6 +149,9 @@ jobs:
         working-directory: apps/aegis-node
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: 'true'
@@ -153,3 +181,26 @@ jobs:
           path: artifacts/release-identity
           if-no-files-found: warn
           retention-days: 14
+  required:
+    name: Aegis Release Identity result
+    needs: [selection, web, windows, android]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node --input-type=module <<'JS'
+          import { validateResults } from './.github/scripts/select-node-ci.mjs';
+          const jobs = JSON.parse(process.env.JOB_RESULTS);
+          if (jobs.selection.result !== 'success') throw Error('Identity CI selection did not pass.');
+          const selected = Object.fromEntries(Object.entries(jobs.selection.outputs).map(([key, value]) => [key, value === 'true']));
+          validateResults(selected, jobs, { web: 'identity', windows: 'windows', android: 'identity' });
+          JS

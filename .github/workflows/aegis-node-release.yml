@@ -14,7 +14,20 @@ concurrency:
   group: aegis-node-release
   cancel-in-progress: false
 jobs:
+  acceptance:
+    uses: ./.github/workflows/aegis-node-ci.yml
+    with:
+      full_matrix: true
+      ref: ${{ inputs.tag || github.ref }}
+    secrets: inherit
+  identity:
+    uses: ./.github/workflows/aegis-release-identity-ci.yml
+    with:
+      full_matrix: true
+      ref: ${{ inputs.tag || github.ref }}
+    secrets: inherit
   build:
+    needs: [acceptance, identity]
     strategy:
       fail-fast: false
       matrix:
@@ -105,18 +118,17 @@ jobs:
           args: --target x86_64-pc-windows-msvc
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows --signed
-      - if: matrix.android == 'false' && ((inputs.tag || github.ref_name) == 'node-v0.7.0' || (inputs.tag || github.ref_name) == 'node-v0.7.1')
+      - if: matrix.android == 'false'
         name: Verify signed upgrade preserves installed version and application profile
         env:
           GH_TOKEN: ${{ github.token }}
         run: node ../../packages/aegis-client/tests/windows-release-upgrade.mjs release-assets/Aegis-Windows-x86_64-Setup.exe
-      - if: matrix.android == 'false' && ((inputs.tag || github.ref_name) == 'node-v0.7.0' || (inputs.tag || github.ref_name) == 'node-v0.7.1')
+      - if: matrix.android == 'false'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Windows-release-upgrade-evidence
           if-no-files-found: error
           path: |
-            artifacts/v0.7.0-completion/windows-release-upgrade.json
             artifacts/release-identity/*
       - if: matrix.android == 'true'
         name: Decode private Android keystore without logging credentials

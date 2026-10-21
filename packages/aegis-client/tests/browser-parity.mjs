@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdirSync, readFileSync } from 'node:fs';
 const appVersion = JSON.parse(readFileSync(new URL('../../../apps/aegis-node/package.json', import.meta.url), 'utf8')).version;
-const updateVersion = appVersion.replace(/-unstable\.(\d+)$/, (_, value) => `-unstable.${Number(value) + 1}`);
+// A preview can advance to its stable release; a stable install needs a newer patch.
+const [major, minor, patch] = appVersion.split('-')[0].split('.').map(Number);
+const updateVersion = appVersion.includes('-') ? `${major}.${minor}.${patch}` : `${major}.${minor}.${patch + 1}`;
+assert.notEqual(updateVersion, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
@@ -42,6 +45,12 @@ const server = http.createServer(async (req, res) => {
    event({ type: 'conversation', conversationId: 'c1' });
    event({ type: 'token', content: 'Parcial ' });
    if (body.content === 'cancelar') return;
+   if (body.content === 'falha de lembrete') {
+     event({ type: 'tool_status', category: 'reminder', state: 'failed', message: 'Servidor de lembretes temporariamente indisponível.' });
+     event({ type: 'done', conversationId: 'c1', messageId: 'reminder-failure-fixture', conversationTitle: fixture.title });
+     res.end();
+     return;
+   }
    event({ type: 'tool_status', category: 'email', state: 'started', message: 'Consultando integração…' });
    setTimeout(() => {
      event({ type: 'token', content: '**completa** [Link](https://example.test/article) [Conectar Google](https://accounts.google.com/o/oauth2/v2/auth?client_id=test)' });
@@ -92,7 +101,7 @@ try {
        if(command === 'node_settings_open') return;
        if(command === 'node_reminders') { if(args.operation === 'list') {
          const query=args.payload??{};window.reminderListRequests.push(query);if(window.reminderListDelay)await new Promise(resolve=>setTimeout(resolve,window.reminderListDelay));
-         if(query.offset>0 || query.seriesOffset>0) {await new Promise(resolve=>setTimeout(resolve,350));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
+         if(query.offset>0 || query.seriesOffset>0) {await (window.reminderPageGate ?? new Promise(resolve=>setTimeout(resolve,350)));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
          const offset=query.offset??0,seriesOffset=query.seriesOffset??0;
          return structuredClone({hasMoreDeliveries:window.reminderDeliveryTruncated===true,reminders:reminders.slice(offset,offset+200),series:series.slice(seriesOffset,seriesOffset+100),hasMore:reminders.length>offset+200,nextOffset:reminders.length>offset+200?offset+200:null,seriesHasMore:series.length>seriesOffset+100,nextSeriesOffset:series.length>seriesOffset+100?seriesOffset+100:null,focusedReminder:[window.oldReminder,...window.extraFocusedReminders].find(item=>item?.reminderId===query.focusId)??null});
        } window.reminderPayloads.push(args); if(args.operation==='seriesCreate') {series.push({seriesId:crypto.randomUUID(),...args.payload,revision:1,status:'active'});return series.at(-1);} return {}; }
@@ -156,6 +165,12 @@ try {
    await page.getByRole('button', { name: 'Salvar feedback' }).click();
    await page.getByRole('dialog', { name: 'Dar um bonk nessa resposta' }).waitFor({ state: 'hidden' });
    assert.equal(feedback, host === 'web' ? 2 : 4);
+   await page.locator('textarea').fill('falha de lembrete');
+   await page.getByLabel('Enviar mensagem').click();
+   await page.getByText('Servidor de lembretes temporariamente indisponível.', { exact: true }).waitFor();
+   assert.equal(await page.getByRole('button', { name: /Ativar notificações|Permitir notificações/ }).count(), 0,
+     'A reminder tool failure preserves its cause and never offers browser push activation');
+   assert.equal(await page.locator('.notification-control').count(), 0);
    if (host === 'native') {
      await page.getByRole('link', { name: 'Link', exact: true }).click();
      await page.getByRole('link', { name: 'Conectar Google' }).click();
@@ -167,7 +182,10 @@ try {
      await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
      const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
      await panel.getByRole('button', {name:'Sobre',exact:true}).click();
-     await panel.getByText(appVersion, { exact: true }).waitFor();
+     const installedVersion = panel.locator('.about-brand .settings-badge');
+     await installedVersion.waitFor();
+     // Assert the public formatting contract independently of getReleaseIdentity().
+     assert.equal((await installedVersion.textContent()).trim(), `v${appVersion}`);
      await panel.getByText('Android', { exact: true }).first().waitFor();
      assert.equal(await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).count(),0);
      assert.equal(await panel.locator('.update-notice').count(),0,'About has no second updater renderer');
@@ -349,12 +367,17 @@ try {
      assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),0);
      const seriesMore=panel.getByRole('button',{name:'Carregar mais séries',exact:true});
      const pageRequests=await page.evaluate(()=>{window.reminderDeliveryTruncated=true;return window.reminderListRequests.length;});
+     // Hold the fixture response until the pending UI assertion completes. Wall-clock
+     // delays can expire while Playwright scrolls a long list before returning click().
+     await page.evaluate(()=>{window.reminderPageGate=new Promise(resolve=>window.releaseReminderPage=()=>{window.reminderPageGate=null;resolve();});});
      await seriesMore.click();assert.equal(await seriesMore.isDisabled(),true);
+     await page.evaluate(()=>window.releaseReminderPage());
      await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).waitFor();
      assert.equal(await seriesMore.count(),0);assert.equal(await page.evaluate(()=>window.reminderListRequests.length),pageRequests+1,'One click fetches exactly one series page');
      const deliveryWarning=panel.getByText('Parte dos detalhes de entrega não foi carregada. Isso não altera o estado dos lembretes.',{exact:true});await deliveryWarning.waitFor();await page.evaluate(()=>window.reminderDeliveryTruncated=false);
      const occurrencesMore=panel.getByRole('button',{name:'Carregar mais ocorrências',exact:true});
-     await page.evaluate(()=>window.reminderPageFailure=true);await occurrencesMore.click();assert.equal(await occurrencesMore.isDisabled(),true);
+     await page.evaluate(()=>{window.reminderPageFailure=true;window.reminderPageGate=new Promise(resolve=>window.releaseReminderPage=()=>{window.reminderPageGate=null;resolve();});});await occurrencesMore.click();assert.equal(await occurrencesMore.isDisabled(),true);
+     await page.evaluate(()=>window.releaseReminderPage());
      await panel.getByRole('alert').filter({hasText:'Falha sintética de página.'}).waitFor();
      assert.equal(await panel.getByRole('heading',{name:'Ocorrência paginada 1',exact:true}).count(),1,'A failed page preserves existing occurrences');
      assert.equal(await panel.getByRole('heading',{name:'Série paginada 101',exact:true}).count(),1,'A failed occurrence page preserves loaded series');

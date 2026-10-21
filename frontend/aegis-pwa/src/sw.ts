@@ -3,7 +3,7 @@ import { clientsClaim } from 'workbox-core';
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { Queue } from 'workbox-background-sync';
-import { handleReminderClick, parseReminderPush, reminderNotificationOptions } from './services/reminderNotification';
+import { handleReminderClick, parseReminderPush } from './services/reminderNotification';
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<string | { url: string; revision: string | null }> };
 self.skipWaiting();
@@ -47,11 +47,8 @@ async function openApp(): Promise<void> {
   if (existing) { await existing.focus(); return; }
   await self.clients.openWindow('/');
 }
-self.addEventListener('push', event => {
-  let payload;
-  try { payload = parseReminderPush(event.data?.json()); } catch { return; }
-  if (payload) event.waitUntil(self.registration.showNotification('Aegis', reminderNotificationOptions(payload)));
-});
+// Existing displayed notifications and this named queue outlive a worker update.
+// New Web Push delivery is retired; preserve only explicit legacy click completion.
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   const payload = parseReminderPush(event.notification.data);

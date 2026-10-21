@@ -18,7 +18,12 @@ export async function checkUpdate(platform: Platform): Promise<AvailableUpdate |
     const { check } = await import('@tauri-apps/plugin-updater');
     const update = await check({ timeout: 10000 });
     if (!update) return null;
-    validateWindowsUpdate(update.rawJson, update.version);
+    try {
+      validateWindowsUpdate(update.rawJson, update.version);
+    } catch (error) {
+      await update.close();
+      throw error;
+    }
     return {
       version: update.version, kind: 'installer',
       dispose: () => update.close(),

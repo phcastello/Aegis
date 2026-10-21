@@ -1,8 +1,17 @@
-# Aegis native client
+# Cliente nativo da Aegis
 
-Tauri 2 + Vue client for Android (priority) and Windows, sharing the v0.6.1 implementation with the Web Client in `packages/aegis-client`. Web Push/service worker remain web-only.
+Aplicativo Tauri 2 para Android ARM64 e Windows x86_64, com a interface Vue de
+`packages/aegis-client`. Cada instalação pareada é um Node; notificações nativas
+usam Windows/FCM. O cliente web/PWA tem outro host.
 
-Install dependencies from the repository root:
+## Preparar o ambiente
+
+Use Node 22/24, npm, Rust estável e os pré-requisitos Tauri 2 da plataforma.
+Windows exige Visual Studio Build Tools (C++) e WebView2. Android exige JDK 17,
+SDK/NDK Android e o target Rust `aarch64-linux-android` (as versões exatas usadas
+no build ficam no workflow `.github/workflows/aegis-node-ci.yml`).
+
+Na raiz do repositório:
 
 ```sh
 npm ci --prefix packages/aegis-client
@@ -10,15 +19,41 @@ npm ci --prefix apps/aegis-node
 cd apps/aegis-node
 ```
 
-- Windows development: `npm run dev:desktop`
-- Windows installer: `npm run build:desktop` (requires the updater signing key; CI uses an explicit unsigned updater-artifacts override)
-- Android development: `npm run dev:android`
-- Android debug APK: `npm run build:android`
-- Signed Android release APK: `npm run build:android:release`
-- Checks: `npm run check`, `npm run build`, `npm test`, `npm run test:rust`, `npm run test:release`
+Os comandos abaixo são executados em `apps/aegis-node`:
 
-Official backend default: `https://aegis.phcastello.com`. Optional `AEGIS_NODE_API_BASE_URL` in the shell or ignored `.env.local` is compiled by Rust and supplied once to the shared client. Release builds require HTTPS. LAN development needs a reachable origin (Android localhost is the phone), a matching explicit `AEGIS_CORS_ORIGINS` entry for the Vite frontend origin, and a secure development origin for microphone capture. Use a trusted HTTPS development origin or test capture in the bundled debug APK; HTTP LAN Vite pages are not secure contexts.
+| Finalidade | Comando |
+| --- | --- |
+| Interface no navegador (IPC simulado somente nos testes) | `npm run dev` |
+| Desenvolvimento Windows | `npm run dev:desktop` |
+| Instalador Windows | `npm run build:desktop` |
+| Desenvolvimento Android | `npm run dev:android` |
+| APK Android de depuração | `npm run build:android` |
+| APK Android de release | `npm run build:android:release` |
+| Tipos e identidade de versão | `npm run check` |
+| Bundle da interface | `npm run build` |
+| Testes JavaScript/TypeScript | `npm test` |
+| Contratos de distribuição | `npm run test:release` |
+| Rust sem recursos desktop | `npm run test:rust` |
+| Rust desktop na plataforma suportada | `npm run test:rust:desktop` |
 
-Before changing versions: edit package.json, then `npm run version:sync`. Run `npm run version:check` to detect drift.
+Builds de distribuição exigem as chaves existentes de assinatura do updater/APK;
+a CI usa identidade isolada para os testes. Não substitua chaves nem publique
+binários de teste como instaladores oficiais. Fixtures devem ficar fora da distribuição.
 
-See [Stage 02 setup, signing and acceptance](../../docs/v0.7.0-stage02-client-parity.md) and [Stage 01 toolchain setup](../../docs/v0.7.0-stage01-tauri-foundation.md).
+## Backend e captura
+
+O endereço padrão do backend é compilado pelo Rust. Para desenvolvimento, configure
+`AEGIS_NODE_API_BASE_URL` no shell ou `.env.local` ignorado. Release exige HTTPS.
+O localhost do Android é o telefone; use origem alcançável e inclua a origem Vite
+em `AEGIS_CORS_ORIGINS`. A captura no navegador exige contexto seguro; para LAN,
+use HTTPS confiável ou teste no APK de depuração. Configurar uma URL não pareia o Node.
+
+## Versão, testes e histórico
+
+Edite a versão de `package.json` e execute `npm run version:sync`; confirme com
+`npm run version:check`. Esta manutenção preserva a versão publicada 0.7.1.
+
+Veja [testes e alcance das evidências](../../docs/testes.md). Os relatos de
+[fundação](../../docs/v0.7.0-stage01-tauri-foundation.md) e
+[paridade](../../docs/v0.7.0-stage02-client-parity.md) preservam decisões antigas;
+o [registro integrado](../../docs/v0.7.0-completion.md) reúne as etapas posteriores.

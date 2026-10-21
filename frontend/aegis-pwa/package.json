@@ -6,14 +6,12 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && tsc -p tsconfig.sw.json --noEmit && vite build",
-    "test:email": "node --test tests/emailConnection*.test.mjs",
+    "test:email": "npm --prefix ../../packages/aegis-client run test:email",
     "preview": "vite preview --host 0.0.0.0",
     "test": "node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs"
   },
   "dependencies": {
     "@aegis/client": "file:../../packages/aegis-client",
-    "dompurify": "^3.4.8",
-    "markdown-it": "14.3.3",
     "vue": "^3.5.22",
     "workbox-background-sync": "^7.4.1",
     "workbox-core": "^7.4.1",
@@ -21,7 +19,6 @@
     "workbox-routing": "^7.4.1"
   },
   "devDependencies": {
-    "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^6.0.1",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",

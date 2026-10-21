@@ -30,7 +30,7 @@ function ghCommand(args) {
 }
 
 // Versioned assets are immutable, including on retry. Only node-preview/latest.json
-// is mutable, and it is advanced after the public version's bytes are verified.
+// is mutable, and only verified public stable distributions may advance it.
 export function publishRelease({ tag, commit, version, directory = 'release-assets', runGh = ghCommand }) {
   const kind = releaseKind(version);
   if (tag !== `node-v${version}`) throw new Error('Release tag/package version mismatch.');
@@ -83,7 +83,10 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
       if (previous === version) continue;
       let code;
       try { code = androidVersionCode(previous); } catch { continue; }
-      if (code >= androidVersionCode(version)) throw new Error('A newer or conflicting native distribution is already published: ' + item.tag_name);
+      // Manual previews do not participate in stable-channel monotonicity.
+      // Otherwise a future preview could block a maintained stable patch line.
+      if (kind === 'stable' && previous.includes('-')) continue;
+      if (code >= androidVersionCode(version)) throw new Error('A newer or conflicting native distribution is already published in this channel: ' + item.tag_name);
     }
   }
   function download(name, patterns, action) {
@@ -115,7 +118,10 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
       const previousBytes = readFileSync(join(temp, 'latest.json'));
       const previous = JSON.parse(previousBytes.toString('utf8'));
       const difference = androidVersionCode(version) - androidVersionCode(previous.version);
-      if (difference < 0) throw new Error('Compatibility feed would downgrade the current version.');
+      // Old publishers could have left a future preview here. It is not a stable
+      // channel floor: installed clients still compare their own version/code and
+      // will ignore a lower stable, while older stable clients recover a safe feed.
+      if (difference < 0 && !previous.version.includes('-')) throw new Error('Compatibility feed would downgrade the current stable version.');
       if (difference === 0 && !previousBytes.equals(manifestBytes))
         throw new Error('Compatibility feed would replace an existing version with different metadata.');
       return { exists: true, equal: difference === 0 };
@@ -123,7 +129,7 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
   }
 
   rejectNewerDistribution();
-  feedState(); // Fail before creating a release when the current feed is newer or unavailable.
+  if (kind === 'stable') feedState(); // Previews must never read, create or replace the compatibility feed.
   let current = release(tag);
   if (current && (current.tag_name !== tag || current.prerelease !== (kind === 'preview')))
     throw new Error('Existing release tag/channel differs from the requested distribution.');
@@ -147,6 +153,9 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
   const published = release(tag);
   if (!published || published.draft || published.prerelease !== (kind === 'preview')) throw new Error('Distribution release is not public in the expected channel.');
 
+  verifyAssets(published, true);
+  if (kind === 'preview') return { tag, version, kind, commit, assets: releaseFiles, compatibilityFeed: 'unchanged' };
+
   // Recheck after publication: another release may have advanced the feed while
   // assets were uploading. Workflow concurrency also serializes official runs.
   rejectNewerDistribution();
@@ -160,11 +169,11 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
     gh(['release', 'upload', 'node-preview', join(directory, 'latest.json'), '--clobber']);
   }
   if (!feedState().equal) throw new Error('Published compatibility feed does not match the verified distribution.');
-  return { tag, version, kind, commit, assets: releaseFiles };
+  return { tag, version, kind, commit, assets: releaseFiles, compatibilityFeed: 'stable' };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { version } = synchronize();
   const result = publishRelease({ tag: process.env.RELEASE_TAG, commit: process.env.RELEASE_COMMIT, version });
-  console.log(`Published and verified ${result.tag}; compatibility feed is current.`);
+  console.log(`Published and verified ${result.tag}; compatibility feed: ${result.compatibilityFeed}.`);
 }
