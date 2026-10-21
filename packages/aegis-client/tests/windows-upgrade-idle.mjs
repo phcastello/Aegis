@@ -14,9 +14,9 @@ import { reloadReadyWindowsPage } from './windows-webview-ready.mjs';
 
 if (process.platform !== 'win32') throw Error('Requires an isolated real Windows runner.');
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
-const acceptedVersion = '0.7.0-unstable.19';
-const acceptedInstallerUrl = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-unstable.19/Aegis-Windows-x86_64-Setup.exe';
-const acceptedInstallerSha256 = '3e62a0359a4865e3bad7b03df8745a33641f5eb6b50919f50e4a55e1503e748b';
+const acceptedVersion = '0.7.0';
+const acceptedInstallerUrl = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Windows-x86_64-Setup.exe';
+const acceptedInstallerSha256 = '34504a0b8e197f24977e7f7e886196ad187a01f0acb9b0e81c23407176faeb5f';
 const candidateVersion = JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
 const origin = 'http://127.0.0.1:18104';
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -113,7 +113,7 @@ if (mode === 'install-before') {
   save(planPath, plan);
   assert.ok(process.env.GITHUB_ENV, 'This preparation step is intended for the isolated CI workflow.');
   appendFileSync(process.env.GITHUB_ENV, `AEGIS_INSTALLED_EXE=${executable}\nAEGIS_UPGRADE_PLAN=${planPath}\n`, 'utf8');
-  console.log('Public accepted NSIS digest, actual installation and Windows version 19 smoke PASS; no Node paired to production.');
+  console.log(`Public accepted NSIS digest, actual installation and Windows version ${acceptedVersion} smoke PASS; no Node paired to production.`);
 } else if (mode === 'compare') {
   const [planArgument, beforeArgument, afterArgument, outputArgument] = args;
   assert.ok(planArgument && beforeArgument && afterArgument && outputArgument, 'Usage: compare PLAN.json BEFORE_DEBUG.exe AFTER_DEBUG.exe OUTPUT_DIR');
@@ -138,7 +138,7 @@ if (mode === 'install-before') {
       sameDisposableBackendProcess: true, sameOsVault: 'com.aegis.node.identity.v1 / installation', samePrivateWebViewProfile: true, usesActualAppLocalDataDirectory: true,
       idleSecondsBefore: before.states.reduce((sum, state) => sum + state.durationSeconds, 0), idleSecondsAfter: after.states.reduce((sum, state) => sum + state.durationSeconds, 0),
       limits: ['Actual public accepted NSIS and candidate NSIS are installed sequentially to the same path; their installed runtime versions and the actual app local data directory are checked. The CI runner is isolated; app storage is never broadly deleted.', 'The published runtime keeps its production HTTPS origin and is never paired. Its WebView uses a process-only offline proxy and private CDP API responses.', 'Authentication and NodeId continuity use the immutable accepted and candidate debug executables compiled for one loopback API and in-memory database. No production Node credential is read or written.', 'This does not exercise signed updater feed/download/install, owner data, physical toast interaction or Windows display scaling. Physical upgrade acceptance remains pending.'] });
-    console.log('Actual NSIS 19 -> candidate installation, shared storage, same native NodeId/OS vault/database without a second pairing, and equivalent ten-minute idle windows PASS.');
+    console.log(`Actual NSIS ${acceptedVersion} -> ${candidateVersion} installation, shared storage, same native NodeId/OS vault/database without a second pairing, and equivalent ten-minute idle windows PASS.`);
   } finally {
     if (fixtureExit === undefined) spawnSync('taskkill', ['/PID', String(fixture.pid), '/T', '/F'], { stdio: 'ignore' });
     rmSync(plan.work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
