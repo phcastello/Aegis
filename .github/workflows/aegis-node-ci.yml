@@ -249,8 +249,8 @@ jobs:
           AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
         run: |
-          git fetch origin 6e2f2467714338f1832ff3c89414d9a84912b21c --depth=1
-          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 6e2f2467714338f1832ff3c89414d9a84912b21c
+          git fetch origin 496a53032b5e33355374380f66f3736e65aa9ba6 --depth=1
+          git worktree add --detach "$RUNNER_TEMP/aegis-accepted-baseline" 496a53032b5e33355374380f66f3736e65aa9ba6
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/packages/aegis-client"
           npm ci --prefix "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
           cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
