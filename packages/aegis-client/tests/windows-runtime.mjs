@@ -50,7 +50,9 @@ try {
   console.log('Windows single-instance identity checkpoint protection PASS.');
   await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
   await page.getByRole('button',{name:'Sobre',exact:true}).click();
-  await page.getByText(version, { exact: true }).waitFor();
+  const versionBadge = page.locator('.about-brand .settings-badge');
+  await versionBadge.waitFor({ state: 'visible' });
+  assert.equal((await versionBadge.textContent())?.trim(), `v${runtime.version}`);
   await page.getByText('Diagnóstico técnico',{exact:true}).click();
   await page.getByRole('button', { name: 'Verificar conexão', exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('.diagnostics button')?.disabled);

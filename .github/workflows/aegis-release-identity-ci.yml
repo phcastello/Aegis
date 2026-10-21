@@ -8,6 +8,11 @@ on:
       - 'frontend/aegis-pwa/**'
       - '.github/workflows/aegis-release-identity-ci.yml'
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Only installed Windows WebView2 identity and runtime smoke tests
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -15,6 +20,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   web:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     name: Shared and host identity regression
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -98,6 +104,8 @@ jobs:
           JS
       - name: Observe real Tauri IPC and capture sidebar and About in installed WebView2
         run: node ../../packages/aegis-client/tests/windows-release-identity.mjs "$AEGIS_IDENTITY_INSTALLED_EXE" ../../artifacts/release-identity
+      - name: Verify installed Windows runtime, About version and lifecycle
+        run: node ../../packages/aegis-client/tests/windows-runtime.mjs "$AEGIS_IDENTITY_INSTALLED_EXE"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -106,6 +114,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   android:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     name: Installed Android WebView identity (x86_64 emulator)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
