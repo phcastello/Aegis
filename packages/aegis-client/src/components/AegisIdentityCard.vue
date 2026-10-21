@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import AegisMark from './AegisMark.vue';
-defineProps<{ version?: string }>();
+import { getReleaseIdentity } from '../services/releaseIdentity';
+const props = defineProps<{ version?: string }>();
+const identity = computed(() => getReleaseIdentity(props.version));
 </script>
 
 <template>
@@ -12,9 +15,9 @@ defineProps<{ version?: string }>();
     <div class="identity-card__copy">
       <div class="identity-card__title">
         <h1>Aegis</h1>
-        <span>{{ version ? `v${version}` : 'Assistente pessoal' }}</span>
+        <span>{{ identity.versionLabel }}</span>
       </div>
-
+      <p class="identity-card__codename">{{ identity.codename }}</p>
     </div>
   </section>
 </template>
