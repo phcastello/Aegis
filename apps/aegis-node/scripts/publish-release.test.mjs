@@ -66,9 +66,10 @@ function fixture(t, version = '0.7.0') {
   return { directory, releases, calls, addRelease, publish, runGh, setFail: value => { fail = value; } };
 }
 
-for (const version of ['0.7.0-unstable.20', '0.7.0']) {
+for (const version of ['0.7.0-unstable.20', '0.7.0', '0.7.1']) {
   test(`${version}: publishes verified immutable assets before advancing feed, without becoming Latest`, t => {
     const f = fixture(t, version);
+    if (version === '0.7.1') f.addRelease('node-preview', { version: '0.7.0' });
     const result = f.publish();
     const current = f.releases.get(`node-v${version}`);
     assert.equal(result.kind, version.includes('-') ? 'preview' : 'stable');
@@ -91,6 +92,16 @@ for (const version of ['0.7.0-unstable.20', '0.7.0']) {
     assert.ok(current.files.get('SHA256SUMS').toString().includes(installerHash));
   });
 }
+
+test('0.7.1 advances the stable Android allocation and immutable distribution URLs', t => {
+  const f = fixture(t, '0.7.1');
+  const manifest = JSON.parse(readFileSync(join(f.directory, 'latest.json')));
+  assert.equal(manifest.version, '0.7.1');
+  assert.equal(manifest.android.aarch64.versionCode, 7001999);
+  assert.ok(manifest.android.aarch64.versionCode > 7000999);
+  assert.match(manifest.android.aarch64.url, /\/node-v0\.7\.1\/Aegis-Android-arm64\.apk$/);
+  assert.match(manifest.platforms['windows-x86_64'].url, /\/node-v0\.7\.1\/Aegis-Windows-x86_64-Setup\.exe$/);
+});
 
 test('stable manifest binds exact version, updater signature, APK code and immutable URLs', t => {
   const f = fixture(t);

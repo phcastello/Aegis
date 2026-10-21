@@ -6,6 +6,7 @@ import ChatView from '@aegis/client/views/ChatView.vue';
 import SettingsShell, { type SettingsSection } from '@aegis/client/components/SettingsShell.vue';
 import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
 import AegisMark from '@aegis/client/components/AegisMark.vue';
+import { getReleaseIdentity } from '@aegis/client/services/releaseIdentity';
 import UpdateNotice from './components/UpdateNotice.vue';
 import ReminderActionSync from './components/ReminderActionSync.vue';
 import { actionDiagnosticsUnavailable, mergeActionSettings, pendingActionLabel } from './services/reminderActions';
@@ -18,6 +19,7 @@ import type { RuntimeInfo } from './services/runtime';
 const RemindersPanel = defineAsyncComponent(() => import('./components/RemindersPanel.vue'));
 const PlacesPanel = defineAsyncComponent(() => import('./components/PlacesPanel.vue'));
 const props = defineProps<{ runtime: RuntimeInfo }>();
+const releaseIdentity = computed(() => getReleaseIdentity(props.runtime.version));
 const section = ref<SettingsSection | null>(null); const dirty = ref(false); const activity = ref(false);
 const shell = ref<InstanceType<typeof SettingsShell> | null>(null); const focusedReminderId = ref<string | null>(null);
 const remindersPanel = ref<InstanceType<typeof RemindersPanel> | null>(null); const placesPanel = ref<InstanceType<typeof PlacesPanel> | null>(null);
@@ -54,7 +56,9 @@ onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEv
     <PlacesPanel v-else-if="section === 'places'" ref="placesPanel" :platform="runtime.platform" @dirty="dirty = $event" />
     <section v-else-if="section === 'updates'"><h2>Atualizações</h2><p class="settings-muted">Versão instalada: {{ runtime.version }}. O download e a instalação precisam de sua ação.</p><UpdateNotice :updates="updates" :work-active="activity" /><div class="settings-actions"><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">{{ updates.state.value === 'checking' ? 'Verificando…' : 'Verificar atualizações' }}</button></div><p v-if="updates.checkedMessage.value" role="status">{{ updates.checkedMessage.value }}</p><p v-if="updates.checkedAt.value" class="settings-muted">Última consulta: {{ new Date(updates.checkedAt.value).toLocaleString('pt-BR') }}<span v-if="updates.diagnostic.value"> · Código: {{ updates.diagnostic.value.code }}</span></p><details v-if="runtime.platform === 'android'"><summary>Downloads antigos do navegador</summary><p>APKs baixados anteriormente pelo navegador continuam na pasta Downloads. Você pode removê-los uma vez pelo gerenciador de arquivos do Android. A Aegis não procura nem apaga arquivos pessoais nessa pasta.</p></details></section>
     <section v-else-if="section === 'about'">
-      <div class="about-brand"><div><AegisMark /></div><div><h2>Sobre a Aegis</h2><span class="settings-badge">{{ runtime.version }}</span></div></div>
+      <div class="about-brand"><div><AegisMark /></div><div><h2>Sobre a Aegis</h2><span class="settings-badge">{{ releaseIdentity.versionLabel }}</span></div></div>
+      <p class="about-release-codename">{{ releaseIdentity.codename }}</p>
+      <p v-if="releaseIdentity.tagline" class="about-release-tagline settings-muted">{{ releaseIdentity.tagline }}</p>
       <p class="settings-muted">Sua assistente pessoal, com modelos acessados por API.</p>
       <ReminderActionSync :settings="actionSettings" />
       <dl><div><dt>Aplicativo</dt><dd>{{ runtime.platform === 'android' ? 'Android' : runtime.platform === 'windows' ? 'Windows' : 'Plataforma não suportada' }}</dd></div><div><dt>Identidade do dispositivo</dt><dd>{{ identity?.state === 'paired' ? 'Pareada' : 'Verificar em Dispositivos' }}</dd></div></dl>
@@ -63,4 +67,4 @@ onUnmounted(() => { disposed = true; stopReminderListener?.(); document.removeEv
     </section>
   </SettingsShell>
 </template>
-<style scoped>.about-brand { display: flex; gap: 16px; align-items: center; }.about-brand > div:first-child { width: 52px; height: 52px; }.about-brand h2 { margin-bottom: 8px; }</style>
+<style scoped>.about-brand { display: flex; gap: 16px; align-items: center; }.about-brand > div:first-child { width: 52px; height: 52px; flex-shrink: 0; }.about-brand > div { min-width: 0; }.about-brand h2 { margin-bottom: 8px; }</style>
