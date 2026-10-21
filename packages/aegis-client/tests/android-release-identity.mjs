@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { _android } from 'playwright-core';
 import { assertNativeReleaseIdentity, routeOfflineIdentityApi } from './native-release-identity.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -26,29 +26,15 @@ const version = JSON.parse(readFileSync(join(repository, 'apps/aegis-node/packag
 runAdb('install', '-r', resolve(apk));
 runAdb('shell', 'am', 'force-stop', 'com.aegis.node');
 runAdb('shell', 'am', 'start', '-W', '-n', 'com.aegis.node/.MainActivity');
-const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-let browser;
+let device;
 try {
-  const deadline = Date.now() + 45000;
-  let pid;
-  while (!pid) {
-    pid = runAdb('shell', 'pidof', 'com.aegis.node').split(/\s+/)[0];
-    if (!pid && Date.now() >= deadline) throw Error('Installed Android application process unavailable.');
-    if (!pid) await pause(150);
-  }
-  runAdb('forward', 'tcp:9464', `localabstract:webview_devtools_remote_${pid}`);
-  while (true) {
-    try { if ((await fetch('http://127.0.0.1:9464/json/version', { signal: AbortSignal.timeout(2000) })).ok) break; } catch {}
-    if (Date.now() >= deadline) throw Error('Installed Android WebView CDP unavailable.');
-    await pause(200);
-  }
-  browser = await chromium.connectOverCDP('http://127.0.0.1:9464');
-  let page;
-  while (!page) {
-    page = browser.contexts().flatMap(context => context.pages()).find(candidate => !candidate.isClosed() && /tauri\.localhost|tauri:\/\/localhost/.test(candidate.url()));
-    if (!page && Date.now() >= deadline) throw Error('Android application WebView target unavailable.');
-    if (!page) await pause(100);
-  }
+  // Android WebViews do not support desktop Browser.setDownloadBehavior. The
+  // Android-specific connector attaches without changing downloads or native IPC.
+  const devices = await _android.devices({ omitDriverInstall: true });
+  device = serial ? devices.find(candidate => candidate.serial() === serial) : devices.length === 1 ? devices[0] : undefined;
+  assert.ok(device, 'The selected isolated emulator must be unambiguous.');
+  const webview = await device.webView({ pkg: 'com.aegis.node' }, { timeout: 45000 });
+  const page = await webview.page();
   await routeOfflineIdentityApi(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
   const report = await assertNativeReleaseIdentity(page, { version, platform: 'android', output });
@@ -62,7 +48,6 @@ try {
   }, null, 2) + '\n');
   console.log('Real Android APK/WebView sidebar and About release identity PASS.');
 } finally {
-  await browser?.close().catch(() => {});
+  await device?.close().catch(() => {});
   runAdb('shell', 'am', 'force-stop', 'com.aegis.node');
-  runAdb('forward', '--remove', 'tcp:9464');
 }
