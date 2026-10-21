@@ -16,12 +16,17 @@ Não há autorização para merge, deploy, release, tags ou alteração de feeds
    Builds PWA/nativo e email (9 testes) aprovados; paridade completa web/nativo
    aprovada após corrigir também a corrida da fixture de paginação (resposta
    controlada, sem aumentar timeout nem mudar o produto).
-2. **Captura de áudio — validada em automação.** Recursos por sessão, descarte
+2. **Captura de áudio — `04dcd67`, validada em automação.** Recursos por sessão, descarte
    imediato/abort, escolha local de entrada, nível real e silêncio digital.
    16 regressões e 58 testes compartilhados passaram. Chromium com MediaRecorder/
    WebAudio reais e sinal sintético passou nos hosts web e fixtures Android/Windows.
    Não houve teste físico; ver [evidências de áudio](audio-maintenance-validation.md).
-3. Web Push — implementação em andamento; nenhuma consulta ao banco do proprietário.
+3. **Web Push — validado localmente.** Retirados ativação, sender/pacote/DI,
+   VAPID e gerador órfão. Registro antigo recebe 410; somente ações/tokens antigos
+   e fila SW continuam, com critério de encerramento em [compatibilidade](web-push-legado.md).
+   Nenhuma consulta ou limpeza do banco do proprietário. Backend 627 passaram/73
+   ignorados antes do banco descartável; paridade com falha de lembrete sem convite
+   push e upgrade real de worker com IndexedDB/cache/offline passaram.
 4. Distribuição/operação/CI — implementação em andamento; sem operação em produção.
 5. Redução seletiva — consumidores a confirmar. A16 permanece fora do escopo.
 

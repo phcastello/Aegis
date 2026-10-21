@@ -33,7 +33,7 @@ import type {
 } from '../types/chat';
 
 defineProps<{ appVersion?: string }>();
-const emit = defineEmits<{ notificationRequired: []; activityChanged: [active: boolean] }>();
+const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
 
@@ -501,7 +501,6 @@ async function handleSubmit(): Promise<void> {
           if (eventTurnId !== activeTurnId.value) return;
           turnStatus.value = 'thinking';
           showToolStatus(status.message, status.state);
-          if (status.category === 'reminder' && status.state === 'failed') emit('notificationRequired');
         },
         onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle, memoryActivity }) => {
           if (completedTurnId !== activeTurnId.value) return;
@@ -922,7 +921,6 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
-        <slot name="notifications" />
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
         <div class="composer-field">

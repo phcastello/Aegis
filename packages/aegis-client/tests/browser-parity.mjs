@@ -45,6 +45,12 @@ const server = http.createServer(async (req, res) => {
    event({ type: 'conversation', conversationId: 'c1' });
    event({ type: 'token', content: 'Parcial ' });
    if (body.content === 'cancelar') return;
+   if (body.content === 'falha de lembrete') {
+     event({ type: 'tool_status', category: 'reminder', state: 'failed', message: 'Servidor de lembretes temporariamente indisponível.' });
+     event({ type: 'done', conversationId: 'c1', messageId: 'reminder-failure-fixture', conversationTitle: fixture.title });
+     res.end();
+     return;
+   }
    event({ type: 'tool_status', category: 'email', state: 'started', message: 'Consultando integração…' });
    setTimeout(() => {
      event({ type: 'token', content: '**completa** [Link](https://example.test/article) [Conectar Google](https://accounts.google.com/o/oauth2/v2/auth?client_id=test)' });
@@ -159,6 +165,12 @@ try {
    await page.getByRole('button', { name: 'Salvar feedback' }).click();
    await page.getByRole('dialog', { name: 'Dar um bonk nessa resposta' }).waitFor({ state: 'hidden' });
    assert.equal(feedback, host === 'web' ? 2 : 4);
+   await page.locator('textarea').fill('falha de lembrete');
+   await page.getByLabel('Enviar mensagem').click();
+   await page.getByText('Servidor de lembretes temporariamente indisponível.', { exact: true }).waitFor();
+   assert.equal(await page.getByRole('button', { name: /Ativar notificações|Permitir notificações/ }).count(), 0,
+     'A reminder tool failure preserves its cause and never offers browser push activation');
+   assert.equal(await page.locator('.notification-control').count(), 0);
    if (host === 'native') {
      await page.getByRole('link', { name: 'Link', exact: true }).click();
      await page.getByRole('link', { name: 'Conectar Google' }).click();

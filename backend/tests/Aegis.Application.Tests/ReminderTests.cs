@@ -288,8 +288,8 @@ public sealed class ReminderTests
     [Fact]
     public void SignedInteractionIsBoundToReminderActionAndExpiry()
     {
-        var clock = new TestClock(); var tokens = new ReminderInteractionTokens(new EphemeralDataProtectionProvider(), clock);
-        var id = Guid.NewGuid(); var token = tokens.Create(id, Guid.NewGuid(), "acknowledge");
+        var clock = new TestClock(); var protection = new EphemeralDataProtectionProvider(); var tokens = new LegacyReminderInteractionTokens(protection, clock);
+        var id = Guid.NewGuid(); var token = LegacyReminderTokenFixture.Create(protection, clock, id, "acknowledge");
         Assert.True(tokens.Validate(token, id, "acknowledge"));
         Assert.False(tokens.Validate(token, id, "open")); Assert.False(tokens.Validate(token, Guid.NewGuid(), "acknowledge"));
         Assert.False(tokens.Validate(token + "tamper", id, "acknowledge"));
