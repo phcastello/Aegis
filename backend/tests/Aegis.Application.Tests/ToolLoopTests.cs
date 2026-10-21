@@ -263,8 +263,6 @@ public sealed class ToolLoopTests
             yield return response with { Content = null };
         }
 
-        public Task<ModelCompletionResponse> GenerateAsync(ModelRequest request, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public IAsyncEnumerable<ModelStreamChunk> StreamAsync(ModelRequest request, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request with { InputItems = request.InputItems?.ToList() ?? request.Request.InputItems?.ToList() });
