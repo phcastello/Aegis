@@ -70,7 +70,7 @@ Permanecem em investigação a captura de microfone em um computador Windows e a
 
 ## Desenvolvimento e documentação
 
-O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.env.example`](.env.example) e [`docker-compose.yml`](docker-compose.yml) antes de executar uma instância. Veja o [índice técnico](docs/README.md) para desenvolvimento, testes e registros históricos.
+O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.env.example`](.env.example), [`docker-compose.yml`](docker-compose.yml) e o [procedimento de operação privada](docs/operacao-privada.md), incluindo migrations, antes de executar uma instância. O [índice técnico](docs/README.md) reúne desenvolvimento, testes e histórico.
 
 - [Cliente nativo: comandos de desenvolvimento e build](apps/aegis-node/README.md)
 - [Funcionalidades introduzidas na v0.7.0](docs/v0.7.0-release-notes.md)

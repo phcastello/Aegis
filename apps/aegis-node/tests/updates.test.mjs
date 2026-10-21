@@ -36,12 +36,18 @@ test('declining a version never installs it or checks again', async () => {
   assert.equal(state.visible.value, false);
 });
 
-test('Windows updates accept only the exact HTTPS versioned installer from this repository', () => {
-  const url = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.0-stage.3/Aegis-Windows-x86_64-Setup.exe';
-  validateWindowsUpdate({ platforms: { 'windows-x86_64': { url } } }, '0.7.0-stage.3');
-  for (const bad of [url.replace('https:', 'http:'), url.replace('phcastello', 'other'), url.replace('stage.3', 'stage.2'), 'file:///tmp/app.exe'])
-    assert.throws(() => validateWindowsUpdate({ platforms: { 'windows-x86_64': { url: bad } } }, '0.7.0-stage.3'));
-  assert.throws(() => validateWindowsUpdate({}, '0.7.0-stage.3'));
+test('Windows stable metadata binds version and exact HTTPS versioned installer', () => {
+  const version = '0.7.2';
+  const url = 'https://github.com/phcastello/Aegis/releases/download/node-v0.7.2/Aegis-Windows-x86_64-Setup.exe';
+  validateWindowsUpdate({ version, platforms: { 'windows-x86_64': { url } } }, version);
+  for (const bad of [url.replace('https:', 'http:'), url.replace('phcastello', 'other'), url.replace('0.7.2', '0.7.1'), 'file:///tmp/app.exe'])
+    assert.throws(() => validateWindowsUpdate({ version, platforms: { 'windows-x86_64': { url: bad } } }, version));
+  assert.throws(() => validateWindowsUpdate({}, version));
+  assert.throws(() => validateWindowsUpdate({ version: '0.7.1', platforms: { 'windows-x86_64': { url } } }, version));
+  for (const preview of ['0.7.2-unstable.1', '0.7.2-stage.1', '0.7.2+metadata']) {
+    const previewUrl = url.replace(version, preview);
+    assert.throws(() => validateWindowsUpdate({ version: preview, platforms: { 'windows-x86_64': { url: previewUrl } } }, preview));
+  }
 });
 
 test('manual checks can recover after the automatic check without parallel requests or installation', async () => {

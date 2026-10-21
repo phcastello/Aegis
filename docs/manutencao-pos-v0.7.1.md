@@ -18,20 +18,25 @@ Não há autorização para merge, deploy, release, tags ou alteração de feeds
    controlada, sem aumentar timeout nem mudar o produto).
 2. **Captura de áudio — `04dcd67`, validada em automação.** Recursos por sessão, descarte
    imediato/abort, escolha local de entrada, nível real e silêncio digital.
-   16 regressões e 58 testes compartilhados passaram. Chromium com MediaRecorder/
+   17 regressões passaram, incluindo a revisão `9d11037` que preserva uma
+   preferência nova durante falha da entrada antiga. Chromium com MediaRecorder/
    WebAudio reais e sinal sintético passou nos hosts web e fixtures Android/Windows.
    Não houve teste físico; ver [evidências de áudio](audio-maintenance-validation.md).
-3. **Web Push — validado localmente.** Retirados ativação, sender/pacote/DI,
+3. **Web Push — `2d8edf0`, validado localmente.** Retirados ativação, sender/pacote/DI,
    VAPID e gerador órfão. Registro antigo recebe 410; somente ações/tokens antigos
    e fila SW continuam, com critério de encerramento em [compatibilidade](web-push-legado.md).
    Nenhuma consulta ou limpeza do banco do proprietário. Backend 627 passaram/73
    ignorados antes do banco descartável; paridade com falha de lembrete sem convite
    push e upgrade real de worker com IndexedDB/cache/offline passaram.
-4. Distribuição/operação/CI — implementação em andamento; sem operação em produção.
+4. **Distribuição/operação/CI — validado localmente.** Feed compatível somente
+   estável; previews manuais sem mutá-lo. Seleção de jobs testada e aceites nativos
+   preservados. Compose privado em Production, binds explícitos e migrador antes
+   da API. PostgreSQL16 descartável:697 testes passaram/6 ignorados externos;
+   imagem Production health200/Swagger404/inscrição410. Nenhuma operação em produção.
 5. Redução seletiva — consumidores a confirmar. A16 permanece fora do escopo.
 
-Próximo passo: completar paridade/aviso de atualização/Lugares/Lembretes e registrar
-os commits e resultados de cada checkpoint. A matriz A01–A16 será fechada com evidência.
+Próximo passo: regressão integrada no conteúdo final, envio da branch e PR;
+registrar os resultados da matriz CI explicitamente acionada.
 
 ## Fontes e limites
 

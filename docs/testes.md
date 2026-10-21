@@ -8,6 +8,7 @@ npm ci --prefix packages/aegis-client
 npm ci --prefix frontend/aegis-pwa
 npm ci --prefix apps/aegis-node
 node scripts/check-docs.mjs
+node scripts/check-compose.mjs
 npm run test:email --prefix packages/aegis-client
 npm test --prefix frontend/aegis-pwa
 npm test --prefix apps/aegis-node
@@ -28,6 +29,9 @@ A API requer .NET SDK 8. Os testes PostgreSQL só são exercitados quando
 os testes de integração são ignorados; isso não comprova migrations nem persistência.
 `.env` é lido pelo Compose, não automaticamente por `dotnet run`.
 
+O teste de operação/migrations usa ainda `AEGIS_OPERATION_TEST_DATABASE`, aceitando
+somente o banco descartável `aegis_operation_test`; veja [operação privada](operacao-privada.md).
+
 Para paridade browser, instale Chromium com `npx playwright-core install chromium`
 em `packages/aegis-client`. Em dois terminais na raiz, mantenha os servidores locais:
 
@@ -43,6 +47,8 @@ npm run test:browser --prefix packages/aegis-client
 node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/maintenance/update-notice
 node apps/aegis-node/tests/places-browser.mjs
 node apps/aegis-node/tests/reminders-browser.mjs
+node packages/aegis-client/tests/transcription-browser.mjs
+node frontend/aegis-pwa/tests/worker-upgrade.mjs
 ```
 
 São navegadores reais com API privada em memória e IPC Tauri simulado. Não atestam

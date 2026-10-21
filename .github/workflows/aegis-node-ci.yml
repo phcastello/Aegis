@@ -2,11 +2,22 @@ name: Aegis Node CI
 on:
   push:
     branches: [main, 'feat/v0.7.0-*']
-    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
   pull_request:
-    paths: ['apps/aegis-node/**', 'packages/aegis-client/**', 'frontend/aegis-pwa/**', 'backend/**', 'deploy/**', 'scripts/node-transport-probe/**', '.github/**']
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact immutable release ref for acceptance; defaults to the triggering ref
+        type: string
+        default: ''
+      full_matrix:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
+      full_matrix:
+        description: Complete release acceptance including native gates and long idle measurements; overrides focused filters
+        type: boolean
+        default: false
       ui_only:
         description: Focused browser/layout checks without native builds; takes precedence over other filters
         type: boolean
@@ -31,11 +42,38 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: node-ci-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && 'android-distribution' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
+  group: node-ci-${{ inputs.ref || github.head_ref || github.ref_name }}-${{ inputs.ref && 'release-acceptance' || 'checks' }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && 'android-distribution' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
   cancel-in-progress: true
 jobs:
+  selection:
+    runs-on: ubuntu-24.04
+    outputs:
+      backend: ${{ steps.select.outputs.backend }}
+      ui: ${{ steps.select.outputs.ui }}
+      native: ${{ steps.select.outputs.native }}
+      framework: ${{ steps.select.outputs.framework }}
+      idle: ${{ steps.select.outputs.idle }}
+      full: ${{ steps.select.outputs.full }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Test the job selector even for documentation-only changes
+        run: node --test .github/scripts/select-node-ci.test.mjs
+      - name: Check documented commands and local links
+        run: node scripts/check-docs.mjs
+      - id: select
+        env:
+          CI_INPUTS: ${{ toJSON(inputs) }}
+        run: node .github/scripts/select-node-ci.mjs
   regression:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_framework_only && !inputs.android_distribution_only) }}
+    needs: selection
+    if: ${{ needs.selection.outputs.backend == 'true' }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -52,11 +90,17 @@ jobs:
       AEGIS_NODE_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
       AEGIS_REMINDER_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
       AEGIS_MEMORY_TEST_DATABASE: 'Host=localhost;Database=aegis_nodes_test;Username=aegis_test;Password=test_only_password'
+      AEGIS_OPERATION_TEST_DATABASE: 'Host=localhost;Database=aegis_operation_test;Username=aegis_test;Password=test_only_password'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '8.0.x'
+      - name: Create the explicitly disposable operation migration database
+        run: docker exec '${{ job.services.postgres.id }}' createdb -U aegis_test aegis_operation_test
       - run: dotnet build backend/Aegis.sln
       - run: dotnet test backend/Aegis.sln --no-build --logger trx --results-directory artifacts/v0.7.0-completion/backend
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -70,6 +114,8 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/aegis-pwa/package-lock.json
+      - name: Verify development and private Compose configuration without starting services
+        run: node scripts/check-compose.mjs
       - name: Real authenticated transport through two Nginx proxy hops
         run: |
           npm ci --prefix scripts/node-transport-probe
@@ -79,50 +125,15 @@ jobs:
         run: |
           dotnet build backend/tests/Aegis.NodeRuntimeFixture/Aegis.NodeRuntimeFixture.csproj
           node backend/tests/Aegis.NodeRuntimeFixture/reminder-command-replay.mjs
-      - working-directory: packages/aegis-client
-        run: npm ci
-      - working-directory: frontend/aegis-pwa
-        run: npm ci
-      - working-directory: frontend/aegis-pwa
-        run: npm run build
-      - working-directory: frontend/aegis-pwa
-        run: npm test
-      - working-directory: apps/aegis-node
-        run: npm ci
-      - name: Use reachable HTTPS Ubuntu mirror for browser dependencies
-        run: |
-          sudo python3 - <<'PYTHON'
-          from pathlib import Path
-          mirror = Path('/etc/apt/apt-mirrors.txt')
-          if mirror.exists():
-              mirror.write_text('https://archive.ubuntu.com/ubuntu/\n')
-          Path('/etc/apt/apt.conf.d/99-aegis-ci-network').write_text(
-              'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
-          PYTHON
-      - working-directory: packages/aegis-client
-        run: npx playwright-core install --with-deps chromium
-      - name: Browser regression of shared web and native UI (native IPC mocked)
-        env:
-          PARITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/v0.7.0-completion/ui
-        run: |
-          mkdir -p artifacts/v0.7.0-completion/ui
-          npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
-          npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
-          npm run test:browser --prefix packages/aegis-client
-          node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
-          node apps/aegis-node/tests/places-browser.mjs
-          node apps/aegis-node/tests/reminders-browser.mjs
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        if: always()
-        with:
-          name: Aegis-UI-Captures
-          path: artifacts/v0.7.0-completion/ui
-          retention-days: 7
   ui:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ui_only }}
+    needs: selection
+    if: ${{ needs.selection.outputs.ui == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -139,6 +150,8 @@ jobs:
           npm run build --prefix frontend/aegis-pwa
           npm run build --prefix apps/aegis-node
           npm test --prefix apps/aegis-node
+          npm test --prefix frontend/aegis-pwa
+          npm run test:release --prefix apps/aegis-node
       - name: Install browser for visual checks
         working-directory: packages/aegis-client
         run: |
@@ -161,6 +174,10 @@ jobs:
           node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
           node apps/aegis-node/tests/places-browser.mjs
           node apps/aegis-node/tests/reminders-browser.mjs
+      - name: Exercise capture sessions and input meter in Chromium for web, Android and Windows IPC hosts
+        run: node packages/aegis-client/tests/transcription-browser.mjs
+      - name: Upgrade the legacy service worker while preserving queued actions and offline cache
+        run: node frontend/aegis-pwa/tests/worker-upgrade.mjs
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -168,11 +185,12 @@ jobs:
           path: artifacts/v0.7.0-completion/ui
           retention-days: 7
   native:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && (inputs.android_distribution_only || !inputs.android_framework_only || inputs.windows_only)) }}
+    needs: selection
+    if: ${{ needs.selection.outputs.native == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && '[{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]' || github.event_name == 'workflow_dispatch' && inputs.windows_only && '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"}]' || '[{"os":"windows-2022","android":"false","platform":"Windows-x86_64"},{"os":"ubuntu-24.04","android":"true","platform":"Android-arm64"}]') }}
+        include: ${{ fromJSON(needs.selection.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -180,6 +198,9 @@ jobs:
         working-directory: apps/aegis-node
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: ${{ matrix.android }}
@@ -275,7 +296,7 @@ jobs:
           retention-days: 14
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
-      - if: matrix.android == 'true' && !inputs.android_distribution_only
+      - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
         run: npm run build:android
       - if: matrix.android == 'true'
         id: android_distribution_build
@@ -314,26 +335,27 @@ jobs:
           path: apps/aegis-node/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
           if-no-files-found: error
           retention-days: 1
-      - if: matrix.android == 'true' && !inputs.android_distribution_only
+      - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
         name: Android native payload validation unit tests
         run: src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
-      - if: matrix.android == 'true' && !inputs.android_distribution_only
+      - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
         run: node scripts/package-artifacts.mjs android --debug
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        if: ${{ !inputs.android_distribution_only }}
+        if: ${{ needs.selection.outputs.full == 'true' || !inputs.android_distribution_only }}
         with:
           name: Aegis-CI-${{ matrix.platform }}
           retention-days: 7
           if-no-files-found: error
           path: apps/aegis-node/release-assets/*
   android-notification-framework:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.ui_only && !inputs.windows_only && !inputs.android_distribution_only) }}
+    needs: selection
+    if: ${{ needs.selection.outputs.framework == 'true' }}
     name: Android framework API ${{ matrix.api }} (debug + minified release)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        api: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '26' && '[26]' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '35' && '[35]' || '[26,35]') }}
+        api: ${{ fromJSON(needs.selection.outputs.full != 'true' && github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '26' && '[26]' || needs.selection.outputs.full != 'true' && github.event_name == 'workflow_dispatch' && inputs.android_framework_only && inputs.android_framework_api == '35' && '[35]' || '[26,35]') }}
     defaults:
       run:
         shell: bash
@@ -343,6 +365,9 @@ jobs:
       ORG_GRADLE_PROJECT_aegisFrameworkFixture: 'true'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: 'true'
@@ -402,12 +427,12 @@ jobs:
             node ../../scripts/node-transport-probe/android-native.mjs release
 
       - name: Preserve candidate APK and generic instrumentation for idle comparison
-        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
         run: |
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-after.apk"
           cp src-tauri/gen/android/notificationFrameworkTest/build/outputs/apk/release/notificationFrameworkTest-release.apk "$RUNNER_TEMP/aegis-idle-test.apk"
       - name: Hybrid efficiency, six ten-minute windows with bounded active segments
-        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
         timeout-minutes: 85
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
@@ -420,7 +445,7 @@ jobs:
             node ../../scripts/node-transport-probe/android-hybrid-efficiency.mjs "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion
       - name: Build accepted Android baseline with the same isolated signing identity
         id: idle_baseline_build
-        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' && steps.debug_test.outcome == 'success' && steps.release_test.outcome == 'success' }}
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/aegis-node/src-tauri/target
         run: |
@@ -435,7 +460,7 @@ jobs:
           npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-before.apk"
       - name: Equivalent Android idle windows before and after (ten minutes each)
-        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only && steps.idle_baseline_build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' && steps.idle_baseline_build.outcome == 'success' }}
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           api-level: 35
@@ -446,7 +471,7 @@ jobs:
           script: |
             node ../../scripts/node-transport-probe/android-idle.mjs "$RUNNER_TEMP/aegis-idle-before.apk" "$RUNNER_TEMP/aegis-idle-after.apk" "$RUNNER_TEMP/aegis-idle-test.apk" ../../artifacts/v0.7.0-completion
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        if: ${{ !cancelled() && matrix.api == 35 && !inputs.android_framework_only }}
+        if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' }}
         with:
           name: Aegis-Android-Idle-Comparison
           path: |
@@ -454,3 +479,27 @@ jobs:
             artifacts/v0.7.0-completion/android-hybrid-efficiency.json
           if-no-files-found: warn
           retention-days: 14
+  required:
+    name: Aegis Node CI result
+    needs: [selection, regression, ui, native, android-notification-framework]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Fail on a failed, cancelled or unexpectedly skipped selected job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node --input-type=module <<'JS'
+          import { validateResults } from './.github/scripts/select-node-ci.mjs';
+          const jobs = JSON.parse(process.env.JOB_RESULTS);
+          if (jobs.selection.result !== 'success') throw Error('CI selection did not pass.');
+          const selected = Object.fromEntries(Object.entries(jobs.selection.outputs).map(([key, value]) => [key, value === 'true']));
+          validateResults(selected, jobs, { regression: 'backend', ui: 'ui', native: 'native', 'android-notification-framework': 'framework' });
+          JS

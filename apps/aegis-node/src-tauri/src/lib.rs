@@ -110,7 +110,13 @@ pub fn run() {
     );
     #[cfg(windows)]
     let builder = builder
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .default_version_comparator(|current, release| {
+                    updates::stable_update_eligible(&current, &release.version)
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()

@@ -10,7 +10,7 @@ services:
     depends_on:
       - aegis-api
     ports:
-      - "${AEGIS_FRONTEND_PORT:-5173}:80"
+      - "${AEGIS_HTTP_BIND_ADDRESS:-127.0.0.1}:${AEGIS_FRONTEND_PORT:-5173}:80"
 
   aegis-api:
     build:
@@ -113,7 +113,7 @@ services:
       AEGIS_MAX_EMAIL_FULL_BODY_CHARS: ${AEGIS_MAX_EMAIL_FULL_BODY_CHARS:-50000}
       AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS: ${AEGIS_EMAIL_BRIEFING_LOOKBACK_DAYS:-7}
     ports:
-      - "${AEGIS_API_PORT:-8090}:8090"
+      - "${AEGIS_HTTP_BIND_ADDRESS:-127.0.0.1}:${AEGIS_API_PORT:-8090}:8090"
     volumes:
       - data_protection_keys:/root/.aspnet/DataProtection-Keys
       - ${AEGIS_FCM_CREDENTIALS_DIR:-./.runtime-secrets/fcm}:/run/aegis-fcm:ro
@@ -126,7 +126,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${AEGIS_DATA_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -134,8 +134,8 @@ services:
     image: qdrant/qdrant:v1.12.6
     container_name: aegis-qdrant
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - "${AEGIS_DATA_BIND_ADDRESS:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${AEGIS_DATA_BIND_ADDRESS:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 
@@ -145,8 +145,8 @@ services:
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-aegis_dev_password}
     ports:
-      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
-      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
+      - "${AEGIS_DATA_BIND_ADDRESS:-127.0.0.1}:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${AEGIS_DATA_BIND_ADDRESS:-127.0.0.1}:${NEO4J_BOLT_PORT:-7687}:7687"
     volumes:
       - neo4j_data:/data
 
