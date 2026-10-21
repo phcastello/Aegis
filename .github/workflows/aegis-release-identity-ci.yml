@@ -1,0 +1,146 @@
+name: Aegis Release Identity
+on:
+  pull_request:
+    paths:
+      - 'apps/aegis-node/src/**'
+      - 'apps/aegis-node/package*.json'
+      - 'packages/aegis-client/**'
+      - 'frontend/aegis-pwa/**'
+      - '.github/workflows/aegis-release-identity-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-identity-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  web:
+    name: Shared and host identity regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            packages/aegis-client/package-lock.json
+            apps/aegis-node/package-lock.json
+            frontend/aegis-pwa/package-lock.json
+      - name: Install shared client and both hosts
+        run: |
+          npm ci --prefix packages/aegis-client
+          npm ci --prefix apps/aegis-node
+          npm ci --prefix frontend/aegis-pwa
+      - name: Validate versions, shared behavior and native host contracts
+        run: |
+          npm run version:check --prefix apps/aegis-node
+          npm test --prefix packages/aegis-client
+          npm run check --prefix apps/aegis-node
+          npm run test:release --prefix apps/aegis-node
+          npm test --prefix apps/aegis-node
+      - name: Build and test both hosts
+        run: |
+          npm run build --prefix frontend/aegis-pwa
+          npm test --prefix frontend/aegis-pwa
+          npm run build --prefix apps/aegis-node
+      - name: Install Chromium for the real App chains
+        working-directory: packages/aegis-client
+        run: |
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+          mirror = Path('/etc/apt/apt-mirrors.txt')
+          if mirror.exists():
+              mirror.write_text('https://archive.ubuntu.com/ubuntu/\n')
+          Path('/etc/apt/apt.conf.d/99-aegis-ci-network').write_text(
+              'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
+          PYTHON
+          npx playwright-core install --with-deps chromium
+      - name: Real native and web App chains across viewport and enlarged-font matrix
+        env:
+          IDENTITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/release-identity/browser
+        run: node packages/aegis-client/tests/release-identity-browser.mjs
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-Shared-Host-Release-Identity
+          path: artifacts/release-identity/browser
+          if-no-files-found: warn
+          retention-days: 14
+  windows:
+    name: Installed Windows WebView2 identity
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/aegis-node
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-aegis-node
+      - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        with:
+          projectPath: apps/aegis-node
+          args: --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Install the actual NSIS package in an isolated runner
+        run: |
+          node --input-type=module <<'JS'
+          import { readdirSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { install, installedExecutable } from '../../packages/aegis-client/tests/windows-upgrade-idle.mjs';
+          const directory = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis';
+          const installers = readdirSync(directory).filter(name => name.endsWith('.exe'));
+          if (installers.length !== 1) throw Error('Expected exactly one NSIS candidate.');
+          const destination = join(process.env.RUNNER_TEMP, 'aegis-release-identity-installed');
+          install(join(directory, installers[0]), destination);
+          appendFileSync(process.env.GITHUB_ENV, `AEGIS_IDENTITY_INSTALLED_EXE=${installedExecutable(destination)}\n`);
+          JS
+      - name: Observe real Tauri IPC and capture sidebar and About in installed WebView2
+        run: node ../../packages/aegis-client/tests/windows-release-identity.mjs "$AEGIS_IDENTITY_INSTALLED_EXE" ../../artifacts/release-identity
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-Windows-Release-Identity
+          path: artifacts/release-identity
+          if-no-files-found: warn
+          retention-days: 14
+  android:
+    name: Installed Android WebView identity (x86_64 emulator)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/aegis-node
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-aegis-node
+        with:
+          android: 'true'
+          cache-variant: release-identity-x86_64
+      - name: Prepare emulator target and KVM
+        run: |
+          rustup target add x86_64-linux-android
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build the actual Android UI in a development APK without framework fixtures
+        run: npm run tauri -- android build --debug --apk --target x86_64
+      - name: Observe real Tauri IPC and capture drawer and About in Android WebView
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          working-directory: apps/aegis-node
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048
+          script: node ../../packages/aegis-client/tests/android-release-identity.mjs src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk ../../artifacts/release-identity
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: Aegis-Android-Release-Identity
+          path: artifacts/release-identity
+          if-no-files-found: warn
+          retention-days: 14

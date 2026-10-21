@@ -1,19 +1,19 @@
-# Aegis v0.7.0 — "It's Not Stalking. It's a Feature."
+# Aegis v0.7.1 — "It's Not Stalking. It's a Feature."
 
-Aegis é uma assistente pessoal com chat, voz, memória, histórico e integrações com Gmail e Google Calendar, usando modelos acessados por API. A **v0.7.0 estável** leva essa experiência a aplicativos nativos para **Android ARM64 e Windows x86_64**, com Nodes pareados, notificações, lembretes recorrentes, lugares e regras de chegada e saída. O Web Client/PWA continua disponível.
+Aegis é uma assistente pessoal com chat, voz, memória, histórico e integrações com Gmail e Google Calendar, usando modelos acessados por API. Está disponível para **Android ARM64, Windows x86_64 e Web Client/PWA**, com Nodes pareados, notificações, lembretes recorrentes, lugares e regras de chegada e saída. A **v0.7.1** corrige a apresentação do codinome na sidebar e em Sobre, junto à versão real de cada cliente.
 
-[Release oficial e changelog completo](https://github.com/phcastello/Aegis/releases/tag/v0.7.0) · [Distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0) · [Notas da v0.7.0](docs/v0.7.0-release-notes.md) · [Verificação técnica do lançamento](docs/v0.7.0-release-verification.md)
+[Release oficial](https://github.com/phcastello/Aegis/releases/tag/v0.7.1) · [Distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.1) · [Notas da v0.7.1](docs/v0.7.1-release-notes.md) · [Verificação do patch](docs/v0.7.1-verification.md)
 
-A versão reúne a fundação nativa, a arquitetura de Nodes e a conclusão integrada dos Stages 01–12. Os [relatórios dos Stages 01–07](docs/v0.7.0-stage01-tauri-foundation.md) e o [registro de conclusão](docs/v0.7.0-completion.md) preservam contratos, decisões, evidências e limites das previews. Esta versão não distribui aplicativos Linux, iOS ou macOS.
+A [v0.7.0](docs/v0.7.0-release-notes.md) reuniu a fundação nativa, a arquitetura de Nodes e a conclusão integrada dos Stages 01–12. Os [relatórios dos Stages 01–07](docs/v0.7.0-stage01-tauri-foundation.md) e o [registro de conclusão](docs/v0.7.0-completion.md) preservam contratos, decisões, evidências e limites das previews. Esta versão não distribui aplicativos Linux, iOS ou macOS.
 
 ## Download Aegis
 
 | Plataforma | Download oficial |
 | --- | --- |
-| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Android-arm64.apk) |
-| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.0/Aegis-Windows-x86_64-Setup.exe) |
+| Android ARM64 | [Baixar Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.1/Aegis-Android-arm64.apk) |
+| Windows x86_64 | [Baixar Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.1/Aegis-Windows-x86_64-Setup.exe) |
 
-Os instaladores e seus hashes SHA-256 estão na [distribuição nativa oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.0). Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente. **Instale a atualização sobre a versão existente; não desinstale para atualizar.**
+Os instaladores e seus hashes SHA-256 estão na [distribuição nativa oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.1). Os aplicativos oficiais usam `https://aegis.phcastello.com` automaticamente. **Instale a atualização sobre a versão existente; não desinstale para atualizar.**
 
 ### Android
 
@@ -21,9 +21,9 @@ Os instaladores e seus hashes SHA-256 estão na [distribuição nativa oficial](
 2. Autorize a instalação pelo navegador quando o Android solicitar e confirme no instalador do sistema.
 3. Abra a Aegis. Se já usa uma versão release, instale a atualização por cima, preservando os dados do aplicativo.
 
-A distribuição Android é por APK, fora da Play Store. Use **Configurações → Atualizações → Verificar atualizações**; o aviso no chat abre essa seção, que concentra download, instalação e diagnóstico de falhas. Sobre exibe a versão. A consulta também ocorre ao abrir ou retornar ao app, com intervalo limitado e sem polling periódico. Falha de rede é apresentada como erro de consulta.
+A distribuição Android é por APK, fora da Play Store. Use **Configurações → Atualizações → Verificar atualizações**; o aviso no chat abre essa seção, que concentra download, instalação e diagnóstico de falhas. Sobre exibe a versão instalada e o codinome completo. A consulta também ocorre ao abrir ou retornar ao app, com intervalo limitado e sem polling periódico. Falha de rede é apresentada como erro de consulta.
 
-O updater nativo da Aegis baixa para o cache privado, verifica pacote, versão e certificado e solicita confirmação no instalador Android. A v0.7.0 usa `versionName = 0.7.0` e `versionCode = 7000999`, posterior ao `7000019` da preview `.19`. O mesmo pacote e certificado permitem a atualização normal preservando identidade do Node, dados e configurações. O feed `node-preview/latest.json` continua servindo as instalações já distribuídas; seus downloads apontam para a release estável imutável.
+O updater nativo da Aegis baixa para o cache privado, verifica pacote, versão e certificado e solicita confirmação no instalador Android. A v0.7.1 usa `versionName = 0.7.1` e `versionCode = 7001999`, posterior ao `7000999` da v0.7.0 e ao `7000019` da preview `.19`. O mesmo pacote e certificado permitem a atualização normal preservando identidade do Node, dados e configurações. O feed `node-preview/latest.json` continua servindo as instalações já distribuídas; seus downloads apontam para a release estável imutável.
 
 **Migração de `stage.10`:** seu updater antigo reconhece apenas `stage.N`. Baixe o APK estável oficial e instale sobre a release existente uma vez, sem desinstalar. Previews `unstable.N`, incluindo `.19`, reconhecem a versão estável pelo fluxo de atualização existente. APKs debug antigos podem usar outro certificado e precisam de uma migração específica; não apague dados para contornar um conflito de assinatura.
 
@@ -101,6 +101,7 @@ Version history:
 - v0.6.0 — "Yeah, I know." — memória canônica, extração automática, histórico temporal, projeções semântica/relacional e recuperação híbrida.
 - v0.6.1 — "Yeah, I know." — presença conversacional, busca casual, recuperação de integrações e histórico completo no chat.
 - v0.7.0 — "It's Not Stalking. It's a Feature." — aplicativos Android/Windows, Nodes, notificações e lembretes recorrentes, lugares e geofencing híbrido, atualização assinada e recuperação nativa.
+- v0.7.1 — "It's Not Stalking. It's a Feature." — restaura o codinome completo na sidebar e em Sobre dos clientes Android, Windows e Web/PWA, preservando a versão técnica em execução.
 
 Gmail capabilities introduced in v0.2.1 remain available: Aegis can connect through OAuth, brief the inbox from chat, summarize emails and threads, and prepare light organization actions that only execute after textual confirmation.
 

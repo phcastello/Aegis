@@ -6,6 +6,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
+// Run from any directory after npm ci in both hosts and @aegis/client:
+//   node packages/aegis-client/tests/release-identity-browser.mjs
+// IDENTITY_SCREENSHOT_DIR changes the report/PNG destination. A compatible
+// Chromium from Playwright's cache or PLAYWRIGHT_CHROMIUM_EXECUTABLE is required.
+// --before captures both actual Apps and intentionally fails on absent names;
+// a screenshot baseline without the codename never counts as a passing result.
 // Exercise both production entry points, including App -> ChatView ->
 // ConversationSidebar -> AegisIdentityCard. Only external API/IPC are fixtures.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
