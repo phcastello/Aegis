@@ -18,7 +18,8 @@ local daquela instalação. A seleção se aplica à próxima captura. Não há 
 automático de permissão ao abrir as configurações. Nomes podem permanecer ocultos
 até o usuário permitir uma gravação. Um ID salvo removido/alterado que gere
 `NotFoundError` ou `OverconstrainedError` é descartado, e a captura tenta a entrada
-padrão com aviso. Negar permissão não causa tentativa com outra entrada.
+padrão com aviso. Uma preferência nova salva enquanto essa tentativa aguarda
+permissão é preservada para a próxima captura. Negar permissão não causa tentativa com outra entrada.
 
 O nível usa amostras do stream realmente capturado. Ausência de sinal dá
 orientação; `track.muted` indica falta temporária de dados e não prova mute físico.
@@ -51,7 +52,7 @@ npm --prefix apps/aegis-node run build
 ```
 
 A suíte de estado usa TypeScript 5.9.3 do lockfile para transpilar os módulos atuais.
-Seus 16 testes cobrem os dois controles e três races históricas com expectativas
+Seus 17 testes cobrem os dois controles e três races históricas com expectativas
 seguras, permissões resolvidas/rejeitadas em ambas as ordens, descarte antes e
 durante inspeção/upload, retorno tardio, callbacks repetidos, reinício rápido,
 visibilidade/unmount, recorder vazio/falho/sem `onstop`, track encerrada,

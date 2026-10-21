@@ -170,7 +170,7 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
         if (!owns(session)) return;
         const name = (error as DOMException).name;
         if (!preferred || (name !== 'NotFoundError' && name !== 'OverconstrainedError')) throw error;
-        setPreferredVoiceInput('');
+        if (getPreferredVoiceInput() === preferred) setPreferredVoiceInput('');
         notice.value = 'O microfone salvo não está disponível. Usando a entrada padrão; confira a seleção em Configurações → Sobre → Microfone.';
         diagnostic.value = 'device_unavailable';
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });

@@ -162,6 +162,19 @@ test('exact selected input and fallback on removed/changed saved device; prefere
     assert.equal(f.voiceInput.getPreferredVoiceInput(), ''); assert.match(f.api.notice.value, /entrada padrão/); f.api.dispose(); assert.equal(input.track.stopped, true); f.assertReleased();
   }
 });
+test('missing old selection falls back without erasing a preference saved during permission', async () => {
+  for (const name of ['NotFoundError', 'OverconstrainedError']) {
+    const permission = deferred(), f = await fixture({ preferred: 'synthetic-old', getUserMedia: (_c, call) => call === 1 ? permission.promise : Promise.resolve(stream()) }).ready();
+    const pending = f.api.start();
+    f.voiceInput.setPreferredVoiceInput('synthetic-next');
+    permission.reject(new DOMException('missing previous input', name)); await pending;
+    assert.equal(f.requests[1].audio, true, 'current attempt falls back to default');
+    assert.equal(f.voiceInput.getPreferredVoiceInput(), 'synthetic-next', 'new preference survives old selection failure');
+    f.api.discard(); await f.api.start();
+    assert.equal(f.requests[2].audio.deviceId.exact, 'synthetic-next', 'next capture uses the new preference');
+    f.api.dispose(); f.assertReleased();
+  }
+});
 test('input changes apply next capture; denied permission never retries using another input', async () => {
   const f = await fixture().ready(); await f.start(); f.voiceInput.setPreferredVoiceInput('synthetic-second'); assert.equal(f.requests.length, 1);
   f.api.discard(); await f.start(); assert.equal(f.requests[1].audio.deviceId.exact, 'synthetic-second'); f.api.dispose(); f.assertReleased();
