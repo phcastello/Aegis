@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { createHash } from 'node:crypto';
 
 // Run from any directory after npm ci in both hosts and @aegis/client:
 //   node packages/aegis-client/tests/release-identity-browser.mjs
@@ -23,8 +24,18 @@ mkdirSync(output, { recursive: true });
 const installed = JSON.parse(readFileSync(join(root, 'apps/aegis-node/package.json'), 'utf8')).version;
 const codename = "It's Not Stalking. It's a Feature.";
 const tagline = "You're terrible at hiding.";
+const sourceFiles = [
+  'apps/aegis-node/src/main.ts', 'apps/aegis-node/src/App.vue',
+  'frontend/aegis-pwa/src/main.ts', 'frontend/aegis-pwa/src/App.vue',
+  'packages/aegis-client/src/views/ChatView.vue',
+  'packages/aegis-client/src/components/ConversationSidebar.vue',
+  'packages/aegis-client/src/components/AegisIdentityCard.vue',
+  'packages/aegis-client/src/styles.css',
+  ...(phase === 'after' ? ['packages/aegis-client/src/services/releaseIdentity.ts'] : []),
+];
+const sourceHashes = () => Object.fromEntries(sourceFiles.map(file => [file, createHash('sha256').update(readFileSync(join(root, file))).digest('hex')]));
 const report = {
-  phase, installed,
+  phase, installed, sourceHashes: sourceHashes(),
   rendering: 'Production web and native main.ts/App.vue and shared components; browser Chromium with simulated native IPC, not installed Android or Windows/WebView2.',
   scaling: 'Root font size 100%/200%, no CSS transform; no Android system-font hardware claim.',
   cases: [], failures: [], pageErrors: [],
@@ -269,6 +280,7 @@ try {
     }
   }
   report.failures.push(...report.pageErrors.map(message => `Page error: ${message}`));
+  assert.deepEqual(sourceHashes(), report.sourceHashes, 'Product source changed during captures; repeat against a stable tree.');
   assert.equal(report.failures.length, 0, report.failures.join('\n'));
   console.log(`${report.cases.length} production App identity scenarios PASS; captures: ${output}`);
 } finally {
