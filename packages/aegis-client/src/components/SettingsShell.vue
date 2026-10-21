@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import VoiceInputSettings from './VoiceInputSettings.vue';
 export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | 'about';
 const props = defineProps<{ section: SettingsSection | null; dirty?: boolean }>();
 const emit = defineEmits<{ close: []; navigate: [section: SettingsSection]; discard: [] }>();
@@ -66,7 +67,7 @@ defineExpose({ requestClose, navigate, dismissPending });
     <header class="settings-header" :inert="pending !== null"><div><span class="settings-eyebrow">Aegis</span><h1 id="settings-title">Configurações</h1></div><button class="settings-icon-button" type="button" aria-label="Fechar configurações" @click="requestClose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></header>
     <div class="settings-layout" :inert="pending !== null">
       <nav class="settings-navigation" aria-label="Seções de configurações"><button v-for="item in sections" :key="item.id" type="button" :aria-current="section === item.id ? 'page' : undefined" @click="navigate(item.id)">{{ item.label }}</button></nav>
-      <div class="settings-content"><slot /></div>
+      <div class="settings-content"><slot /><VoiceInputSettings v-if="section === 'about'" /></div>
     </div>
     <div v-if="pending" class="settings-confirm-backdrop">
       <section class="settings-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Descartar alterações?</h2><p>Há um formulário que ainda não foi salvo.</p><div class="settings-actions"><button type="button" autofocus @click="pending = null">Continuar editando</button><button type="button" class="settings-danger" @click="discard">Descartar alterações</button></div></section>

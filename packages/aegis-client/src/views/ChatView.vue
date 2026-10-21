@@ -946,12 +946,12 @@ onBeforeUnmount(() => {
             :title="transcription.isRecording.value ? 'Encerrar gravação' : transcription.isTranscribing.value ? 'Transcrevendo…' : 'Gravar mensagem de voz'"
             @click="toggleRecording"
           >
-            <span v-if="transcription.isRecording.value" class="recording-bars" aria-hidden="true"><i/><i/><i/></span>
+            <span v-if="transcription.isRecording.value" class="recording-bars" aria-hidden="true"><i :style="{ height: `${2 + transcription.inputLevel.value * 18}px` }"/><i :style="{ height: `${2 + transcription.inputLevel.value * 24}px` }"/><i :style="{ height: `${2 + transcription.inputLevel.value * 18}px` }"/></span>
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
           </button>
 
           <button
-            v-if="transcription.isRecording.value || transcription.isTranscribing.value"
+            v-if="transcription.isBusy.value"
             class="record-discard-button"
             type="button"
             :aria-label="transcription.isTranscribing.value ? 'Cancelar transcrição' : 'Descartar gravação'"
@@ -964,9 +964,10 @@ onBeforeUnmount(() => {
             <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
           </button>
         </div>
+        <div v-if="transcription.isRecording.value" class="voice-input-status"><meter min="0" max="1" :value="transcription.inputLevel.value" aria-label="Nível real da entrada de áudio" /><span role="status">{{ transcription.inputStatus.value }}</span></div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
-        <span class="composer-hint">{{ transcription.isRecording.value ? 'Ouvindo… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        <span class="composer-hint">{{ transcription.isRecording.value ? 'Gravando… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>
     </div>

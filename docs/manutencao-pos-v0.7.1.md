@@ -7,7 +7,7 @@ Não há autorização para merge, deploy, release, tags ou alteração de feeds
 
 ## Checkpoints
 
-1. **Base/documentação — validado.** Reproduzido timeout de 30 s na paridade
+1. **Base/documentação — `bf453d3`, validado.** Reproduzido timeout de 30 s na paridade
    procurando `0.7.1` em Sobre; expectativa corrigida no badge instalado para
    `v${appVersion}`, independente da função de produção. O comando email antigo
    retornava sucesso com zero testes no Node 22; agora o pacote dono nomeia os três
@@ -16,7 +16,11 @@ Não há autorização para merge, deploy, release, tags ou alteração de feeds
    Builds PWA/nativo e email (9 testes) aprovados; paridade completa web/nativo
    aprovada após corrigir também a corrida da fixture de paginação (resposta
    controlada, sem aumentar timeout nem mudar o produto).
-2. Captura de áudio — implementação em andamento; aceite físico Windows pendente.
+2. **Captura de áudio — validada em automação.** Recursos por sessão, descarte
+   imediato/abort, escolha local de entrada, nível real e silêncio digital.
+   16 regressões e 58 testes compartilhados passaram. Chromium com MediaRecorder/
+   WebAudio reais e sinal sintético passou nos hosts web e fixtures Android/Windows.
+   Não houve teste físico; ver [evidências de áudio](audio-maintenance-validation.md).
 3. Web Push — implementação em andamento; nenhuma consulta ao banco do proprietário.
 4. Distribuição/operação/CI — implementação em andamento; sem operação em produção.
 5. Redução seletiva — consumidores a confirmar. A16 permanece fora do escopo.

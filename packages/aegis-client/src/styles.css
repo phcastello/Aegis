@@ -1249,12 +1249,8 @@ button:disabled {
   width: 3px;
   border-radius: 3px;
   background: currentColor;
-  animation: audio-bar 460ms ease-in-out infinite alternate;
+  transition: height 80ms linear;
 }
-
-.recording-bars i:nth-child(1) { height: 8px; }
-.recording-bars i:nth-child(2) { height: 17px; animation-delay: 150ms; }
-.recording-bars i:nth-child(3) { height: 11px; animation-delay: 280ms; }
 
 .send-button svg {
   width: 17px;
@@ -1562,7 +1558,7 @@ button:disabled {
   }
 
   .recording-bars i {
-    animation: none;
+    transition: none;
   }
 }
 
@@ -1761,3 +1757,7 @@ button:disabled {
 }
 
 .settings-content > section > .settings-error { position: sticky; top: 0; z-index: 3; background: var(--surface); }
+
+/* The recording indicator follows captured PCM; it has no idle animation. */
+.voice-input-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+.voice-input-status meter { width: 72px; min-width: 72px; }
