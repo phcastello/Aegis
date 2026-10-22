@@ -54,8 +54,11 @@ export async function assertNativeReleaseIdentity(page, { version, platform, out
   assert.equal((await about.locator('.about-release-tagline').innerText()).trim(), tagline);
   assert.equal((await about.locator('.settings-badge').innerText()).trim(), `v${version}`);
   assert.equal(await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).count(), 0);
-  assert.equal(await about.getByRole('button', { name: 'Abrir Atualizações', exact: true }).isVisible(), true);
+  assert.equal(await about.getByRole('button', { name: 'Abrir Atualizações', exact: true }).count(), 0);
   await page.screenshot({ path: join(output, `${platform}-about.png`) });
+  await page.getByRole('button', { name: 'Atualizações', exact: true }).click();
+  await about.getByRole('heading', { name: 'Atualizações', exact: true }).waitFor();
+  await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Fechar configurações', exact: true }).click();
   return { platform: runtime.platform, version: runtime.version, nativeIpc: 'unmodified', codename, tagline, layout };
 }
