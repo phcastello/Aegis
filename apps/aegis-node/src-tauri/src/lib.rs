@@ -19,6 +19,19 @@ mod updates;
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_notifications;
 
+fn process_session_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+#[cfg(test)]
+mod process_tests {
+    #[test]
+    fn activity_recreation_keeps_process_identity() {
+        assert_eq!(super::process_session_id(), super::process_session_id());
+        assert!(uuid::Uuid::parse_str(super::process_session_id()).is_ok());
+    }
+}
+
 #[cfg(feature = "native-runtime")]
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,12 +39,14 @@ struct RuntimeInfo {
     platform: platform::Platform,
     backend_url: Option<String>,
     version: String,
+    process_session_id: String,
 }
 
 #[cfg(feature = "native-runtime")]
 #[tauri::command]
 fn runtime_info() -> RuntimeInfo {
     RuntimeInfo {
+        process_session_id: process_session_id().to_owned(),
         platform: platform::current(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         backend_url: config::configured_endpoint()
@@ -249,6 +264,7 @@ pub fn run() {
             node_domains::node_location,
             node_domains::node_geofences,
             node_domains::node_settings_open,
+            node_domains::node_hide_keyboard,
             node_domains::node_consume_reminder_open,
             install_android_update
         ])

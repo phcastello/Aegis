@@ -15,7 +15,12 @@ impl CapabilityRegistry {
             crate::platform::Platform::Windows | crate::platform::Platform::Android => {
                 let mut capabilities = Self::audio(true, true);
                 if cfg!(feature = "native-runtime") {
-                    for name in ["notification.show", "reminder.notify", "reminder.withdraw"] {
+                    for name in [
+                        "notification.show",
+                        "conversation.notify",
+                        "reminder.notify",
+                        "reminder.withdraw",
+                    ] {
                         capabilities.push(NodeCapability {
                             name: name.into(),
                             version: 1,

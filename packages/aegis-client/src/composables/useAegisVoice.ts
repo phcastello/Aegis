@@ -1,12 +1,11 @@
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { cancelSpeech, getVoiceStatus, streamSpeech } from '../services/aegisApi';
 import { VoicePlaybackService, type VoicePlaybackState } from '../services/voicePlaybackService';
 
-const AUTO_SPEAK_KEY = 'aegis.voice.autoSpeak';
+import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 
 export function useAegisVoice() {
   const player = new VoicePlaybackService();
-  const autoSpeak = ref(localStorage.getItem(AUTO_SPEAK_KEY) !== 'false');
   const playbackState = ref<VoicePlaybackState>('idle');
   const voiceAvailable = ref(true);
   const voiceMessage = ref<string | null>(null);
@@ -18,8 +17,7 @@ export function useAegisVoice() {
   const isBusy = computed(() => playbackState.value === 'buffering' || playbackState.value === 'playing' || playbackState.value === 'initializing');
 
   function setAutoSpeak(value: boolean): void {
-    autoSpeak.value = value;
-    localStorage.setItem(AUTO_SPEAK_KEY, String(value));
+    setAutoSpeakPreference(value);
     if (value) void prepare();
   }
 
@@ -82,6 +80,7 @@ export function useAegisVoice() {
     try { voiceAvailable.value = (await getVoiceStatus()).available; } catch { voiceAvailable.value = false; }
   }
 
+  watch(autoSpeak, enabled => { if (!enabled) void stop(); });
   onBeforeUnmount(() => { void stop(); });
   return { autoSpeak, playbackState, voiceAvailable, voiceMessage, isBusy, setAutoSpeak, prepare, speak, stop, refreshStatus };
 }

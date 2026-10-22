@@ -178,6 +178,7 @@ impl NotificationExecutor {
         if !matches!(
             c.capability.as_str(),
             "notification.show"
+                | "conversation.notify"
                 | "reminder.notify"
                 | "reminder.withdraw"
                 | "geofence.monitor"
@@ -238,6 +239,14 @@ impl NotificationExecutor {
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationNotificationInput {
+    pub title: String,
+    pub body: String,
+    pub conversation_id: uuid::Uuid,
+    pub message_id: uuid::Uuid,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReminderNotificationInput {
     pub title: String,
     pub body: String,
@@ -257,6 +266,17 @@ fn valid_command_input(c: &NotificationCommand) -> bool {
         "notification.show" => {
             serde_json::from_value::<NotificationInput>(c.input.clone()).is_ok_and(|i| valid(&i))
         }
+        "conversation.notify" => serde_json::from_value::<ConversationNotificationInput>(
+            c.input.clone(),
+        )
+        .is_ok_and(|i| {
+            !i.conversation_id.is_nil()
+                && !i.message_id.is_nil()
+                && valid(&NotificationInput {
+                    title: i.title,
+                    body: i.body,
+                })
+        }),
         "reminder.notify" => serde_json::from_value::<ReminderNotificationInput>(c.input.clone())
             .is_ok_and(|i| {
                 !i.reminder_id.is_nil()
@@ -347,6 +367,32 @@ mod tests {
             expires_at: "2026-10-03T12:01:00Z".into(),
             input: serde_json::json!({"title":"Aegis","body":"Olá"}),
         }
+    }
+    #[tokio::test]
+    async fn proactive_notifications_validate_destination_and_dedupe() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = NotificationExecutor::new(Mock(calls.clone()));
+        let mut c = command();
+        c.capability = "conversation.notify".into();
+        c.input = serde_json::json!({"title":"Aegis","body":"Nova mensagem da Aegis","conversationId":uuid::Uuid::new_v4(),"messageId":uuid::Uuid::new_v4()});
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-03T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert!(matches!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Success
+        ));
+        assert!(matches!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Duplicate
+        ));
+        c.command_id = uuid::Uuid::new_v4();
+        c.input["conversationId"] = serde_json::json!(uuid::Uuid::nil());
+        assert!(matches!(
+            executor.execute(&c, now).await.status,
+            NotificationStatus::Failed
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn native_clock_counts_queue_delay_without_changing_the_external_command() {

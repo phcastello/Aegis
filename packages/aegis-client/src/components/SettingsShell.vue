@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { dismissKeyboard } from '../services/navigation';
+import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 import VoiceInputSettings from './VoiceInputSettings.vue';
-export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | 'about';
+export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | 'audio' | 'about';
 const props = defineProps<{ section: SettingsSection | null; dirty?: boolean }>();
 const emit = defineEmits<{ close: []; navigate: [section: SettingsSection]; discard: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const pending = ref<SettingsSection | 'close' | null>(null);
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'devices', label: 'Dispositivos' }, { id: 'reminders', label: 'Lembretes' },
-  { id: 'places', label: 'Lugares' }, { id: 'updates', label: 'Atualizações' }, { id: 'about', label: 'Sobre' }
+  { id: 'places', label: 'Lugares' }, { id: 'audio', label: 'Áudio e voz' }, { id: 'updates', label: 'Atualizações' }, { id: 'about', label: 'Sobre' }
 ];
 let previousFocus: HTMLElement | null = null;
 let confirmationFocus: HTMLElement | null = null;
@@ -51,10 +53,12 @@ watch(pending, async (value, before) => {
 watch(() => props.section, async (section, before) => {
   await nextTick();
   if (section && !before) {
-    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousFocus = document.activeElement instanceof HTMLElement && !document.activeElement.matches('textarea, input') ? document.activeElement : null;
+    dismissKeyboard();
     dialog.value?.showModal();
   } else if (!section && before) {
     dialog.value?.close();
+    window.dispatchEvent(new Event('aegis-chat-visible'));
     previousFocus?.focus({ preventScroll: true });
     pending.value = null;
   }
@@ -67,7 +71,7 @@ defineExpose({ requestClose, navigate, dismissPending });
     <header class="settings-header" :inert="pending !== null"><div><span class="settings-eyebrow">Aegis</span><h1 id="settings-title">Configurações</h1></div><button class="settings-icon-button" type="button" aria-label="Fechar configurações" @click="requestClose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button></header>
     <div class="settings-layout" :inert="pending !== null">
       <nav class="settings-navigation" aria-label="Seções de configurações"><button v-for="item in sections" :key="item.id" type="button" :aria-current="section === item.id ? 'page' : undefined" @click="navigate(item.id)">{{ item.label }}</button></nav>
-      <div class="settings-content"><slot /><VoiceInputSettings v-if="section === 'about'" /></div>
+      <div class="settings-content"><section v-if="section === 'audio'"><h2>Áudio e voz</h2><label class="audio-preference"><input type="checkbox" :checked="autoSpeak" @change="setAutoSpeakPreference(($event.target as HTMLInputElement).checked)" /> Reproduzir respostas automaticamente</label><p class="settings-muted">Você também pode reproduzir cada resposta pelo chat.</p><VoiceInputSettings /></section><slot v-else /></div>
     </div>
     <div v-if="pending" class="settings-confirm-backdrop">
       <section class="settings-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Descartar alterações?</h2><p>Há um formulário que ainda não foi salvo.</p><div class="settings-actions"><button type="button" autofocus @click="pending = null">Continuar editando</button><button type="button" class="settings-danger" @click="discard">Descartar alterações</button></div></section>

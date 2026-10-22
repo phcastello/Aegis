@@ -16,12 +16,33 @@ class MainActivity : TauriActivity() {
     runOnUiThread { settingsBack.isEnabled=enabled }
     return "success"
   }
+  fun hideKeyboard(payload:String):String {
+    runOnUiThread {
+      val view=currentFocus ?: currentWebView
+      view?.let {
+        (getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(it.windowToken,0)
+        it.clearFocus()
+      }
+      ViewCompat.getWindowInsetsController(window.decorView)?.hide(WindowInsetsCompat.Type.ime())
+    }
+    return "success"
+  }
   override fun onNewIntent(intent:android.content.Intent) {
     super.onNewIntent(intent)
     openReminder(intent)
   }
   private fun openReminder(intent:android.content.Intent?) {
+    intent?.getStringExtra("conversationId")?.let { id ->
+      intent.removeExtra("conversationId")
+      try {
+        if(java.util.UUID.fromString(id).toString()==id) {
+          NodeNativeNotifications.prefs(this).edit().putString("pendingConversationOpen",id).commit()
+          currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-conversation-open',{detail:{conversationId:'$id'}}))",null) }
+        }
+      } catch(_:Exception) {}
+    }
     val id=intent?.getStringExtra("reminderId") ?: return
+    intent.removeExtra("reminderId")
     try { if(java.util.UUID.fromString(id).toString()!=id)return }catch(_:Exception){return}
     NodeNativeNotifications.prefs(this).edit().putString("pendingReminderOpen",id).commit()
     currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:'$id'}}))",null) }
@@ -60,8 +81,9 @@ class MainActivity : TauriActivity() {
   fun consumeReminderOpen(payload:String):String {
     val prefs=NodeNativeNotifications.prefs(this)
     val id=prefs.getString("pendingReminderOpen",null)
-    prefs.edit().remove("pendingReminderOpen").commit()
-    return org.json.JSONObject().put("reminderId",id ?: org.json.JSONObject.NULL).toString()
+    val conversationId=prefs.getString("pendingConversationOpen",null)
+    prefs.edit().remove("pendingReminderOpen").remove("pendingConversationOpen").commit()
+    return org.json.JSONObject().put("reminderId",id ?: org.json.JSONObject.NULL).put("conversationId",conversationId ?: org.json.JSONObject.NULL).toString()
   }
   fun nodeActionState(payload:String):String {
     return NodeReminderActions.diagnostics(this).toString()

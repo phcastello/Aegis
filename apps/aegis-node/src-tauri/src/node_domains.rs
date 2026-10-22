@@ -209,10 +209,22 @@ pub async fn node_consume_reminder_open(app: AppHandle) -> Result<Value, String>
             .map_err(|_| "Não foi possível abrir o lembrete.".into());
     }
     #[cfg(windows)]
-    return Ok(json!({"reminderId":crate::windows_notifications::consume_open()}));
+    return Ok(
+        json!({"reminderId":crate::windows_notifications::consume_open(),"conversationId":crate::windows_notifications::consume_conversation_open()}),
+    );
     #[cfg(not(any(windows, target_os = "android")))]
     {
         let _ = app;
         Ok(json!({"reminderId":null}))
     }
+}
+
+#[tauri::command]
+pub async fn node_hide_keyboard(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    crate::native_notifications::android_call(&app, "hideKeyboard", "{}".into())
+        .await
+        .map_err(|_| "Não foi possível fechar o teclado.".to_string())?;
+    let _ = app;
+    Ok(())
 }

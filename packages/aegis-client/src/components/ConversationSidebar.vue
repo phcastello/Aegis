@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ComponentPublicInstance } from 'vue';
+import ConversationMenu from './ConversationMenu.vue';
 import type { ConversationSummary } from '../types/chat';
 import AegisIdentityCard from './AegisIdentityCard.vue';
 
@@ -19,17 +19,13 @@ const emit = defineEmits<{
   close: [];
   newConversation: [];
   openConversation: [conversationId: string];
-  renameConversation: [conversationId: string, title: string];
+  renameConversation: [conversation: ConversationSummary];
+  infoConversation: [conversation: ConversationSummary];
   requestDeleteConversation: [conversation: ConversationSummary];
   loadMore: [];
   retryHistory: [];
 }>();
 
-const menuConversationId = ref<string | null>(null);
-const editingConversationId = ref<string | null>(null);
-const editTitle = ref('');
-const editError = ref<string | null>(null);
-const renameInput = ref<HTMLInputElement | null>(null);
 const loadMoreSentinel = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
@@ -43,45 +39,6 @@ const historyCountLabel = computed(() => {
 
 function getTitle(conversation: ConversationSummary): string {
   return conversation.title?.trim() || 'Nova conversa';
-}
-
-function toggleMenu(conversationId: string): void {
-  menuConversationId.value = menuConversationId.value === conversationId ? null : conversationId;
-  editError.value = null;
-}
-
-function setRenameInput(element: Element | ComponentPublicInstance | null): void {
-  // A string ref inside v-for becomes an array in Vue, even for the one visible editor.
-  renameInput.value = element instanceof HTMLInputElement ? element : null;
-}
-
-function startRename(conversation: ConversationSummary): void {
-  editingConversationId.value = conversation.id;
-  editTitle.value = getTitle(conversation);
-  editError.value = null;
-  menuConversationId.value = null;
-
-  void nextTick(() => {
-    renameInput.value?.focus();
-    renameInput.value?.select();
-  });
-}
-
-function cancelRename(): void {
-  editingConversationId.value = null;
-  editTitle.value = '';
-  editError.value = null;
-}
-
-function saveRename(conversationId: string): void {
-  const normalizedTitle = editTitle.value.trim();
-  if (!normalizedTitle) {
-    editError.value = 'Escolha um título para continuar.';
-    return;
-  }
-
-  emit('renameConversation', conversationId, normalizedTitle);
-  cancelRename();
 }
 
 function configureObserver(): void {
@@ -167,48 +124,11 @@ onBeforeUnmount(() => {
           class="history-item"
           :class="{ 'history-item--active': conversation.id === activeConversationId }"
         >
-          <template v-if="editingConversationId === conversation.id">
-            <input
-              :ref="setRenameInput"
-              v-model="editTitle"
-              class="history-rename-input"
-              maxlength="80"
-              aria-label="Renomear conversa"
-              @keydown.enter.prevent="saveRename(conversation.id)"
-              @keydown.esc.prevent="cancelRename"
-              @blur="cancelRename"
-            />
-            <span v-if="editError" class="history-inline-error">{{ editError }}</span>
-          </template>
-
-          <template v-else>
-            <button
-              type="button"
-              class="history-item__main"
-              :disabled="disabled"
-              @click="emit('openConversation', conversation.id)"
-            >
-              <strong>{{ getTitle(conversation) }}</strong>
-            </button>
-
-            <button
-              type="button"
-              class="history-menu-button"
-              :aria-label="`Ações de ${getTitle(conversation)}`"
-              @click.stop="toggleMenu(conversation.id)"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M5 10h.01M10 10h.01M15 10h.01" />
-              </svg>
-            </button>
-
-            <div v-if="menuConversationId === conversation.id" class="history-menu">
-              <button type="button" @click="startRename(conversation)">Renomear</button>
-              <button type="button" class="history-menu__delete" @click="emit('requestDeleteConversation', conversation); menuConversationId = null">
-                Apagar
-              </button>
-            </div>
-          </template>
+          <button type="button" class="history-item__main" :disabled="disabled" @click="emit('openConversation', conversation.id)">
+            <strong>{{ getTitle(conversation) }}</strong>
+            <span v-if="conversation.hasUnreadProactive" class="unread-dot" role="img" aria-label="Mensagem da Aegis não lida"></span>
+          </button>
+          <ConversationMenu :title="getTitle(conversation)" :disabled="disabled" @info="emit('infoConversation', conversation)" @rename="emit('renameConversation', conversation)" @delete="emit('requestDeleteConversation', conversation)" />
         </div>
 
         <div ref="loadMoreSentinel" class="history-sentinel" aria-hidden="true"></div>

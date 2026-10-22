@@ -7,6 +7,7 @@ export interface RuntimeInfo {
   platform: Platform;
   backendUrl: string | null;
   version: string;
+  processSessionId?: string;
 }
 
 export interface HealthResult {

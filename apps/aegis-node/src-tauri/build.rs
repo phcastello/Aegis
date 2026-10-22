@@ -61,6 +61,7 @@ fn main() {
             "node_location",
             "node_geofences",
             "node_settings_open",
+            "node_hide_keyboard",
             "node_consume_reminder_open",
             "install_android_update",
         ]),

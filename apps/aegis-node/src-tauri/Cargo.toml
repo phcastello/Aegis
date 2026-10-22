@@ -1,6 +1,6 @@
 [package]
 name = "aegis-node"
-version = "0.7.1"
+version = "0.7.2"
 description = "Aegis Android and Windows foundation"
 authors = ["Aegis contributors"]
 edition = "2021"

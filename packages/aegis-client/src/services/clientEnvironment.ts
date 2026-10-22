@@ -1,5 +1,7 @@
 export interface ClientEnvironment {
   apiBaseUrl: string;
+  processSessionId?: string;
+  dismissKeyboard?: () => Promise<void>;
   externalLinks: 'browser' | 'system';
   openExternalUrl?: (url: string) => Promise<void>;
 }

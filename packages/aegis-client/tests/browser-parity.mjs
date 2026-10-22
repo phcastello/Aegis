@@ -10,7 +10,8 @@ assert.notEqual(updateVersion, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
-let cancellations = 0, feedback = 0, deletions = 0;
+let cancellations = 0, feedback = 0, deletions = 0, renameFailures = 0;
+let proactiveMessages = [], proactiveRead = 0, conversationDelay = 0;
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const server = http.createServer(async (req, res) => {
  if (req.headers.origin === 'http://127.0.0.1:1420') res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
@@ -31,12 +32,16 @@ const server = http.createServer(async (req, res) => {
  if (path === '/api/voice/transcription/status') return json(res, { enabled: false, configured: false });
  if (path === '/api/email/status') return json(res, { isConnected: true, emailAddress: 'test@example.test' });
  if (path === '/api/notifications/configuration') return json(res, { enabled: false, publicKey: null });
- if (path === '/api/chat/conversations') return json(res, { items: deletions ? [] : [fixture], hasMore: false });
- if (path.endsWith('/title')) { fixture.title = body.title; return json(res, fixture); }
+ if (path === '/api/chat/proactive-activity') return json(res, proactiveMessages.length ? [{ conversationId: 'c1', lastProactiveSequence: proactiveMessages.length, readProactiveSequence: proactiveRead }] : []);
+ if (path === '/api/chat/conversations/c1/proactive-messages') return json(res, proactiveMessages.filter(m => m.proactiveSequence > Number(url.searchParams.get('after'))));
+ if (path === '/api/chat/conversations/c1/proactive-read') { proactiveRead = Math.max(proactiveRead, body.sequence); return json(res, null, 204); }
+ if (path === '/api/chat/conversations') return json(res, { items: deletions ? [] : [{...fixture, hasUnreadProactive: proactiveMessages.length > proactiveRead}], hasMore: false });
+ if (path.endsWith('/title')) { if (body.title === 'Falhar uma vez' && renameFailures++ === 0) return json(res, { error: 'fixture failure' }, 503); fixture.title = body.title; return json(res, fixture); }
  if (path.endsWith('/feedback')) { feedback++; return json(res, { id: 'f1', rating: body.rating }); }
  if (path.endsWith('/memory-activity')) return json(res, { pending: false, sections: [{ kind: 'used', items: ['Fato de teste.'], totalCount: 1 }] });
  if (path === '/api/chat/conversations/c1' && req.method === 'DELETE') { deletions++; return json(res, null, 204); }
- if (path === '/api/chat/conversations/c1') return json(res, fixture);
+ if (path === '/api/chat/conversations/c1') { if(conversationDelay) await new Promise(resolve=>setTimeout(resolve,conversationDelay)); return json(res, {...fixture, messages:[...fixture.messages, ...proactiveMessages]}); }
+ if (path === '/api/chat/conversations/f0000000-0000-4000-8000-000000000001') return json(res, {...fixture,id:'f0000000-0000-4000-8000-000000000001',messages:[{...fixture.messages[0],content:'Destino explícito preservado.'}]});
  if (path.includes('/turns/') && req.method === 'DELETE') { cancellations++; return json(res, null, 204); }
  if (path.includes('/turns/')) return json(res, null, 204);
  if (path === '/api/chat/messages/stream') {
@@ -116,7 +121,7 @@ try {
        if(command==='node_set_reminders'){const node=args.id===current.id?current:other;node.receiveReminders=args.receiveReminders;return node;}
        if(command==='node_remove'){other.revokedAt=now;other.enabled=false;return;}
 
-       if (command === 'runtime_info') return { platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: runtimeVersion };
+       if (command === 'runtime_info') return { processSessionId: localStorage.getItem('fixture.processSession') || 'fixture-process', platform: 'android', backendUrl: 'http://127.0.0.1:18093', version: runtimeVersion };
        if (command === 'check_backend') return { status: 'connected', message: null };
        if (command === 'node_transport_status') return { transportState: 'online', lastError: null };
        if (command === 'node_transport_reconnect') return;
@@ -153,6 +158,43 @@ try {
    assert.equal(await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).count(),0,'Collapsed mobile navigation exposes only the normal sidebar opener');
    assert.equal(await page.locator('.global-navigation-floating').count(),0);
    await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
+   assert.equal(await page.locator('.conversation-heading').isVisible(), false, 'Mobile hides title/date/category');
+   assert.equal(await page.locator('.voice-toggle').count(), 0);
+   await page.locator('textarea').fill('Rascunho preservado'); await page.locator('textarea').focus();
+   await page.getByLabel('Abrir histórico', { exact: true }).click();
+   assert.equal(await page.locator('textarea').evaluate(el => el === document.activeElement), false);
+   await page.getByLabel('Fechar histórico', { exact: true }).click();
+   assert.equal(await page.locator('textarea').inputValue(), 'Rascunho preservado');
+   assert.equal(await page.locator('textarea').evaluate(el => el === document.activeElement), false);
+   await page.getByLabel('Menu da conversa', { exact: true }).click();
+   assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Informações','Renomear','Excluir']);
+   await page.keyboard.press('Escape'); assert.equal(await page.getByRole('menu').count(), 0);
+   await page.getByLabel('Menu da conversa', { exact: true }).click();
+   await page.getByRole('menuitem', { name: 'Informações', exact: true }).click();
+   const info = page.getByRole('dialog', { name: 'Informações da conversa', exact: true });
+   await info.locator('code').getByText('c1', { exact: true }).waitFor();
+   await page.evaluate(() => { navigator.clipboard.writeText = async value => { window.copiedId = value; }; });
+   await info.getByRole('button', { name: 'Copiar ID', exact: true }).click();
+   assert.equal(await page.evaluate(() => window.copiedId), 'c1'); await info.getByText('Copiado', { exact: true }).waitFor();
+   await page.keyboard.press('Escape'); await info.waitFor({state:'hidden'});
+   await page.getByLabel('Menu da conversa', { exact: true }).click();
+   await page.getByRole('menuitem', { name: 'Renomear', exact: true }).click();
+   const rename = page.getByRole('dialog', { name: 'Renomear conversa', exact: true });
+   assert.equal(await rename.getByLabel('Título', {exact:true}).inputValue(), fixture.title);
+   assert.equal(await rename.getByRole('button', { name: 'Salvar', exact:true }).isDisabled(), true);
+   await rename.getByLabel('Título', {exact:true}).fill('   ');
+   assert.equal(await rename.getByRole('button', { name: 'Salvar', exact:true }).isDisabled(), true);
+   await page.keyboard.press('Escape'); await rename.waitFor({state:'hidden'});
+   await page.getByLabel('Menu da conversa', { exact: true }).click(); await page.getByRole('menuitem', { name: 'Renomear', exact: true }).click();
+   await rename.getByLabel('Título', {exact:true}).fill('Falhar uma vez');
+   await rename.getByRole('button', {name:'Salvar',exact:true}).click(); await rename.getByRole('alert').waitFor();
+   assert.equal(await rename.getByLabel('Título', {exact:true}).inputValue(), 'Falhar uma vez');
+   await page.evaluate(() => window.dispatchEvent(new Event('aegis-back'))); await rename.waitFor({state:'hidden'});
+   assert.equal(await page.locator('textarea').inputValue(), 'Rascunho preservado');
+   await page.getByLabel('Menu da conversa', {exact:true}).click();await page.getByRole('menuitem',{name:'Renomear',exact:true}).click();
+   await rename.getByLabel('Título',{exact:true}).fill('Título pelo menu superior');await rename.getByRole('button',{name:'Salvar',exact:true}).click();await rename.waitFor({state:'hidden'});
+   await page.getByLabel('Menu da conversa', {exact:true}).click();await page.getByRole('menuitem',{name:'Renomear',exact:true}).click();
+   await rename.getByLabel('Título',{exact:true}).fill('Conversa de teste');await rename.getByRole('button',{name:'Salvar',exact:true}).click();await rename.waitFor({state:'hidden'});
    await page.locator('textarea').fill('teste'); await page.getByLabel('Enviar mensagem').click();
    await page.getByText('Parcial', { exact: true }).waitFor();
    assert.equal(await page.locator('.markdown-message strong').count(), 0);
@@ -181,6 +223,9 @@ try {
      await page.getByRole('button',{name:'Abrir histórico',exact:true}).click();
      await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
      const panel = page.getByRole('dialog', { name: 'Configurações', exact: true });
+     await panel.getByRole('button',{name:'Áudio e voz',exact:true}).click();
+     const automatic = panel.getByRole('checkbox',{name:'Reproduzir respostas automaticamente',exact:true});
+     assert.equal(await automatic.isChecked(),false);await automatic.check();assert.equal(await page.evaluate(()=>localStorage.getItem('aegis.voice.autoSpeak')),'true');await automatic.uncheck();
      await panel.getByRole('button', {name:'Sobre',exact:true}).click();
      const installedVersion = panel.locator('.about-brand .settings-badge');
      await installedVersion.waitFor();
@@ -190,7 +235,7 @@ try {
      assert.equal(await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).count(),0);
      assert.equal(await panel.locator('.update-notice').count(),0,'About has no second updater renderer');
      assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='check_android_update').length),1,'There is only one initial update check');
-     await panel.getByRole('button',{name:'Abrir Atualizações',exact:true}).click();
+     assert.equal(await panel.getByRole('button',{name:'Abrir Atualizações',exact:true}).count(),0);await panel.getByRole('button',{name:'Atualizações',exact:true}).click();
      await page.evaluate(version=>window.fixtureUpdate={version,url:`https://github.com/phcastello/Aegis/releases/download/node-v${version}/Aegis-Android-arm64.apk`},updateVersion);
      await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
      await panel.getByRole('status',{name:'Atualização da Aegis',exact:true}).waitFor();
@@ -427,13 +472,43 @@ try {
    await page.locator('textarea').fill('cancelar'); await page.getByLabel('Enviar mensagem').click();
    await page.getByLabel('Interromper geração').click(); await page.getByLabel('Enviar mensagem').waitFor();
    await page.getByLabel('Abrir histórico').click();
-   await page.getByLabel('Ações de Conversa de teste').click(); await page.getByRole('button', { name: 'Renomear', exact: true }).click();
-   await page.getByLabel('Renomear conversa').fill('Renomeada'); await page.getByLabel('Renomear conversa').press('Enter');
+   await page.getByLabel('Ações de Conversa de teste').click(); await page.getByRole('menuitem', { name: 'Renomear', exact: true }).click();
+   await page.getByLabel('Título', { exact: true }).fill('Renomeada'); await page.getByLabel('Título', { exact: true }).press('Enter');
    await page.getByRole('button', { name: 'Renomeada', exact: true }).waitFor();
    await page.getByRole('button', { name: 'Nova conversa', exact: true }).click();
    await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
    await page.locator('#conversation-sidebar').evaluate(element=>Promise.all(element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));
    if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${host}-chat-mobile.png`});
+   assert.equal(await page.getByLabel('Menu da conversa',{exact:true}).isDisabled(),true,'Empty conversation requires no persisted ID');
+   proactiveMessages = [{id:'proactive-one',conversationId:'c1',role:'assistant',content:'Preciso que você abra o aplicativo no celular para ativar o lembrete.',createdAt:new Date().toISOString(),isProactive:true,proactiveSequence:1}];
+   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+   await page.getByLabel('Abrir histórico',{exact:true}).click();await page.getByLabel('Mensagem da Aegis não lida',{exact:true}).waitFor();
+   assert.equal(await page.getByText(proactiveMessages[0].content,{exact:true}).count(),0,'Incoming message does not navigate to another conversation');
+   await page.reload();await page.getByLabel('Abrir histórico',{exact:true}).click();await page.getByLabel('Mensagem da Aegis não lida',{exact:true}).waitFor();
+   await page.getByRole('button',{name:/^Renomeada/}).click();await page.getByText(proactiveMessages[0].content,{exact:true}).waitFor();
+   await page.waitForFunction(()=>!document.querySelector('[aria-label="Mensagem da Aegis não lida"]'));
+   assert.equal(proactiveRead,1,'Only visible proactive content advances the persisted read marker');
+   await page.getByLabel('Abrir histórico',{exact:true}).click();
+   proactiveMessages.push({id:'proactive-two',conversationId:'c1',role:'assistant',content:'A localização em segundo plano precisa ser habilitada para este outro lembrete.',createdAt:new Date().toISOString(),isProactive:true,proactiveSequence:2});
+   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+   await page.getByText(proactiveMessages[1].content,{exact:true}).waitFor();
+   assert.equal(proactiveRead,1,'Selected conversation behind mobile drawer does not imply reading');
+   await page.getByLabel('Fechar histórico',{exact:true}).click();
+   await page.locator('.messages').evaluate(element=>element.scrollTop=element.scrollHeight);
+   await page.waitForFunction(()=>!document.querySelector('[aria-label="Mensagem da Aegis não lida"]'));
+   assert.equal(proactiveRead,2);
+
+   if(host==='native') {
+     await page.reload();await page.getByText(proactiveMessages[0].content,{exact:true}).waitFor();
+     await page.evaluate(()=>localStorage.setItem('fixture.processSession','new-native-process'));await page.reload();
+     await page.getByText('Digite ou fale uma mensagem.',{exact:true}).waitFor();
+     assert.equal(await page.getByText(proactiveMessages[0].content,{exact:true}).count(),0,'A new native process starts empty');
+     conversationDelay = 500;
+     await page.getByLabel('Abrir histórico',{exact:true}).click();await page.getByRole('button',{name:'Renomeada',exact:true}).click();
+     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('aegis-conversation-open',{detail:{conversationId:'f0000000-0000-4000-8000-000000000001'}})));
+     conversationDelay = 0;
+     await page.getByText('Destino explícito preservado.',{exact:true}).waitFor();
+   }
    await page.setViewportSize({ width: 1600, height: 900 });
    // matchMedia delivers the breakpoint change asynchronously. Wait for Vue's
    // desktop layout, then read both rectangles in the same browser frame.
@@ -455,14 +530,15 @@ try {
      await page.keyboard.press('Escape');await settings.waitFor({state:'hidden'});assert.equal(await trigger.evaluate(element=>document.activeElement===element),true,'Escape must restore launcher focus');
      await trigger.click();await settings.waitFor();await page.mouse.click(12,450);await settings.waitFor({state:'hidden'});assert.equal(await trigger.evaluate(element=>document.activeElement===element),true,'Backdrop must restore launcher focus');
    }
+   await page.getByRole('button',{name:'Renomeada',exact:true}).click();
    await page.getByLabel('Ações de Renomeada').click();
-   await page.getByRole('button', { name: 'Apagar', exact: true }).click();
+   await page.getByRole('menuitem', { name: 'Excluir', exact: true }).click();
    await page.getByRole('dialog', { name: 'Apagar conversa' }).getByRole('button', { name: 'Apagar', exact: true }).click();
    await page.getByRole('dialog', { name: 'Apagar conversa' }).waitFor({ state: 'hidden' });
-   assert.equal(deletions, 1);
+   assert.equal(deletions, 1); await page.getByText('Digite ou fale uma mensagem.',{exact:true}).waitFor();
    assert.deepEqual(errors, []);
    console.log(`${host}: UI, streaming before done, cancel, history, rename, Markdown, feedback, memory, mobile/resize PASS (fixture; native IPC mocked)`);
-   await context.close(); fixture.title = 'Conversa de teste'; deletions = 0;
+   await context.close(); fixture.title = 'Conversa de teste'; deletions = 0; renameFailures = 0; proactiveMessages = []; proactiveRead = 0;
  }
  assert.equal(feedback, 4); assert.equal(cancellations, 2);
 } catch(error) { if(process.env.PARITY_SCREENSHOT_DIR&&activePage&&!activePage.isClosed())await activePage.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${activeHost}-failure.png`}).catch(()=>{});throw error;

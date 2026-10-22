@@ -2,6 +2,15 @@ package com.aegis.node
 import org.junit.Assert.*
 import org.junit.Test
 class NodeNotificationPayloadTest {
+ @Test fun conversationNotificationsRequireTwoRealCanonicalIds() {
+  val conversation="00000000-0000-4000-8000-000000000001";val message="00000000-0000-4000-8000-000000000002"
+  assertTrue(NodeNotificationPayload.validConversationDestination(conversation,message))
+  for(invalid in listOf("", "https://example.test", "00000000-0000-0000-0000-000000000000", "1-1-1-1-1")) {
+   assertFalse(NodeNotificationPayload.validConversationDestination(invalid,message))
+   assertFalse(NodeNotificationPayload.validConversationDestination(conversation,invalid))
+  }
+ }
+
  private fun data()=mapOf("nodeId" to "current-node", "type" to "notification.show", "version" to "1", "commandId" to "00000000-0000-4000-8000-000000000001", "expiresAt" to "2026-10-03T12:00:00Z", "title" to "Aegis", "body" to "Olá")
  @Test fun validInputNeedsMatchingNativeBinding() {assertNotNull(NodeNotificationPayload.fromData(data(),"current-node"));assertNull(NodeNotificationPayload.fromData(data(),null));assertNull(NodeNotificationPayload.fromData(data(),"another-node"))}
  @Test fun rejectsUnknownTypesAndExtraFields() {assertNull(NodeNotificationPayload.fromData(data()+mapOf("type" to "shell.execute"),"current-node"));assertNull(NodeNotificationPayload.fromData(data()+mapOf("extra" to "value"),"current-node"));assertNull(NodeNotificationPayload.fromData(data()+mapOf("version" to "2"),"current-node"))}

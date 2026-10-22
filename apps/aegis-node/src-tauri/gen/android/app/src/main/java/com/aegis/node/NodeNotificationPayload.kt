@@ -8,6 +8,9 @@ data class NodeNotificationPayload(val commandId:String,val expiresAt:String,val
   // Instant.parse in desugar_jdk_libs 2.1.5 accepts only Z, unlike a desktop JDK 17.
   fun expiryEpochSecond(expires: String): Long = OffsetDateTime.parse(expires).toInstant().epochSecond
   private val keys=setOf("nodeId","type","version","commandId","expiresAt","title","body")
+  fun validConversationDestination(conversationId:String,messageId:String):Boolean = try {
+   listOf(conversationId,messageId).all { val id=UUID.fromString(it);id.toString()==it && id!=UUID(0,0) }
+  } catch(_:Exception) {false}
   fun validText(title:String,body:String):Boolean = title.isNotBlank() && title.length<=120 && body.length<=2000 && (title+body).toByteArray(Charsets.UTF_8).size<=2800 && !title.any {it.isISOControl()} && !body.any {it.isISOControl() && it!='\n' && it!='\t'}
   fun fromData(data:Map<String,String>,boundNodeId:String?):NodeNotificationPayload? {
    if(boundNodeId==null || data.keys!=keys || data["nodeId"]!=boundNodeId || data["type"]!="notification.show" || data["version"]!="1") return null
