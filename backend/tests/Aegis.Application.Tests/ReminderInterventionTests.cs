@@ -169,13 +169,26 @@ public sealed class ReminderInterventionTests
     [Fact] public async Task SlowHealthySyncConfirmedBeforeFiveMinutesNeverProducesMessage() {
         await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
         var store = new ReminderInterventionStore(db, clock); var start = clock.Now;
-        foreach (var seconds in new[] { 0, 30, 90, 180, 299 }) {
+        foreach (var seconds in new[] { 0, 30, 90, 180, 269 }) {
             clock.Now = start.AddSeconds(seconds);
             foreach (var recovery in await store.ReconcileAsync(default)) await store.RecoveryCompletedAsync(recovery, "accepted", default);
             Assert.Null(await store.ClaimAsync(default));
         }
         var rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "waiting_initial", null, clock.Now); await db.SaveChangesAsync();
         clock.Now = start.AddMinutes(5); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default)); Assert.Empty(db.ChatMessages.Where(m => m.IsProactive));
+    }
+    [Theory][InlineData(0)][InlineData(1)][InlineData(15)][InlineData(29)]
+    public async Task AnyNormalScanAlignmentEscalatesWithinFiveMinutes(int phaseSeconds) {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock); var start = clock.Now;
+        var store = new ReminderInterventionStore(db, clock); InterventionClaim? intervention = null;
+        for (var seconds = phaseSeconds; seconds <= 300 && intervention is null; seconds += 30) {
+            clock.Now = start.AddSeconds(seconds);
+            foreach (var recovery in await store.ReconcileAsync(default)) await store.RecoveryCompletedAsync(recovery, "accepted", default);
+            intervention = await store.ClaimAsync(default);
+            if (seconds < 270) Assert.Null(intervention);
+        }
+        Assert.NotNull(intervention); Assert.InRange((clock.Now - start).TotalSeconds, 270, 300);
+        Assert.Equal(TimeSpan.FromMinutes(5), ReminderReliabilityPolicy.PendingSyncLimit);
     }
     [Theory][InlineData(false)][InlineData(true)]
     public async Task DeadlineWinsOverLateScansAndRepeatedAcksDoNotRestartIncident(bool scanBeforeAck) {

@@ -7,6 +7,9 @@ public static class ReminderReliabilityPolicy
     // Every recovery is measured from the original activation incident.
     public static readonly TimeSpan PendingSyncLimit = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(30);
+    // Reserve one scan interval so a rule created between scans is escalated
+    // before the five-minute ceiling in a normally running monitor.
+    public static readonly TimeSpan EscalationAfter = PendingSyncLimit - ScanInterval;
     public static readonly TimeSpan[] RecoveryOffsets = [TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(180)];
     public static readonly TimeSpan[] ModelRetryDelays = [TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(15)];
     // After the initial five calls: one call after 1h, 3h, 6h, 12h, then at most daily.
@@ -18,7 +21,7 @@ public static class ReminderReliabilityPolicy
         "background_location_required" or "location_permission_required" or "precise_location_required" or
         "location_services_disabled" or "region_limit_exceeded" or "geometry_required";
     public static bool ShouldIntervene(GeographicReminderRule rule, DateTimeOffset startedAt, DateTimeOffset now) =>
-        HasProblem(rule, now) && (RequiresImmediateIntervention(rule) || now >= startedAt + PendingSyncLimit);
+        HasProblem(rule, now) && (RequiresImmediateIntervention(rule) || now >= startedAt + EscalationAfter);
     public static bool HasProblem(GeographicReminderRule rule, DateTimeOffset now) => rule.Status == "active" &&
         (rule.EndsAt is null || rule.EndsAt > now) &&
         (rule.SyncStatus is "pending_sync" or "recoverable_error" || LocalLeaseExpired(rule, now));

@@ -60,7 +60,7 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
                 results.Add(new(attempt, now, "prepared_outcome_unknown")); job.RecoveryResultsJson = JsonSerializer.Serialize(results);
                 job.NextAttemptAt = attempt < ReminderReliabilityPolicy.RecoveryOffsets.Length
                     ? new[] { now.AddSeconds(30), job.StartedAt + ReminderReliabilityPolicy.RecoveryOffsets[attempt] }.Max()
-                    : new[] { now.AddSeconds(30), job.StartedAt + ReminderReliabilityPolicy.PendingSyncLimit }.Max();
+                    : new[] { now.AddSeconds(30), job.StartedAt + ReminderReliabilityPolicy.EscalationAfter }.Max();
                 claims.Add(new(job.Id, rule.ObserverNodeId, attempt));
             }
         }

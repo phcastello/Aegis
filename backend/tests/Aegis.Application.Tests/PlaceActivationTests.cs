@@ -39,8 +39,8 @@ public sealed class PlaceActivationTests
     {
         await using var f = new Fixture(); await f.Initialize(); var place = await f.Place(); var rule = await f.Rule(place.Id);
         var start = f.Clock.Now;
-        f.Clock.Now = start.AddSeconds(299); Assert.Equal("pending_sync", Assert.Single(await f.Service.RulesAsync()).SyncStatus);
-        f.Clock.Now = start.AddSeconds(300); var overdue = Assert.Single(await f.Service.RulesAsync());
+        f.Clock.Now = start.AddSeconds(269); Assert.Equal("pending_sync", Assert.Single(await f.Service.RulesAsync()).SyncStatus);
+        f.Clock.Now = start.AddSeconds(270); var overdue = Assert.Single(await f.Service.RulesAsync());
         Assert.Equal("recoverable_error", overdue.SyncStatus); Assert.Equal("activation_confirmation_overdue", overdue.ErrorCode);
         var entity = await f.Db.Set<GeographicReminderRule>().SingleAsync(); entity.Confirm(rule.Revision, "waiting_initial", null, f.Clock.Now); await f.Db.SaveChangesAsync();
         var installed = Assert.Single(await f.Service.RulesAsync()); Assert.Equal("waiting_initial", installed.SyncStatus); Assert.Null(installed.ErrorCode);
