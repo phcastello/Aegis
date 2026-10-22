@@ -7,7 +7,7 @@ export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | '
 const props = defineProps<{ section: SettingsSection | null; dirty?: boolean }>();
 const emit = defineEmits<{ close: []; navigate: [section: SettingsSection]; discard: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
-const pending = ref<SettingsSection | 'close' | null>(null);
+const pending = ref<SettingsSection | 'close' | { proceed: () => void; cancel: () => void } | null>(null);
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'devices', label: 'Dispositivos' }, { id: 'reminders', label: 'Lembretes' },
   { id: 'places', label: 'Lugares' }, { id: 'audio', label: 'Áudio e voz' }, { id: 'updates', label: 'Atualizações' }, { id: 'about', label: 'Sobre' }
@@ -19,17 +19,32 @@ function navigate(section: SettingsSection) {
   if (props.dirty) { pending.value = section; return; }
   emit('navigate', section);
 }
+function cancelPending() {
+  const destination = pending.value;
+  pending.value = null;
+  if (typeof destination === 'object') destination?.cancel();
+}
+// Native destinations share the existing discard dialog and retain their action
+// until the user decides. Cancelling settles the request without navigating.
+function requestNavigation(action: () => void): Promise<boolean> {
+  if (!props.dirty) { action(); return Promise.resolve(true); }
+  cancelPending();
+  return new Promise(resolve => {
+    pending.value = { proceed: () => { action(); resolve(true); }, cancel: () => resolve(false) };
+  });
+}
 function requestClose() {
-  if (pending.value) { pending.value = null; return; }
+  if (pending.value) { cancelPending(); return; }
   if (props.dirty) { pending.value = 'close'; return; }
   emit('close');
 }
-function dismissPending(): boolean { if (!pending.value) return false; pending.value = null; return true; }
+function dismissPending(): boolean { if (!pending.value) return false; cancelPending(); return true; }
 function discard() {
   const destination = pending.value;
   pending.value = null;
   emit('discard');
-  if (destination === 'close') emit('close'); else if (destination) emit('navigate', destination);
+  if (typeof destination === 'object') destination?.proceed();
+  else if (destination === 'close') emit('close'); else if (destination) emit('navigate', destination);
 }
 function keepFocus(event: KeyboardEvent) {
   if (event.key !== 'Tab' || !dialog.value?.open) return;
@@ -60,11 +75,11 @@ watch(() => props.section, async (section, before) => {
     dialog.value?.close();
     window.dispatchEvent(new Event('aegis-chat-visible'));
     previousFocus?.focus({ preventScroll: true });
-    pending.value = null;
+    cancelPending();
   }
 }, { immediate: true });
-onBeforeUnmount(() => { dialog.value?.close(); previousFocus?.focus({ preventScroll: true }); });
-defineExpose({ requestClose, navigate, dismissPending });
+onBeforeUnmount(() => { cancelPending(); dialog.value?.close(); previousFocus?.focus({ preventScroll: true }); });
+defineExpose({ requestClose, navigate, dismissPending, requestNavigation });
 </script>
 <template>
   <dialog ref="dialog" class="settings-dialog" aria-labelledby="settings-title" @cancel.prevent="requestClose" @click="backdrop" @keydown="keepFocus">
@@ -74,7 +89,7 @@ defineExpose({ requestClose, navigate, dismissPending });
       <div class="settings-content"><section v-if="section === 'audio'"><h2>Áudio e voz</h2><label class="audio-preference"><input type="checkbox" :checked="autoSpeak" @change="setAutoSpeakPreference(($event.target as HTMLInputElement).checked)" /> Reproduzir respostas automaticamente</label><p class="settings-muted">Você também pode reproduzir cada resposta pelo chat.</p><VoiceInputSettings /></section><slot v-else /></div>
     </div>
     <div v-if="pending" class="settings-confirm-backdrop">
-      <section class="settings-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Descartar alterações?</h2><p>Há um formulário que ainda não foi salvo.</p><div class="settings-actions"><button type="button" autofocus @click="pending = null">Continuar editando</button><button type="button" class="settings-danger" @click="discard">Descartar alterações</button></div></section>
+      <section class="settings-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Descartar alterações?</h2><p>Há um formulário que ainda não foi salvo.</p><div class="settings-actions"><button type="button" autofocus @click="cancelPending">Continuar editando</button><button type="button" class="settings-danger" @click="discard">Descartar alterações</button></div></section>
     </div>
   </dialog>
 </template>

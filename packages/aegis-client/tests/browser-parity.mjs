@@ -11,7 +11,7 @@ assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url)
 assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
 let cancellations = 0, feedback = 0, deletions = 0, renameFailures = 0;
-let proactiveMessages = [], proactiveRead = 0, conversationDelay = 0;
+let proactiveMessages = [], proactiveRead = 0, conversationDelay = 0, notificationConversationLoads = 0;
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const server = http.createServer(async (req, res) => {
  if (req.headers.origin === 'http://127.0.0.1:1420') res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
@@ -41,7 +41,7 @@ const server = http.createServer(async (req, res) => {
  if (path.endsWith('/memory-activity')) return json(res, { pending: false, sections: [{ kind: 'used', items: ['Fato de teste.'], totalCount: 1 }] });
  if (path === '/api/chat/conversations/c1' && req.method === 'DELETE') { deletions++; return json(res, null, 204); }
  if (path === '/api/chat/conversations/c1') { if(conversationDelay) await new Promise(resolve=>setTimeout(resolve,conversationDelay)); return json(res, {...fixture, messages:[...fixture.messages, ...proactiveMessages]}); }
- if (path === '/api/chat/conversations/f0000000-0000-4000-8000-000000000001') return json(res, {...fixture,id:'f0000000-0000-4000-8000-000000000001',messages:[{...fixture.messages[0],content:'Destino explícito preservado.'}]});
+ if (path === '/api/chat/conversations/f0000000-0000-4000-8000-000000000001') { notificationConversationLoads++; return json(res, {...fixture,id:'f0000000-0000-4000-8000-000000000001',messages:[{...fixture.messages[0],content:'Destino explícito preservado.'}]}); }
  if (path.includes('/turns/') && req.method === 'DELETE') { cancellations++; return json(res, null, 204); }
  if (path.includes('/turns/')) return json(res, null, 204);
  if (path === '/api/chat/messages/stream') {
@@ -103,7 +103,8 @@ try {
        window.nativeCalls.push(command);
        // Match Tauri's JSON IPC boundary instead of retaining Vue proxy references.
        if(args!==undefined)args=JSON.parse(JSON.stringify(args));
-       if(command === 'node_settings_open') return;
+       if(command === 'node_settings_open' || command === 'node_hide_keyboard') return;
+       if(command === 'node_consume_reminder_open') { const value=JSON.parse(localStorage.getItem('fixture.pendingNativeDestination')??'null');localStorage.removeItem('fixture.pendingNativeDestination');return value??{conversationId:null,reminderId:null}; }
        if(command === 'node_reminders') { if(args.operation === 'list') {
          const query=args.payload??{};window.reminderListRequests.push(query);if(window.reminderListDelay)await new Promise(resolve=>setTimeout(resolve,window.reminderListDelay));
          if(query.offset>0 || query.seriesOffset>0) {await (window.reminderPageGate ?? new Promise(resolve=>setTimeout(resolve,350)));if(window.reminderPageFailure){window.reminderPageFailure=false;throw Error('Falha sintética de página.');}}
@@ -452,10 +453,33 @@ try {
      const dirtyFocus=await page.evaluate(()=>{const item={...window.oldReminder,reminderId:crypto.randomUUID(),text:'Foco aguardando formulário'};window.extraFocusedReminders.push(item);return {id:item.reminderId,requests:window.reminderListRequests.length};});
      await page.evaluate(id=>window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:id}})),dirtyFocus.id);
      await page.waitForTimeout(200);assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Formulário ainda não salvo');assert.equal(await page.evaluate(()=>window.reminderListRequests.length),dirtyFocus.requests,'A notification must preserve the unsaved form');
-     await panel.getByRole('button',{name:'Cancelar',exact:true}).click();
-     await panel.locator('.editor-discard').getByRole('button',{name:'Descartar alterações',exact:true}).click();
+     const discardNavigation=panel.getByRole('alertdialog',{name:'Descartar alterações?',exact:true});
+     await discardNavigation.waitFor(); await discardNavigation.getByRole('button',{name:'Continuar editando',exact:true}).click();
+     assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Formulário ainda não salvo');
+     await page.waitForTimeout(1100);
+     await page.evaluate(id=>{for(let i=0;i<2;i++)window.dispatchEvent(new CustomEvent('aegis-reminder-open',{detail:{reminderId:id}}));},dirtyFocus.id);
+     await discardNavigation.getByRole('button',{name:'Descartar alterações',exact:true}).click();
      await panel.getByRole('heading',{name:'Foco aguardando formulário',exact:true}).waitFor();
      assert.equal(await page.evaluate(id=>document.activeElement.id===`reminder-${id}`,dirtyFocus.id),true);
+     await panel.getByRole('button',{name:'Novo lembrete',exact:true}).click();
+     await panel.getByLabel('O que lembrar').fill('Edição preservada ao tocar mensagem');
+     const beforeNotificationNavigation=notificationConversationLoads;
+     const emitConversation=()=>page.evaluate(()=>{for(let i=0;i<2;i++)window.dispatchEvent(new CustomEvent('aegis-conversation-open',{detail:{conversationId:'f0000000-0000-4000-8000-000000000001'}}));});
+     await emitConversation(); await discardNavigation.waitFor();
+     await discardNavigation.getByRole('button',{name:'Continuar editando',exact:true}).click();
+     assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Edição preservada ao tocar mensagem');
+     assert.equal(notificationConversationLoads,beforeNotificationNavigation,'Continue editing cancels navigation without losing data');
+     await page.waitForTimeout(1100); await emitConversation(); await discardNavigation.waitFor();
+     await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back'))); await discardNavigation.waitFor({state:'hidden'});
+     assert.equal(await panel.getByLabel('O que lembrar').inputValue(),'Edição preservada ao tocar mensagem');
+     await page.waitForTimeout(1100); await emitConversation();
+     await discardNavigation.getByRole('button',{name:'Descartar alterações',exact:true}).click();
+     await panel.waitFor({state:'hidden'}); await page.getByText('Destino explícito preservado.',{exact:true}).waitFor();
+     assert.equal(notificationConversationLoads,beforeNotificationNavigation+1,'Duplicate native events produce one guarded navigation');
+     await page.getByLabel('Abrir histórico',{exact:true}).click();
+     await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).click();
+     await panel.getByRole('button',{name:'Lembretes',exact:true}).click();
+
      await page.evaluate(()=>window.dispatchEvent(new Event('aegis-back')));
      await panel.waitFor({state:'hidden'});
      await page.getByRole('button',{name:'Fechar histórico',exact:true}).click();
@@ -508,6 +532,9 @@ try {
      await page.evaluate(()=>window.dispatchEvent(new CustomEvent('aegis-conversation-open',{detail:{conversationId:'f0000000-0000-4000-8000-000000000001'}})));
      conversationDelay = 0;
      await page.getByText('Destino explícito preservado.',{exact:true}).waitFor();
+     await page.evaluate(()=>{localStorage.setItem('fixture.processSession','cold-notification-process');localStorage.setItem('fixture.pendingNativeDestination',JSON.stringify({conversationId:'f0000000-0000-4000-8000-000000000001',reminderId:null}));});
+     await page.reload(); await page.getByText('Destino explícito preservado.',{exact:true}).waitFor();
+     assert.equal(await page.evaluate(()=>localStorage.getItem('fixture.pendingNativeDestination')),null,'Cold-start destination is consumed');
    }
    await page.setViewportSize({ width: 1600, height: 900 });
    // matchMedia delivers the breakpoint change asynchronously. Wait for Vue's

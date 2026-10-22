@@ -41,8 +41,35 @@ function foreground() {
 }
 function nativeBack() { if (shell.value?.dismissPending()) return; if (section.value === 'reminders' && remindersPanel.value?.requestBack()) return; if (section.value === 'places' && placesPanel.value?.requestBack()) return; if (section.value) shell.value?.requestClose(); }
 function consumeNativeDestination() { void invoke('node_consume_reminder_open').catch(() => undefined); }
-function showReminder(id: unknown) { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return; consumeNativeDestination(); focusedReminderId.value = id; if (section.value) shell.value?.navigate('reminders'); else navigate('reminders'); }
-function showConversation(id: unknown) { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return; consumeNativeDestination(); close(); void chat.value?.openConversation(id); }
+const remindersNavigation = ref(0);
+const pendingDestinations = new Set<string>();
+let lastDestination: { key: string; at: number } | null = null;
+async function showDestination(kind: 'conversation' | 'reminder', id: unknown) {
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
+  const key = `${kind}:${id.toLowerCase()}`;
+  if (pendingDestinations.has(key) || lastDestination?.key === key && Date.now() - lastDestination.at < 1000) return;
+  consumeNativeDestination();
+  pendingDestinations.add(key);
+  const hadUnsavedChanges = dirty.value;
+  const open = () => {
+    if (disposed) return;
+    if (kind === 'conversation') { close(); void chat.value?.openConversation(id); }
+    else {
+      // Discarding within the same section must also dispose of its editor.
+      if (section.value === 'reminders' && hadUnsavedChanges) remindersNavigation.value++;
+      focusedReminderId.value = id; navigate('reminders');
+    }
+  };
+  try {
+    if (section.value && shell.value) await shell.value.requestNavigation(open);
+    else open();
+  } finally {
+    pendingDestinations.delete(key);
+    lastDestination = { key, at: Date.now() };
+  }
+}
+function showReminder(id: unknown) { void showDestination('reminder', id); }
+function showConversation(id: unknown) { void showDestination('conversation', id); }
 function openConversation(event: Event) { showConversation((event as CustomEvent<{conversationId?:unknown}>).detail?.conversationId); }
 function openReminder(event: Event) { showReminder((event as CustomEvent<{reminderId?:unknown}>).detail?.reminderId); }
 let stopConversationListener: (() => void) | undefined;
@@ -59,7 +86,7 @@ onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNav
   </ChatView>
   <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
     <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />
-    <RemindersPanel v-else-if="section === 'reminders'" ref="remindersPanel" :platform="runtime.platform" :focused-reminder-id="focusedReminderId" @dirty="dirty = $event" />
+    <RemindersPanel v-else-if="section === 'reminders'" ref="remindersPanel" :key="remindersNavigation" :platform="runtime.platform" :focused-reminder-id="focusedReminderId" @dirty="dirty = $event" />
     <PlacesPanel v-else-if="section === 'places'" ref="placesPanel" :platform="runtime.platform" @dirty="dirty = $event" />
     <section v-else-if="section === 'updates'"><h2>Atualizações</h2><p class="settings-muted">Versão instalada: {{ runtime.version }}. O download e a instalação precisam de sua ação.</p><UpdateNotice :updates="updates" :work-active="activity" /><div class="settings-actions"><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">{{ updates.state.value === 'checking' ? 'Verificando…' : 'Verificar atualizações' }}</button></div><p v-if="updates.checkedMessage.value" role="status">{{ updates.checkedMessage.value }}</p><p v-if="updates.checkedAt.value" class="settings-muted">Última consulta: {{ new Date(updates.checkedAt.value).toLocaleString('pt-BR') }}<span v-if="updates.diagnostic.value"> · Código: {{ updates.diagnostic.value.code }}</span></p><details v-if="runtime.platform === 'android'"><summary>Downloads antigos do navegador</summary><p>APKs baixados anteriormente pelo navegador continuam na pasta Downloads. Você pode removê-los uma vez pelo gerenciador de arquivos do Android. A Aegis não procura nem apaga arquivos pessoais nessa pasta.</p></details></section>
     <section v-else-if="section === 'about'">
