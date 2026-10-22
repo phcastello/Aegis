@@ -38,6 +38,8 @@ public sealed class TitleGenerationTests
         var policy = payload.RootElement.GetProperty("input")[0].GetProperty("content").GetString()!;
         Assert.Contains("Comprar leite na saída", policy);
         Assert.Contains("prefixos classificatórios", policy);
+        Assert.Contains("nomeie a própria tarefa", policy);
+        Assert.Contains("Lembrete para", policy);
         Assert.Contains("próprio sistema de lembretes", policy);
         Assert.DoesNotContain("runtime", handler.Body!, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("gpt-5-nano", new TitleOptions().Model);
@@ -96,6 +98,29 @@ public sealed class TitleGenerationTests
         conversation.SetGeneratedTitle(title);
         Assert.Equal("Meu título", conversation.Title);
         Assert.False(conversation.CanGenerateAutomaticTitle);
+    }
+
+    private sealed class LiveTitleFactAttribute : FactAttribute {
+        public LiveTitleFactAttribute() {
+            if (Environment.GetEnvironmentVariable("AEGIS_TITLE_TEST_OPENAI") != "YES" || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY")))
+                Skip = "Requires explicit AEGIS_TITLE_TEST_OPENAI=YES and a model API key; no application data is written.";
+        }
+    }
+    [LiveTitleFact]
+    public async Task LiveModelNamesTheTaskRatherThanTheReminderRequest() {
+        using var http = new HttpClient { BaseAddress = new Uri(Environment.GetEnvironmentVariable("AEGIS_OPENAI_BASE_URL") ?? "https://api.openai.com/"), Timeout = TimeSpan.FromSeconds(32) };
+        var generator = new OpenAiTitleGenerator(http,
+            Options.Create(new TitleOptions { Model = Environment.GetEnvironmentVariable("AEGIS_TITLE_MODEL") ?? TitleOptions.DefaultModel }),
+            Options.Create(new OpenAIOptions { ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") }), NullLogger<OpenAiTitleGenerator>.Instance);
+        foreach (var request in new[] { "Me lembra de comprar leite ao sair da faculdade", "Me lembra de limpar a caixa da Kali", "Me lembra do protocolo ao chegar em casa", "Me lembra de levar o guarda-chuva quando sair do trabalho", "Quem é a Aegis?", "Como funciona o sistema de lembretes da Aegis?" }) {
+            var operational = request.StartsWith("Me lembra", StringComparison.Ordinal);
+            var title = await generator.GenerateAsync(request, operational ? "Criei o lembrete solicitado." : "Sou a Aegis. Tenho lembretes temporais e geográficos.");
+            Assert.False(string.IsNullOrWhiteSpace(title), "The configured title model must return completed text.");
+            Assert.InRange(title!.Trim().Length, 1, 50);
+            if (!operational) continue; // The reminder system itself may legitimately be the topic.
+            foreach (var prefix in new[] { "Lembrete:", "Lembrete para", "Lembrete de", "Lembrar de", "Pedido de", "Criação de lembrete" })
+                Assert.False(title.Trim().StartsWith(prefix, StringComparison.OrdinalIgnoreCase), $"Unnatural task title: {title}");
+        }
     }
 
     private sealed class BlockingTitleService : IConversationTitleService
