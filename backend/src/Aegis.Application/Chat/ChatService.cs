@@ -401,7 +401,7 @@ public sealed class ChatService(
             message.Content,
             message.CreatedAt,
             message.Model,
-            memoryActivity);
+            memoryActivity, message.IsProactive, message.ProactiveSequence);
     }
 
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(
@@ -460,7 +460,7 @@ public sealed class ChatService(
             conversation.UpdatedAt,
             conversation.TitleSource,
             conversation.Messages.Count,
-            CreatePreview(lastMessage?.Content));
+            CreatePreview(lastMessage?.Content), conversation.HasUnreadProactive);
     }
 
     private static ConversationSummaryResponse MapConversationSummary(ConversationSummaryData conversation)
@@ -472,7 +472,7 @@ public sealed class ChatService(
             conversation.UpdatedAt,
             conversation.TitleSource,
             conversation.MessageCount,
-            CreatePreview(conversation.LastMessageContent));
+            CreatePreview(conversation.LastMessageContent), conversation.HasUnreadProactive);
     }
 
     private async Task QueueConversationTitleGenerationAsync(

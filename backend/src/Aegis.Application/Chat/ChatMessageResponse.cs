@@ -9,4 +9,5 @@ public sealed record ChatMessageResponse(
     string Content,
     DateTimeOffset CreatedAt,
     string? Model,
-    MemoryActivitySnapshot? MemoryActivity = null);
+    MemoryActivitySnapshot? MemoryActivity = null,
+    bool IsProactive = false, long? ProactiveSequence = null);

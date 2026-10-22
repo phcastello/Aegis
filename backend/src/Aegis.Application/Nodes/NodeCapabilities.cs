@@ -5,7 +5,7 @@ public sealed record NodeCapability(string Name, int Version);
 public static class NodeCapabilityCatalog
 {
     public const int MaximumCount = 32, MaximumNameLength = 64;
-    private static readonly HashSet<string> names = new(StringComparer.Ordinal) { "audio.input", "audio.output", "notification.show", "reminder.notify", "reminder.withdraw", "location.current", "geofence.monitor" };
+    private static readonly HashSet<string> names = new(StringComparer.Ordinal) { "audio.input", "audio.output", "notification.show", "conversation.notify", "reminder.notify", "reminder.withdraw", "location.current", "geofence.monitor" };
     public static IReadOnlyList<string> Names { get; } = Array.AsReadOnly(names.Order(StringComparer.Ordinal).ToArray());
     public static bool IsKnown(string name) => names.Contains(name);
     public static bool IsValidName(string? name) => name is { Length: > 0 and <= MaximumNameLength } &&

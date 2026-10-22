@@ -728,5 +728,7 @@ public sealed class OpenAIResponsesClient(
         payload.Contains("[memory_tool_arguments_redacted]", StringComparison.Ordinal);
 
     private static string? SafeAuditResponse(string payload, string? response) =>
-        IsMemoryAudit(payload) && response is not null ? "[memory_response_redacted]" : response;
+        payload.Contains("[reminder_intervention_context_redacted]", StringComparison.Ordinal) && response is not null
+            ? "[reminder_intervention_response_redacted]"
+            : IsMemoryAudit(payload) && response is not null ? "[memory_response_redacted]" : response;
 }

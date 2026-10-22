@@ -42,8 +42,7 @@ public sealed class ConversationTitleService(
             return;
         }
 
-        conversation.SetGeneratedTitle(title, generatedTitle);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await dbContext.SetGeneratedTitleIfEligibleAsync(conversation.Id, title, generatedTitle, cancellationToken);
     }
 
     private static string LimitForTitlePrompt(string content, int maxLength)

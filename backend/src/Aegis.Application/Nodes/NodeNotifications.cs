@@ -11,7 +11,9 @@ public sealed record NotificationInput(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ReminderId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Revision = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Generation = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InteractionToken = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InteractionToken = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConversationId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? MessageId = null);
 public static class ReminderNotificationContract
 {
     public const string NotifyCapability = "reminder.notify", WithdrawCapability = "reminder.withdraw";
@@ -20,6 +22,7 @@ public sealed record NotificationDispatchResult(NodeTargetSummary? Node, string 
 public static class NotificationContract
 {
     public const string Capability = "notification.show";
+    public const string ConversationCapability = "conversation.notify";
     public static readonly HashSet<string> Results = new(StringComparer.Ordinal) { "success", "expired", "unsupported", "permission_denied", "failed", "duplicate" };
     // Diagnostic metadata is transient: only the Nodes test endpoint exposes it.
     public const int MaximumDiagnosticLength = 48;
@@ -92,7 +95,8 @@ public sealed class NodeNotificationDispatcher(INodeRegistry nodes, INodeTargetR
         if (command.Capability is ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability &&
             (command.Input.ReminderId is null || command.Input.Generation is null) ||
             command.Capability == ReminderNotificationContract.NotifyCapability && (command.Input.Revision is null || command.Input.InteractionToken is null) ||
-            command.CommandId == Guid.Empty || command.Capability is not (NotificationContract.Capability or ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability) || command.CapabilityVersion != 1 || command.ExpiresAt > clock.GetUtcNow().AddSeconds(300))
+            command.Capability == NotificationContract.ConversationCapability && (command.Input.ConversationId is null || command.Input.ConversationId == Guid.Empty || command.Input.MessageId is null || command.Input.MessageId == Guid.Empty) ||
+            command.CommandId == Guid.Empty || command.Capability is not (NotificationContract.Capability or NotificationContract.ConversationCapability or ReminderNotificationContract.NotifyCapability or ReminderNotificationContract.WithdrawCapability) || command.CapabilityVersion != 1 || command.ExpiresAt > clock.GetUtcNow().AddSeconds(300))
             throw new NodeException("invalid_notification", "Command de notification inválido.");
         var inventory = await nodes.ListForDeliveryAsync(ct);
         var target = inventory.SingleOrDefault(n => n.Id == nodeId);

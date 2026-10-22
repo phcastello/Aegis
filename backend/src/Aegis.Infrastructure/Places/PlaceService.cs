@@ -193,6 +193,8 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
     }
     public async Task<IReadOnlyList<GeographicRuleView>> RulesAsync(CancellationToken ct = default) => (await Rules.AsNoTracking().OrderByDescending(r => r.CreatedAt).Take(500).ToArrayAsync(ct)).Select(r => {
         var view = View(r);
+        if (r.Status == "active" && r.SyncStatus == "pending_sync" && r.SyncStartedAt + Aegis.Infrastructure.Proactivity.ReminderReliabilityPolicy.PendingSyncLimit <= Now)
+            return view with { SyncStatus = "recoverable_error", ErrorCode = "activation_confirmation_overdue" };
         return r.Status == "active" && (r.LeaseUntil <= Now || r.SyncedAt is { } synced && synced.AddDays(7) <= Now)
             ? view with { SyncStatus = "recoverable_error", ErrorCode = "local_lease_expired" } : view;
     }).ToArray();
