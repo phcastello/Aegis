@@ -67,9 +67,8 @@ onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNav
       <p class="about-release-codename">{{ releaseIdentity.codename }}</p>
       <p v-if="releaseIdentity.tagline" class="about-release-tagline settings-muted">{{ releaseIdentity.tagline }}</p>
       <p class="settings-muted">Aegis é sua assistente pessoal baseada em IA, com conversa por texto e voz, memória persistente e integrações. Usa modelos acessados por API e recursos contextuais dos dispositivos pareados para ajudar nas tarefas do dia a dia.</p>
-      <ReminderActionSync :settings="actionSettings" />
       <dl><div><dt>Aplicativo</dt><dd>{{ runtime.platform === 'android' ? 'Android' : runtime.platform === 'windows' ? 'Windows' : 'Plataforma não suportada' }}</dd></div><div><dt>Identidade do dispositivo</dt><dd>{{ identity?.state === 'paired' ? 'Pareada' : 'Verificar em Dispositivos' }}</dd></div></dl>
-      <details><summary>Diagnóstico técnico</summary><DiagnosticsPanel /></details>
+      <details><summary>Diagnóstico técnico</summary><ReminderActionSync :settings="actionSettings" /><DiagnosticsPanel /></details>
     </section>
   </SettingsShell>
 </template>

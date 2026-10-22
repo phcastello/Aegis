@@ -66,7 +66,7 @@ O uso de APIs de modelos, transcrição, Google, mapas e notificações envolve 
 
 A localização usa eventos geográficos e aquisições temporárias, não GPS permanentemente ativo. Permissões, precisão e restrições do Android podem afetar a detecção. Com o backend inacessível, regras previamente sincronizadas podem notificar localmente; os requisitos de localização do Android continuam valendo. Ações pendentes são reconciliadas ao recuperar conexão.
 
-Permanecem em investigação a captura de microfone em um computador Windows e a classificação de intenções temporárias na memória. Consulte as [limitações documentadas](docs/v0.7.1-release-notes.md#known-limitations).
+O aceite da captura de microfone em um computador Windows permanece pendente. A implementação v0.7.2 refina a extração de memória operacional, ainda sem distribuição. Consulte as [limitações documentadas](docs/v0.7.1-release-notes.md#known-limitations).
 
 ## Desenvolvimento e documentação
 
@@ -77,4 +77,4 @@ O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.
 - [Correção da v0.7.1](docs/v0.7.1-release-notes.md)
 - [Histórico técnico da implementação](docs/v0.7.0-completion.md)
 
-Esta branch contém manutenção ainda não distribuída; os downloads acima continuam sendo os instaladores originais da v0.7.1. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).
+Esta branch prepara a [v0.7.2 para revisão](docs/v0.7.2-implementation.md), incluindo a manutenção ainda não distribuída; os downloads acima continuam sendo os instaladores originais da v0.7.1. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).
