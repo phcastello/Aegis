@@ -3,18 +3,28 @@ namespace Aegis.Infrastructure.Proactivity;
 
 public static class ReminderReliabilityPolicy
 {
-    // Existing domain signals have a five-minute TTL. The last retry at five
-    // minutes gets its complete delivery window before escalation at ten minutes.
-    public static readonly TimeSpan PendingSyncLimit = TimeSpan.FromMinutes(10);
+    // A command TTL is a transport window, not a reason to defer intervention.
+    // Every recovery is measured from the original activation incident.
+    public static readonly TimeSpan PendingSyncLimit = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(30);
-    public static readonly TimeSpan[] RecoveryOffsets = [TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(5)];
+    public static readonly TimeSpan[] RecoveryOffsets = [TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(180)];
     public static readonly TimeSpan[] ModelRetryDelays = [TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(15)];
+    // After the initial five calls: one call after 1h, 3h, 6h, 12h, then at most daily.
+    public static readonly TimeSpan[] ModelSlowRetryDelays = [TimeSpan.FromHours(1), TimeSpan.FromHours(3), TimeSpan.FromHours(6), TimeSpan.FromHours(12), TimeSpan.FromHours(24)];
+    public static TimeSpan ModelRetryDelay(int attempts) => attempts <= ModelRetryDelays.Length
+        ? ModelRetryDelays[Math.Max(0, attempts - 1)]
+        : ModelSlowRetryDelays[Math.Min(attempts - ModelRetryDelays.Length - 1, ModelSlowRetryDelays.Length - 1)];
+    public static bool RequiresImmediateIntervention(GeographicReminderRule rule) => rule.SyncStatus == "recoverable_error" && rule.ErrorCode is
+        "background_location_required" or "location_permission_required" or "precise_location_required" or
+        "location_services_disabled" or "region_limit_exceeded" or "geometry_required";
+    public static bool ShouldIntervene(GeographicReminderRule rule, DateTimeOffset startedAt, DateTimeOffset now) =>
+        HasProblem(rule, now) && (RequiresImmediateIntervention(rule) || now >= startedAt + PendingSyncLimit);
     public static bool HasProblem(GeographicReminderRule rule, DateTimeOffset now) => rule.Status == "active" &&
         (rule.EndsAt is null || rule.EndsAt > now) &&
         (rule.SyncStatus is "pending_sync" or "recoverable_error" || LocalLeaseExpired(rule, now));
     public static bool LocalLeaseExpired(GeographicReminderRule rule, DateTimeOffset now) => rule.LeaseUntil <= now || rule.SyncedAt is { } synced && synced.AddDays(7) <= now;
     public static DateTimeOffset StartedAt(GeographicReminderRule rule) => rule.FailureSince ?? rule.SyncStartedAt;
-    public static (string Diagnosis, string Action) Diagnose(GeographicReminderRule rule, bool observerUnreachable = false) => rule.ErrorCode switch {
+    public static (string Diagnosis, string Action) Diagnose(GeographicReminderRule rule, bool observerUnreachable = false) => (rule.SyncStatus == "recoverable_error" ? rule.ErrorCode : null) switch {
         "background_location_required" => ("O Android informou que falta permissão de localização em segundo plano.", "Habilitar localização em segundo plano para a Aegis no celular."),
         "location_permission_required" => ("O Android informou que falta permissão de localização.", "Permitir localização para a Aegis no celular."),
         "precise_location_required" => ("O Android informou que falta localização precisa.", "Habilitar localização precisa para a Aegis no celular."),

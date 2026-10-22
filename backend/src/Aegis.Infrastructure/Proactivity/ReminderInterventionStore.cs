@@ -27,7 +27,7 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
     public Task<IReadOnlyList<RecoveryClaim>> ReconcileAsync(CancellationToken ct) => Locked<IReadOnlyList<RecoveryClaim>>(async () => {
         var now = clock.GetUtcNow();
         var rules = await db.Set<GeographicReminderRule>().Where(r => r.Status == "active" || r.Status == "paused").ToArrayAsync(ct);
-        var jobs = await Jobs.Where(j => j.State == "recovering" || j.State == "pending" || j.State == "generating").ToListAsync(ct);
+        var jobs = await Jobs.Where(j => j.State == "recovering" || j.State == "pending" || j.State == "generating" || j.State == "generation_failed").ToListAsync(ct);
         foreach (var job in jobs) {
             var rule = rules.SingleOrDefault(r => r.Id == job.RuleId);
             if (rule is null || rule.ActivationEpoch != job.ActivationEpoch || !ReminderReliabilityPolicy.HasProblem(rule, now)) job.State = "resolved";
@@ -44,7 +44,16 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
                 job = new() { RuleId = rule.Id, ActivationEpoch = rule.ActivationEpoch, StartedAt = ReminderReliabilityPolicy.StartedAt(rule), NextAttemptAt = ReminderReliabilityPolicy.StartedAt(rule) + ReminderReliabilityPolicy.RecoveryOffsets[0] };
                 Jobs.Add(job); jobs.Add(job);
             }
-            if (job.State != "recovering" || job.NextAttemptAt > now) continue;
+            if (job.State != "recovering") continue;
+            // Deadline and confirmed human-action failures take precedence over retries,
+            // including a late first scan after a backend restart.
+            if (ReminderReliabilityPolicy.ShouldIntervene(rule, job.StartedAt, now)) {
+                (job.Diagnosis, job.RequiredAction) = Diagnose(rule, job);
+                job.State = rule.SourceConversationId is null ? "source_unavailable" : "pending";
+                job.NextAttemptAt = now;
+                continue;
+            }
+            if (job.NextAttemptAt > now) continue;
             if (job.RecoveryAttempts < ReminderReliabilityPolicy.RecoveryOffsets.Length) {
                 var attempt = ++job.RecoveryAttempts;
                 var results = JsonSerializer.Deserialize<List<RecoveryResult>>(job.RecoveryResultsJson)!;
@@ -53,9 +62,6 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
                     ? new[] { now.AddSeconds(30), job.StartedAt + ReminderReliabilityPolicy.RecoveryOffsets[attempt] }.Max()
                     : new[] { now.AddSeconds(30), job.StartedAt + ReminderReliabilityPolicy.PendingSyncLimit }.Max();
                 claims.Add(new(job.Id, rule.ObserverNodeId, attempt));
-            } else if (now >= job.StartedAt + ReminderReliabilityPolicy.PendingSyncLimit) {
-                (job.Diagnosis, job.RequiredAction) = Diagnose(rule, job);
-                job.State = rule.SourceConversationId is null ? "source_unavailable" : "pending";
             }
         }
         return claims;
@@ -75,18 +81,20 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
     private static string Signature(GeographicReminderRule r) => r.SyncStatus + ":" + r.ErrorCode;
     public Task<InterventionClaim?> ClaimAsync(CancellationToken ct) => Locked<InterventionClaim?>(async () => {
         var now = clock.GetUtcNow();
-        var job = await Jobs.Where(j => (j.State == "pending" || j.State == "generating" && j.LeaseUntil <= now) && j.NextAttemptAt <= now)
+        var job = await Jobs.Where(j => (j.State == "pending" || j.State == "generation_failed" || j.State == "generating" && j.LeaseUntil <= now) && j.NextAttemptAt <= now)
             .OrderBy(j => j.NextAttemptAt).FirstOrDefaultAsync(ct);
         if (job is null) return null;
         var rule = await db.Set<GeographicReminderRule>().SingleAsync(r => r.Id == job.RuleId, ct);
         var conversation = await db.Conversations.SingleOrDefaultAsync(c => c.Id == rule.SourceConversationId && c.DeletedAt == null, ct);
         if (conversation is null || rule.ActivationEpoch != job.ActivationEpoch || !ReminderReliabilityPolicy.HasProblem(rule, now)) { job.State = "resolved"; return null; }
-        if (job.GenerationAttempts >= 5) { job.State = "generation_failed"; return null; }
+        if (!ReminderReliabilityPolicy.ShouldIntervene(rule, job.StartedAt, now)) { job.State = "recovering"; job.NextAttemptAt = now; return null; }
         var context = await db.ChatMessages.AsNoTracking().Where(m => m.ConversationId == conversation.Id).OrderByDescending(m => m.CreatedAt).ThenByDescending(m => m.Id).Take(12).ToArrayAsync(ct);
         var source = await db.ChatMessages.AsNoTracking().Where(m => m.ConversationId == conversation.Id && m.Role == "user" && m.CreatedAt <= rule.CreatedAt).OrderByDescending(m => m.CreatedAt).FirstOrDefaultAsync(ct)
             ?? context.FirstOrDefault(m => m.Role == "user");
         if (source is null) { job.State = "source_unavailable"; return null; }
         job.State = "generating"; job.GenerationAttempts++; job.LeaseToken = Guid.NewGuid(); job.LeaseUntil = now.AddMinutes(2);
+        // A crashed owner also respects the retry frequency, including the slow phase.
+        job.NextAttemptAt = job.LeaseUntil.Value + ReminderReliabilityPolicy.ModelRetryDelay(job.GenerationAttempts);
         (job.Diagnosis, job.RequiredAction) = Diagnose(rule, job);
         // Always include the actual origin request, even after a long subsequent conversation.
         var relevant = context.Where(m => m.Id != source.Id).Take(11).Append(source).OrderBy(m => m.CreatedAt).ToArray();
@@ -101,6 +109,7 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
             ? await db.Conversations.FromSqlInterpolated($"SELECT * FROM conversations WHERE \"Id\" = {claim.ConversationId} FOR UPDATE").SingleOrDefaultAsync(ct)
             : await db.Conversations.SingleOrDefaultAsync(c => c.Id == claim.ConversationId, ct);
         if (conversation is null || conversation.DeletedAt is not null || rule.ActivationEpoch != claim.ActivationEpoch || !ReminderReliabilityPolicy.HasProblem(rule, now)) { job.State = "resolved"; return false; }
+        if (!ReminderReliabilityPolicy.ShouldIntervene(rule, job.StartedAt, now)) { job.State = "recovering"; job.NextAttemptAt = now; return false; }
         if (Signature(rule) != claim.ProblemSignature) { job.State = "pending"; job.NextAttemptAt = now; return false; }
         var message = conversation.AddProactiveMessage(result.Content, now);
         message.AttachAuditData(result.Model, null, null, result.MetadataJson);
@@ -117,6 +126,6 @@ public sealed class ReminderInterventionStore(AegisDbContext db, TimeProvider cl
             db.LlmRequestAudits.Add(new(claim.ConversationId, claim.SourceUserMessageId, null, audit.Provider, audit.Model, audit.Success, audit.DurationMilliseconds, audit.RequestPayloadJson, audit.HttpStatusCode, audit.ResponseBody, audit.FailureReason, audit.ErrorType));
         job.LastError = "model_unavailable"; job.LeaseToken = null; job.LeaseUntil = null;
         job.State = job.GenerationAttempts <= ReminderReliabilityPolicy.ModelRetryDelays.Length ? "pending" : "generation_failed";
-        job.NextAttemptAt = clock.GetUtcNow() + ReminderReliabilityPolicy.ModelRetryDelays[Math.Min(job.GenerationAttempts - 1, ReminderReliabilityPolicy.ModelRetryDelays.Length - 1)]; return true;
+        job.NextAttemptAt = clock.GetUtcNow() + ReminderReliabilityPolicy.ModelRetryDelay(job.GenerationAttempts); return true;
     }, ct);
 }

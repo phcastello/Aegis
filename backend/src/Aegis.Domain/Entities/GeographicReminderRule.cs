@@ -70,7 +70,7 @@ public sealed class GeographicReminderRule : AuditableEntity
         if (errorCode is not null && (errorCode.Length > 64 || errorCode.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))) throw new ArgumentException("Código de erro inválido.");
         if (status == "recoverable_error" && FailureSince is null) {
             if (SyncStatus is not ("pending_sync" or "recoverable_error")) ActivationEpoch++;
-            FailureSince = now;
+            FailureSince = SyncStatus == "pending_sync" ? SyncStartedAt : now;
         } else if (status != "recoverable_error") FailureSince = null;
         SyncStatus = Status == "cancelled" ? "removed" : status; SyncedAt = now; SyncedRevision = revision; ErrorCode = errorCode;
     }

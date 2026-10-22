@@ -27,11 +27,11 @@ public sealed class ReminderInterventionTests
     private static GeneratedIntervention Generated() => new("Preciso que você abra a Aegis no celular para concluir a ativação daquele lembrete.", "fixture-model", "{}", new("openai", "fixture-model", true, 10, "{\"purpose\":\"reminder_intervention\"}", 200, null, null, null));
     private static async Task Recover(ReminderInterventionStore store, Clock clock) {
         var start = clock.Now;
-        foreach (var minutes in new[] { 1, 3, 5 }) {
-            clock.Now = start.AddMinutes(minutes);
+        foreach (var seconds in new[] { 30, 90, 180 }) {
+            clock.Now = start.AddSeconds(seconds);
             foreach (var claim in await store.ReconcileAsync(default)) await store.RecoveryCompletedAsync(claim, "unavailable", default);
         }
-        clock.Now = start.AddMinutes(10); await store.ReconcileAsync(default);
+        clock.Now = start.AddMinutes(5); await store.ReconcileAsync(default);
     }
     [Theory]
     [InlineData("installed")][InlineData("active")][InlineData("waiting_initial")]
@@ -85,17 +85,127 @@ public sealed class ReminderInterventionTests
         var retry = (await new ReminderInterventionStore(db, clock).ClaimAsync(default))!;
         Assert.NotEqual(first.Token, retry.Token); Assert.False(await store.CompleteAsync(first, Generated(), default)); Assert.True(await store.CompleteAsync(retry, Generated(), default));
     }
-    [Fact] public async Task WorkerLeaseRestartRecoversAndRetryBudgetIsFinite() {
-        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock); var store = new ReminderInterventionStore(db, clock); await Recover(store, clock);
-        var stale = (await store.ClaimAsync(default))!; clock.Now = clock.Now.AddMinutes(3);
-        var next = (await store.ClaimAsync(default))!; Assert.False(await store.CompleteAsync(stale, Generated(), default));
-        for (var attempt = 0; attempt < 4; attempt++) { await store.FailAsync(next, default); clock.Now = clock.Now.AddHours(1); if (attempt < 3) next = (await store.ClaimAsync(default))!; }
-        Assert.Null(await store.ClaimAsync(default)); Assert.Equal("generation_failed", (await db.Set<ReminderIntervention>().SingleAsync()).State);
+    private static async Task ExhaustInitialModelAttempts(ReminderInterventionStore store, AegisDbContext db, Clock clock) {
+        for (var attempt = 1; attempt <= 5; attempt++) {
+            var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
+            Assert.True(await store.FailAsync(claim, default));
+            var job = await db.Set<ReminderIntervention>().SingleAsync();
+            Assert.Equal(attempt, job.GenerationAttempts);
+            if (attempt < 5) clock.Now = job.NextAttemptAt;
+        }
+        Assert.Equal("generation_failed", (await db.Set<ReminderIntervention>().SingleAsync()).State);
+    }
+    [Fact] public async Task ProlongedModelOutagePersistsSlowBackoffAndEventuallyProducesOneMessage() {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var store = new ReminderInterventionStore(db, clock); await Recover(store, clock);
+        await ExhaustInitialModelAttempts(store, db, clock);
+        var failedAt = clock.Now;
+        foreach (var hours in new[] { 1, 3, 6, 12, 24, 24 }) {
+            var job = await db.Set<ReminderIntervention>().SingleAsync();
+            Assert.Equal(clock.Now.AddHours(hours), job.NextAttemptAt);
+            clock.Now = job.NextAttemptAt.AddSeconds(-1);
+            store = new(db, clock); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default));
+            clock.Now = clock.Now.AddSeconds(1);
+            var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
+            Assert.True(await store.FailAsync(claim, default));
+        }
+        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        var recovered = Assert.IsType<InterventionClaim>(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
+        Assert.True(clock.Now > failedAt.AddDays(2));
+        Assert.True(await store.CompleteAsync(recovered, Generated(), default));
+        Assert.False(await store.CompleteAsync(recovered, Generated(), default));
+        clock.Now = clock.Now.AddDays(1); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default));
+        Assert.Single(db.ChatMessages.Where(m => m.IsProactive)); Assert.Single(db.Set<ProactiveNotification>());
+    }
+    [Theory][InlineData("installed")][InlineData("paused")][InlineData("cancelled")][InlineData("deleted")]
+    public async Task ExhaustedModelWorkIsCancelledIfProblemOrConversationCeasesToExist(string resolution) {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var store = new ReminderInterventionStore(db, clock); await Recover(store, clock); await ExhaustInitialModelAttempts(store, db, clock);
+        var rule = await db.Set<GeographicReminderRule>().SingleAsync();
+        if (resolution == "installed") rule.Confirm(1, "installed", null, clock.Now);
+        else if (resolution == "deleted") (await db.Conversations.SingleAsync()).Delete(clock.Now);
+        else rule.SetStatus(resolution == "paused" ? "pause" : "cancel", clock.Now);
+        await db.SaveChangesAsync(); clock.Now = clock.Now.AddDays(1);
+        Assert.Null(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
+        Assert.Equal("resolved", (await db.Set<ReminderIntervention>().SingleAsync()).State);
+        Assert.Empty(db.ChatMessages.Where(m => m.IsProactive)); Assert.Empty(db.Set<ProactiveNotification>());
+    }
+    [Fact] public async Task ExpiredSlowGenerationLeaseCannotBypassBackoffOrCommit() {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var store = new ReminderInterventionStore(db, clock); await Recover(store, clock); await ExhaustInitialModelAttempts(store, db, clock);
+        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        var stale = (await store.ClaimAsync(default))!;
+        clock.Now = clock.Now.AddMinutes(3); Assert.Null(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
+        Assert.False(await store.CompleteAsync(stale, Generated(), default));
+        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        var retry = (await store.ClaimAsync(default))!;
+        Assert.NotEqual(stale.Token, retry.Token); Assert.True(await store.CompleteAsync(retry, Generated(), default));
+    }
+    [Theory]
+    [InlineData("background_location_required")][InlineData("location_permission_required")][InlineData("precise_location_required")]
+    [InlineData("location_services_disabled")][InlineData("region_limit_exceeded")][InlineData("geometry_required")]
+    public async Task ConfirmedHumanActionFailuresEscalateOnFirstScanWithoutRecovery(string code) {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var start = clock.Now; var rule = await db.Set<GeographicReminderRule>().SingleAsync();
+        clock.Now = start.AddSeconds(10); rule.Confirm(1, "recoverable_error", code, clock.Now); await db.SaveChangesAsync();
+        var store = new ReminderInterventionStore(db, clock); clock.Now = start.AddSeconds(30);
+        Assert.Empty(await store.ReconcileAsync(default));
+        var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
+        Assert.Equal(code, claim.ErrorCode); Assert.Equal("[]", claim.RecoveriesJson);
+        Assert.True(await store.CompleteAsync(claim, Generated(), default));
+        await new ReminderInterventionStore(db, clock).ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default));
+        Assert.Single(db.ChatMessages.Where(m => m.IsProactive));
+    }
+    [Theory][InlineData("location_provider_unavailable")][InlineData("native_registration_failed")][InlineData("transport_failed")]
+    public async Task TemporaryErrorsRecoverBeforeDeadlineWithoutInventingPermissions(string code) {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "recoverable_error", code, clock.Now); await db.SaveChangesAsync();
+        var store = new ReminderInterventionStore(db, clock); Assert.Empty(await store.ReconcileAsync(default)); Assert.Null(await store.ClaimAsync(default));
+        clock.Now = clock.Now.AddSeconds(30); var recovery = Assert.Single(await store.ReconcileAsync(default)); await store.RecoveryCompletedAsync(recovery, "accepted", default);
+        Assert.DoesNotContain("permissão", ReminderReliabilityPolicy.Diagnose(rule).Diagnosis);
+        rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "waiting_initial", null, clock.Now); await db.SaveChangesAsync();
+        clock.Now = clock.Now.AddMinutes(6); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default)); Assert.Empty(db.ChatMessages.Where(m => m.IsProactive));
+    }
+    [Fact] public async Task SlowHealthySyncConfirmedBeforeFiveMinutesNeverProducesMessage() {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var store = new ReminderInterventionStore(db, clock); var start = clock.Now;
+        foreach (var seconds in new[] { 0, 30, 90, 180, 299 }) {
+            clock.Now = start.AddSeconds(seconds);
+            foreach (var recovery in await store.ReconcileAsync(default)) await store.RecoveryCompletedAsync(recovery, "accepted", default);
+            Assert.Null(await store.ClaimAsync(default));
+        }
+        var rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "waiting_initial", null, clock.Now); await db.SaveChangesAsync();
+        clock.Now = start.AddMinutes(5); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default)); Assert.Empty(db.ChatMessages.Where(m => m.IsProactive));
+    }
+    [Theory][InlineData(false)][InlineData(true)]
+    public async Task DeadlineWinsOverLateScansAndRepeatedAcksDoNotRestartIncident(bool scanBeforeAck) {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock); var start = clock.Now;
+        var store = new ReminderInterventionStore(db, clock);
+        if (scanBeforeAck) await store.ReconcileAsync(default);
+        foreach (var seconds in new[] { 120, 240, 299 }) {
+            clock.Now = start.AddSeconds(seconds); var rule = await db.Set<GeographicReminderRule>().SingleAsync();
+            rule.Confirm(1, "recoverable_error", "native_registration_failed", clock.Now); await db.SaveChangesAsync();
+            Assert.Equal(start, ReminderReliabilityPolicy.StartedAt(rule)); Assert.Equal(1, rule.ActivationEpoch);
+        }
+        // Restart after missed scans: no three additional retries beyond the deadline.
+        clock.Now = start.AddSeconds(300); store = new(db, clock);
+        Assert.Empty(await store.ReconcileAsync(default));
+        var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
+        Assert.Equal(start, (await db.Set<ReminderIntervention>().SingleAsync()).StartedAt);
+        Assert.DoesNotContain("permissão", claim.Diagnosis); Assert.True(await store.CompleteAsync(claim, Generated(), default));
+    }
+    [Fact] public async Task ConfirmedPermissionBecomingTransientBeforeGenerationReturnsToRecovery() {
+        await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
+        var rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "recoverable_error", "background_location_required", clock.Now); await db.SaveChangesAsync();
+        var store = new ReminderInterventionStore(db, clock); await store.ReconcileAsync(default);
+        rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "recoverable_error", "native_registration_failed", clock.Now); await db.SaveChangesAsync();
+        Assert.Null(await store.ClaimAsync(default)); Assert.Equal("recovering", (await db.Set<ReminderIntervention>().SingleAsync()).State);
     }
     [Fact] public async Task KnownPermissionProblemSuppliesOnlyConfirmedDiagnosisAndNoToolsToModel() {
         await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
         var rule = await db.Set<GeographicReminderRule>().SingleAsync(); rule.Confirm(1, "recoverable_error", "background_location_required", clock.Now); await db.SaveChangesAsync();
-        var store = new ReminderInterventionStore(db, clock); await Recover(store, clock); var claim = (await store.ClaimAsync(default))!;
+        var store = new ReminderInterventionStore(db, clock); await store.ReconcileAsync(default); var claim = (await store.ClaimAsync(default))!;
+        Assert.Equal("[]", claim.RecoveriesJson);
         var model = new Model(); var result = await new ProactiveMessageGenerator(model, new Prompts()).GenerateAsync(claim, default);
         Assert.Equal(Generated().Content, result.Content); Assert.Empty(model.Request!.Tools);
         var input = model.Request.Request.InputItems!;
@@ -184,6 +294,22 @@ public sealed class ReminderInterventionTests
         Assert.True(await sa.CompleteAsync(claim,Generated(),default)); Assert.False(await sb.CompleteAsync(claim,Generated(),default));
         await using var check = create(); Assert.Single(await check.ChatMessages.Where(m => m.IsProactive).ToListAsync()); Assert.Single(await check.Set<ProactiveNotification>().ToListAsync());
         var summary = Assert.Single(await check.GetRecentConversationSummariesAsync(30)); Assert.True(summary.HasUnreadProactive);
+    });
+    [NodePostgresTests.PostgresFact] public Task ExhaustedGenerationSurvivesDatabaseRestartAndConcurrentSlowRetriesStayUnique() => WithPostgres(async create => {
+        var clock = new Clock(); DateTimeOffset retryAt;
+        await using (var seed = create()) {
+            await Seed(seed, clock); var store = new ReminderInterventionStore(seed, clock); await Recover(store, clock);
+            await ExhaustInitialModelAttempts(store, seed, clock); retryAt = (await seed.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        }
+        clock.Now = retryAt.AddSeconds(-1);
+        await using (var early = create()) { Assert.Null(await new ReminderInterventionStore(early, clock).ClaimAsync(default)); }
+        clock.Now = retryAt;
+        await using var a = create(); await using var b = create(); var sa = new ReminderInterventionStore(a, clock); var sb = new ReminderInterventionStore(b, clock);
+        var claims = await Task.WhenAll(sa.ClaimAsync(default), sb.ClaimAsync(default)); var claim = Assert.Single(claims, c => c is not null)!;
+        var writes = await Task.WhenAll(sa.CompleteAsync(claim, Generated(), default), sb.CompleteAsync(claim, Generated(), default));
+        Assert.Single(writes, result => result);
+        await using var check = create(); Assert.Equal(6, (await check.Set<ReminderIntervention>().SingleAsync()).GenerationAttempts);
+        Assert.Single(await check.ChatMessages.Where(m => m.IsProactive).ToListAsync()); Assert.Single(await check.Set<ProactiveNotification>().ToListAsync());
     });
     [NodePostgresTests.PostgresFact] public Task ConcurrentDeviceReadsAreMonotonicAndCannotAcknowledgeFutureMessage() => WithPostgres(async create => {
         var clock = new Clock(); Guid id;
