@@ -64,6 +64,28 @@ public sealed class MemoryExtractionClientTests
         Assert.Equal("DATES", Assert.Single(candidate.Relations).Predicate);
     }
 
+    [Theory]
+    [InlineData("Me lembra de comprar leite às 18h", "Comandos operacionais")]
+    [InlineData("Me avisa quando eu sair da faculdade", "lembretes internos")]
+    [InlineData("Cancela o lembrete do mercado", "candidates vazio")]
+    [InlineData("Costumo comprar leite depois da faculdade", "afirma um hábito")]
+    [InlineData("Prefiro receber lembretes no celular", "afirma uma preferência")]
+    [InlineData("Guarda na memória que sempre compro leite às sextas", "pedido explícito de memória")]
+    public async Task OperationalAndDurableExamplesReachTheExtractorAsDataWithTheCorrectPolicy(string target, string instruction)
+    {
+        var handler = new CaptureHandler();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        await new OpenAiMemoryExtractionClient(http, new MemoryAutomaticOptions { ApiKey = "test_key" }, metrics)
+            .ExtractAsync(new(target, [], [], [], []), default);
+        using var body = JsonDocument.Parse(handler.Body!);
+        var policy = body.RootElement.GetProperty("input")[0].GetProperty("content")[0].GetProperty("text").GetString()!;
+        Assert.Contains(instruction, policy);
+        using var data = JsonDocument.Parse(body.RootElement.GetProperty("input")[1].GetProperty("content").GetString()!);
+        Assert.Equal(target, data.RootElement.GetProperty("targetUserMessage").GetString());
+        Assert.Contains("Não infira hábito a partir de pedidos repetidos", policy);
+    }
+
     private sealed class CaptureHandler(string structuredOutput = "{\"candidates\":[]}") : HttpMessageHandler
     {
         public string? Body { get; private set; }

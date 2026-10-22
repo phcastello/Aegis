@@ -35,6 +35,10 @@ public sealed class TitleGenerationTests
         Assert.False(payload.RootElement.TryGetProperty("tools", out _));
         Assert.False(payload.RootElement.TryGetProperty("instructions", out _));
         Assert.Equal(2, payload.RootElement.GetProperty("input").GetArrayLength());
+        var policy = payload.RootElement.GetProperty("input")[0].GetProperty("content").GetString()!;
+        Assert.Contains("Comprar leite na saída", policy);
+        Assert.Contains("prefixos classificatórios", policy);
+        Assert.Contains("próprio sistema de lembretes", policy);
         Assert.DoesNotContain("runtime", handler.Body!, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("gpt-5-nano", new TitleOptions().Model);
     }
@@ -75,6 +79,23 @@ public sealed class TitleGenerationTests
             service.Release.TrySetResult();
             await worker.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Theory]
+    [InlineData("Comprar leite na saída")]
+    [InlineData("Limpar a caixa da Kali")]
+    [InlineData("Protocolo ao chegar em casa")]
+    [InlineData("Quem é a Aegis?")]
+    [InlineData("Como funcionam os lembretes")]
+    public void NaturalTitlesArePreservedAndManualRenameWins(string title)
+    {
+        var sanitizer = typeof(ConversationTitleService).GetMethod("SanitizeGeneratedTitle", BindingFlags.NonPublic | BindingFlags.Static)!;
+        Assert.Equal(title, sanitizer.Invoke(null, [title]));
+        var conversation = new Aegis.Domain.Entities.Conversation();
+        conversation.Rename("Meu título");
+        conversation.SetGeneratedTitle(title);
+        Assert.Equal("Meu título", conversation.Title);
+        Assert.False(conversation.CanGenerateAutomaticTitle);
     }
 
     private sealed class BlockingTitleService : IConversationTitleService
