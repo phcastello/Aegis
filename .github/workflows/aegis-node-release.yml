@@ -10,24 +10,64 @@ on:
         type: string
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 concurrency:
   group: aegis-node-release
   cancel-in-progress: false
 jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require signing protection before scheduling any signing job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'JS'
+          import { assertEnvironment, signingEnvironment } from './.github/scripts/native-preview.mjs';
+          const get = async path => {
+            const response = await fetch(`${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/${path}`, {headers:{Authorization:`Bearer ${process.env.GH_TOKEN}`,Accept:'application/vnd.github+json'}});
+            if (!response.ok) throw Error(`Cannot verify signing protection: HTTP ${response.status}`);
+            return response.json();
+          };
+          const environment = await get(`environments/${signingEnvironment}`);
+          const policies = [];
+          for (let page=1;;page++) {
+            const result = await get(`environments/${signingEnvironment}/deployment-branch-policies?per_page=100&page=${page}`);
+            policies.push(...result.branch_policies);
+            if (result.branch_policies.length < 100) break;
+          }
+          assertEnvironment(environment, {branch_policies:policies});
+          JS
+      - id: resolve
+        name: Resolve the existing release tag once
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          const tag = process.env.RELEASE_TAG;
+          if (!/^node-v[0-9]+\.[0-9]+\.[0-9]+(?:-unstable\.[1-9][0-9]*)?$/.test(tag)) throw Error('Expected an existing node version tag.');
+          const sha = execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], {encoding:'utf8'}).trim();
+          if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Expected a full immutable SHA.');
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          JS
   acceptance:
+    needs: resolve
     uses: ./.github/workflows/aegis-node-ci.yml
     with:
+      stage: release
       full_matrix: true
-      ref: ${{ inputs.tag || github.ref }}
-    secrets: inherit
-  identity:
-    uses: ./.github/workflows/aegis-release-identity-ci.yml
-    with:
-      full_matrix: true
-      ref: ${{ inputs.tag || github.ref }}
-    secrets: inherit
+      ref: ${{ needs.resolve.outputs.sha }}
   build:
-    needs: [acceptance, identity]
+    needs: [resolve, acceptance]
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +79,7 @@ jobs:
             android: 'true'
             platform: Android-arm64
     runs-on: ${{ matrix.os }}
+    environment: aegis-native-signing
     defaults:
       run:
         shell: bash
@@ -46,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
       - name: Validate tag and required signing secrets
         env:
@@ -171,7 +212,7 @@ jobs:
         name: Remove private keystore
         run: rm -f "$RUNNER_TEMP/aegis-release.p12"
   publish:
-    needs: build
+    needs: [resolve, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -181,7 +222,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
