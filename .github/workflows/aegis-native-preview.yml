@@ -1,0 +1,243 @@
+name: Aegis Native Preview
+run-name: Aegis Native Preview · ${{ inputs.version }} · ${{ inputs.platform }} · ${{ inputs.sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA in this repository
+        required: true
+        type: string
+      branch:
+        description: Repository branch containing that commit
+        required: true
+        type: string
+      version:
+        description: New monotonic preview version, e.g. 0.7.2-unstable.1 (N 1..998)
+        required: true
+        type: string
+      platform:
+        description: Native installers to build
+        required: true
+        default: both
+        type: choice
+        options: [android, windows, both]
+permissions:
+  contents: read
+  actions: read
+# Serial allocation prevents two different artifacts reserving the same version.
+concurrency:
+  group: aegis-native-preview
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      versionCode: ${{ steps.plan.outputs.versionCode }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Require registered trusted main workflow
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EXPECTED_WORKFLOW: ${{ github.repository }}/.github/workflows/aegis-native-preview.yml@refs/heads/main
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$WORKFLOW_REF" = "$EXPECTED_WORKFLOW"
+          test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Verify protected signing environment, source and version reservation
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_SHA: ${{ inputs.sha }}
+          PREVIEW_BRANCH: ${{ inputs.branch }}
+          PREVIEW_VERSION: ${{ inputs.version }}
+          PREVIEW_PLATFORM: ${{ inputs.platform }}
+        run: node .github/scripts/native-preview.mjs resolve
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Preview-plan-${{ github.run_id }}
+          path: preview-plan/preview.json
+          if-no-files-found: error
+          retention-days: 90
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Preview-plan-${{ github.run_id }}
+          path: preview-plan
+      - name: Apply temporary version using trusted synchronization and identity contracts
+        env:
+          PREVIEW_SHA: ${{ needs.plan.outputs.sha }}
+          PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PREVIEW_SHA"
+          node trusted/.github/scripts/native-preview.mjs prepare "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/trusted" "$PREVIEW_VERSION"
+      # Only main's reviewed composite action controls toolchain setup/caches.
+      - uses: ./trusted/.github/actions/setup-aegis-node
+        with:
+          android: ${{ matrix.android }}
+          cache-variant: preview-build
+      - name: Essential interface and distribution contracts
+        working-directory: apps/aegis-node
+        run: npm run check && npm test && npm run test:release
+      - if: matrix.android == 'true'
+        name: Configure public Firebase Android client (never a service-account credential)
+        env:
+          FIREBASE_CLIENT_B64: ${{ vars.AEGIS_ANDROID_FIREBASE_CLIENT_B64 }}
+        run: python3 trusted/.github/scripts/native-preview-android.py firebase apps/aegis-node/src-tauri/gen/android/app/google-services.json
+      - if: matrix.android == 'true'
+        name: Build release APK with a disposable key; official signing is isolated
+        working-directory: apps/aegis-node
+        env:
+          ANDROID_KEYSTORE_PASSWORD: disposable-preview-build
+          ANDROID_KEY_ALIAS: preview
+          ANDROID_KEY_PASSWORD: disposable-preview-build
+        run: |
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/disposable-preview.p12"
+          keytool -genkeypair -keystore "$ANDROID_KEYSTORE_PATH" -storetype PKCS12 -alias preview \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD -keypass:env ANDROID_KEY_PASSWORD \
+            -dname CN=Disposable-preview-build -keyalg RSA -keysize 2048 -validity 2
+          npm run build:android:release
+          node "$GITHUB_WORKSPACE/trusted/apps/aegis-node/scripts/package-artifacts.mjs" android
+          cp src-tauri/gen/android/app/build/generated/source/buildConfig/universal/release/com/aegis/node/BuildConfig.java release-assets/BuildConfig.java
+      - if: matrix.android == 'false'
+        name: Build NSIS without the official updater key
+        working-directory: apps/aegis-node
+        run: |
+          npm run tauri -- build --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          node "$GITHUB_WORKSPACE/trusted/apps/aegis-node/scripts/package-artifacts.mjs" windows
+      - if: matrix.android == 'false'
+        name: Check actual installation, WebView identity and previous stable profile before signing
+        working-directory: apps/aegis-node
+        run: node ../../packages/aegis-client/tests/windows-release-upgrade.mjs release-assets/Aegis-Windows-x86_64-Setup.exe
+      - name: Bind build bytes to source and temporary version
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: node trusted/.github/scripts/native-preview.mjs manifest apps/aegis-node/release-assets preview-plan/preview.json "$PLATFORM"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Untrusted-build-${{ matrix.platform }}-${{ github.run_id }}
+          path: apps/aegis-node/release-assets/*
+          if-no-files-found: error
+          retention-days: 1
+  sign:
+    needs: [plan, build]
+    # Owner approval is required here. Only trusted main code runs in this job;
+    # candidate installers are parsed/signed as data, never installed or executed.
+    environment: aegis-native-signing
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Never replace a previously signed preview on rerun
+        run: test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Preview-plan-${{ github.run_id }}
+          path: preview-plan
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Untrusted-build-${{ matrix.platform }}-${{ github.run_id }}
+          path: candidate
+      - name: Verify artifact provenance before any key is available
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: node .github/scripts/native-preview.mjs verify-input candidate preview-plan/preview.json "$PLATFORM"
+      - if: matrix.android == 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - if: matrix.android == 'true'
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - if: matrix.android == 'true'
+        run: sdkmanager 'build-tools;37.0.0'
+      - if: matrix.android == 'false'
+        name: Install only the trusted updater signer; no candidate dependencies
+        working-directory: apps/aegis-node
+        run: npm ci --ignore-scripts
+      - if: matrix.android == 'false'
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: '1.94.0'
+      - name: Prepare signed artifact directory
+        run: mkdir signed
+      - if: matrix.android == 'true'
+        name: Verify and re-sign APK with the existing official certificate
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          FIREBASE_CLIENT_B64: ${{ vars.AEGIS_ANDROID_FIREBASE_CLIENT_B64 }}
+        run: python3 .github/scripts/native-preview-android.py sign candidate signed preview-plan/preview.json
+      - if: matrix.android == 'false'
+        name: Sign Windows updater bytes with their exact preview version
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          cp candidate/Aegis-Windows-x86_64-Setup.exe signed/
+          apps/aegis-node/node_modules/.bin/tauri signer sign --app-version "$PREVIEW_VERSION" signed/Aegis-Windows-x86_64-Setup.exe > /dev/null
+      - if: matrix.android == 'false'
+        name: Verify updater signature with the committed existing public key
+        env:
+          PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const config = JSON.parse(readFileSync('apps/aegis-node/src-tauri/tauri.conf.json'));
+          writeFileSync('updater.pub', Buffer.from(config.plugins.updater.pubkey, 'base64'));
+          writeFileSync('updater.sig', Buffer.from(readFileSync('signed/Aegis-Windows-x86_64-Setup.exe.sig', 'utf8').trim(), 'base64'));
+          JS
+          cargo run --quiet --locked --manifest-path .github/scripts/preview-updater-verifier/Cargo.toml -- \
+            signed/Aegis-Windows-x86_64-Setup.exe updater.pub updater.sig "$PREVIEW_VERSION"
+      - name: Write public hashes and immutable source provenance
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: node .github/scripts/native-preview.mjs manifest signed preview-plan/preview.json "$PLATFORM" signed
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Preview-${{ needs.plan.outputs.version }}-${{ matrix.platform }}-${{ needs.plan.outputs.sha }}
+          path: signed/*
+          if-no-files-found: error
+          retention-days: 14

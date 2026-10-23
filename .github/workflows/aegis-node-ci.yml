@@ -1,19 +1,34 @@
 name: Aegis Node CI
 on:
   push:
-    branches: [main, 'feat/v0.7.0-*']
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+  merge_group:
+    types: [checks_requested]
   workflow_call:
     inputs:
       ref:
         description: Exact immutable release ref for acceptance; defaults to the triggering ref
         type: string
         default: ''
+      stage:
+        type: string
+        default: release
       full_matrix:
         type: boolean
         default: true
   workflow_dispatch:
     inputs:
+      stage:
+        description: Integration or risk-based release acceptance; full_matrix always includes long measurements
+        type: choice
+        options: [integration, release]
+        default: integration
+      base_ref:
+        description: Optional full base SHA for risk-based manual selection; absent history selects conservatively
+        type: string
+        default: ''
       full_matrix:
         description: Complete release acceptance including native gates and long idle measurements; overrides focused filters
         type: boolean
@@ -41,6 +56,7 @@ on:
         default: false
 permissions:
   contents: read
+  pull-requests: read
 concurrency:
   group: node-ci-${{ inputs.ref || github.head_ref || github.ref_name }}-${{ inputs.ref && 'release-acceptance' || 'checks' }}-${{ github.event_name == 'workflow_dispatch' && inputs.ui_only && 'ui' || github.event_name == 'workflow_dispatch' && inputs.android_distribution_only && 'android-distribution' || github.event_name == 'workflow_dispatch' && inputs.windows_only && 'windows' || github.event_name == 'workflow_dispatch' && inputs.android_framework_only && format('android-framework-{0}', inputs.android_framework_api || 'all') || github.event_name == 'workflow_dispatch' && 'all-dispatch' || 'all' }}
   cancel-in-progress: true
@@ -48,6 +64,12 @@ jobs:
   selection:
     runs-on: ubuntu-24.04
     outputs:
+      integration: ${{ steps.select.outputs.integration }}
+      partial: ${{ steps.select.outputs.partial }}
+      stage: ${{ steps.select.outputs.stage }}
+      source_sha: ${{ steps.select.outputs.source_sha }}
+      evidence_sha: ${{ steps.select.outputs.evidence_sha }}
+      identity: ${{ steps.select.outputs.identity }}
       backend: ${{ steps.select.outputs.backend }}
       ui: ${{ steps.select.outputs.ui }}
       native: ${{ steps.select.outputs.native }}
@@ -58,13 +80,15 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
       - name: Test the job selector even for documentation-only changes
-        run: node --test .github/scripts/select-node-ci.test.mjs
+        run: node --test .github/scripts/*.test.mjs
+      - name: Test trusted preview APK validation and isolated signing controls
+        run: python3 -m unittest discover -s .github/scripts -p '*_test.py'
       - name: Check documented commands and local links
         run: node scripts/check-docs.mjs
       - id: select
@@ -94,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.selection.outputs.evidence_sha }}
           fetch-depth: 0
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -132,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.selection.outputs.evidence_sha }}
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -199,7 +223,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.selection.outputs.evidence_sha }}
           fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
         with:
@@ -261,10 +285,10 @@ jobs:
       - if: matrix.android == 'false'
         name: Native HttpApi notification dispatch and Android push register refresh against real controllers
         run: node ../../scripts/node-transport-probe/native-http.mjs
-      - if: matrix.android == 'false'
+      - if: matrix.android == 'false' && needs.selection.outputs.idle == 'true'
         name: Preserve the candidate executable for the idle comparison
         run: cp src-tauri/target/x86_64-pc-windows-msvc/debug/aegis-node.exe "$RUNNER_TEMP/aegis-idle-after.exe"
-      - if: matrix.android == 'false'
+      - if: matrix.android == 'false' && needs.selection.outputs.idle == 'true'
         name: Build the immutable accepted baseline for an equivalent native idle window
         env:
           AEGIS_NODE_API_BASE_URL: http://127.0.0.1:18104
@@ -277,9 +301,12 @@ jobs:
           cd "$RUNNER_TEMP/aegis-accepted-baseline/apps/aegis-node"
           npm run tauri -- build --debug --no-bundle --target x86_64-pc-windows-msvc
           cp "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/debug/aegis-node.exe" "$RUNNER_TEMP/aegis-idle-before.exe"
-      - if: matrix.android == 'false'
+      - if: matrix.android == 'false' && needs.selection.outputs.idle == 'true'
         name: Real NSIS upgrade, same native identity and equivalent Windows idle windows
         run: node ../../packages/aegis-client/tests/windows-upgrade-idle.mjs compare "$AEGIS_UPGRADE_PLAN" "$RUNNER_TEMP/aegis-idle-before.exe" "$RUNNER_TEMP/aegis-idle-after.exe" ../../artifacts/v0.7.0-completion
+      - if: matrix.android == 'false' && needs.selection.outputs.idle != 'true'
+        name: Upgrade the actual installed Windows candidate without idle measurements
+        run: node ../../packages/aegis-client/tests/windows-integration-upgrade.mjs "$AEGIS_UPGRADE_PLAN" ../../artifacts/v0.7.0-completion
       - if: matrix.android == 'false'
         name: Run real installed candidate Windows WebView2 smoke test
         run: node ../../packages/aegis-client/tests/windows-runtime.mjs "$AEGIS_INSTALLED_EXE"
@@ -366,7 +393,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.selection.outputs.evidence_sha }}
           fetch-depth: 0
       - uses: ./.github/actions/setup-aegis-node
         with:
@@ -479,27 +506,47 @@ jobs:
             artifacts/v0.7.0-completion/android-hybrid-efficiency.json
           if-no-files-found: warn
           retention-days: 14
+  identity:
+    needs: selection
+    if: ${{ needs.selection.outputs.identity == 'true' }}
+    uses: ./.github/workflows/aegis-release-identity-ci.yml
+    with:
+      ref: ${{ needs.selection.outputs.evidence_sha }}
+      stage: ${{ needs.selection.outputs.stage }}
+      full_matrix: ${{ needs.selection.outputs.full == 'true' }}
   required:
-    name: Aegis Node CI result
-    needs: [selection, regression, ui, native, android-notification-framework]
+    name: ${{ needs.selection.outputs.stage == 'release' && 'Aegis Release Acceptance result' || 'Aegis Node CI result' }}
+    needs: [selection, regression, ui, native, android-notification-framework, identity]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.selection.outputs.evidence_sha }}
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
       - name: Fail on a failed, cancelled or unexpectedly skipped selected job
+        # Drafts deliberately receive no integration approval, even on the same SHA.
         env:
           JOB_RESULTS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'JS'
-          import { validateResults } from './.github/scripts/select-node-ci.mjs';
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { validateResults, validateIntegrationContext } from './.github/scripts/select-node-ci.mjs';
           const jobs = JSON.parse(process.env.JOB_RESULTS);
           if (jobs.selection.result !== 'success') throw Error('CI selection did not pass.');
-          const selected = Object.fromEntries(Object.entries(jobs.selection.outputs).map(([key, value]) => [key, value === 'true']));
-          validateResults(selected, jobs, { regression: 'backend', ui: 'ui', native: 'native', 'android-notification-framework': 'framework' });
+          const selected = Object.fromEntries(Object.entries(jobs.selection.outputs).map(([key, value]) => [key, ['true','false'].includes(value) ? value === 'true' : value]));
+          const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          validateIntegrationContext(selected, { event: process.env.GITHUB_EVENT_NAME, payload, sha: process.env.GITHUB_SHA, checkoutSha: execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() });
+          if (payload.pull_request) {
+            const response = await fetch(`${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/pulls/${payload.number}`, {headers:{Authorization:`Bearer ${process.env.GH_TOKEN}`,Accept:'application/vnd.github+json'}});
+            if (!response.ok) throw Error(`Cannot verify current PR: HTTP ${response.status}`);
+            const current = await response.json();
+            if (current.draft || current.state !== 'open' || current.head.sha !== selected.source_sha || current.base.sha !== payload.pull_request.base.sha) throw Error('PR changed or returned to draft; current candidate requires new integration.');
+          }
+          validateResults(selected, jobs, { regression: 'backend', ui: 'ui', native: 'native', 'android-notification-framework': 'framework', identity: 'identity' });
           JS

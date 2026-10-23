@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload existing private signing material through gh's stdin, never command arguments/logs."""
+"""Upload existing signing material to aegis-native-signing through gh's stdin."""
 import base64
 import json
 import subprocess
@@ -15,6 +15,7 @@ values = {
     "TAURI_SIGNING_PRIVATE_KEY": (key_dir / "updater.key").read_text(),
 }
 for name, value in values.items():
-    subprocess.run(["gh", "secret", "set", name, "--repo", "phcastello/Aegis"],
+    subprocess.run(["gh", "secret", "set", name, "--repo", "phcastello/Aegis",
+                    "--env", "aegis-native-signing"],
                    input=value, text=True, check=True, stdout=subprocess.DEVNULL)
     print(f"Configured {name}")

@@ -40,7 +40,9 @@ object NodeBackgroundWork {
     manager.cancelAllWorkByTag(NodeSyncWorker::class.java.name).result.get(5,TimeUnit.SECONDS)
     if(defer) {
       val delayed=OneTimeWorkRequestBuilder<NodeSyncWorker>().setInitialDelay(1,TimeUnit.DAYS).build()
-      manager.enqueueUniqueWork("aegis-native-sync",ExistingWorkPolicy.KEEP,delayed).result.get(5,TimeUnit.SECONDS)
+      // A foreground retry may enqueue between cancellation and this insertion.
+      // Replace it; later production KEEP requests preserve the fixture delay.
+      manager.enqueueUniqueWork("aegis-native-sync",ExistingWorkPolicy.REPLACE,delayed).result.get(5,TimeUnit.SECONDS)
     }else {enqueue(context);scheduleRenewal(context)}
     val deferred=defer && manager.getWorkInfosForUniqueWork("aegis-native-sync").get(5,TimeUnit.SECONDS).any{!it.state.isFinished && it.nextScheduleTimeMillis>System.currentTimeMillis()+60000}
     return JSONObject().put("workerDeferred",deferred).toString()
