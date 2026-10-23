@@ -617,6 +617,12 @@ object NodeGeofences {
   }
   return changed
  }
+ /** Atomically seed the instrumentation deadline before any existing worker can consume it. */
+ internal fun confirmPendingFixture(context:Context,placeId:String,pending:String) = synchronized(applyGate) {
+  check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
+  check(prefs(context).edit().putString("nativePending:$placeId",pending).commit())
+  confirmNative(context)
+ }
  /** Single supplemental acquisition; delayed WorkManager never resurrects it. */
  fun confirmNative(context:Context,observation:NodeGeoEngine.Observation?=null,receivedBefore:Long=Long.MAX_VALUE) = synchronized(applyGate) {
   val value=manifest(context) ?: return@synchronized

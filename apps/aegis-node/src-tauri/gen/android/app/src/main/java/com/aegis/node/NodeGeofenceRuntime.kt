@@ -61,9 +61,9 @@ object NodeGeofenceRuntime {
  }
  @JvmStatic fun permissions(context:Context):String = NodeLocation.permissions(context).toString()
  /** Instrumentation may advance a persisted deadline; distribution cannot. */
- @JvmStatic fun confirmPending(context:Context) {
+ @JvmStatic fun confirmPending(context:Context,placeId:String,pending:String) {
   check(BuildConfig.DEBUG || BuildConfig.AEGIS_FRAMEWORK_FIXTURE)
-  NodeGeofences.confirmNative(context)
+  NodeGeofences.confirmPendingFixture(context,placeId,pending)
  }
  @JvmStatic fun deactivate(context:Context) = NodeGeofences.clear(context)
  @JvmStatic fun restore(context:Context) = NodeGeofences.restore(context)

@@ -264,10 +264,11 @@ class NodeGeofenceReceiverFrameworkTest {
    // The OS scheduler delay is represented by an expired persisted deadline;
    // run the same production domain boundary called by the late worker. This
    // avoids requiring WorkManager to run at a precise wall-clock interval.
+   // Seed and consume under the domain lock: an earlier real worker must not
+   // remove this fixture row using a snapshot taken before its deadline changed.
    val delayed=System.currentTimeMillis()-180000
    val pending=JSONObject().put("transition","enter").put("receivedAt",delayed).put("detectedAt",delayed).put("deadline",delayed+120000).put("baselineAt",now-300000).put("configurationId",generation)
-   check(preferences.edit().putString("nativePending:$placeId",pending.toString()).commit())
-   runtime.getMethod("confirmPending",Context::class.java).invoke(null,context)
+   runtime.getMethod("confirmPending",Context::class.java,String::class.java,String::class.java).invoke(null,context,placeId,pending.toString())
    assertFalse(preferences.contains("nativePending:$placeId"));requireRecorded("transition_expired")
    assertEquals("outside",JSONObject(preferences.getString("state:$placeId",null)!!).getString("confirmed"))
    assertTrue(events(ruleId).isEmpty())
