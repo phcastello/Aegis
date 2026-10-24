@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "highWaterMark": 7002002,
+  "reservations": [
+    {
+      "schema": 2,
+      "sha": "64dc3345aec6299cb971f52e4701a42e63746926",
+      "branch": "fix/v0.7.2-ux-proactivity",
+      "number": 2,
+      "platform": "both",
+      "version": "0.7.2-unstable.2",
+      "kind": "normal",
+      "sourceCommit": "64dc3345aec6299cb971f52e4701a42e63746926",
+      "sourceVersion": "0.7.2",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "publishedAt": "2026-10-24T03:04:26.487Z",
+      "repository": "phcastello/Aegis",
+      "runId": "40056787159",
+      "controlSha": "bfa0617ba5a45b93d43d55c985d8887c0b5b4c6e",
+      "limits": "Build/signing only; publication requires separate protected promotion. No backend deployment or physical acceptance.",
+      "versionCode": 7002002
+    }
+  ]
+}
