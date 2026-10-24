@@ -35,28 +35,29 @@ object NodeUpdates {
    if(target!=null&&(installed>=target || System.currentTimeMillis()-file.lastModified()>TimeUnit.DAYS.toMillis(7))) file.delete()
   }
  }
- fun install(activity:Activity,version:String,url:String,versionCode:Long):JSONObject {
+ fun install(activity:Activity,version:String,url:String,versionCode:Long,sha256:String):JSONObject {
   var phase="verification"
   try {
-  requireUpdate(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-unstable\\.[0-9]+)?").matches(version),"update_version_mismatch")
+  requireUpdate(NodeUpdateContract.supportedVersion(version),"update_version_mismatch")
   requireUpdate(url=="https://github.com/phcastello/Aegis/releases/download/node-v$version/Aegis-Android-arm64.apk","update_package_mismatch")
+  requireUpdate(Regex("[0-9a-f]{64}").matches(sha256),"update_archive_invalid")
   cleanup(activity)
   val current=activity.packageManager.getPackageInfo(activity.packageName,flags())
-  requireUpdate(versionCode>code(current),"update_version_mismatch")
+  requireUpdate(versionCode in 1..2100000000L&&versionCode>code(current),"update_version_mismatch")
   val target=File(directory(activity),"aegis-update-$versionCode.apk")
   val partial=File(target.path+".part")
-  if(target.exists())try{verify(activity,target,current,version,versionCode)}catch(_:Exception){check(target.delete())}
+  if(target.exists())try{verify(activity,target,current,version,versionCode,sha256)}catch(_:Exception){check(target.delete())}
   if(!target.exists()) {
    partial.delete()
    try {
     phase="download"
     download(url,partial)
     phase="verification"
-    verify(activity,partial,current,version,versionCode)
+    verify(activity,partial,current,version,versionCode,sha256)
     check(partial.renameTo(target))
    }finally{partial.delete()}
   }
-  verify(activity,target,current,version,versionCode)
+  verify(activity,target,current,version,versionCode,sha256)
   phase="install_permission"
   if(Build.VERSION.SDK_INT>=26&&!activity.packageManager.canRequestPackageInstalls()) {
    handoff(activity,Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${activity.packageName}")))
@@ -84,7 +85,8 @@ object NodeUpdates {
   activity.runOnUiThread{try{activity.startActivity(intent);accepted=true}catch(_:Exception){}finally{finished.countDown()}}
   check(finished.await(10,TimeUnit.SECONDS) && accepted)
  }
- private fun verify(context:Context,file:File,current:PackageInfo,version:String,versionCode:Long) {
+ private fun verify(context:Context,file:File,current:PackageInfo,version:String,versionCode:Long,sha256:String) {
+  requireUpdate(NodeUpdateContract.matchesHash(file,sha256),"update_archive_invalid")
   val archive=context.packageManager.getPackageArchiveInfo(file.absolutePath,flags()) ?: throw Rejected("update_archive_invalid")
   requireUpdate(archive.packageName==context.packageName,"update_package_mismatch")
   requireUpdate(archive.versionName==version&&code(archive)==versionCode,"update_version_mismatch")

@@ -1,4 +1,25 @@
 fn main() {
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    let config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string("tauri.conf.json").expect("Tauri configuration"),
+    )
+    .expect("valid Tauri configuration");
+    let code = config["bundle"]["android"]["versionCode"]
+        .as_u64()
+        .filter(|value| (1..=2_100_000_000).contains(value))
+        .expect("Android installation code must be within the supported range");
+    println!("cargo:rustc-env=AEGIS_INSTALLATION_CODE={code}");
+    for key in ["AEGIS_SOURCE_COMMIT", "AEGIS_SOURCE_VERSION"] {
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Ok(value) = std::env::var(key) {
+            assert!(
+                !value.contains(['\r', '\n']),
+                "Source provenance must be a single line"
+            );
+            println!("cargo:rustc-env={key}={value}");
+        }
+    }
+
     const KEY: &str = "AEGIS_NODE_API_BASE_URL";
     println!("cargo:rerun-if-env-changed={KEY}");
     println!("cargo:rerun-if-changed=../.env.local");
@@ -38,6 +59,8 @@ fn main() {
             "runtime_info",
             "check_backend",
             "check_android_update",
+            "prepare_windows_update",
+            "install_windows_update",
             "node_status",
             "node_test_notification",
             "node_exit",

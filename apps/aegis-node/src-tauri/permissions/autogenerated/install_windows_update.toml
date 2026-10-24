@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-windows-update"
+description = "Enables the install_windows_update command without any pre-configured scope."
+commands.allow = ["install_windows_update"]
+
+[[permission]]
+identifier = "deny-install-windows-update"
+description = "Denies the install_windows_update command without any pre-configured scope."
+commands.deny = ["install_windows_update"]

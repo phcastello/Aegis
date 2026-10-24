@@ -245,7 +245,7 @@ try {
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-updates-mobile.png`});
      await page.evaluate(()=>window.fixtureUpdateFailure='update_feed_missing');
      await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).click();
-     await panel.getByText('O canal de atualizações não está disponível. Tente novamente mais tarde.',{exact:true}).waitFor();
+     await panel.getByText('O manifesto de atualizações não está disponível. Tente novamente mais tarde.',{exact:true}).waitFor();
      await panel.locator('.update-notice').getByText('Código: update_feed_missing',{exact:true}).waitFor();
      await panel.locator('.update-notice .update-title-mobile').getByText('Atualização disponível',{exact:true}).waitFor();
      await panel.locator('.update-notice .update-version').getByText(`Versão ${updateVersion}`,{exact:true}).waitFor();
@@ -268,6 +268,18 @@ try {
      assert.equal(await panel.getByRole('button',{name:'Verificar atualizações',exact:true}).count(),0);
      assert.equal(await panel.getByRole('button',{name:'Baixar e instalar',exact:true}).count(),0);
      assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='check_android_update').length),4,'Opening About does not run another update check');
+     await panel.getByRole('button',{name:'Atualizações',exact:true}).click();
+     await panel.getByText('Recuperar este Node',{exact:true}).click();
+     await panel.getByText('Para restaurar uma versão histórica, o proprietário precisa reconstruir e aprovar uma nova distribuição de recuperação.',{exact:false}).waitFor();
+     await page.evaluate(()=>window.fixtureUpdate={version:'0.7.2-unstable.5.rollback.1',kind:'rollback',rollbackOf:'0.7.2-unstable.5',restoresVersion:'0.7.2-unstable.4',versionCode:7002006,url:'https://github.com/phcastello/Aegis/releases/download/node-v0.7.2-unstable.5.rollback.1/Aegis-Android-arm64.apk'});
+     await panel.getByRole('button',{name:'Buscar atualização de recuperação',exact:true}).click();
+     await panel.locator('.update-title-mobile').getByText('Atualização de recuperação disponível',{exact:true}).waitFor();
+     await panel.getByText('Esta distribuição restaura o código da 0.7.2-unstable.4 após problemas encontrados na 0.7.2-unstable.5.',{exact:true}).waitFor();
+     assert.equal(await page.evaluate(()=>window.nativeCalls.filter(command=>command==='install_android_update').length),3,'Recovery discovery must not trigger an installation');
+     await panel.getByRole('button',{name:'Abrir publicação de recuperação',exact:true}).click();
+     await page.waitForFunction(()=>window.openedUrls.includes('https://github.com/phcastello/Aegis/actions/workflows/aegis-native-preview.yml'));
+     assert.equal(await page.evaluate(()=>window.nativeCalls.some(command=>command.includes('workflow_dispatch'))),false,'Recovery only opens the owner publication page');
+     await panel.getByRole('button',{name:'Sobre',exact:true}).click();
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-about-mobile.png`});
      await panel.getByText('Diagnóstico técnico', {exact:true}).click();
      await panel.getByText('Disponível', { exact: true }).waitFor();

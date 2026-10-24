@@ -3,12 +3,13 @@ import type { useUpdates } from '../composables/useUpdates';
 defineProps<{ updates: ReturnType<typeof useUpdates>; workActive?: boolean }>();
 </script>
 <template>
-  <aside v-if="updates.visible.value" class="update-notice" aria-label="Atualização da Aegis" role="status">
+  <aside v-if="updates.visible.value" class="update-notice" :class="{ 'update-notice--recovery': updates.update.value?.distributionKind === 'rollback' }" aria-label="Atualização da Aegis" role="status">
     <div class="update-notice-content">
       <template v-if="updates.update.value">
-        <strong class="update-title-desktop">Aegis {{ updates.update.value.version }} disponível</strong>
-        <strong class="update-title-mobile">Atualização disponível</strong>
+        <strong class="update-title-desktop">{{ updates.update.value.distributionKind === 'rollback' ? 'Atualização de recuperação disponível' : `Aegis ${updates.update.value.version} disponível` }}</strong>
+        <strong class="update-title-mobile">{{ updates.update.value.distributionKind === 'rollback' ? 'Atualização de recuperação disponível' : 'Atualização disponível' }}</strong>
         <span class="update-version">Versão {{ updates.update.value.version }}</span>
+        <span v-if="updates.update.value.distributionKind === 'rollback'" class="update-recovery">Esta distribuição restaura o código da {{ updates.update.value.restoresVersion }} após problemas encontrados na {{ updates.update.value.rollbackOf }}.</span>
       </template>
       <span v-if="updates.state.value === 'installing'">{{ updates.update.value?.kind === 'apk' ? 'Preparando instalador…' : 'Baixando atualização…' }} {{ updates.progress.value !== null ? `${updates.progress.value}%` : '' }}</span>
       <span v-else-if="updates.state.value === 'ready'">Download concluído. Instale quando terminar seu trabalho; a Aegis será reiniciada.</span>
