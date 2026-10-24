@@ -19,6 +19,13 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
+      - name: Restrict historical signing to the reviewed main control plane
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EXPECTED_WORKFLOW: ${{ github.repository }}/.github/workflows/aegis-node-release.yml@refs/heads/main
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$WORKFLOW_REF" = "$EXPECTED_WORKFLOW"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
@@ -55,6 +62,9 @@ jobs:
           if (!/^node-v[0-9]+\.[0-9]+\.[0-9]+(?:-unstable\.[1-9][0-9]*)?$/.test(tag)) throw Error('Expected an existing node version tag.');
           const sha = execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], {encoding:'utf8'}).trim();
           if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Expected a full immutable SHA.');
+          // The historical path runs build scripts with keys after approval.
+          // Never let it sign arbitrary branch code, even with a legacy endpoint.
+          execFileSync('git', ['merge-base', '--is-ancestor', sha, 'refs/remotes/origin/main'], {stdio:'pipe'});
           const config = JSON.parse(execFileSync('git', ['show', `${sha}:apps/aegis-node/src-tauri/tauri.conf.json`], {encoding:'utf8'}));
           if (config.plugins.updater.endpoints.some(url => url.includes('/aegis-distribution/')))
             throw Error('Use Aegis Native Preview (stable runs require full acceptance), then protected Native Promote for v2 distributions.');
