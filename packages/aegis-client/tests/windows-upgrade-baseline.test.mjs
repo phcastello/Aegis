@@ -10,7 +10,7 @@ test('the v0.7.1 historical patch keeps its surviving stable v0.7.0 baseline and
 });
 
 test('every future stable or preview distribution upgrades the exact surviving v0.7.1 bytes', () => {
-  for (const candidate of ['0.7.2-unstable.1', '0.7.2', '0.7.3', '0.8.0-unstable.1', '1.0.0']) {
+  for (const candidate of ['0.7.2-unstable.1', '0.7.2-unstable.5.rollback.1', '0.7.2-unstable.5.rollback.3', '0.7.3-rollback.1', '0.7.3-rollback.3', '0.7.2', '0.7.3', '0.8.0-unstable.1', '1.0.0']) {
     const baseline = signedUpgradeBaseline(candidate);
     assert.equal(baseline.version, '0.7.1');
     assert.equal(baseline.sha256, 'f4cda9fc477258ff6c5f3bf420b0430c5ac3fbd2e76c01d145a3466657d494c3');

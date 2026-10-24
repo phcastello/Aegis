@@ -68,6 +68,21 @@ def sign(candidate, output, plan_file):
     print("Preview Android official identity, certificate, version, Firebase, ARM64 and fixture guards PASS.")
 
 
+def verify(candidate, plan_file):
+    """Recheck final public bytes without loading any private signing credential."""
+    _, config = firebase()
+    apk = Path(candidate) / "Aegis-Android-arm64.apk"
+    plan = json.loads(Path(plan_file).read_text())
+    tools = Path(os.environ["ANDROID_HOME"]) / "build-tools/37.0.0"
+    analyzer = str(Path(os.environ["ANDROID_HOME"]) / "cmdline-tools/latest/bin/apkanalyzer")
+    guard.verify_manifest(run([analyzer, "manifest", "print", str(apk)]), plan["version"], plan["versionCode"])
+    guard.verify_archive(apk)
+    guard.verify_certificate(run([str(tools / "apksigner"), "verify", "--verbose", "--print-certs", str(apk)]))
+    guard.verify_firebase(config, lambda name: run([analyzer, "resources", "value", "--config", "default", "--type", "string", "--name", name, str(apk)]))
+    run([str(tools / "zipalign"), "-c", "-P", "16", "4", str(apk)])
+    print("Final Android identity, official certificate, version, Firebase and archive guards PASS.")
+
+
 if __name__ == "__main__":
     try:
         if sys.argv[1] == "firebase":
@@ -77,6 +92,8 @@ if __name__ == "__main__":
             target.write_bytes(value)
         elif sys.argv[1] == "sign":
             sign(*sys.argv[2:])
+        elif sys.argv[1] == "verify":
+            verify(*sys.argv[2:])
         else:
             raise SystemExit("Unknown preview Android command.")
     except (OSError, ValueError, KeyError, TypeError, guard.VerificationError):
