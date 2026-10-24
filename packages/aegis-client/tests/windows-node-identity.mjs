@@ -207,9 +207,11 @@ try {
   let ackMetadata=nativeReminderMetadata(acknowledgementOccurrence);assert.equal(ackMetadata.presentation.generation,1);
   const openAction=ackMetadata.actions.find(item=>item.action==='open');const ackAction=ackMetadata.actions.find(item=>item.action==='acknowledge');
   assert.ok(openAction&&ackAction);activateReminderAction(openAction.id);
-  await waitUntil(async()=>(await invoke('node_consume_reminder_open')).reminderId===acknowledgementOccurrence,10000);
+  // App.vue consumes the native destination while opening the reminder. Observe
+  // the resulting UI; a second consume IPC here races the product's one-shot read.
   await page.getByRole('heading',{name:'Lembretes',exact:true}).waitFor();
   await page.locator('#reminder-'+acknowledgementOccurrence).waitFor();
+  await page.waitForFunction(id=>document.activeElement?.id==='reminder-'+id,acknowledgementOccurrence,{timeout:10000});
   assert.equal((await reminderReceipts(acknowledgementOccurrence)).length,0,'Opening the body must not acknowledge the occurrence.');
   await close();
   // Use exactly the registered protocol handler argv, with the private fixture
@@ -254,7 +256,11 @@ try {
   assert.equal(nativeReminderMetadata(snoozeOccurrence).presentation.generation,2,'Withdrawing an older generation must retain the newer presentation.');
   assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.notify',1,1)).status,'expired','A delayed old generation must not post again.');
   const secondMetadata=nativeReminderMetadata(snoozeOccurrence);activateReminderAction(secondMetadata.actions.find(item=>item.generation===2&&item.action==='open').id);
-  await waitUntil(async()=>(await invoke('node_consume_reminder_open')).reminderId===snoozeOccurrence,10000);
+  // Observe navigation without consuming the same native event as App.vue.
+  await page.getByRole('heading',{name:'Lembretes',exact:true}).waitFor();
+  await page.locator('#reminder-'+snoozeOccurrence).waitFor();
+  await page.waitForFunction(id=>document.activeElement?.id==='reminder-'+id,snoozeOccurrence,{timeout:10000});
+  assert.equal((await reminderReceipts(snoozeOccurrence)).length,1,'Opening generation 2 must not add an acknowledgement.');
   const latestClose=page.getByRole('button',{name:'Fechar configurações',exact:true});if(await latestClose.count())await latestClose.click();
   assert.equal((await reminderCommand(pcId,snoozeOccurrence,'reminder.withdraw',2,2)).status,'success');
   assert.equal(nativeReminderMetadata(snoozeOccurrence).presentation,null);
