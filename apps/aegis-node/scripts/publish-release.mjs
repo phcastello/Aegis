@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { androidVersionCode, synchronize } from './version.mjs';
+import { androidVersionCode, synchronize, parseDistributionVersion } from './version.mjs';
 import { metadata } from './release-metadata.mjs';
 
 const repo = 'phcastello/Aegis';
@@ -170,6 +170,53 @@ export function publishRelease({ tag, commit, version, directory = 'release-asse
   }
   if (!feedState().equal) throw new Error('Published compatibility feed does not match the verified distribution.');
   return { tag, version, kind, commit, assets: releaseFiles, compatibilityFeed: 'stable' };
+}
+
+// Compatibility only: v2 clients use the atomic Git pointer. This mutable
+// release asset remains necessary for installers shipped before that contract.
+export function advanceLegacyStable({ manifest, commit, runGh = ghCommand }) {
+  const parsed = parseDistributionVersion(manifest.version);
+  if (!parsed.stable) throw Error('Only stable distributions may advance the legacy feed.');
+  if (manifest.schema !== 2 || manifest.versionCode !== androidVersionCode(manifest.version)) throw Error('Stable legacy migration requires its historical installation slot.');
+  const signature = manifest.platforms?.['windows-x86_64']?.signature ?? '';
+  const expected = metadata(manifest.version, signature, manifest.pub_date, {...manifest,sha256:{
+    'Aegis-Windows-x86_64-Setup.exe':manifest.platforms?.['windows-x86_64']?.sha256,
+    'Aegis-Android-arm64.apk':manifest.android?.aarch64?.sha256,
+  }});
+  if (JSON.stringify(expected) !== JSON.stringify(manifest)) throw Error('Legacy feed requires the verified v2 stable manifest.');
+  if (!/^[a-f0-9]{40}$/.test(commit ?? '')) throw Error('Legacy feed requires exact source commit.');
+  function gh(args) {
+    const result=runGh(args);
+    if (result.status !== 0) throw Error(result.stderr || result.stdout || 'Cannot advance legacy feed.');
+    return result.stdout;
+  }
+  const temporary=mkdtempSync(join(tmpdir(),'aegis-legacy-'));
+  const bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n');
+  try {
+    let exists=false, equal=false;
+    const response=runGh(['api',`repos/${repo}/releases/tags/node-preview`]);
+    if (response.status === 0) {
+      const release=JSON.parse(response.stdout);
+      if (release.draft || release.tag_name !== 'node-preview') throw Error('Legacy feed must be public.');
+      gh(['release','download','node-preview','--pattern','latest.json','--dir',temporary]);
+      const previousBytes=readFileSync(join(temporary,'latest.json'));
+      const previous=JSON.parse(previousBytes);
+      if (!previous.version.includes('-') && androidVersionCode(previous.version)>manifest.versionCode) throw Error('Legacy stable feed cannot regress.');
+      equal=previousBytes.equals(bytes); exists=true;
+      if (!previous.version.includes('-') && androidVersionCode(previous.version)===manifest.versionCode && !equal) throw Error('Legacy version cannot change its metadata.');
+    } else {
+      let failure; try {failure=JSON.parse(response.stdout);} catch { /* fail closed */ }
+      if (String(failure?.status)!=='404' || failure?.message!=='Not Found') throw Error('Cannot inspect legacy feed.');
+    }
+    writeFileSync(join(temporary,'latest.json'),bytes);
+    if (!exists) gh(['release','create','node-preview','--target',commit,'--prerelease','--latest=false',
+      '--title','Aegis native update compatibility feed','--notes','Stable compatibility metadata for historical installations.',join(temporary,'latest.json')]);
+    else if (!equal) gh(['release','upload','node-preview',join(temporary,'latest.json'),'--clobber']);
+    rmSync(join(temporary,'latest.json'));
+    gh(['release','download','node-preview','--pattern','latest.json','--dir',temporary]);
+    if (!readFileSync(join(temporary,'latest.json')).equals(bytes)) throw Error('Legacy feed verification failed.');
+    return 'stable';
+  } finally {rmSync(temporary,{recursive:true,force:true});}
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
