@@ -1,7 +1,5 @@
 name: Aegis Node Release
 on:
-  push:
-    tags: ['node-v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -13,7 +11,7 @@ permissions:
   actions: read
   pull-requests: read
 concurrency:
-  group: aegis-node-release
+  group: aegis-native-distribution
   cancel-in-progress: false
 jobs:
   resolve:
@@ -57,6 +55,9 @@ jobs:
           if (!/^node-v[0-9]+\.[0-9]+\.[0-9]+(?:-unstable\.[1-9][0-9]*)?$/.test(tag)) throw Error('Expected an existing node version tag.');
           const sha = execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], {encoding:'utf8'}).trim();
           if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Expected a full immutable SHA.');
+          const config = JSON.parse(execFileSync('git', ['show', `${sha}:apps/aegis-node/src-tauri/tauri.conf.json`], {encoding:'utf8'}));
+          if (config.plugins.updater.endpoints.some(url => url.includes('/aegis-distribution/')))
+            throw Error('Use Aegis Native Preview (stable runs require full acceptance), then protected Native Promote for v2 distributions.');
           appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
           JS
   acceptance:

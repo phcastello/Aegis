@@ -12,9 +12,28 @@ on:
         required: true
         type: string
       version:
-        description: New monotonic preview version, e.g. 0.7.2-unstable.1 (N 1..998)
+        description: New distribution version (unstable.N, stable, or explicit rollback)
         required: true
         type: string
+      kind:
+        description: Normal distribution or recovery of published code
+        required: true
+        default: normal
+        type: choice
+        options: [normal, rollback]
+      rollback_of:
+        description: Faulty published v2 distribution (rollback only)
+        required: false
+        type: string
+      restores_version:
+        description: Functional published v2 distribution whose exact source will be rebuilt
+        required: false
+        type: string
+      compatibility_confirmed:
+        description: I checked current API, protocol and persisted Node data compatibility for this recovery
+        required: true
+        default: false
+        type: boolean
       platform:
         description: Native installers to build
         required: true
@@ -24,12 +43,16 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 # Serial allocation prevents two different artifacts reserving the same version.
 concurrency:
-  group: aegis-native-preview
+  group: aegis-native-distribution
   cancel-in-progress: false
 jobs:
   plan:
+    permissions:
+      contents: write # Durable reservation only; candidate build receives no write token.
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -37,6 +60,8 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       versionCode: ${{ steps.plan.outputs.versionCode }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      stable: ${{ steps.plan.outputs.stable }}
+      sourceVersion: ${{ steps.plan.outputs.sourceVersion }}
     steps:
       - name: Require registered trusted main workflow
         env:
@@ -61,6 +86,10 @@ jobs:
           PREVIEW_BRANCH: ${{ inputs.branch }}
           PREVIEW_VERSION: ${{ inputs.version }}
           PREVIEW_PLATFORM: ${{ inputs.platform }}
+          DISTRIBUTION_KIND: ${{ inputs.kind }}
+          ROLLBACK_OF: ${{ inputs.rollback_of }}
+          RESTORES_VERSION: ${{ inputs.restores_version }}
+          COMPATIBILITY_CONFIRMED: ${{ inputs.compatibility_confirmed }}
         run: node .github/scripts/native-preview.mjs resolve
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -68,8 +97,21 @@ jobs:
           path: preview-plan/preview.json
           if-no-files-found: error
           retention-days: 90
-  build:
+  acceptance:
     needs: plan
+    if: needs.plan.outputs.stable == 'true'
+    uses: ./.github/workflows/aegis-node-ci.yml
+    with:
+      stage: release
+      full_matrix: true
+      ref: ${{ needs.plan.outputs.sha }}
+  build:
+    needs: [plan, acceptance]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.plan.outputs.stable != 'true' || needs.acceptance.result == 'success') }}
+    env:
+      AEGIS_VERSION_CODE: ${{ needs.plan.outputs.versionCode }}
+      AEGIS_SOURCE_COMMIT: ${{ needs.plan.outputs.sha }}
+      AEGIS_SOURCE_VERSION: ${{ needs.plan.outputs.sourceVersion }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -96,9 +138,10 @@ jobs:
         env:
           PREVIEW_SHA: ${{ needs.plan.outputs.sha }}
           PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
+          PREVIEW_VERSION_CODE: ${{ needs.plan.outputs.versionCode }}
         run: |
           test "$(git rev-parse HEAD)" = "$PREVIEW_SHA"
-          node trusted/.github/scripts/native-preview.mjs prepare "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/trusted" "$PREVIEW_VERSION"
+          node trusted/.github/scripts/native-preview.mjs prepare "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/trusted" "$PREVIEW_VERSION" "$PREVIEW_VERSION_CODE"
       # Only main's reviewed composite action controls toolchain setup/caches.
       - uses: ./trusted/.github/actions/setup-aegis-node
         with:
@@ -149,6 +192,7 @@ jobs:
           retention-days: 1
   sign:
     needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' }}
     # Owner approval is required here. Only trusted main code runs in this job;
     # candidate installers are parsed/signed as data, never installed or executed.
     environment: aegis-native-signing
