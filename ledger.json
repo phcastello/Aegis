@@ -23,5 +23,10 @@
       "limits": "Build/signing only; publication requires separate protected promotion. No backend deployment or physical acceptance.",
       "versionCode": 7002002
     }
-  ]
+  ],
+  "recommended": {
+    "version": "0.7.2-unstable.2",
+    "versionCode": 7002002,
+    "sha256": "50114dea04ed3ac18bb1ed6a559d85c36906ed1854c93525d848478cabafc005"
+  }
 }
