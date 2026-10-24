@@ -65,6 +65,7 @@ test('temporary synchronization updates all consumers without changing branch fi
     assert.equal(JSON.parse(readFileSync(join(work, files[2]))).bundle.android.versionCode, plan.versionCode);
     assert.equal(JSON.parse(readFileSync(join(work, 'packages/aegis-client/package.json'))).version, plan.version);
     assert.equal(readFileSync(join(root, files[0]), 'utf8'), original);
+    assert.throws(() => prepareCandidate(work, root, plan.version), /Command failed/, 'A new prerelease must never silently derive its installation code from SemVer.');
     const configPath = join(work, files[2]);
     const config = JSON.parse(readFileSync(configPath)); config.plugins.updater.pubkey = 'other-key'; writeFileSync(configPath, JSON.stringify(config));
     assert.throws(() => prepareCandidate(work, root, plan.version), /updater identity/);

@@ -86,7 +86,7 @@ export function synchronize(write = false, options = {}) {
   const configPath = new URL('src-tauri/tauri.conf.json', root);
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
   const explicitCode = options.versionCode ?? (process.env.AEGIS_VERSION_CODE ? Number(process.env.AEGIS_VERSION_CODE) : undefined);
-  if (write && parsed.kind === 'rollback' && explicitCode === undefined) throw Error('Rollback requires a reserved installation code.');
+  if (write && !parsed.stable && explicitCode === undefined) throw Error('Prereleases require a reserved installation code; supply --version-code.');
   const versionCode = validateVersionCode(explicitCode ?? (write ? androidVersionCode(version) : config.bundle.android.versionCode));
   if (parsed.stable && versionCode !== androidVersionCode(version)) throw Error('Stable installation code must preserve the legacy migration slot.');
   if (!parsed.stable && versionCode >= androidVersionCode(parsed.base)) throw Error('Installation code reaches the reserved stable slot.');
