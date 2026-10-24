@@ -91,6 +91,7 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
   const previousEnv = { ...process.env }, previousFetch = globalThis.fetch, cwd = process.cwd();
   const calls = [];
   const git = githubFixture();
+  const v2Releases = [], v2Runs = [];
   let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false;
   const fake = async (url, options) => {
     const parsed = new URL(url); calls.push(parsed.pathname + parsed.search);
@@ -103,12 +104,12 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     else if (parsed.pathname.endsWith('aegis-native-signing')) body = environment;
     else if (parsed.pathname.includes('/compare/')) body = { status: ancestry, base_commit: { sha } };
     else if (parsed.pathname.includes('/contents/')) body = { content: Buffer.from('{"version":"0.7.2"}').toString('base64') };
-    else if (parsed.pathname.endsWith('/releases')) body = parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ tag_name: 'v0.7.1' })) : [{ tag_name: 'node-v0.7.1' }];
+    else if (parsed.pathname.endsWith('/releases')) body = parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ tag_name: 'v0.7.1' })) : [{ tag_name: 'node-v0.7.1' }, ...v2Releases];
     else if (parsed.pathname.endsWith('/runs')) body = { workflow_runs: [
       { id: 1, head_branch: 'main', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 0.7.2-unstable.20 · android · ${sha}`, conclusion: 'cancelled' },
       { id: 2, head_branch: 'main', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 20.99.999-unstable.998 · android · ${sha}`, conclusion: 'failure' },
       { id: 3, head_branch: 'main', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 0.7.2-unstable.999 · android · ${sha}`, conclusion: 'failure' },
-      { id: 4, head_branch: 'fix/untrusted', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 20.99.999-unstable.998 · android · ${sha}`, conclusion: 'success' }
+      { id: 4, head_branch: 'fix/untrusted', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 20.99.999-unstable.998 · android · ${sha}`, conclusion: 'success' }, ...v2Runs
     ] };
     else if (parsed.pathname.endsWith('/jobs')) body = { jobs: [{ name: 'plan', status: 'completed',
       conclusion: parsed.pathname.includes('/runs/1/') ? 'success' : 'failure' }] };
@@ -133,6 +134,15 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     hiddenPermissivePolicy = false;
     ancestry = 'diverged'; await assert.rejects(resolvePreview(), /reachable/);
     ancestry = 'ahead'; fail = true; await assert.rejects(resolvePreview(), /Cannot verify preview prerequisite/);
+    fail = false;
+    const {versionCode, ...identity}=received;
+    const reserved=await git.state.reserve({...identity,version:'0.7.2-unstable.500',number:500,runId:'500'});
+    assert.equal(reserved.versionCode,7002022);
+    v2Releases.push({tag_name:`node-v${reserved.version}`,draft:false});
+    v2Runs.push({id:500,head_branch:'main',event:'workflow_dispatch',display_title:`Aegis Native Preview · ${reserved.version} · both · ${sha}`,conclusion:'success'});
+    Object.assign(process.env,{PREVIEW_VERSION:'0.7.2-unstable.501',GITHUB_RUN_ID:'501'});
+    await resolvePreview();
+    assert.equal(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))).versionCode,7002023,'v2 release/run names must not inflate the independent ledger counter');
   } finally {
     process.chdir(cwd); globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];
