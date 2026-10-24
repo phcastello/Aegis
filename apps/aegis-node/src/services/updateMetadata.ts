@@ -86,7 +86,7 @@ export function validateWindowsUpdate(metadata: Record<string, unknown>, version
   if ((metadata.kind === 'rollback') !== recovery) return invalid();
   if (metadata.kind === 'rollback') {
     parseVersion(metadata.rollbackOf);
-    parseVersion(metadata.restoresVersion, true);
+    parseVersion(metadata.restoresVersion);
     if (!isNextRollback(version, String(metadata.rollbackOf)) ||
         compareUpdateVersions(String(metadata.restoresVersion), String(metadata.rollbackOf)) >= 0) return invalid();
   } else if (metadata.rollbackOf !== undefined || metadata.restoresVersion !== undefined) return invalid();

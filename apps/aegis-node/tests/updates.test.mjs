@@ -96,7 +96,9 @@ test('recovery metadata rejects a misleading kind, lower precedence or inconsist
   const good = manifest(version, 7002006, { kind: 'rollback', rollbackOf: '0.7.2-unstable.5', restoresVersion: '0.7.2-unstable.4' });
   for (const patch of [
     { kind: 'normal' }, { rollbackOf: '0.7.2-unstable.6' }, { restoresVersion: '0.7.2-unstable.5' },
-    { rollbackOf: '0.7.2-unstable.5.rollback.1' }, { restoresVersion: undefined }
+    { rollbackOf: '0.7.2-unstable.5.rollback.1' }, { restoresVersion: undefined },
+    { rollbackOf: '0.7.2-unstable.5+metadata' }, { restoresVersion: '0.7.0-stage.10' },
+    { restoresVersion: '0.7.2-unstable.4+metadata' }, { sourceVersion: '0.7.2+metadata' }
   ]) assert.throws(() => validateWindowsUpdate({ ...good, ...patch }, version, installed));
 });
 

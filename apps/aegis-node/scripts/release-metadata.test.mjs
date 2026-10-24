@@ -54,7 +54,8 @@ test('recommended manifests distinguish published version, restored code and ins
   assert.equal(result.sourceVersion,'0.7.2'); assert.equal(result.restoresVersion,'0.7.2-unstable.4');
   assert.equal(result.versionCode,7002006); assert.equal(result.android.aarch64.versionCode,7002006);
   assert.equal(result.publishedAt,result.pub_date);
+  assert.equal(metadata(version,signature,'2026-10-23T00:00:00Z',{...distribution,sourceVersion:'0.7.0-stage.10'}).sourceVersion,'0.7.0-stage.10');
   assert.match(result.notes,/recuperação/);
-  for (const change of [{versionCode:0},{sourceCommit:'main'},{kind:'normal'},{rollbackOf:version},{restoresVersion:'0.7.2-unstable.6'},{compatibility:{api:2,nodeData:1}},{sha256:{}}])
+  for (const change of [{versionCode:0},{sourceCommit:'main'},{sourceVersion:'0.7.2+build'},{kind:'normal'},{rollbackOf:version},{restoresVersion:'0.7.2-unstable.6'},{compatibility:{api:2,nodeData:1}},{sha256:{}}])
     assert.throws(() => metadata(version,signature,'2026-10-23T00:00:00Z',{...distribution,...change}));
 });

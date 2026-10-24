@@ -75,6 +75,18 @@ pub fn supported_version(version: &semver::Version) -> bool {
         }
 }
 
+fn supported_source_version(version: &semver::Version) -> bool {
+    if supported_version(version) {
+        return true;
+    }
+    let parts = version.pre.as_str().split('.').collect::<Vec<_>>();
+    version.build.is_empty()
+        && version.major <= 20
+        && version.minor <= 99
+        && version.patch <= 999
+        && matches!(parts.as_slice(), ["stage", n] if positive(n))
+}
+
 pub fn recommended_update_eligible(installed: &semver::Version, next: &semver::Version) -> bool {
     supported_version(next) && next > installed
 }
@@ -149,7 +161,7 @@ pub fn interpret(
     let source = parsed(&manifest.source_version)?;
     if manifest.schema != 2
         || !supported_version(&version)
-        || !source.build.is_empty()
+        || !supported_source_version(&source)
         || !valid_hex(&manifest.source_commit, 40)
         || manifest.version_code == 0
         || manifest.version_code > 2_100_000_000
@@ -179,7 +191,12 @@ pub fn interpret(
                     .as_deref()
                     .ok_or("update_metadata_invalid")?,
             )?;
-            if previous >= version || restores >= previous || !valid_rollback(&version, &previous) {
+            if !supported_version(&previous)
+                || !supported_version(&restores)
+                || previous >= version
+                || restores >= previous
+                || !valid_rollback(&version, &previous)
+            {
                 return Err("update_metadata_invalid".into());
             }
         }
@@ -369,6 +386,38 @@ mod tests {
             )
             .unwrap()
             .is_none());
+        }
+    }
+    #[test]
+    fn provenance_fields_reject_versions_outside_the_shared_contract() {
+        for invalid in [
+            "0.7.2+untrusted",
+            "0.7.2-beta.1",
+            "0.100.0",
+            "0.7.2-stage.65536",
+        ] {
+            let mut value = manifest("0.7.2-unstable.2", 7002002);
+            value["sourceVersion"] = invalid.into();
+            assert!(interpret(&value.to_string(), "0.7.1", 7001999).is_err());
+        }
+        let mut legacy_source = manifest("0.7.2-unstable.2", 7002002);
+        legacy_source["sourceVersion"] = "0.7.0-stage.10".into();
+        assert!(interpret(&legacy_source.to_string(), "0.7.1", 7001999)
+            .unwrap()
+            .is_some());
+        for (field, value) in [
+            ("rollbackOf", "0.7.2-unstable.5+metadata"),
+            ("restoresVersion", "0.7.2-stage.4"),
+            ("restoresVersion", "0.7.2-unstable.4+metadata"),
+        ] {
+            let mut bad = recovery(
+                "0.7.2-unstable.5.rollback.2",
+                "0.7.2-unstable.5",
+                "0.7.2-unstable.4",
+                7002007,
+            );
+            bad[field] = value.into();
+            assert!(interpret(&bad.to_string(), "0.7.2-unstable.5", 7002005).is_err());
         }
     }
     #[test]

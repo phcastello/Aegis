@@ -31,7 +31,9 @@ export function metadata(version, signature, date, distribution) {
     const parsed = parseDistributionVersion(version);
     const {sourceCommit, sourceVersion, kind, rollbackOf, restoresVersion, compatibility, sha256} = distribution;
     if (!/^[a-f0-9]{40}$/.test(sourceCommit ?? '')) throw Error('Distribution requires the exact source commit.');
-    parseDistributionVersion(sourceVersion);
+    // Code provenance can refer to a historical stage checkout; new published
+    // distribution names still use only the v2 grammar.
+    parseDistributionVersion(sourceVersion.replace(/-stage\.([1-9]\d*)$/, '-unstable.$1'));
     if (kind !== parsed.kind) throw Error('Distribution kind differs from its version.');
     if (JSON.stringify(compatibility) !== JSON.stringify({api:1,nodeData:1})) throw Error('Unknown API or Node persistence compatibility contract.');
     if (kind === 'rollback') {
