@@ -94,6 +94,19 @@ class PreviewSigningTests(unittest.TestCase):
             signing = next(call for call in calls if call[1] == "sign")
             self.assertFalse(Path(signing[signing.index("--ks") + 1]).exists())
 
+    def test_promotion_verifies_final_apk_without_any_private_signing_credential(self):
+        environment = {name: value for name, value in self.environment().items()
+                       if name in ("FIREBASE_CLIENT_B64", "ANDROID_HOME")}
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, environment, clear=True):
+            candidate, _, plan = self.signing_case(temporary)
+            calls = []
+            with patch.object(preview, "run", self.tool(calls)):
+                preview.verify(candidate, plan)
+            self.assertTrue(any(call[1] == "verify" for call in calls))
+            self.assertFalse(any(call[1] == "sign" for call in calls))
+            with patch.object(preview, "run", self.tool([], certificate="b" * 64)), self.assertRaises(preview.guard.VerificationError):
+                preview.verify(candidate, plan)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,8 @@ test('stable release still requests full acceptance and uses one resolved SHA fo
   assert.match(acceptance, /full_matrix: true/);
   assert.match(acceptance, /ref: \$\{\{ needs.resolve.outputs.sha \}\}/);
   assert.match(job(source, 'resolve'), /assertEnvironment\(environment/);
+  assert.match(job(source, 'resolve'), /test \"\$GITHUB_REF\" = refs\/heads\/main/);
+  assert.match(job(source, 'resolve'), /merge-base', '--is-ancestor', sha, 'refs\/remotes\/origin\/main'/);
   assert.doesNotMatch(acceptance, /secrets: inherit/);
   assert.match(job(source, 'build'), /environment: aegis-native-signing/);
   assert.match(job(source, 'build'), /verify-android-distribution\.py/);

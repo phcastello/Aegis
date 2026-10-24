@@ -1,0 +1,141 @@
+name: Aegis Native Promote
+run-name: Recommend signed native distribution from run ${{ inputs.run_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Aegis Native Preview v2 run (both platforms)
+        required: true
+        type: string
+      publish:
+        description: Explicitly authorize publishing immutable installers and recommending this distribution to compatible Nodes
+        required: true
+        default: false
+        type: boolean
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: aegis-native-distribution
+  cancel-in-progress: false
+jobs:
+  plan:
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - name: Require reviewed main control plane and explicit publication
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EXPECTED_WORKFLOW: ${{ github.repository }}/.github/workflows/aegis-native-promote.yml@refs/heads/main
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$WORKFLOW_REF" = "$EXPECTED_WORKFLOW"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Validate successful trusted run and exact durable reservation
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: node .github/scripts/recommended-publish.mjs plan "$SOURCE_RUN"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Promotion-plan-${{ github.run_id }}
+          path: promotion-plan/preview.json
+          if-no-files-found: error
+          retention-days: 90
+  publish:
+    needs: plan
+    environment: aegis-native-signing
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Promotion-plan-${{ github.run_id }}
+          path: promotion-plan
+      - name: Recheck protected environment and reservation after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import assert from 'node:assert/strict';
+          import {verifyPromotion} from './.github/scripts/recommended-publish.mjs';
+          import {DistributionState} from './.github/scripts/distribution-state.mjs';
+          import {assertEnvironment, signingEnvironment} from './.github/scripts/native-preview.mjs';
+          const state = new DistributionState();
+          const policies=[];
+          for(let page=1;;page++) {
+            const response=await state.api(`environments/${signingEnvironment}/deployment-branch-policies?per_page=100&page=${page}`);
+            policies.push(...response.branch_policies);
+            if(response.branch_policies.length<100) break;
+          }
+          assertEnvironment(await state.api(`environments/${signingEnvironment}`), {branch_policies:policies});
+          assert.deepEqual(await verifyPromotion(process.env.SOURCE_RUN), JSON.parse(readFileSync('promotion-plan/preview.json')));
+          JS
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Preview-${{ needs.plan.outputs.version }}-Android-arm64-${{ needs.plan.outputs.sha }}
+          path: signed-android
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Preview-${{ needs.plan.outputs.version }}-Windows-x86_64-${{ needs.plan.outputs.sha }}
+          path: signed-windows
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify signed hashes, exact source and complete manifest
+        run: node .github/scripts/recommended-publish.mjs assemble release-assets signed-android signed-windows promotion-plan/preview.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'build-tools;37.0.0'
+      - name: Reverify APK certificate, package, version and release guards without private keys
+        env:
+          FIREBASE_CLIENT_B64: ${{ vars.AEGIS_ANDROID_FIREBASE_CLIENT_B64 }}
+        run: python3 .github/scripts/native-preview-android.py verify signed-android promotion-plan/preview.json
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: '1.94.0'
+      - name: Reverify Windows cryptographic updater signature and exact version
+        env:
+          DISTRIBUTION_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const config=JSON.parse(readFileSync('apps/aegis-node/src-tauri/tauri.conf.json'));
+          writeFileSync('updater.pub',Buffer.from(config.plugins.updater.pubkey,'base64'));
+          writeFileSync('updater.sig',Buffer.from(readFileSync('signed-windows/Aegis-Windows-x86_64-Setup.exe.sig','utf8').trim(),'base64'));
+          JS
+          cargo run --quiet --locked --manifest-path .github/scripts/preview-updater-verifier/Cargo.toml -- \
+            signed-windows/Aegis-Windows-x86_64-Setup.exe updater.pub updater.sig "$DISTRIBUTION_VERSION"
+      - name: Publish immutable bytes, verify public assets, then atomically recommend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/recommended-publish.mjs publish release-assets promotion-plan/preview.json
