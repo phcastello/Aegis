@@ -43,3 +43,19 @@ test('stable metadata upgrades unstable.19 with the reserved versionCode and sig
   assert.match(result.notes, /releases\/tag\/v0\.7\.0/);
   assert.throws(() => metadata('0.7.0-unstable.19', signature, '2026-10-20T00:00:00Z'), /exact version/);
 });
+
+
+test('recommended manifests distinguish published version, restored code and installation code', () => {
+  const version='0.7.2-unstable.5.rollback.1';
+  const signature=Buffer.from(Buffer.from(signed,'base64').toString('utf8').replace('0.7.0-stage.2',version)).toString('base64');
+  const distribution={versionCode:7002006,kind:'rollback',rollbackOf:'0.7.2-unstable.5',restoresVersion:'0.7.2-unstable.4',sourceCommit:'a'.repeat(40),sourceVersion:'0.7.2',compatibility:{api:1,nodeData:1},sha256:{'Aegis-Windows-x86_64-Setup.exe':'b'.repeat(64),'Aegis-Android-arm64.apk':'c'.repeat(64)}};
+  const result=metadata(version,signature,'2026-10-23T00:00:00Z',distribution);
+  assert.equal(result.schema,2); assert.equal(result.kind,'rollback');
+  assert.equal(result.sourceVersion,'0.7.2'); assert.equal(result.restoresVersion,'0.7.2-unstable.4');
+  assert.equal(result.versionCode,7002006); assert.equal(result.android.aarch64.versionCode,7002006);
+  assert.equal(result.publishedAt,result.pub_date);
+  assert.equal(metadata(version,signature,'2026-10-23T00:00:00Z',{...distribution,sourceVersion:'0.7.0-stage.10'}).sourceVersion,'0.7.0-stage.10');
+  assert.match(result.notes,/recuperação/);
+  for (const change of [{versionCode:0},{sourceCommit:'main'},{sourceVersion:'0.7.2+build'},{kind:'normal'},{rollbackOf:version},{restoresVersion:'0.7.2-unstable.6'},{compatibility:{api:2,nodeData:1}},{sha256:{}}])
+    assert.throws(() => metadata(version,signature,'2026-10-23T00:00:00Z',{...distribution,...change}));
+});

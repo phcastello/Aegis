@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import test from 'node:test';
 import { metadata } from './release-metadata.mjs';
-import { checksumManifest, publishRelease, releaseFiles, releaseKind } from './publish-release.mjs';
+import { checksumManifest, publishRelease, releaseFiles, releaseKind, advanceLegacyStable } from './publish-release.mjs';
 
 const commit = 'a'.repeat(40);
 const signature = version => Buffer.from(`untrusted comment: test fixture\nsignature\ntrusted comment: timestamp:1\tfile:Aegis.exe\tversion:${version}\nglobal-signature`).toString('base64');
@@ -280,4 +280,34 @@ test('public assets are reverified before any stable feed mutation', t => {
   assert.throws(f.publish, /Immutable release asset differs/);
   assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'), previous);
   assert.ok(!f.calls.some(args => args[1] === 'upload' && args[2] === 'node-preview'));
+});
+
+
+test('v2 stable migration advances legacy clients while prereleases never touch their feed', t => {
+  const f=fixture(t,'0.7.2');
+  f.addRelease('node-preview',{version:'0.7.1'});
+  const distribution={versionCode:7002999,kind:'normal',sourceCommit:commit,sourceVersion:'0.7.2',compatibility:{api:1,nodeData:1},sha256:{'Aegis-Windows-x86_64-Setup.exe':'b'.repeat(64),'Aegis-Android-arm64.apk':'c'.repeat(64)}};
+  const stable=metadata('0.7.2',signature('0.7.2'),'2026-10-23T00:00:00Z',distribution);
+  const publish=() => advanceLegacyStable({manifest:stable,commit,runGh:f.runGh});
+  assert.equal(publish(),'stable');
+  const uploaded=f.releases.get('node-preview').files.get('latest.json');
+  assert.equal(JSON.parse(uploaded).version,'0.7.2');
+  assert.equal(JSON.parse(uploaded).android.aarch64.versionCode,7002999);
+  const uploads=f.calls.filter(args=>args[1]==='upload').length;
+  publish(); assert.equal(f.calls.filter(args=>args[1]==='upload').length,uploads);
+  const preview=metadata('0.7.3-unstable.1',signature('0.7.3-unstable.1'),'2026-10-23T00:00:00Z',{...distribution,versionCode:7003001});
+  assert.throws(()=>advanceLegacyStable({manifest:preview,commit,runGh:f.runGh}),/Only stable/);
+  assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'),uploaded);
+  f.addRelease('node-preview',{version:'0.7.3'});
+  assert.throws(publish,/regress/);
+});
+
+test('failed legacy upload preserves prior bytes in the fixture and can be resumed', t => {
+  const f=fixture(t,'0.7.2'); f.addRelease('node-preview',{version:'0.7.1'});
+  const stable=metadata('0.7.2',signature('0.7.2'),'2026-10-23T00:00:00Z',{versionCode:7002999,kind:'normal',sourceCommit:commit,sourceVersion:'0.7.2',compatibility:{api:1,nodeData:1},sha256:{'Aegis-Windows-x86_64-Setup.exe':'b'.repeat(64),'Aegis-Android-arm64.apk':'c'.repeat(64)}});
+  const previous=f.releases.get('node-preview').files.get('latest.json');
+  f.setFail(args=>args[1]==='upload'?{status:1,stderr:'interrupted'}:null);
+  assert.throws(()=>advanceLegacyStable({manifest:stable,commit,runGh:f.runGh}),/interrupted/);
+  assert.deepEqual(f.releases.get('node-preview').files.get('latest.json'),previous);
+  f.setFail(null); assert.equal(advanceLegacyStable({manifest:stable,commit,runGh:f.runGh}),'stable');
 });

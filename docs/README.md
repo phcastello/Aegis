@@ -6,6 +6,7 @@ manutenção nesta branch ainda precisam de distribuição posterior da API/PWA/
 - [Desenvolvimento nativo](../apps/aegis-node/README.md): requisitos e comandos atuais.
 - [Desenvolvimento e testes](testes.md): suítes, execução e limites das evidências.
 - [Operação privada](operacao-privada.md): Compose, migrations, backup e recuperação.
+- [Implementação v0.7.2 para revisão](v0.7.2-implementation.md): UX, ativação geográfica, mensagens proativas e validação pendente.
 - [Manutenção pós-v0.7.1](manutencao-pos-v0.7.1.md): checkpoints, resultados e pendências.
 - [Captura de áudio](audio-maintenance-validation.md), [Web Push legado](web-push-legado.md)
   e [distribuição/CI](distribuicao-e-ci.md): comportamento implementado e evidências.

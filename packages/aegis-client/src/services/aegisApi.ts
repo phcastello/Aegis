@@ -324,3 +324,10 @@ export async function submitMessageFeedback(
   });
 }
 
+
+export interface ProactiveActivity { conversationId: string; lastProactiveSequence: number; readProactiveSequence: number }
+export function getProactiveActivity(signal?: AbortSignal): Promise<ProactiveActivity[]> { return requestJson('/api/chat/proactive-activity', { signal }); }
+export function getProactiveMessages(id: string, after: number, signal?: AbortSignal): Promise<import('../types/chat').ChatMessage[]> {
+  return requestJson(`/api/chat/conversations/${encodeURIComponent(id)}/proactive-messages?after=${after}`, { signal });
+}
+export function markProactiveRead(id: string, sequence: number): Promise<void> { return requestJson(`/api/chat/conversations/${encodeURIComponent(id)}/proactive-read`, { method: 'POST', body: JSON.stringify({ sequence }) }); }

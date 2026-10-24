@@ -71,6 +71,6 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
  }
  @Command fun installUpdate(invoke:Invoke) {
   val args=org.json.JSONObject(invoke.getArgs().toString())
-  NodeUpdates.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode")).toString()))}catch(_:Exception){invoke.reject("update_installer_failed")} }
+  NodeUpdates.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode"),args.getString("sha256")).toString()))}catch(_:Exception){invoke.reject("update_installer_failed")} }
  }
 }

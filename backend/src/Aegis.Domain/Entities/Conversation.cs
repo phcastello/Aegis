@@ -22,6 +22,15 @@ public sealed class Conversation : AuditableEntity
         TitleSource = DefaultTitleSource;
     }
 
+    public long LastProactiveSequence { get; private set; }
+    public long ReadProactiveSequence { get; private set; }
+    public bool HasUnreadProactive => LastProactiveSequence > ReadProactiveSequence;
+    public void MarkProactiveRead(long sequence) => ReadProactiveSequence = Math.Max(ReadProactiveSequence, Math.Min(sequence, LastProactiveSequence));
+    public ChatMessage AddProactiveMessage(string content, DateTimeOffset now) {
+        var message = AddMessage("assistant", content, now);
+        message.MarkProactive(++LastProactiveSequence); return message;
+    }
+
     public string? Title { get; private set; }
 
     public string? TitleSource { get; private set; }
@@ -104,16 +113,16 @@ public sealed class Conversation : AuditableEntity
         Touch(DeletedAt);
     }
 
-    public ChatMessage AddMessage(string role, string content)
+    public ChatMessage AddMessage(string role, string content, DateTimeOffset? now = null)
     {
         if (DeletedAt is not null)
         {
             throw new InvalidOperationException("Cannot add messages to a deleted conversation.");
         }
 
-        var message = new ChatMessage(Id, role, content);
+        var message = new ChatMessage(Id, role, content, now);
         _messages.Add(message);
-        Touch();
+        Touch(now);
 
         return message;
     }

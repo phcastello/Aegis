@@ -7,4 +7,5 @@ public sealed record ConversationSummaryData(
     DateTimeOffset UpdatedAt,
     string? TitleSource,
     int MessageCount,
-    string? LastMessageContent);
+    string? LastMessageContent,
+    bool HasUnreadProactive = false);

@@ -30,6 +30,7 @@ try {
         else if (path === '/api/voice/transcription/status') body = { enabled: true, configured: true, maxRecordingSeconds: 90 };
         else if (path === '/api/voice/transcriptions') { uploads++; body = { text: 'Texto sintético' }; }
         else if (path === '/api/email/status') body = { isConnected: false };
+        else if (path === '/api/chat/proactive-activity') body = [];
         else if (path === '/api/chat/conversations') body = { items: [], hasMore: false };
         else if (path === '/api/notifications/configuration') body = { enabled: false };
         else body = {};
@@ -104,7 +105,7 @@ try {
         assert.ok(decoded[1].peak <= 1e-30, 'digital-zero codec residue far below PCM resolution');
         await page.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();
         const settings = page.getByRole('dialog', { name: 'Configurações', exact: true });
-        await settings.getByRole('button', { name: 'Sobre', exact: true }).click();
+        await settings.getByRole('button', { name: 'Áudio e voz', exact: true }).click();
         await settings.getByText('Microfone', { exact: true }).click();
         await settings.getByLabel('Entrada de áudio', { exact: true }).selectOption('synthetic-b');
         await settings.getByRole('button', { name: 'Fechar configurações', exact: true }).click();

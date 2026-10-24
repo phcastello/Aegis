@@ -69,6 +69,19 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
     IQueryable<ToolContextEntry> IAegisDbContext.ToolContextEntries => ToolContextEntries;
 
+    public async Task<bool> SetGeneratedTitleIfEligibleAsync(Guid id, string title, string? raw, CancellationToken ct) {
+        var now = DateTimeOffset.UtcNow;
+        if (!Database.IsRelational()) {
+            var conversation = await GetConversationWithMessagesAsync(id, ct);
+            if (conversation is null || !conversation.CanGenerateAutomaticTitle) return false;
+            conversation.SetGeneratedTitle(title, raw, now); await SaveChangesAsync(ct); return true;
+        }
+        // A manual rename that commits during model generation always wins.
+        return await Conversations.Where(c => c.Id == id && c.DeletedAt == null && c.TitleGeneratedAt == null && c.TitleSource != Conversation.ManualTitleSource)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Title, title).SetProperty(c => c.TitleSource, Conversation.GeneratedTitleSource)
+                .SetProperty(c => c.TitleGeneratedAt, now).SetProperty(c => c.TitleGenerationRawResponse, raw).SetProperty(c => c.UpdatedAt, now), ct) > 0;
+    }
+
     public void AddConversation(Conversation conversation)
     {
         Conversations.Add(conversation);
@@ -235,7 +248,8 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
                         WHERE lm."ConversationId" = c."Id"
                         ORDER BY lm."CreatedAt" DESC, lm."Id" DESC
                         LIMIT 1
-                    ) AS "LastMessageContent"
+                    ) AS "LastMessageContent",
+                    c."LastProactiveSequence" > c."ReadProactiveSequence" AS "HasUnreadProactive"
                 FROM conversations c
                 WHERE
                     c."DeletedAt" IS NULL
@@ -266,7 +280,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
                     new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.GetInt32(5),
-                    reader.IsDBNull(6) ? null : reader.GetString(6)));
+                    reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetBoolean(7)));
             }
 
             return summaries;
@@ -449,6 +463,7 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
         modelBuilder.Entity<Conversation>(entity =>
         {
             entity.ToTable("conversations");
+            entity.Ignore(c => c.HasUnreadProactive);
             entity.HasKey(conversation => conversation.Id);
 
             entity.Property(conversation => conversation.Title)
@@ -484,6 +499,22 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
 
             entity.HasIndex(conversation => new { conversation.DeletedAt, conversation.UpdatedAt, conversation.Id });
         });
+
+        modelBuilder.Entity<ReminderIntervention>(e => {
+            e.ToTable("reminder_interventions"); e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.RuleId, x.ActivationEpoch }).IsUnique();
+            e.HasIndex(x => new { x.State, x.NextAttemptAt });
+            e.Property(x => x.RecoveryResultsJson).HasColumnType("jsonb");
+            e.HasOne<GeographicReminderRule>().WithMany().HasForeignKey(x => x.RuleId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.SetNull);
+        });
+        modelBuilder.Entity<ProactiveNotification>(e => {
+            e.ToTable("proactive_notifications"); e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.MessageId, x.NodeId }).IsUnique().AreNullsDistinct(false);
+            e.HasIndex(x => new { x.State, x.NextAttemptAt });
+            e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<ChatMessage>().HasIndex(x => new { x.ConversationId, x.ProactiveSequence }).IsUnique();
 
         modelBuilder.Entity<ChatMessage>(entity =>
         {

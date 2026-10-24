@@ -170,12 +170,18 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("IsProactive")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("MetadataJson")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Model")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<long?>("ProactiveSequence")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("PromptSnapshot")
                         .HasColumnType("text");
@@ -193,7 +199,8 @@ namespace Aegis.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ConversationId");
+                    b.HasIndex("ConversationId", "ProactiveSequence")
+                        .IsUnique();
 
                     b.ToTable("chat_messages", (string)null);
                 });
@@ -209,6 +216,12 @@ namespace Aegis.Infrastructure.Migrations
 
                     b.Property<DateTimeOffset?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("LastProactiveSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ReadProactiveSequence")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("Title")
                         .HasMaxLength(200)
@@ -381,6 +394,9 @@ namespace Aegis.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("ActivationEpoch")
+                        .HasColumnType("integer");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -395,6 +411,9 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<string>("ErrorCode")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("FailureSince")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("LastEventAt")
                         .HasColumnType("timestamp with time zone");
@@ -429,6 +448,9 @@ namespace Aegis.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("SyncStartedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("SyncStatus")
                         .IsRequired()
@@ -1536,6 +1558,64 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("places", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.ProactiveNotification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("AcceptedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastResult")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("NodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PostedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Transport")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MessageId", "NodeId")
+                        .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("MessageId", "NodeId"), false);
+
+                    b.HasIndex("State", "NextAttemptAt");
+
+                    b.ToTable("proactive_notifications", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.PushSubscription", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1819,6 +1899,68 @@ namespace Aegis.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("reminder_node_delivery_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderIntervention", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ActivationEpoch")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Diagnosis")
+                        .HasColumnType("text");
+
+                    b.Property<int>("GenerationAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("MessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RecoveryAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RecoveryResultsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("RequiredAction")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RuleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MessageId");
+
+                    b.HasIndex("RuleId", "ActivationEpoch")
+                        .IsUnique();
+
+                    b.HasIndex("State", "NextAttemptAt");
+
+                    b.ToTable("reminder_interventions", (string)null);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ReminderRecipient", b =>
@@ -2323,6 +2465,15 @@ namespace Aegis.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.ProactiveNotification", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.Reminder", b =>
                 {
                     b.HasOne("Aegis.Domain.Entities.ReminderSeries", null)
@@ -2356,6 +2507,20 @@ namespace Aegis.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ReminderId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ReminderIntervention", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.GeographicReminderRule", null)
+                        .WithMany()
+                        .HasForeignKey("RuleId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 

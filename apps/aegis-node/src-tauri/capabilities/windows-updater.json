@@ -9,8 +9,8 @@
   ],
   "permissions": [
     "updater:allow-check",
-    "updater:allow-download",
-    "updater:allow-install",
+    "allow-prepare-windows-update",
+    "allow-install-windows-update",
     "core:resources:allow-close"
   ]
 }

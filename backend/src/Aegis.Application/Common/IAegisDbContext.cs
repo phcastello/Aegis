@@ -112,5 +112,11 @@ public interface IAegisDbContext
         string key,
         CancellationToken cancellationToken = default);
 
+    async Task<bool> SetGeneratedTitleIfEligibleAsync(Guid id, string title, string? raw, CancellationToken ct) {
+        var conversation = await GetConversationWithMessagesAsync(id, ct);
+        if (conversation is null || !conversation.CanGenerateAutomaticTitle) return false;
+        conversation.SetGeneratedTitle(title, raw); await SaveChangesAsync(ct); return true;
+    }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

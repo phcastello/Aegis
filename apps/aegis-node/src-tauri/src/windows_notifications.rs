@@ -19,6 +19,7 @@ use windows::{
     },
 };
 static PRESENTATION_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CONVERSATION_OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static OPEN: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
 static WAKE: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
 static IDENTITY_BOOTSTRAPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -477,6 +478,17 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
                 input.generation.to_string(),
                 group(input.reminder_id),
             )
+        } else if command.capability == "conversation.notify" {
+            let input: crate::node_notification::ConversationNotificationInput =
+                serde_json::from_value(command.input.clone()).map_err(|_| ())?;
+            (
+                input.title,
+                input.body,
+                format!("aegis-reminder://conversation/{}", input.conversation_id),
+                String::new(),
+                command.command_id.simple().to_string(),
+                "conversation".into(),
+            )
         } else if command.capability == "notification.show" {
             (
                 command.input["title"]
@@ -526,7 +538,7 @@ pub fn show(app: &AppHandle, command: &NotificationCommand) -> NotificationResul
         database
             .execute(
                 "INSERT OR REPLACE INTO commands(id,expires) VALUES(?,?)",
-                params![command.command_id.to_string(), now + 600],
+                params![command.command_id.to_string(), now + 86400],
             )
             .map_err(|_| ())?;
         Ok(NotificationStatus::Success)
@@ -578,7 +590,32 @@ fn withdraw_locked(app: &AppHandle, id: uuid::Uuid, generation: u64) -> Result<(
     }
     Ok(())
 }
+pub fn consume_conversation_open() -> Option<String> {
+    CONVERSATION_OPEN
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .ok()?
+        .take()
+}
 pub fn activate(app: &AppHandle, args: &[String]) -> bool {
+    if let Some(uri) = args
+        .iter()
+        .find(|v| v.starts_with("aegis-reminder://conversation/"))
+    {
+        let raw = uri.trim_start_matches("aegis-reminder://conversation/");
+        if let Ok(id) = uuid::Uuid::parse_str(raw) {
+            if !id.is_nil() && id.to_string() == raw && bind_scope(app).ok().flatten().is_some() {
+                *CONVERSATION_OPEN
+                    .get_or_init(|| std::sync::Mutex::new(None))
+                    .lock()
+                    .unwrap() = Some(raw.to_owned());
+                crate::native_notifications::open(app);
+                let _ = app.emit("aegis-conversation-open", json!({"conversationId":raw}));
+                return true;
+            }
+        }
+        return false;
+    }
     if args
         .iter()
         .any(|argument| argument == "aegis-reminder://open")

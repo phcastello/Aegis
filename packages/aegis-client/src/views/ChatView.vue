@@ -5,12 +5,18 @@ import AegisMark from '../components/AegisMark.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import ConversationInfo from '../components/ConversationInfo.vue';
+import ConversationMenu from '../components/ConversationMenu.vue';
+import RenameConversationDialog from '../components/RenameConversationDialog.vue';
+import { clientEnvironment } from '../services/clientEnvironment';
+import { initialConversationId } from '../services/conversationSession';
+import { dismissKeyboard, navigationLayer } from '../services/navigation';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
   deleteConversation,
   cancelTurn,
   completeTurnWithoutSpeech,
   getConversation,
+  getProactiveActivity, getProactiveMessages, markProactiveRead,
   getConversations,
   getEmailStatus,
   getHealth,
@@ -38,7 +44,7 @@ const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 const STORAGE_KEY = 'aegis.currentConversationId';
 
 const messages = ref<LocalChatMessage[]>([]);
-const conversationId = ref<string | null>(localStorage.getItem(STORAGE_KEY));
+const conversationId = ref<string | null>(initialConversationId(localStorage, clientEnvironment().processSessionId));
 const draft = ref('');
 const isLoading = ref(false);
 const isRestoring = ref(false);
@@ -50,6 +56,7 @@ const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('i
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
 let stopObservingGoogle: (() => void) | null = null;
+const messagesContainer = ref<HTMLElement | null>(null);
 const messagesEnd = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
@@ -70,6 +77,21 @@ const isLoadingHistory = ref(false);
 const historyErrorMessage = ref<string | null>(null);
 const deleteTarget = ref<ConversationSummary | null>(null);
 const isDeletingConversation = ref(false);
+const infoTarget = ref<ConversationSummary | null>(null);
+const renameTarget = ref<ConversationSummary | null>(null);
+const renameError = ref<string | null>(null);
+const isRenaming = ref(false);
+const drafts = new Map<string, string>();
+let releaseSidebarLayer: (() => void) | undefined;
+let releaseDeleteLayer: (() => void) | undefined;
+const currentConversationSummary = computed<ConversationSummary>(() => conversations.value.find(c => c.id === conversationId.value) ?? {
+  id: conversationId.value ?? '', title: activeConversationTitle.value, createdAt: activeConversationCreatedAt.value ?? '', updatedAt: '', messageCount: messages.value.length, lastMessagePreview: null
+});
+watch(isSidebarOpen, open => {
+  releaseSidebarLayer?.(); releaseSidebarLayer = undefined;
+  if (open) { dismissKeyboard(); if (sidebarDrawerQuery.matches) releaseSidebarLayer = navigationLayer(() => setSidebarOpen(false)); }
+});
+watch(deleteTarget, target => { releaseDeleteLayer?.(); releaseDeleteLayer = target ? navigationLayer(cancelDeleteConversation) : undefined; });
 const healthState = ref<'checking' | 'online' | 'offline'>('checking');
 const activeTurnId = ref<string | null>(null);
 const turnStatus = ref<'thinking' | 'responding' | 'preparing_voice' | 'speaking' | 'interrupted' | 'voice_unavailable' | 'idle'>('idle');
@@ -83,6 +105,72 @@ let historyRefreshTimer: number | null = null;
 let memoryActivityAbort: AbortController | null = null;
 let memoryActivityGeneration = 0;
 let viewportCleanup: (() => void) | null = null;
+
+let proactiveTimer: ReturnType<typeof setTimeout> | undefined;
+let proactiveObserver: IntersectionObserver | undefined;
+let proactiveBusy = false;
+let proactiveAbort = new AbortController();
+let lastActivity = '';
+const readSequences = new Map<string, number>();
+const latestProactiveSequences = new Map<string, number>();
+let readBusy = false;
+const visibleSequences = new Set<number>();
+function observeProactiveMessages(): void {
+  proactiveObserver?.disconnect(); visibleSequences.clear();
+  messagesContainer.value?.querySelectorAll<HTMLElement>('[data-proactive-sequence]').forEach(el => proactiveObserver?.observe(el));
+}
+async function markVisibleProactive(): Promise<void> {
+  const id = conversationId.value;
+  if (!id || readBusy || document.visibilityState !== 'visible' || !document.hasFocus() ||
+      document.querySelector('dialog[open]') || isSidebarOpen.value && sidebarDrawerQuery.matches || isRestoring.value) return;
+  const sequence = Math.max(0, ...visibleSequences);
+  if (sequence <= (readSequences.get(id) ?? 0)) return;
+  readBusy = true;
+  try {
+    await markProactiveRead(id, sequence);
+    readSequences.set(id, Math.max(sequence, readSequences.get(id) ?? 0));
+    const summary = conversations.value.find(c => c.id === id);
+    const newest = Math.max(0, ...messages.value.filter(m => m.conversationId === id).map(m => m.proactiveSequence ?? 0));
+    if (summary) summary.hasUnreadProactive = Math.max(newest, latestProactiveSequences.get(id) ?? 0) > sequence;
+  } catch { /* A later visibility/poll event retries; the persistent marker remains unread. */ }
+  finally { readBusy = false; }
+}
+async function syncProactiveMessages(): Promise<void> {
+  if (proactiveBusy || proactiveAbort.signal.aborted || document.visibilityState !== 'visible') return;
+  proactiveBusy = true;
+  try {
+    const activity = await getProactiveActivity(proactiveAbort.signal);
+    if (proactiveAbort.signal.aborted) return;
+    const signature = JSON.stringify([...activity].sort((a,b) => a.conversationId.localeCompare(b.conversationId)));
+    if (signature !== lastActivity) { if (activity.length) await refreshProactiveHistory(); lastActivity = signature; }
+    for (const row of activity) {
+      latestProactiveSequences.set(row.conversationId, Math.max(latestProactiveSequences.get(row.conversationId) ?? 0, row.lastProactiveSequence));
+      const read = Math.max(readSequences.get(row.conversationId) ?? 0, row.readProactiveSequence);
+      readSequences.set(row.conversationId, read);
+      const summary = conversations.value.find(c => c.id === row.conversationId);
+      if (summary) summary.hasUnreadProactive = row.lastProactiveSequence > read;
+      if (row.conversationId !== conversationId.value || isRestoring.value || hasActiveTurn.value) continue;
+      const after = Math.max(0, ...messages.value.map(m => m.proactiveSequence ?? 0));
+      if (row.lastProactiveSequence <= after) continue;
+      const incoming = await getProactiveMessages(row.conversationId, after, proactiveAbort.signal);
+      if (proactiveAbort.signal.aborted || row.conversationId !== conversationId.value || isRestoring.value || hasActiveTurn.value) continue;
+      const ids = new Set(messages.value.map(m => m.serverId ?? m.id));
+      messages.value.push(...incoming.filter(m => !ids.has(m.id)).map(m => ({ ...m, serverId: m.id })));
+      messages.value.sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.id.localeCompare(b.id));
+      // Preserve the reader's scroll; incoming messages are marked only at actual visibility.
+    }
+    await nextTick(); observeProactiveMessages(); await markVisibleProactive();
+  } catch { /* Network recovery uses the same bounded poll and foreground hooks. */ }
+  finally { proactiveBusy = false; }
+}
+function scheduleProactiveSync(): void {
+  clearTimeout(proactiveTimer);
+  if (proactiveAbort.signal.aborted || document.visibilityState !== 'visible') return;
+  proactiveTimer = setTimeout(async () => { await syncProactiveMessages(); scheduleProactiveSync(); }, 30000);
+}
+function proactiveVisibilityChanged(): void { requestAnimationFrame(() => { void markVisibleProactive(); }); }
+function proactiveForeground(): void { void syncProactiveMessages(); void markVisibleProactive(); scheduleProactiveSync(); }
+watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value], async () => { await nextTick(); observeProactiveMessages(); void markVisibleProactive(); });
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
@@ -157,11 +245,10 @@ function resizeComposer(): void {
 }
 
 function focusComposer(): void {
-  if (isRestoring.value) {
-    return;
-  }
+  if (isRestoring.value || window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId) return;
 
   void nextTick(() => {
+    if (isSidebarOpen.value && sidebarDrawerQuery.matches) return;
     composerInput.value?.focus({ preventScroll: true });
   });
 }
@@ -340,6 +427,17 @@ function mergeConversationSummary(summary: ConversationSummary): void {
   });
 }
 
+async function refreshProactiveHistory(): Promise<void> {
+  const page = await getConversations(30, null);
+  if (conversations.value.length === 0) {
+    nextHistoryCursor.value = page.nextCursor ?? null; hasMoreHistory.value = page.hasMore;
+  }
+  // Merge the current head without discarding pages the reader already loaded or their cursor.
+  for (const summary of page.items) mergeConversationSummary(summary);
+  const active = page.items.find(c => c.id === conversationId.value);
+  if (active) activeConversationTitle.value = active.title ?? 'Nova conversa';
+}
+
 async function loadConversationHistory(reset = false): Promise<void> {
   if (isLoadingHistory.value) {
     return;
@@ -406,6 +504,8 @@ function closeSidebarDrawer(): void {
 }
 
 async function openConversation(targetConversationId: string): Promise<void> {
+  dismissKeyboard();
+  drafts.set(conversationId.value ?? 'new', draft.value);
   if (isRestoring.value || targetConversationId === conversationId.value) {
     closeSidebarDrawer();
     return;
@@ -426,6 +526,8 @@ async function openConversation(targetConversationId: string): Promise<void> {
   try {
     const conversation = await getConversation(targetConversationId);
     conversationId.value = conversation.id;
+    draft.value = drafts.get(conversation.id) ?? '';
+    resizeComposer();
     activeConversationTitle.value = conversation.title ?? 'Nova conversa';
     activeConversationCreatedAt.value = conversation.createdAt;
     localStorage.setItem(STORAGE_KEY, conversation.id);
@@ -457,7 +559,7 @@ async function handleSubmit(): Promise<void> {
   const localMessage = createLocalUserMessage(content);
   const assistantMessage = createLocalAssistantMessage();
 
-  draft.value = '';
+  draft.value = drafts.get('new') ?? '';
   resizeComposer();
   errorMessage.value = null;
   clearToolStatus();
@@ -592,14 +694,6 @@ async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
   }
 }
 
-function toggleAutoSpeak(): void {
-  const enabled = !voice.autoSpeak.value;
-  voice.setAutoSpeak(enabled);
-  if (!enabled) {
-    stopPlayback();
-  }
-}
-
 function stopPlayback(): void {
   activeSpeechPlaybackId = null;
   activeSpeechMessageId.value = null;
@@ -659,6 +753,7 @@ async function toggleRecording(): Promise<void> {
 }
 
 function startNewConversation(): void {
+  dismissKeyboard();
   cancelMemoryActivityPolling();
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
   historyRefreshTimer = null;
@@ -669,7 +764,7 @@ function startNewConversation(): void {
   activeConversationTitle.value = null;
   activeConversationCreatedAt.value = null;
   messages.value = [];
-  draft.value = '';
+  draft.value = drafts.get('new') ?? '';
   resizeComposer();
   errorMessage.value = null;
   feedbackTarget.value = null;
@@ -679,19 +774,24 @@ function startNewConversation(): void {
   focusComposer();
 }
 
-async function handleRenameConversation(targetConversationId: string, title: string): Promise<void> {
+function requestRenameConversation(conversation: ConversationSummary): void {
+  dismissKeyboard(); renameError.value = null; renameTarget.value = conversation;
+}
+async function handleRenameConversation(title: string): Promise<void> {
+  if (!renameTarget.value || isRenaming.value) return;
+  isRenaming.value = true; renameError.value = null;
   try {
-    const summary = await renameConversation(targetConversationId, title);
+    const targetId = renameTarget.value.id;
+    const summary = await renameConversation(targetId, title);
     mergeConversationSummary(summary);
-    if (conversationId.value === targetConversationId) {
-      activeConversationTitle.value = summary.title ?? 'Nova conversa';
-    }
-  } catch {
-    errorMessage.value = 'Não foi possível renomear a conversa.';
-  }
+    if (conversationId.value === targetId) activeConversationTitle.value = summary.title ?? 'Nova conversa';
+    renameTarget.value = null;
+  } catch { renameError.value = 'Não consegui salvar o título. Tente novamente.'; }
+  finally { isRenaming.value = false; }
 }
 
 function requestDeleteConversation(conversation: ConversationSummary): void {
+  dismissKeyboard();
   deleteTarget.value = conversation;
 }
 
@@ -769,8 +869,24 @@ async function handleFeedbackSubmit(request: SubmitMessageFeedbackRequest): Prom
   }
 }
 
+let explicitDestination: string | null = null;
+function navigateToConversation(id: string): void {
+  if (isRestoring.value) { explicitDestination = id; return; }
+  void openConversation(id);
+}
+watch(isRestoring, restoring => {
+  if (!restoring && explicitDestination) { const id = explicitDestination; explicitDestination = null; void openConversation(id); }
+});
+defineExpose({ openConversation: navigateToConversation });
 onMounted(() => {
   syncViewportHeight();
+  proactiveObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) { const sequence = Number((entry.target as HTMLElement).dataset.proactiveSequence); if (entry.isIntersecting && entry.intersectionRatio >= 1) visibleSequences.add(sequence); else visibleSequences.delete(sequence); }
+    void markVisibleProactive();
+  }, { root: messagesContainer.value, threshold: 1 });
+  window.addEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.addEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
+  document.addEventListener('visibilitychange', proactiveForeground); window.addEventListener('focus', proactiveForeground); window.addEventListener('online', proactiveForeground);
+  void syncProactiveMessages(); scheduleProactiveSync();
   stopObservingGoogle = observeGoogleConnection({
     started: () => {
       emailConnectionState.value = 'pending';
@@ -815,6 +931,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  proactiveAbort.abort(); clearTimeout(proactiveTimer); proactiveObserver?.disconnect();
+  window.removeEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.removeEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
+  document.removeEventListener('visibilitychange', proactiveForeground); window.removeEventListener('focus', proactiveForeground); window.removeEventListener('online', proactiveForeground);
   cancelMemoryActivityPolling();
   clearToolStatus();
   emailConnectionAbortController?.abort();
@@ -824,6 +943,7 @@ onBeforeUnmount(() => {
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
 
   viewportCleanup?.();
+  releaseSidebarLayer?.(); releaseDeleteLayer?.();
 });
 </script>
 
@@ -855,7 +975,8 @@ onBeforeUnmount(() => {
         @close="setSidebarOpen(false)"
         @new-conversation="startNewConversation"
         @open-conversation="openConversation"
-        @rename-conversation="handleRenameConversation"
+        @rename-conversation="requestRenameConversation"
+        @info-conversation="infoTarget = $event"
         @request-delete-conversation="requestDeleteConversation"
         @load-more="loadConversationHistory(false)"
         @retry-history="loadConversationHistory(true)"
@@ -872,22 +993,14 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="chat-voice-controls">
-          <ConversationInfo v-if="conversationId && !isRestoring" :conversation-id="conversationId" />
-          <button
-            type="button"
-            class="voice-toggle"
-            :class="{ 'voice-toggle--muted': !voice.autoSpeak.value }"
-            :aria-label="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
-            :title="voice.autoSpeak.value ? 'Fala automática ligada' : 'Fala automática desligada'"
-            @click="toggleAutoSpeak"
-          ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Zm12-1a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /><path v-if="!voice.autoSpeak.value" d="M4 4l16 16" /></svg></button>
+          <ConversationMenu :title="activeConversationTitle || 'Nova conversa'" show-title :disabled="!conversationId || isRestoring" @info="infoTarget = currentConversationSummary" @rename="requestRenameConversation(currentConversationSummary)" @delete="requestDeleteConversation(currentConversationSummary)" />
         </div>
 
         <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>
       </header>
 
       <div v-if="$slots.notice" class="chat-notices"><slot name="notice" /></div>
-      <div class="messages" aria-live="polite">
+      <div ref="messagesContainer" class="messages" aria-live="polite">
         <div v-if="isRestoring" class="empty-state">
           <AegisMark />
           <span>Carregando conversa...</span>
@@ -901,9 +1014,8 @@ onBeforeUnmount(() => {
         </div>
 
         <template v-else>
+          <template v-for="message in messages" :key="message.id">
           <ChatMessage
-            v-for="message in messages"
-            :key="message.id"
             :message="message"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
@@ -915,6 +1027,8 @@ onBeforeUnmount(() => {
             @replay="replayMessage"
             @stop-playback="stopPlayback"
           />
+          <span v-if="message.isProactive && message.proactiveSequence" :data-proactive-sequence="message.proactiveSequence" class="proactive-read-sentinel" aria-hidden="true"></span>
+          </template>
         </template>
 
         <div ref="messagesEnd" class="messages-end"></div>
@@ -969,6 +1083,9 @@ onBeforeUnmount(() => {
       </form>
       </section>
     </div>
+
+    <ConversationInfo v-if="infoTarget" :conversation-id="infoTarget.id" :created-at="infoTarget.createdAt" @close="infoTarget = null" />
+    <RenameConversationDialog v-if="renameTarget" :title="renameTarget.title || 'Nova conversa'" :saving="isRenaming" :error="renameError" @cancel="renameTarget = null" @save="handleRenameConversation" />
 
     <FeedbackDialog
       v-if="feedbackTarget"

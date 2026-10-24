@@ -77,17 +77,22 @@ object NodeNativeNotifications {
       NodeNotificationResult("success")
     } else if(capability=="geofence.monitor" || capability=="location.current") {
       NodeDomainCommands.accept(context,command,expectedScope,clock)
-    } else if(capability!="notification.show" && capability!="reminder.notify") NodeNotificationResult("unsupported")
+    } else if(capability!="notification.show" && capability!="reminder.notify" && capability!="conversation.notify") NodeNotificationResult("unsupported")
     else {
       val input=command.getJSONObject("input")
       val reminder=if(capability=="reminder.notify") NodeReminderActions.read(input,command.getString("commandId")) else null
-      if(reminder==null) require(input.keys().asSequence().toSet()==setOf("title","body"))
-      show(context,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body"),reminder,clock)
+      val conversation=if(capability=="conversation.notify") {
+        require(input.keys().asSequence().toSet()==setOf("title","body","conversationId","messageId"))
+        require(NodeNotificationPayload.validConversationDestination(input.getString("conversationId"),input.getString("messageId")))
+        input.getString("conversationId")
+      } else null
+      if(reminder==null && conversation==null) require(input.keys().asSequence().toSet()==setOf("title","body"))
+      show(context,command.getString("commandId"),command.getString("expiresAt"),input.getString("title"),input.getString("body"),reminder,clock,conversation)
     }
   } catch (error: NotificationPhaseFailure) { NodeNotificationResult("failed", error.diagnostic) }
     catch (error: Exception) { notificationLog("payload_parse", error); NodeNotificationResult("failed", NotificationDiagnostic.PAYLOAD_PARSE) }
 
-  fun show(context: Context, id: String, expires: String, title: String, body: String, reminder: NodeReminderActions.Presentation? = null,clock:NodeNotificationClock=NodeNotificationClock.wall): NodeNotificationResult { synchronized(NodeNotificationGate.lock) { return try {
+  fun show(context: Context, id: String, expires: String, title: String, body: String, reminder: NodeReminderActions.Presentation? = null,clock:NodeNotificationClock=NodeNotificationClock.wall,conversationId:String?=null): NodeNotificationResult { synchronized(NodeNotificationGate.lock) { return try {
     val now = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { Instant.now().epochSecond }
     val commandNow=notificationPhase("expiry_parse",NotificationDiagnostic.EXPIRY_PARSE){clock.nowEpochSecond()}
     val expiry = notificationPhase("expiry_parse", NotificationDiagnostic.EXPIRY_PARSE) { NodeNotificationPayload.expiryEpochSecond(expires) }
@@ -104,7 +109,7 @@ object NodeNativeNotifications {
           prefs(context).getString("recent", "")!!.split(";").mapNotNull {
             val pair = it.split(",")
             if (pair.size == 2) pair[1].toLongOrNull()?.let { stamp -> pair[0] to stamp } else null
-          }.filter { now - it.second < 600 }.takeLast(255)
+          }.filter { now - it.second < 86400 }.takeLast(255)
         }
         if (recent.any { it.first == id }) NodeNotificationResult("duplicate")
         else {
@@ -112,6 +117,7 @@ object NodeNativeNotifications {
           if(reminder!=null && !NodeReminderActions.remember(context,reminder)) return NodeNotificationResult("expired")
           val click = notificationPhase("pending_intent", NotificationDiagnostic.PENDING_INTENT) {
             val intent=Intent(context,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if(conversationId!=null) intent.setAction("com.aegis.node.conversation.$id").putExtra("conversationId",conversationId)
             if(reminder!=null) intent.setAction("com.aegis.node.open.${reminder.id}.${reminder.generation}").putExtra("reminderId",reminder.id)
             PendingIntent.getActivity(context,0,intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
           }

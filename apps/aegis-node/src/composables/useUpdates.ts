@@ -33,7 +33,9 @@ export function useUpdates(check: () => Promise<AvailableUpdate | null>) {
         try { await previous?.dispose?.(); } catch { /* Disposal cannot hide a successfully discovered version. */ }
       }
       state.value = update.value && (manual || update.value.version !== dismissedVersion) ? readyToInstall.value ? 'ready' : 'available' : 'idle';
-      checkedMessage.value = update.value ? `Versão ${update.value.version} disponível neste canal.` : 'Você está usando a versão mais recente disponível neste canal.';
+      checkedMessage.value = update.value
+        ? `${update.value.distributionKind === 'rollback' ? 'Atualização de recuperação' : 'Versão recomendada'} ${update.value.version} disponível.`
+        : 'Você está usando a versão mais recente disponível para este Node.';
     } catch (cause) {
       state.value = update.value && (manual || update.value.version !== dismissedVersion) ? readyToInstall.value ? 'ready' : 'available' : 'idle';
       nextAutomaticCheck = Date.now() + FAILED_CHECK_INTERVAL;

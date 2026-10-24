@@ -19,6 +19,8 @@ export interface ChatMessage {
   createdAt: string;
   model?: string | null;
   memoryActivity?: MemoryActivitySnapshot | null;
+  isProactive?: boolean;
+  proactiveSequence?: number | null;
 }
 
 export interface Conversation {
@@ -31,6 +33,7 @@ export interface Conversation {
 }
 
 export interface ConversationSummary {
+  hasUnreadProactive?: boolean;
   id: string;
   title?: string | null;
   createdAt: string;
@@ -62,6 +65,8 @@ export interface SendMessageResponse {
 export interface LocalChatMessage extends ChatMessage {
   serverId?: string;
   memoryActivity?: MemoryActivitySnapshot | null;
+  isProactive?: boolean;
+  proactiveSequence?: number | null;
   pending?: boolean;
   streaming?: boolean;
   interrupted?: boolean;
@@ -78,6 +83,8 @@ export interface ChatStreamHandlers {
     conversationTitle?: string | null;
     titleSource?: string | null;
     memoryActivity?: MemoryActivitySnapshot | null;
+  isProactive?: boolean;
+  proactiveSequence?: number | null;
   }) => void;
   onError: (message: string) => void;
 }

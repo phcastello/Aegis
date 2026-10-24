@@ -47,7 +47,7 @@
       "icons/icon.ico"
     ],
     "android": {
-      "versionCode": 7001999
+      "versionCode": 7002999
     },
     "createUpdaterArtifacts": true
   },
@@ -55,7 +55,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQ0MxMEE4QTg1RDg5MjIKUldRaWlWMm9xQkRNcTl4UWxQU1ZTQlhCNlZDVXNOMUt2ZGtVU0FDY2tYcXJ3cHZxc1dacWZhZGUK",
       "endpoints": [
-        "https://github.com/phcastello/Aegis/releases/download/node-preview/latest.json"
+        "https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json"
       ],
       "requireSignedVersion": true,
       "windows": {

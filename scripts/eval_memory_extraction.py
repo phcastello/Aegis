@@ -87,6 +87,13 @@ def main():
         return 2
     m1 = [{"ref": "m1", "content": "Pedro usa RX 6700 XT.", "validFrom": None, "validUntil": None}]
     cases = [
+        ("operational_timed_reminder", "Me lembra de comprar leite às 18h", (), (), lambda c: len(c) == 0),
+        ("operational_geo_reminder", "Me avisa quando eu sair da faculdade", (), (), lambda c: len(c) == 0),
+        ("operational_cancel", "Cancela o lembrete do mercado", (), (), lambda c: len(c) == 0),
+        ("operational_calendar", "Agende uma reunião amanhã", (), (), lambda c: len(c) == 0),
+        ("asserted_habit", "Costumo comprar leite depois da faculdade", (), (), lambda c: any("leite" in x["content"].lower() for x in c)),
+        ("persistent_reminder_preference", "Prefiro receber lembretes no celular", (), (), lambda c: any("celular" in x["content"].lower() for x in c)),
+        ("explicit_habit_memory", "Guarda na memória que sempre compro leite às sextas", (), (), lambda c: any("leite" in x["content"].lower() for x in c)),
         ("manual_faze", "Meu time favorito de R6 é a FaZe Clan.", (), (),
             lambda c: any(x["action"] == "create" and "FaZe" in x["content"] for x in c)),
         ("manual_develops", "Eu desenvolvo você, a Aegis.", (), (),
