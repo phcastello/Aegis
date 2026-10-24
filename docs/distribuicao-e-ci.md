@@ -98,9 +98,10 @@ Exemplo projetado a partir das reservas reais conhecidas, sem executar reservas:
 | --- | --- | --- |
 | Estável já publicada | `0.7.1` | `7001999` |
 | Preview já gerada | `0.7.2-unstable.1` | `7002001` |
-| Próxima preview | `0.7.2-unstable.2` | `7002002` |
-| Recuperação da .2 | `0.7.2-unstable.2.rollback.1` | `7002003` |
-| Próxima evolução normal | `0.7.2-unstable.3` | `7002004` |
+| Primeira preview v2 | `0.7.2-unstable.2` | `7002002` |
+| Preview v2 defeituosa | `0.7.2-unstable.3` | `7002003` |
+| Recuperação da .3 para o código da .2 | `0.7.2-unstable.3.rollback.1` | `7002004` |
+| Próxima evolução normal | `0.7.2-unstable.4` | `7002005` |
 | Estável | `0.7.2` | `7002999` |
 | Recuperação da estável | `0.7.3-rollback.1` | `7003001` |
 | Próxima preview normal | `0.7.3-unstable.1` | `7003002` |
@@ -187,7 +188,9 @@ reserva/build; não reconstruir outros bytes sob uma versão já reservada.
 Uma estável usa o mesmo caminho com `version=0.7.2`; nesse caso o workflow
 exige a matriz completa de release antes do build. Previews e recuperações
 não exigem automaticamente as janelas longas de consumo. O workflow antigo
-`Aegis Node Release` permanece manual para tags históricas; distribuições v2
+`Aegis Node Release` permanece manual para tags históricas, somente com controle
+da `main` e fonte ancestral da `main` revisada; não aceita código arbitrário de
+branches como atalho para assinatura. Distribuições v2
 são direcionadas ao caminho unificado. Criar tag não publica automaticamente.
 
 ## Gerar um rollback
