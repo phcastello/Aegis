@@ -4,8 +4,10 @@ import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } f
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { parameters, assertTrustedDispatch, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview } from './native-preview.mjs';
 import { githubFixture } from './distribution-state.fixture.mjs';
+import { recommendedFeed } from './distribution-state.mjs';
 import { metadata } from '../../apps/aegis-node/scripts/release-metadata.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -52,7 +54,7 @@ test('global Android allocation advances stable and all attempted preview reserv
 test('temporary synchronization updates all consumers without changing branch files', () => {
   const work = mkdtempSync(join(tmpdir(), 'aegis-preview-version-'));
   const files = ['apps/aegis-node/package.json', 'apps/aegis-node/package-lock.json', 'apps/aegis-node/src-tauri/tauri.conf.json',
-    'apps/aegis-node/src-tauri/Cargo.toml', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/scripts/version.mjs',
+    'apps/aegis-node/src-tauri/Cargo.toml', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/scripts/version.mjs', 'apps/aegis-node/scripts/version.test.mjs',
     'packages/aegis-client/package.json', 'packages/aegis-client/package-lock.json', 'frontend/aegis-pwa/package.json', 'frontend/aegis-pwa/package-lock.json'];
   const original = readFileSync(join(root, files[0]), 'utf8');
   try {
@@ -60,14 +62,31 @@ test('temporary synchronization updates all consumers without changing branch fi
     const candidateManifest = JSON.parse(readFileSync(join(work, files[0])));
     candidateManifest.version = plan.version.split('-')[0];
     writeFileSync(join(work, files[0]), JSON.stringify(candidateManifest));
-    prepareCandidate(work, root, plan.version, plan.versionCode);
+    // The trusted infrastructure can be bootstrapped while main still ships the
+    // legacy updater. This fixture represents the candidate opting into v2.
+    const configPath = join(work, files[2]);
+    const candidateConfig = JSON.parse(readFileSync(configPath));
+    candidateConfig.plugins.updater.endpoints = [recommendedFeed];
+    writeFileSync(configPath, JSON.stringify(candidateConfig));
+    const independentCode = plan.versionCode + 1;
+    prepareCandidate(work, root, plan.version, independentCode);
     assert.equal(JSON.parse(readFileSync(join(work, files[0]))).version, plan.version);
-    assert.equal(JSON.parse(readFileSync(join(work, files[2]))).bundle.android.versionCode, plan.versionCode);
+    assert.equal(JSON.parse(readFileSync(join(work, files[2]))).bundle.android.versionCode, independentCode);
     assert.equal(JSON.parse(readFileSync(join(work, 'packages/aegis-client/package.json'))).version, plan.version);
     assert.equal(readFileSync(join(root, files[0]), 'utf8'), original);
+    const checkSnapshot = () => execFileSync(process.execPath, ['--test', 'scripts/version.test.mjs'], { cwd: join(work, 'apps/aegis-node'), stdio: 'pipe' });
+    checkSnapshot();
+    prepareCandidate(work, root, `${plan.version}.rollback.1`, independentCode + 1);
+    checkSnapshot();
+    prepareCandidate(work, root, '0.7.2-unstable.22', independentCode + 2);
+    checkSnapshot();
     assert.throws(() => prepareCandidate(work, root, plan.version), /Command failed/, 'A new prerelease must never silently derive its installation code from SemVer.');
-    const configPath = join(work, files[2]);
-    const config = JSON.parse(readFileSync(configPath)); config.plugins.updater.pubkey = 'other-key'; writeFileSync(configPath, JSON.stringify(config));
+    const config = JSON.parse(readFileSync(configPath));
+    config.plugins.updater.endpoints = ['https://github.com/phcastello/Aegis/releases/download/node-preview/latest.json'];
+    writeFileSync(configPath, JSON.stringify(config));
+    assert.throws(() => prepareCandidate(work, root, plan.version, plan.versionCode), /exact recommended endpoint/);
+    config.plugins.updater.endpoints = [recommendedFeed];
+    config.plugins.updater.pubkey = 'other-key'; writeFileSync(configPath, JSON.stringify(config));
     assert.throws(() => prepareCandidate(work, root, plan.version), /updater identity/);
   } finally { rmSync(work, { recursive: true, force: true }); }
 });

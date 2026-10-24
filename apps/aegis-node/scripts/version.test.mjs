@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { androidVersionCode, synchronize, parseDistributionVersion, compareVersions, rollbackVersion, allocateVersionCode } from './version.mjs';
+import { androidVersionCode, synchronize, parseDistributionVersion, compareVersions, rollbackVersion, allocateVersionCode, validateVersionCode } from './version.mjs';
 
 test('Android codes increase across legacy previews, unstable channel, stable and next patch', () => {
   const versions = ['0.7.0-stage.1', '0.7.0-stage.10', '0.7.0-unstable.11', '0.7.0-unstable.12', '0.7.0-unstable.13', '0.7.0-unstable.14', '0.7.0-unstable.19', '0.7.0', '0.7.1-unstable.1', '0.8.0-unstable.1', '1.0.0'];
@@ -18,7 +18,8 @@ test('ambiguous, invalid and overflowing versions are rejected', () => {
 
 test('checked-in versions and locks agree with the source of truth', () => {
   const { version, versionCode } = synchronize();
-  assert.equal(versionCode, androidVersionCode(version));
+  assert.equal(validateVersionCode(versionCode), versionCode);
+  assert.ok(parseDistributionVersion(version));
 });
 
 
@@ -36,6 +37,8 @@ test('SemVer recovery events preserve normal preview and stable progression', ()
   assert.equal(rollbackVersion('0.7.2-unstable.5.rollback.1',2),'0.7.2-unstable.5.rollback.2');
   assert.equal(rollbackVersion('0.7.2',1),'0.7.3-rollback.1');
   assert.equal(rollbackVersion('0.7.3-rollback.1',2),'0.7.3-rollback.2');
+  assert.equal(rollbackVersion('0.7.2-unstable.5',2),'0.7.2-unstable.5.rollback.2'); // .1 reserved, build failed.
+  assert.equal(rollbackVersion('0.7.3-rollback.1',3),'0.7.3-rollback.3');
   assert.throws(() => rollbackVersion('0.7.2-unstable.5.rollback.1',1));
   for (const value of ['0.7.2.rollback.1','0.7.2+rollback.1','0.7.2-unstable.5.rollback.01','0.7.3-rollback.1.rollback.2'])
     assert.throws(() => parseDistributionVersion(value));

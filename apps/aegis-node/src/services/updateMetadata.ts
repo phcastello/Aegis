@@ -52,17 +52,18 @@ export function compareUpdateVersions(left: string, right: string): number {
 }
 
 function isNextRollback(version: string, previous: string): boolean {
-  const parts = parseVersion(previous);
+  const parts = parseVersion(previous), next = parseVersion(version);
   const prefix = parts.slice(0, 3).join('.');
   if (parts.length === 3) {
-    const patch = Number(parts[2]) + 1;
-    return Number.isSafeInteger(patch) && version === `${parts[0]}.${parts[1]}.${patch}-rollback.1`;
+    return next.slice(0, 3).join('.') === `${parts[0]}.${parts[1]}.${Number(parts[2]) + 1}` &&
+      next[3] === 'rollback' && Number(next[4]) > 0;
   }
+  if (next.slice(0, 3).join('.') !== prefix) return false;
   if (parts[3] === 'unstable') {
-    const next = parts.length === 5 ? 1 : Number(parts[6]) + 1;
-    return version === `${prefix}-unstable.${parts[4]}.rollback.${next}`;
+    return next[3] === 'unstable' && next[4] === parts[4] && next[5] === 'rollback' &&
+      Number(next[6]) > (parts.length === 5 ? 0 : Number(parts[6]));
   }
-  return version === `${prefix}-rollback.${Number(parts[4]) + 1}`;
+  return next[3] === 'rollback' && Number(next[4]) > Number(parts[4]);
 }
 
 // The publisher emits immutable versioned assets. Validate the complete shared

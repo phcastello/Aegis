@@ -99,33 +99,43 @@ fn parsed(value: &str) -> Result<semver::Version, String> {
 }
 
 fn valid_rollback(version: &semver::Version, previous: &semver::Version) -> bool {
-    let parts = previous.pre.as_str().split('.').collect::<Vec<_>>();
-    let suffix = match parts.as_slice() {
-        ["unstable", n] if positive(n) => format!("unstable.{n}.rollback.1"),
-        ["unstable", n, "rollback", m] if positive(n) && positive(m) => {
-            let Some(next) = m.parse::<u32>().ok().and_then(|n| n.checked_add(1)) else {
-                return false;
-            };
-            format!("unstable.{n}.rollback.{next}")
+    let parts = version.pre.as_str().split('.').collect::<Vec<_>>();
+    let before = previous.pre.as_str().split('.').collect::<Vec<_>>();
+    let number = |value: &str| {
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=65535).contains(n))
+    };
+    match (parts.as_slice(), before.as_slice()) {
+        (["unstable", n, "rollback", event], ["unstable", old]) => {
+            version.major == previous.major
+                && version.minor == previous.minor
+                && version.patch == previous.patch
+                && n == old
+                && number(event).is_some()
         }
-        ["rollback", m] if positive(m) => {
-            let Some(next) = m.parse::<u32>().ok().and_then(|n| n.checked_add(1)) else {
-                return false;
-            };
-            format!("rollback.{next}")
+        (["unstable", n, "rollback", event], ["unstable", old, "rollback", prior]) => {
+            version.major == previous.major
+                && version.minor == previous.minor
+                && version.patch == previous.patch
+                && n == old
+                && matches!((number(event),number(prior)),(Some(next),Some(old)) if next>old)
         }
-        _ if previous.pre.is_empty() => {
-            return version.major == previous.major
+        (["rollback", event], ["rollback", prior]) => {
+            version.major == previous.major
+                && version.minor == previous.minor
+                && version.patch == previous.patch
+                && matches!((number(event),number(prior)),(Some(next),Some(old)) if next>old)
+        }
+        (["rollback", event], _) if previous.pre.is_empty() => {
+            version.major == previous.major
                 && version.minor == previous.minor
                 && previous.patch.checked_add(1) == Some(version.patch)
-                && version.pre.as_str() == "rollback.1";
+                && number(event).is_some()
         }
-        _ => return false,
-    };
-    version.major == previous.major
-        && version.minor == previous.minor
-        && version.patch == previous.patch
-        && version.pre.as_str() == suffix
+        _ => false,
+    }
 }
 
 pub fn interpret(
@@ -360,6 +370,59 @@ mod tests {
             .unwrap()
             .is_none());
         }
+    }
+    #[test]
+    fn failed_reservations_allow_gaps_without_reusing_recovery_versions() {
+        // Recovery .1/.2 may already be burned by failed builds. The durable
+        // publisher ledger guarantees fresh codes; clients compare the event order.
+        for value in [
+            recovery(
+                "0.7.2-unstable.5.rollback.2",
+                "0.7.2-unstable.5",
+                "0.7.2-unstable.4",
+                7002007,
+            ),
+            recovery(
+                "0.7.2-unstable.5.rollback.3",
+                "0.7.2-unstable.5.rollback.1",
+                "0.7.2-unstable.4",
+                7002008,
+            ),
+            recovery("0.7.3-rollback.2", "0.7.2", "0.7.1", 7003002),
+            recovery("0.7.3-rollback.3", "0.7.3-rollback.1", "0.7.1", 7003003),
+        ] {
+            assert!(interpret(
+                &value.to_string(),
+                value["rollbackOf"].as_str().unwrap(),
+                7002005
+            )
+            .unwrap()
+            .is_some());
+        }
+        assert!(interpret(
+            &recovery(
+                "0.7.2-unstable.5.rollback.2",
+                "0.7.2-unstable.5.rollback.3",
+                "0.7.2-unstable.4",
+                7002010
+            )
+            .to_string(),
+            "0.7.2-unstable.5",
+            7002005
+        )
+        .is_err());
+        assert!(interpret(
+            &recovery(
+                "0.7.2-unstable.6.rollback.2",
+                "0.7.2-unstable.5",
+                "0.7.2-unstable.4",
+                7002010
+            )
+            .to_string(),
+            "0.7.2-unstable.5",
+            7002005
+        )
+        .is_err());
     }
     #[test]
     fn independent_installation_code_is_preserved() {

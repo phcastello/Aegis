@@ -47,7 +47,7 @@ export function compareVersions(left, right) {
 
 export function rollbackVersion(rollbackOf, eventNumber) {
   const source = parseDistributionVersion(rollbackOf);
-  if (!Number.isInteger(eventNumber) || eventNumber < 1 || eventNumber > 65535 || eventNumber !== (source.rollback ?? 0) + 1)
+  if (!Number.isInteger(eventNumber) || eventNumber < 1 || eventNumber > 65535 || eventNumber <= (source.rollback ?? 0))
     throw Error('Rollback event must advance the previous recovery number.');
   let base = source.base;
   if (source.stable) {

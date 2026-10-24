@@ -34,6 +34,22 @@ test('failure after reservation consumes version/code and a new event increases 
   assert.ok(next.versionCode > failedBuild.versionCode);
   await assert.rejects(f.state.reserve(planFor('0.7.2-unstable.1', '5')), /must follow/);
 });
+test('failed rollback reservation is consumed and the next event can recover the same published faulty distribution', async () => {
+  const f = githubFixture();
+  const restored = await f.state.reserve(planFor('0.7.2-unstable.4', '4'));
+  const faulty = await f.state.reserve(planFor('0.7.2-unstable.5', '5'));
+  await f.state.recommend(faulty, { version: faulty.version, versionCode: faulty.versionCode });
+  const identity = { kind: 'rollback', rollbackOf: faulty.version, restoresVersion: restored.version };
+  const failed = await f.state.reserve({ ...planFor('0.7.2-unstable.5.rollback.1', '6'), ...identity });
+  assert.equal(JSON.parse(f.files()['latest.json']).version, faulty.version, 'A failed build does not publish its recovery.');
+  const recovered = await f.state.reserve({ ...planFor('0.7.2-unstable.5.rollback.2', '7'), ...identity });
+  assert.ok(recovered.versionCode > failed.versionCode);
+  await f.state.recommend(recovered, { version: recovered.version, versionCode: recovered.versionCode, ...identity });
+  const ledger = (await f.state.read()).ledger;
+  assert.equal(ledger.reservations.length, 4);
+  assert.equal(ledger.reservations[2].version, failed.version);
+  assert.equal(JSON.parse(f.files()['latest.json']).rollbackOf, faulty.version);
+});
 test('atomic recommendation keeps previous latest through a failed ref update', async () => {
   const f = githubFixture(), one = await f.state.reserve(planFor('0.7.2-unstable.2'));
   const manifest = { version: one.version, versionCode: one.versionCode, bytes: 'verified' };

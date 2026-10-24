@@ -210,8 +210,10 @@ Esses nomes são exemplo, não distribuições existentes. Depois do build e da
 aprovação de assinatura, promover seu run pelo mesmo `aegis-native-promote.yml`.
 O SHA restaurado deve ser alcançável pela branch indicada e coincidir com a
 procedência da distribuição funcional. Rollback de outro rollback incrementa
-o evento e aponta `rollback_of` para a recuperação defeituosa imediatamente
-anterior. Fontes anteriores ao contrato v2 exigem preparação/revisão específica;
+o evento e aponta `rollback_of` para a distribuição defeituosa publicada.
+Se um evento for reservado e o build falhar, pule seu número: `.rollback.2` pode
+recuperar a mesma distribuição original quando `.rollback.1` nunca foi publicada.
+Nunca reutilize a reserva nem invente uma versão normal para contornar a falha. Fontes anteriores ao contrato v2 exigem preparação/revisão específica;
 não contornamos as verificações para assiná-las automaticamente.
 
 `compatibility_confirmed=true` é uma declaração explícita do operador, não
