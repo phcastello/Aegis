@@ -9,7 +9,8 @@ import ConversationMenu from '../components/ConversationMenu.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
-import { dismissKeyboard, navigationLayer } from '../services/navigation';
+import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../services/navigation';
+import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
   deleteConversation,
@@ -114,26 +115,52 @@ let lastActivity = '';
 const readSequences = new Map<string, number>();
 const latestProactiveSequences = new Map<string, number>();
 let readBusy = false;
-const visibleSequences = new Set<number>();
+let proactiveReadFrame: number | undefined;
 function observeProactiveMessages(): void {
-  proactiveObserver?.disconnect(); visibleSequences.clear();
+  proactiveObserver?.disconnect();
   messagesContainer.value?.querySelectorAll<HTMLElement>('[data-proactive-sequence]').forEach(el => proactiveObserver?.observe(el));
+}
+function canReadProactive(id: string): boolean {
+  return id === conversationId.value && !proactiveAbort.signal.aborted && document.visibilityState === 'visible' &&
+    !document.querySelector('dialog[open]') && !hasNavigationLayer() &&
+    !(isSidebarOpen.value && sidebarDrawerQuery.matches) && !isRestoring.value;
+}
+function visibleProactiveSequence(id: string): number {
+  const container = messagesContainer.value;
+  if (!container) return 0;
+  const current = new Set(messages.value.filter(m => m.conversationId === id && m.isProactive).map(m => m.proactiveSequence));
+  let sequence = 0;
+  for (const el of Array.from(container.querySelectorAll<HTMLElement>('[data-proactive-sequence]'))) {
+    const candidate = Number(el.dataset.proactiveSequence);
+    if (el.dataset.proactiveConversation === id && current.has(candidate) && isMessageEndVisible(el, container)) sequence = Math.max(sequence, candidate);
+  }
+  return sequence;
 }
 async function markVisibleProactive(): Promise<void> {
   const id = conversationId.value;
-  if (!id || readBusy || document.visibilityState !== 'visible' || !document.hasFocus() ||
-      document.querySelector('dialog[open]') || isSidebarOpen.value && sidebarDrawerQuery.matches || isRestoring.value) return;
-  const sequence = Math.max(0, ...visibleSequences);
+  if (!id || readBusy || !canReadProactive(id)) return;
+  const sequence = visibleProactiveSequence(id);
   if (sequence <= (readSequences.get(id) ?? 0)) return;
   readBusy = true;
+  let acknowledged = false;
   try {
+    const foreground = clientEnvironment().isForeground;
+    if (!(foreground ? await foreground() : document.hasFocus())) return;
+    // A native check crosses an async boundary: selection, overlays and layout
+    // may have changed while waiting for the Activity reply.
+    if (!canReadProactive(id) || visibleProactiveSequence(id) < sequence) return;
     await markProactiveRead(id, sequence);
-    readSequences.set(id, Math.max(sequence, readSequences.get(id) ?? 0));
+    const read = Math.max(sequence, readSequences.get(id) ?? 0);
+    readSequences.set(id, read);
+    acknowledged = true;
     const summary = conversations.value.find(c => c.id === id);
     const newest = Math.max(0, ...messages.value.filter(m => m.conversationId === id).map(m => m.proactiveSequence ?? 0));
-    if (summary) summary.hasUnreadProactive = Math.max(newest, latestProactiveSequences.get(id) ?? 0) > sequence;
+    if (summary) summary.hasUnreadProactive = Math.max(newest, latestProactiveSequences.get(id) ?? 0) > read;
   } catch { /* A later visibility/poll event retries; the persistent marker remains unread. */ }
-  finally { readBusy = false; }
+  finally {
+    readBusy = false;
+    if (acknowledged) proactiveVisibilityChanged();
+  }
 }
 async function syncProactiveMessages(): Promise<void> {
   if (proactiveBusy || proactiveAbort.signal.aborted || document.visibilityState !== 'visible') return;
@@ -148,7 +175,7 @@ async function syncProactiveMessages(): Promise<void> {
       const read = Math.max(readSequences.get(row.conversationId) ?? 0, row.readProactiveSequence);
       readSequences.set(row.conversationId, read);
       const summary = conversations.value.find(c => c.id === row.conversationId);
-      if (summary) summary.hasUnreadProactive = row.lastProactiveSequence > read;
+      if (summary) summary.hasUnreadProactive = (latestProactiveSequences.get(row.conversationId) ?? 0) > read;
       if (row.conversationId !== conversationId.value || isRestoring.value || hasActiveTurn.value) continue;
       const after = Math.max(0, ...messages.value.map(m => m.proactiveSequence ?? 0));
       if (row.lastProactiveSequence <= after) continue;
@@ -168,9 +195,12 @@ function scheduleProactiveSync(): void {
   if (proactiveAbort.signal.aborted || document.visibilityState !== 'visible') return;
   proactiveTimer = setTimeout(async () => { await syncProactiveMessages(); scheduleProactiveSync(); }, 30000);
 }
-function proactiveVisibilityChanged(): void { requestAnimationFrame(() => { void markVisibleProactive(); }); }
+function proactiveVisibilityChanged(): void {
+  if (proactiveReadFrame !== undefined) return;
+  proactiveReadFrame = requestAnimationFrame(() => { proactiveReadFrame = undefined; void markVisibleProactive(); });
+}
 function proactiveForeground(): void { void syncProactiveMessages(); void markVisibleProactive(); scheduleProactiveSync(); }
-watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value], async () => { await nextTick(); observeProactiveMessages(); void markVisibleProactive(); });
+watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
@@ -880,11 +910,10 @@ watch(isRestoring, restoring => {
 defineExpose({ openConversation: navigateToConversation });
 onMounted(() => {
   syncViewportHeight();
-  proactiveObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) { const sequence = Number((entry.target as HTMLElement).dataset.proactiveSequence); if (entry.isIntersecting && entry.intersectionRatio >= 1) visibleSequences.add(sequence); else visibleSequences.delete(sequence); }
-    void markVisibleProactive();
-  }, { root: messagesContainer.value, threshold: 1 });
+  proactiveObserver = new IntersectionObserver(proactiveVisibilityChanged, { root: messagesContainer.value, threshold: [0, 1] });
+  messagesContainer.value?.addEventListener('scroll', proactiveVisibilityChanged, { passive: true });
   window.addEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.addEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
+  window.addEventListener('aegis-app-visibility', proactiveForeground);
   document.addEventListener('visibilitychange', proactiveForeground); window.addEventListener('focus', proactiveForeground); window.addEventListener('online', proactiveForeground);
   void syncProactiveMessages(); scheduleProactiveSync();
   stopObservingGoogle = observeGoogleConnection({
@@ -904,6 +933,7 @@ onMounted(() => {
   });
   const handleViewportChange = (): void => {
     syncViewportHeight();
+    proactiveVisibilityChanged();
   };
   const handleSidebarBreakpointChange = (event: MediaQueryListEvent): void => {
     isSidebarOpen.value = !event.matches;
@@ -932,7 +962,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   proactiveAbort.abort(); clearTimeout(proactiveTimer); proactiveObserver?.disconnect();
+  if (proactiveReadFrame !== undefined) cancelAnimationFrame(proactiveReadFrame);
+  messagesContainer.value?.removeEventListener('scroll', proactiveVisibilityChanged);
   window.removeEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.removeEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
+  window.removeEventListener('aegis-app-visibility', proactiveForeground);
   document.removeEventListener('visibilitychange', proactiveForeground); window.removeEventListener('focus', proactiveForeground); window.removeEventListener('online', proactiveForeground);
   cancelMemoryActivityPolling();
   clearToolStatus();
@@ -1017,6 +1050,8 @@ onBeforeUnmount(() => {
           <template v-for="message in messages" :key="message.id">
           <ChatMessage
             :message="message"
+            :data-proactive-sequence="message.isProactive ? message.proactiveSequence : undefined"
+            :data-proactive-conversation="message.isProactive ? message.conversationId : undefined"
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
             :activity-status="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id
@@ -1027,7 +1062,6 @@ onBeforeUnmount(() => {
             @replay="replayMessage"
             @stop-playback="stopPlayback"
           />
-          <span v-if="message.isProactive && message.proactiveSequence" :data-proactive-sequence="message.proactiveSequence" class="proactive-read-sentinel" aria-hidden="true"></span>
           </template>
         </template>
 

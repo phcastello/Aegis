@@ -104,6 +104,7 @@ try {
        // Match Tauri's JSON IPC boundary instead of retaining Vue proxy references.
        if(args!==undefined)args=JSON.parse(JSON.stringify(args));
        if(command === 'node_settings_open' || command === 'node_hide_keyboard') return;
+       if(command === 'node_read_visibility') return true;
        if(command === 'node_consume_reminder_open') { const value=JSON.parse(localStorage.getItem('fixture.pendingNativeDestination')??'null');localStorage.removeItem('fixture.pendingNativeDestination');return value??{conversationId:null,reminderId:null}; }
        if(command === 'node_reminders') { if(args.operation === 'list') {
          const query=args.payload??{};window.reminderListRequests.push(query);if(window.reminderListDelay)await new Promise(resolve=>setTimeout(resolve,window.reminderListDelay));

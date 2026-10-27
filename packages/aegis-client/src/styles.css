@@ -1782,5 +1782,3 @@ button:disabled {
   .sidebar-toggle--floating { top: 10px; left: 16px; width: 44px; height: 44px; border: 1px solid var(--border-subtle, #ffffff18); border-radius: 50%; }
   .hideout-shell:not(.hideout-shell--sidebar-open) .chat-header { padding-left: 16px; }
 }
-
-.proactive-read-sentinel { display: block; height: 1px; flex-shrink: 0; }

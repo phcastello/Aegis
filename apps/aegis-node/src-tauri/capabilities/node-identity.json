@@ -33,6 +33,7 @@
     "allow-node-geofences",
     "allow-node-settings-open",
     "allow-node-hide-keyboard",
+    "allow-node-read-visibility",
     "allow-node-consume-reminder-open",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

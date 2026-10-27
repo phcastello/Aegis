@@ -8,6 +8,17 @@ import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
   private var currentWebView:WebView?=null
+  private var readResumed=false
+  // A cleared WebView input focus does not mean the Activity is in background.
+  // Query the current Activity/window state through the existing closed JNI bridge.
+  fun readVisibility(payload:String):String = (readResumed && hasWindowFocus()).toString()
+  private fun notifyReadVisibility() {
+    currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new Event('aegis-app-visibility'))",null) }
+  }
+  override fun onWindowFocusChanged(hasFocus:Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    notifyReadVisibility()
+  }
   private val settingsBack=object:androidx.activity.OnBackPressedCallback(false) {
     override fun handleOnBackPressed() { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-back'))",null) }
   }
@@ -59,6 +70,8 @@ class MainActivity : TauriActivity() {
   private var connectivityCallback:android.net.ConnectivityManager.NetworkCallback?=null
   override fun onResume() {
     super.onResume()
+    readResumed=true
+    notifyReadVisibility()
     NodeBackgroundWork.actionsChanged={currentWebView?.post{currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-actions-changed'))",null)}}
     if(connectivityCallback==null) {
       val callback=object:android.net.ConnectivityManager.NetworkCallback() {
@@ -71,6 +84,8 @@ class MainActivity : TauriActivity() {
     NodeBackgroundWork.foregroundActions(this)
   }
   override fun onPause() {
+    readResumed=false
+    notifyReadVisibility()
     NodeBackgroundWork.actionsChanged=null
     connectivityCallback?.let{try{getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it)}catch(_:Exception){}}
     connectivityCallback=null

@@ -2,6 +2,9 @@ export interface ClientEnvironment {
   apiBaseUrl: string;
   processSessionId?: string;
   dismissKeyboard?: () => Promise<void>;
+  // Native hosts can distinguish Activity/window visibility from WebView input
+  // focus, which Android deliberately clears when dismissing the keyboard.
+  isForeground?: () => Promise<boolean>;
   externalLinks: 'browser' | 'system';
   openExternalUrl?: (url: string) => Promise<void>;
 }

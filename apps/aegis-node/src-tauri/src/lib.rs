@@ -320,6 +320,7 @@ pub fn run() {
             node_domains::node_geofences,
             node_domains::node_settings_open,
             node_domains::node_hide_keyboard,
+            node_domains::node_read_visibility,
             node_domains::node_consume_reminder_open,
             install_android_update
         ])

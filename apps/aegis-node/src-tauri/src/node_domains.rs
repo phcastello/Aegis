@@ -220,6 +220,23 @@ pub async fn node_consume_reminder_open(app: AppHandle) -> Result<Value, String>
 }
 
 #[tauri::command]
+pub async fn node_read_visibility(app: AppHandle) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let value = crate::native_notifications::android_call(&app, "readVisibility", "{}".into())
+            .await
+            .map_err(|_| "Não foi possível confirmar a visibilidade.".to_string())?;
+        return serde_json::from_str(&value)
+            .map_err(|_| "Não foi possível confirmar a visibilidade.".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Consulta disponível somente no Android.".into())
+    }
+}
+
+#[tauri::command]
 pub async fn node_hide_keyboard(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "android")]
     crate::native_notifications::android_call(&app, "hideKeyboard", "{}".into())
