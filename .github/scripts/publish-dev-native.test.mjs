@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { privateReady } from './publish-dev-native.mjs';
+import { privateReady, retryPublication } from './publish-dev-native.mjs';
 
 const now = Date.now();
 const plan = { sha: 'a'.repeat(40), version: '0.7.2-unstable.3', kind: 'normal', platform: 'both', compatibility: { api: 1, nodeData: 1 } };
@@ -30,4 +30,20 @@ test('one protected job verifies both signatures and publishes without extra wor
   assert.match(signer, /publish-dev-native.mjs publish/);
   assert.doesNotMatch(signer, /workflow run|actions\/workflows\/.*dispatches/);
   assert.doesNotMatch(workflow, /\n  push:|pull_request_target/);
+});
+test('publication retries inside its approved job reuse the same bytes without signing or allocation', async () => {
+  let calls = 0, healthChecks = 0;
+  const publish = async () => { if (++calls < 3) throw Error('transient upload failure'); return 'same immutable distribution'; };
+  assert.equal(await retryPublication(publish, async () => { healthChecks++; }, async () => {}), 'same immutable distribution');
+  assert.equal(calls, 3);
+  assert.equal(healthChecks, 5);
+});
+test('lost private health blocks retry and persistent publication failure stays a failure', async () => {
+  let calls = 0;
+  await assert.rejects(retryPublication(async () => { calls++; throw Error('upload interrupted'); },
+    async () => { if (calls) throw Error('private deployment failed'); }, async () => {}), /private deployment failed/);
+  assert.equal(calls, 1);
+  calls = 0;
+  await assert.rejects(retryPublication(async () => { calls++; throw Error('persistent'); }, async () => {}, async () => {}), /persistent/);
+  assert.equal(calls, 3);
 });

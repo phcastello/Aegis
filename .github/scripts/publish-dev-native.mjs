@@ -36,7 +36,22 @@ export async function integratedPublish({ directory, plan, android, windows, sta
   // Both APK and updater signatures were verified in this SAME approved job.
   // Recheck immediately before releasing bytes/advancing the existing pointer.
   await privateReady(plan, { state });
-  return publishRecommended({ directory, plan, state, beforeRecommend: () => privateReady(plan, { state }) });
+  return retryPublication(() => publishRecommended({ directory, plan, state, beforeRecommend: () => privateReady(plan, { state }) }),
+    () => privateReady(plan, { state }));
+}
+
+// Resume partial immutable uploads/pointer failures with the SAME signed bytes
+// inside the SAME approved job. No new reservation, signing or human approval.
+export async function retryPublication(publish, ready, wait = () => new Promise(resolve => setTimeout(resolve, 5000))) {
+  for (let attempt = 0; ; attempt++) {
+    await ready();
+    try { return await publish(); }
+    catch (error) {
+      if (attempt === 2) throw error;
+      await ready(); // a lost private deployment must stop retries immediately
+      await wait();
+    }
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

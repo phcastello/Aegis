@@ -60,6 +60,9 @@ rollbacks continuam eventos novos e versionados. Build ou assinatura falhos
 consomem a reserva; uma nova tentativa usa o próximo número, nunca outros bytes
 sob a mesma versão. A publicação imutável é retomável com os mesmos bytes pelos
 controles existentes; não remova releases, ledger ou feed para repetir.
+Falhas transitórias de upload/promoção têm até três tentativas com os mesmos bytes
+no mesmo job aprovado, sem outra reserva, assinatura ou aprovação. Se persistirem,
+a operação falha e conserva o recomendado anterior.
 
 Cada execução grava plano, SHA, identidades Docker, migrations, checks existentes,
 resultados de testes, backup e estado final em

@@ -314,6 +314,10 @@ class PrivateHost:
         for component in ("backend", "pwa"):
             if component not in plan["components"]:
                 continue
+            previous = self.api if component == "backend" else self.pwa
+            # Retain the old digest even if a forced rebuild replaces its tag.
+            self.run(["docker", "image", "tag", previous["Image"],
+                      "aegis-dev-recovery:" + self.op.name.lower() + "-" + component])
             tag = "aegis-dev-" + component + ":" + plan["sha"]
             if component == "backend":
                 context, dockerfile = self.source / "backend", self.source / "backend/Dockerfile"
