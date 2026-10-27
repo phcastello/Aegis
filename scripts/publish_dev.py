@@ -54,6 +54,10 @@ def sha256(path):
 def scope(paths):
     result = set()
     for path in paths:
+        # Match CI's distinction: packaged prompts are runtime input; README,
+        # AGENTS and other Markdown documentation never publish applications.
+        if path.endswith(".md") and not re.match(r"^backend/src/[^/]+/Prompts/", path):
+            continue
         if path.startswith("backend/") or path.startswith("docker-compose"):
             result.add("backend")
         if path.startswith("frontend/aegis-pwa/") or path.startswith("docker-compose"):

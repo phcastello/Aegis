@@ -100,6 +100,8 @@ class PublicationTests(unittest.TestCase):
         cases = [(["backend/src/Aegis.Api/A.cs"], {"backend"}),
                  (["frontend/aegis-pwa/src/App.vue"], {"pwa"}),
                  (["docs/a.md", "AGENTS.md", "README.md"], set()),
+                 (["apps/aegis-node/README.md", "backend/README.md", "frontend/aegis-pwa/README.md", "packages/aegis-client/README.md"], set()),
+                 (["backend/src/Aegis.Infrastructure/Prompts/agent.md"], {"backend"}),
                  (["apps/aegis-node/src-tauri/src/lib.rs"], {"native"}),
                  (["packages/aegis-client/src/App.vue"], {"pwa", "native"}),
                  (["backend/a.cs", "apps/aegis-node/src/App.vue"], {"backend", "native"})]
