@@ -328,7 +328,7 @@ class PrivateHost:
             results = self.op / "test-results"
             results.mkdir(mode=0o700)
             self.run(["docker", "run", "--rm", "--network", self.network, "-v", str(results) + ":/tmp/results", *env, sdk,
-                      "dotnet", "test", "Aegis.sln", "--logger", "trx", "--results-directory", "/tmp/results"])
+                      "dotnet", "test", "Aegis.sln", "--no-restore", "--logger", "trx", "--results-directory", "/tmp/results"])
             require(list(results.glob("*.trx")), "Backend test evidence is missing.")
             import xml.etree.ElementTree as ET
             summaries = []
@@ -346,6 +346,9 @@ class PrivateHost:
             # Tests execute in a temporary container, never in the personal DB.
             self.run(["docker", "run", "--rm", "-v", str(self.source) + ":/workspace", "-w", "/workspace", "node:24-alpine",
                       "sh", "-ec", "npm ci --prefix packages/aegis-client && npm ci --prefix frontend/aegis-pwa && npm test --prefix frontend/aegis-pwa"])
+            # Reuse the browser upgrade test on the private DEVELOPMENT host.
+            # It serves only synthetic fixtures on localhost, never production.
+            self.run(["node", "frontend/aegis-pwa/tests/worker-upgrade.mjs"], cwd=self.source)
         self.recovery_proved = not plan["pending"]
 
     def test_db(self):
@@ -355,12 +358,15 @@ class PrivateHost:
         self.db = self.network + "-pg"
         self.run(["docker", "network", "create", "--internal", self.network])
         self.run(["docker", "run", "-d", "--name", self.db, "--network", self.network,
+                  "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=1g",
                   "-e", "POSTGRES_USER=test", "-e", "POSTGRES_PASSWORD=disposable_only",
                   "-e", "POSTGRES_DB=aegis_operation_test", self.pg["Image"]])
         self.disposable.append(self.db)
         for _ in range(60):
             try:
-                self.run(["docker", "exec", self.db, "pg_isready", "-U", "test"])
+                # The entrypoint's temporary initializer accepts Unix sockets
+                # before shutting down. TCP opens only on the final server.
+                self.run(["docker", "exec", self.db, "pg_isready", "-h", "127.0.0.1", "-U", "test"])
                 return
             except Blocked:
                 time.sleep(1)
@@ -496,6 +502,9 @@ class PrivateHost:
         require(status == 200 and "javascript" in headers.get("Content-Type", "") and len(sw) > 100,
                 "PWA service worker is unavailable.")
         require("no-cache" in headers.get("Cache-Control", ""), "Service worker cache policy is unsafe.")
+        for path, body in (("sw.js", sw), ("index.html", self.http("/")[2])):
+            actual = self.run(["docker", "exec", "aegis-pwa", "sha256sum", "/usr/share/nginx/html/" + path]).split()[0]
+            require(hashlib.sha256(body).hexdigest() == actual, "HTTPS PWA bytes differ from running image: " + path)
         # Read-only normal API contract; no reminder creation or synthetic push.
         for path in ("/api/chat/conversations",):
             status, _, body = self.http(path)
@@ -587,7 +596,7 @@ class PrivateHost:
 
     def cleanup(self):
         for name in self.disposable:
-            self.run(["docker", "rm", "-f", "-v", name])  # only our disposable, unnamed test volume
+            self.run(["docker", "rm", "-f", name])  # only our disposable tmpfs test database
         if self.network:
             self.run(["docker", "network", "rm", self.network])
         # Preserve pinned source and private evidence for diagnostics/recovery.

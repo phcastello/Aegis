@@ -243,6 +243,22 @@ class PublicationTests(unittest.TestCase):
             with dev.locked(state):
                 pass
 
+    def test_disposable_database_waits_for_final_tcp_server_and_never_publishes_ports(self):
+        host = object.__new__(dev.PrivateHost)
+        host.network, host.disposable = None, []
+        host.op = Path("fixture-only")
+        host.pg = {"Image": "postgres-fixture"}
+        commands = []
+        host.run = lambda args, **kw: commands.append(args) or ""
+        host.test_db()
+        readiness = commands[-1]
+        self.assertIn("pg_isready", readiness)
+        self.assertEqual(readiness[readiness.index("-h") + 1], "127.0.0.1")
+        start = next(c for c in commands if c[:3] == ["docker", "run", "-d"])
+        self.assertIn("--tmpfs", start)
+        self.assertNotIn("-p", start)
+        self.assertNotIn("--publish", start)
+
 
 if __name__ == "__main__":
     unittest.main()

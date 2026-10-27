@@ -1,5 +1,10 @@
 # Distribuição, previews e estágios de CI
 
+Para disponibilizar desenvolvimento para teste, use a operação única
+[publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
+aplicativos, reserva, build, assinatura e recomendação com uma aprovação protegida.
+Os comandos separados descritos abaixo continuam como ferramentas manuais.
+
 Este documento descreve os caminhos implementados e distingue suas pendências operacionais. Os instaladores v0.7.1 publicados permanecem inalterados; editar workflows não demonstra uma distribuição nova.
 
 ## Distribuição recomendada v2 e compatibilidade

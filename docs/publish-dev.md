@@ -1,6 +1,6 @@
 # Publicar desenvolvimento para teste
 
-No host privado já autorizado, com Docker local, Python 3, Git e `gh` autenticado
+No host privado já autorizado, com Docker local, Python 3, Git, Node.js e `gh` autenticado
 como proprietário, use o checkout dos controles revisados:
 
 ```bash
@@ -24,7 +24,7 @@ API nova provoca apenas reload do nginx da PWA para resolver seu novo IP.
 
 São executados testes pertinentes nos bytes selecionados, builds e verificação da
 imagem efetivamente iniciada, HTTPS, API v1 e disponibilidade/cache do service
-worker. O comando usa a configuração efetiva, preservando os mounts, volumes,
+worker (incluindo o teste de upgrade em Chromium instalado no host). O comando usa a configuração efetiva, preservando os mounts, volumes,
 credenciais e bancos; alterações de Compose exigem reconciliar a instalação antes
 da publicação. Testes de consumo e homologação estável continuam separados.
 
