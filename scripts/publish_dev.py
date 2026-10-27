@@ -124,7 +124,11 @@ def publish(port, plan, journal):
         port.record(journal, phase="failed", error=str(error), recovery=recovery, success=False)
         raise
     finally:
-        port.cleanup()
+        try:
+            port.cleanup()
+        except Exception as error:
+            port.record(journal, phase="failed", success=False, cleanupError=str(error))
+            raise
     return journal
 
 
@@ -431,10 +435,34 @@ class PrivateHost:
         after = self.inventory(rehearsal=True, columns=self.before["columns"])
         require(all(after["rows"][t] == v for t, v in self.before["rows"].items() if t != "__EFMigrationsHistory"),
                 "Rehearsal changed historical fields; publication blocked.")
+        self.rehearse_previous_api()
         self.recovery_proved = True
         self.backup_result = dict(restored=True, historicalTables=len(self.before["rows"]) - 1,
-                                  sha256=sha256(backup / "postgres.dump"), previousMigratorCompatible=True)
+                                  sha256=sha256(backup / "postgres.dump"), previousMigratorCompatible=True,
+                                  previousApiReadContract=True)
         save(self.op / "backup-result.json", self.backup_result)
+
+    def rehearse_previous_api(self):
+        name = self.network + "-previous-api"
+        # Only the disposable restored database is reachable. No production
+        # environment, FCM file, identity/keyring volume or published host port.
+        self.run(["docker", "run", "-d", "--name", name, "--network", self.network,
+                  "-e", "ASPNETCORE_ENVIRONMENT=Production", "-e", "ASPNETCORE_URLS=http://+:8090",
+                  "-e", "ConnectionStrings__AegisDatabase=Host=" + self.db + ";Database=recovery;Username=test;Password=disposable_only",
+                  "-e", "AEGIS_MEMORY_SEMANTIC_ENABLED=false", "-e", "AEGIS_MEMORY_GRAPH_ENABLED=false",
+                  "-e", "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED=false", "--entrypoint", "dotnet", self.api["Image"], "/app/Aegis.Api.dll"])
+        self.disposable.append(name)
+        address = self.inspect(name)["NetworkSettings"]["Networks"][self.network]["IPAddress"]
+        for attempt in range(45):
+            try:
+                for path in ("/api/health", "/api/chat/conversations"):
+                    with urllib.request.urlopen("http://" + address + ":8090" + path, timeout=3) as response:
+                        require(response.status == 200 and isinstance(json.load(response), (dict, list)),
+                                "Previous API cannot read the expanded schema.")
+                return
+            except Exception:
+                time.sleep(1)
+        raise Blocked("Previous API failed recovery rehearsal against migrated disposable backup.")
 
     def unchanged(self, plan):
         for original in (self.api, self.pwa, self.pg, *self.others):
@@ -511,6 +539,32 @@ class PrivateHost:
             require(status == 200 and isinstance(json.loads(body), (list, dict)), "Installed client API contract failed.")
         if not initial:
             self.health = {"https": True, "serviceWorker": True, "clientApiV1": True}
+            if "backend" in plan["components"] and not getattr(self, "workers_checked", False):
+                worker_source = self.source / "backend/src/Aegis.Infrastructure/Proactivity/ReminderInterventionWorker.cs"
+                if worker_source.exists():
+                    self.verify_proactivity_workers()
+                self.workers_checked = True
+            if getattr(self, "worker_evidence", None):
+                self.health["workers"] = self.worker_evidence
+
+    def verify_proactivity_workers(self):
+        registration = (self.source / "backend/src/Aegis.Infrastructure/DependencyInjection.cs").read_text()
+        for worker in ("ReminderInterventionWorker", "ProactiveNotificationWorker"):
+            require("." + worker + ">()" in registration, "Expected background worker is not registered: " + worker)
+        query = """SELECT json_object_agg(relname, seq_scan + coalesce(idx_scan,0))
+                   FROM pg_stat_user_tables WHERE relname IN ('reminder_interventions','proactive_notifications');"""
+        before = json.loads(self.sql(query))
+        require(before and len(before) == 2, "Proactivity schema is incomplete.")
+        # Observe ordinary database polling, without inventing an incident,
+        # touching a reminder or generating a proactive production message.
+        for _ in range(45):
+            time.sleep(1)
+            after = json.loads(self.sql(query))
+            if all(after.get(table, 0) > scans for table, scans in before.items()):
+                self.worker_evidence = {"registered": True, "ordinaryDatabasePollingObserved": True}
+                save(self.op / "worker-health.json", {"before": before, "after": after, **self.worker_evidence})
+                return
+        raise Blocked("Expected background polling was not observed; native promotion blocked.")
 
     def checkpoint(self, plan):
         state = {"sourceCommit": plan["sha"], "backend": self.identity(self.inspect("aegis-api")),
@@ -519,6 +573,7 @@ class PrivateHost:
                  "health": self.health, "compatibility": plan["compatibility"], "evidence": str(self.op)}
         state["migrationHistory"] = plan["appliedMigrations"] + plan["pending"]
         state["backup"] = getattr(self, "backup_result", None)
+        state["previousEvidence"] = self.current.get("evidence")
         save(self.state / "current.json", state)
 
     def readiness(self, plan, state="success"):
@@ -595,7 +650,7 @@ class PrivateHost:
                 pass
 
     def cleanup(self):
-        for name in self.disposable:
+        for name in reversed(self.disposable):
             self.run(["docker", "rm", "-f", name])  # only our disposable tmpfs test database
         if self.network:
             self.run(["docker", "network", "rm", self.network])

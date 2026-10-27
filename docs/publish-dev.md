@@ -34,7 +34,8 @@ contratos antigos; Down nunca é executado. A API escritora para por uma janela
 curta; o dump PostgreSQL e Data Protection são salvos com a configuração/FCM em
 diretório privado. O dump é restaurado em PostgreSQL descartável isolado; os hashes
 de todas as linhas históricas são comparados. O candidato migra duas vezes e o
-migrador anterior também precisa aceitar o esquema expandido. Só então o NodeAdmin
+migrador e a API anteriores também precisam aceitar o esquema expandido numa
+rede descartável sem segredos nem portas publicadas. Só então o NodeAdmin
 migra a instalação real e a nova imagem inicia. Backup inválido ou migration
 incerta bloqueia a operação. Recuperação automática troca imagens compatíveis;
 restauração do banco exige procedimento administrativo próprio, em destino separado.
@@ -80,3 +81,9 @@ Testes seguros da operação:
 python3 -m unittest discover -s scripts -p publish_dev_test.py
 node --test .github/scripts/*.test.mjs
 ```
+
+O ensaio Docker adicional usa somente imagens locais imutáveis indicadas em
+`AEGIS_PUBLISH_TEST_OLD_IMAGE` e `AEGIS_PUBLISH_TEST_NEW_IMAGE`:
+`python3 -m unittest discover -s scripts -p publish_dev_docker_test.py`.
+Cria PostgreSQL em tmpfs e dados sintéticos numa rede interna temporária; nunca
+descobre a instalação pessoal. Falhas da operação usam fixtures sem dados reais.

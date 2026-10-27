@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -143,6 +144,14 @@ class PublicationTests(unittest.TestCase):
         self.assertLess(host.events.index("build-backend"), host.events.index("backup"))
         self.assertLess(host.events.index("restore"), host.events.index("migrate"))
 
+    def test_migration_failure_recovers_images_without_database_downgrade(self):
+        host = FixtureHost("migrate")
+        with self.assertRaises(dev.Blocked):
+            dev.publish(host, plan(pending=["safe"]), {})
+        self.assertIn("recover-images", host.events)
+        self.assertEqual(host.feed, "old")
+        self.assertNotIn("database-downgrade", host.events)
+
     def test_destructive_or_uncertain_migration_blocks_before_build(self):
         host = FixtureHost()
         with self.assertRaises(dev.Blocked):
@@ -243,6 +252,14 @@ class PublicationTests(unittest.TestCase):
             with dev.locked(state):
                 pass
 
+    def test_cleanup_failure_is_reported_instead_of_false_success(self):
+        host = FixtureHost("cleanup-disposable")
+        result = {}
+        with self.assertRaises(dev.Blocked):
+            dev.publish(host, plan(), result)
+        self.assertFalse(result["success"])
+        self.assertIn("cleanupError", result)
+
     def test_disposable_database_waits_for_final_tcp_server_and_never_publishes_ports(self):
         host = object.__new__(dev.PrivateHost)
         host.network, host.disposable = None, []
@@ -258,6 +275,67 @@ class PublicationTests(unittest.TestCase):
         self.assertIn("--tmpfs", start)
         self.assertNotIn("-p", start)
         self.assertNotIn("--publish", start)
+
+    def test_worker_health_observes_real_polling_without_creating_reminders(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = object.__new__(dev.PrivateHost)
+            host.source = host.op = Path(directory)
+            registration = host.source / "backend/src/Aegis.Infrastructure/DependencyInjection.cs"
+            registration.parent.mkdir(parents=True)
+            registration.write_text("services.AddHostedService<A.ReminderInterventionWorker>();\nservices.AddHostedService<A.ProactiveNotificationWorker>();")
+            queries = []
+            answers = iter(['{"reminder_interventions":10,"proactive_notifications":20}',
+                            '{"reminder_interventions":11,"proactive_notifications":21}'])
+            host.sql = lambda query: queries.append(query) or next(answers)
+            with patch.object(dev.time, "sleep"):
+                host.verify_proactivity_workers()
+            self.assertTrue(host.worker_evidence["ordinaryDatabasePollingObserved"])
+            self.assertTrue(all(q.strip().startswith("SELECT") for q in queries))
+
+    def test_actual_git_checkout_rejects_dirty_source_and_different_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL).decode().strip()
+            git("init")
+            git("config", "user.email", "fixture@example.invalid")
+            git("config", "user.name", "Fixture")
+            (root / "source.txt").write_text("selected")
+            git("add", "source.txt")
+            git("commit", "-m", "fixture")
+            sha = git("rev-parse", "HEAD")
+            state = root / "state"
+            state.mkdir()
+            host = dev.PrivateHost(root, state)
+            host.git("worktree", "add", "--detach", str(host.source), sha)
+            host.pin(sha)
+            (host.source / "source.txt").write_text("changed after selection")
+            with self.assertRaisesRegex(dev.Blocked, "modified"):
+                host.pin(sha)
+            with self.assertRaises(dev.Blocked):
+                host.pin("b" * 40)
+
+    def test_docker_adapter_updates_only_the_affected_private_service(self):
+        for component, service in (("backend", "aegis-api"), ("pwa", "aegis-pwa")):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as directory:
+                host = object.__new__(dev.PrivateHost)
+                host.op = host.deploy_root = Path(directory)
+                host.project = "fixture"
+                host.config = {"services": {"aegis-api": {"image": "old-api"}, "aegis-pwa": {"image": "old-pwa"}}}
+                host.images = {component: "new-image"}
+                commands = []
+                host.run = lambda args, **kw: commands.append(args) or ""
+                host.wait_health = lambda: None
+                host.deploy(plan((component,)))
+                ups = [c for c in commands if "up" in c]
+                self.assertEqual(len(ups), 1)
+                self.assertEqual(ups[0][-1], service)
+                self.assertIn("--no-deps", ups[0])
+                self.assertIn("--no-build", ups[0])
+                import json
+                config = json.loads((host.op / "deployment.compose.private.json").read_text())
+                other = "aegis-pwa" if service == "aegis-api" else "aegis-api"
+                self.assertEqual(config["services"][other], host.config["services"][other])
 
 
 if __name__ == "__main__":
