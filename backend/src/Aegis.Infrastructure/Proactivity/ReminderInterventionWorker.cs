@@ -23,6 +23,7 @@ public sealed class ReminderInterventionWorker(IServiceScopeFactory scopes, Time
         var claim = await store.ClaimAsync(ct);
         if (claim is null) return false;
         try {
+            if (!await store.RevalidateAsync(claim, ct)) return true;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(60));
             var result = await scope.ServiceProvider.GetRequiredService<IProactiveMessageGenerator>().GenerateAsync(claim, timeout.Token);
             await store.CompleteAsync(claim, result, ct);

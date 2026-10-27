@@ -89,11 +89,11 @@ public sealed class ReminderInterventionTests
         for (var attempt = 1; attempt <= 5; attempt++) {
             var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
             Assert.True(await store.FailAsync(claim, default));
-            var job = await db.Set<ReminderIntervention>().SingleAsync();
+            var job = await db.Set<SharedReminderIncident>().SingleAsync();
             Assert.Equal(attempt, job.GenerationAttempts);
             if (attempt < 5) clock.Now = job.NextAttemptAt;
         }
-        Assert.Equal("generation_failed", (await db.Set<ReminderIntervention>().SingleAsync()).State);
+        Assert.Equal("generation_failed", (await db.Set<SharedReminderIncident>().SingleAsync()).State);
     }
     [Fact] public async Task ProlongedModelOutagePersistsSlowBackoffAndEventuallyProducesOneMessage() {
         await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
@@ -101,7 +101,7 @@ public sealed class ReminderInterventionTests
         await ExhaustInitialModelAttempts(store, db, clock);
         var failedAt = clock.Now;
         foreach (var hours in new[] { 1, 3, 6, 12, 24, 24 }) {
-            var job = await db.Set<ReminderIntervention>().SingleAsync();
+            var job = await db.Set<SharedReminderIncident>().SingleAsync();
             Assert.Equal(clock.Now.AddHours(hours), job.NextAttemptAt);
             clock.Now = job.NextAttemptAt.AddSeconds(-1);
             store = new(db, clock); await store.ReconcileAsync(default); Assert.Null(await store.ClaimAsync(default));
@@ -109,7 +109,7 @@ public sealed class ReminderInterventionTests
             var claim = Assert.IsType<InterventionClaim>(await store.ClaimAsync(default));
             Assert.True(await store.FailAsync(claim, default));
         }
-        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        clock.Now = (await db.Set<SharedReminderIncident>().SingleAsync()).NextAttemptAt;
         var recovered = Assert.IsType<InterventionClaim>(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
         Assert.True(clock.Now > failedAt.AddDays(2));
         Assert.True(await store.CompleteAsync(recovered, Generated(), default));
@@ -127,17 +127,18 @@ public sealed class ReminderInterventionTests
         else rule.SetStatus(resolution == "paused" ? "pause" : "cancel", clock.Now);
         await db.SaveChangesAsync(); clock.Now = clock.Now.AddDays(1);
         Assert.Null(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
-        Assert.Equal("resolved", (await db.Set<ReminderIntervention>().SingleAsync()).State);
+        if (resolution == "deleted") Assert.Equal("source_unavailable", (await db.Set<SharedReminderIncident>().SingleAsync()).State);
+        else Assert.Equal("resolved", (await db.Set<ReminderIntervention>().SingleAsync()).State);
         Assert.Empty(db.ChatMessages.Where(m => m.IsProactive)); Assert.Empty(db.Set<ProactiveNotification>());
     }
     [Fact] public async Task ExpiredSlowGenerationLeaseCannotBypassBackoffOrCommit() {
         await using var db = MemoryDb(); var clock = new Clock(); await Seed(db, clock);
         var store = new ReminderInterventionStore(db, clock); await Recover(store, clock); await ExhaustInitialModelAttempts(store, db, clock);
-        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        clock.Now = (await db.Set<SharedReminderIncident>().SingleAsync()).NextAttemptAt;
         var stale = (await store.ClaimAsync(default))!;
         clock.Now = clock.Now.AddMinutes(3); Assert.Null(await new ReminderInterventionStore(db, clock).ClaimAsync(default));
         Assert.False(await store.CompleteAsync(stale, Generated(), default));
-        clock.Now = (await db.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+        clock.Now = (await db.Set<SharedReminderIncident>().SingleAsync()).NextAttemptAt;
         var retry = (await store.ClaimAsync(default))!;
         Assert.NotEqual(stale.Token, retry.Token); Assert.True(await store.CompleteAsync(retry, Generated(), default));
     }
@@ -312,7 +313,7 @@ public sealed class ReminderInterventionTests
         var clock = new Clock(); DateTimeOffset retryAt;
         await using (var seed = create()) {
             await Seed(seed, clock); var store = new ReminderInterventionStore(seed, clock); await Recover(store, clock);
-            await ExhaustInitialModelAttempts(store, seed, clock); retryAt = (await seed.Set<ReminderIntervention>().SingleAsync()).NextAttemptAt;
+            await ExhaustInitialModelAttempts(store, seed, clock); retryAt = (await seed.Set<SharedReminderIncident>().SingleAsync()).NextAttemptAt;
         }
         clock.Now = retryAt.AddSeconds(-1);
         await using (var early = create()) { Assert.Null(await new ReminderInterventionStore(early, clock).ClaimAsync(default)); }
@@ -321,7 +322,7 @@ public sealed class ReminderInterventionTests
         var claims = await Task.WhenAll(sa.ClaimAsync(default), sb.ClaimAsync(default)); var claim = Assert.Single(claims, c => c is not null)!;
         var writes = await Task.WhenAll(sa.CompleteAsync(claim, Generated(), default), sb.CompleteAsync(claim, Generated(), default));
         Assert.Single(writes, result => result);
-        await using var check = create(); Assert.Equal(6, (await check.Set<ReminderIntervention>().SingleAsync()).GenerationAttempts);
+        await using var check = create(); Assert.Equal(6, (await check.Set<SharedReminderIncident>().SingleAsync()).GenerationAttempts);
         Assert.Single(await check.ChatMessages.Where(m => m.IsProactive).ToListAsync()); Assert.Single(await check.Set<ProactiveNotification>().ToListAsync());
     });
     [NodePostgresTests.PostgresFact] public Task ConcurrentDeviceReadsAreMonotonicAndCannotAcknowledgeFutureMessage() => WithPostgres(async create => {

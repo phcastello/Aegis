@@ -1944,6 +1944,9 @@ namespace Aegis.Infrastructure.Migrations
                     b.Property<Guid>("RuleId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("SharedIncidentId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTimeOffset>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1954,6 +1957,8 @@ namespace Aegis.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("MessageId");
+
+                    b.HasIndex("SharedIncidentId");
 
                     b.HasIndex("RuleId", "ActivationEpoch")
                         .IsUnique();
@@ -2103,6 +2108,97 @@ namespace Aegis.Infrastructure.Migrations
                     b.HasIndex("Status");
 
                     b.ToTable("reminder_series", (string)null);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.SharedReminderIncident", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AffectedRuleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Cause")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Diagnosis")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("GenerationAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GroupKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("HealthySince")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("MessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ObserverNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProblemSignature")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RequiredAction")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RequiredActionKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Subsystem")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GroupKey")
+                        .IsUnique()
+                        .HasFilter("\"ResolvedAt\" IS NULL");
+
+                    b.HasIndex("MessageId");
+
+                    b.HasIndex("State", "NextAttemptAt");
+
+                    b.ToTable("shared_reminder_incidents", (string)null);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ToolContextEntry", b =>
@@ -2522,6 +2618,11 @@ namespace Aegis.Infrastructure.Migrations
                         .HasForeignKey("RuleId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.SharedReminderIncident", null)
+                        .WithMany()
+                        .HasForeignKey("SharedIncidentId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.ReminderRecipient", b =>
@@ -2543,6 +2644,14 @@ namespace Aegis.Infrastructure.Migrations
                     b.HasOne("Aegis.Domain.Entities.Conversation", null)
                         .WithMany()
                         .HasForeignKey("SourceConversationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.SharedReminderIncident", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
                         .OnDelete(DeleteBehavior.SetNull);
                 });
 

@@ -508,6 +508,15 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             e.HasOne<GeographicReminderRule>().WithMany().HasForeignKey(x => x.RuleId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.SetNull);
         });
+        modelBuilder.Entity<SharedReminderIncident>(e => {
+            e.ToTable("shared_reminder_incidents"); e.HasKey(x => x.Id);
+            e.Property(x => x.GroupKey).HasMaxLength(200);
+            e.HasIndex(x => x.GroupKey).IsUnique().HasFilter("\"ResolvedAt\" IS NULL");
+            e.HasIndex(x => new { x.State, x.NextAttemptAt });
+            e.HasOne<ChatMessage>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.SetNull);
+        });
+        modelBuilder.Entity<ReminderIntervention>().HasOne<SharedReminderIncident>().WithMany()
+            .HasForeignKey(x => x.SharedIncidentId).OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<ProactiveNotification>(e => {
             e.ToTable("proactive_notifications"); e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.MessageId, x.NodeId }).IsUnique().AreNullsDistinct(false);
