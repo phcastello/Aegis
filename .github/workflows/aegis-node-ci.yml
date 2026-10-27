@@ -89,6 +89,8 @@ jobs:
         run: node --test .github/scripts/*.test.mjs
       - name: Test trusted preview APK validation and isolated signing controls
         run: python3 -m unittest discover -s .github/scripts -p '*_test.py'
+      - name: Test private publication failures with disposable fixtures
+        run: python3 -m unittest discover -s scripts -p 'publish_dev*_test.py'
       - name: Check documented commands and local links
         run: node scripts/check-docs.mjs
       - id: select

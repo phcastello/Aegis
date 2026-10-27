@@ -1,8 +1,13 @@
 # Desenvolvimento e operação privada
 
+Para a rotina autorizada de desenvolvimento, use
+[publish-dev](publish-dev.md). O script descobre a instalação efetiva e orquestra
+os procedimentos abaixo; não é necessário coordená-los manualmente.
+
 O Compose base continua em `Development`: Swagger e migrations automáticas no startup ajudam no desenvolvimento. A operação privada combina **`docker-compose.yml` e `docker-compose.private.yml`**; a API fica em `Production`, sem Swagger nem migrations automáticas. O código de `Program.cs` permanece igual.
 
-Esta manutenção ainda precisa ser distribuída. Os comandos abaixo descrevem a configuração implementada na branch; executá-los na instalação pessoal é uma etapa operacional separada.
+Os comandos abaixo documentam os mecanismos administrativos reutilizados pelo
+orquestrador e continuam úteis para recuperação controlada.
 
 ## Configuração e acesso
 
