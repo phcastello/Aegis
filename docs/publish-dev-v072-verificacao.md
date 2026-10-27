@@ -66,6 +66,14 @@ O ensaio Docker é opt-in e aparece como skip na suíte rápida sem suas imagens
 O bootstrap dos controles está no [PR #22](https://github.com/phcastello/Aegis/pull/22),
 separado das funcionalidades do [PR #19](https://github.com/phcastello/Aegis/pull/19),
 que permanece draft. A main conserva seu ruleset e `Aegis Node CI result`.
+O PR #22 foi integrado em `53107dbbc77a5445b5d5a86cbd2f2527bb6c887a` após o
+[CI de integração 40457016335](https://github.com/phcastello/Aegis/actions/runs/40457016335)
+aprovar todos os jobs, inclusive as matrizes Android 26/35 debug e minificada.
+Uma execução anterior apresentou intermitência no fixture Android 35
+(`native_region_unknown` versus `native_configuration_stale`); as asserções foram
+preservadas e o commit final passou. Os controles também testam READMEs dentro dos
+componentes para que documentação não reserve uma versão nativa; prompts Markdown
+empacotados no backend continuam classificados como alteração de aplicação.
 Não se gerou outra distribuição nativa para homologar o orquestrador: `.3` não
 foi consumida. O caminho de uma aprovação foi validado por contratos/fixtures e
 pela estrutura do workflow; nova instalação física não foi simulada. A homologação
