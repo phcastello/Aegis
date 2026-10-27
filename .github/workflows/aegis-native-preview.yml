@@ -3,6 +3,11 @@ run-name: Aegis Native Preview · ${{ inputs.version }} · ${{ inputs.platform }
 on:
   workflow_dispatch:
     inputs:
+      publish_dev:
+        description: Publish both signed previews and recommend in the same protected approval after private-host validation
+        required: false
+        default: false
+        type: boolean
       sha:
         description: Full 40-character commit SHA in this repository
         required: true
@@ -65,12 +70,21 @@ jobs:
     steps:
       - name: Require registered trusted main workflow
         env:
+          PUBLISH_DEV: ${{ inputs.publish_dev }}
+          PLATFORM: ${{ inputs.platform }}
+          KIND: ${{ inputs.kind }}
+          VERSION: ${{ inputs.version }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           EXPECTED_WORKFLOW: ${{ github.repository }}/.github/workflows/aegis-native-preview.yml@refs/heads/main
         run: |
           test "$GITHUB_REF" = refs/heads/main
           test "$WORKFLOW_REF" = "$EXPECTED_WORKFLOW"
           test "$GITHUB_RUN_ATTEMPT" = 1
+          if [ "$PUBLISH_DEV" = true ]; then
+            test "$PLATFORM" = both
+            test "$KIND" = normal
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-unstable\.[1-9][0-9]*$ ]]
+          fi
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
@@ -196,11 +210,12 @@ jobs:
     # Owner approval is required here. Only trusted main code runs in this job;
     # candidate installers are parsed/signed as data, never installed or executed.
     environment: aegis-native-signing
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    permissions:
+      contents: write # Only trusted code inside the one approved signing/publication job.
+      actions: read
+      statuses: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Never replace a previously signed preview on rerun
         run: test "$GITHUB_RUN_ATTEMPT" = 1
@@ -215,36 +230,53 @@ jobs:
         with:
           name: Preview-plan-${{ github.run_id }}
           path: preview-plan
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - if: inputs.platform != 'windows'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: Untrusted-build-${{ matrix.platform }}-${{ github.run_id }}
-          path: candidate
+          name: Untrusted-build-Android-arm64-${{ github.run_id }}
+          path: candidate-android
+      - if: inputs.platform != 'android'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Untrusted-build-Windows-x86_64-${{ github.run_id }}
+          path: candidate-windows
       - name: Verify artifact provenance before any key is available
         env:
-          PLATFORM: ${{ matrix.platform }}
-        run: node .github/scripts/native-preview.mjs verify-input candidate preview-plan/preview.json "$PLATFORM"
-      - if: matrix.android == 'true'
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          if [ "$PLATFORM" != windows ]; then
+            node .github/scripts/native-preview.mjs verify-input candidate-android preview-plan/preview.json Android-arm64
+          fi
+          if [ "$PLATFORM" != android ]; then
+            node .github/scripts/native-preview.mjs verify-input candidate-windows preview-plan/preview.json Windows-x86_64
+          fi
+      - if: inputs.publish_dev
+        name: Require freshly validated private deployment before protected signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/publish-dev-native.mjs check unused preview-plan/preview.json
+      - if: inputs.platform != 'windows'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
-      - if: matrix.android == 'true'
+      - if: inputs.platform != 'windows'
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
           packages: platform-tools
-      - if: matrix.android == 'true'
+      - if: inputs.platform != 'windows'
         run: sdkmanager 'build-tools;37.0.0'
-      - if: matrix.android == 'false'
+      - if: inputs.platform != 'android'
         name: Install only the trusted updater signer; no candidate dependencies
         working-directory: apps/aegis-node
         run: npm ci --ignore-scripts
-      - if: matrix.android == 'false'
+      - if: inputs.platform != 'android'
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
           toolchain: '1.94.0'
       - name: Prepare signed artifact directory
-        run: mkdir signed
-      - if: matrix.android == 'true'
+        run: mkdir signed-android signed-windows
+      - if: inputs.platform != 'windows'
         name: Verify and re-sign APK with the existing official certificate
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -252,17 +284,17 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           FIREBASE_CLIENT_B64: ${{ vars.AEGIS_ANDROID_FIREBASE_CLIENT_B64 }}
-        run: python3 .github/scripts/native-preview-android.py sign candidate signed preview-plan/preview.json
-      - if: matrix.android == 'false'
+        run: python3 .github/scripts/native-preview-android.py sign candidate-android signed-android preview-plan/preview.json
+      - if: inputs.platform != 'android'
         name: Sign Windows updater bytes with their exact preview version
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
         run: |
-          cp candidate/Aegis-Windows-x86_64-Setup.exe signed/
-          apps/aegis-node/node_modules/.bin/tauri signer sign --app-version "$PREVIEW_VERSION" signed/Aegis-Windows-x86_64-Setup.exe > /dev/null
-      - if: matrix.android == 'false'
+          cp candidate-windows/Aegis-Windows-x86_64-Setup.exe signed-windows/
+          apps/aegis-node/node_modules/.bin/tauri signer sign --app-version "$PREVIEW_VERSION" signed-windows/Aegis-Windows-x86_64-Setup.exe > /dev/null
+      - if: inputs.platform != 'android'
         name: Verify updater signature with the committed existing public key
         env:
           PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
@@ -271,17 +303,36 @@ jobs:
           import {readFileSync,writeFileSync} from 'node:fs';
           const config = JSON.parse(readFileSync('apps/aegis-node/src-tauri/tauri.conf.json'));
           writeFileSync('updater.pub', Buffer.from(config.plugins.updater.pubkey, 'base64'));
-          writeFileSync('updater.sig', Buffer.from(readFileSync('signed/Aegis-Windows-x86_64-Setup.exe.sig', 'utf8').trim(), 'base64'));
+          writeFileSync('updater.sig', Buffer.from(readFileSync('signed-windows/Aegis-Windows-x86_64-Setup.exe.sig', 'utf8').trim(), 'base64'));
           JS
           cargo run --quiet --locked --manifest-path .github/scripts/preview-updater-verifier/Cargo.toml -- \
-            signed/Aegis-Windows-x86_64-Setup.exe updater.pub updater.sig "$PREVIEW_VERSION"
+            signed-windows/Aegis-Windows-x86_64-Setup.exe updater.pub updater.sig "$PREVIEW_VERSION"
       - name: Write public hashes and immutable source provenance
         env:
-          PLATFORM: ${{ matrix.platform }}
-        run: node .github/scripts/native-preview.mjs manifest signed preview-plan/preview.json "$PLATFORM" signed
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          if [ "$PLATFORM" != windows ]; then
+            node .github/scripts/native-preview.mjs manifest signed-android preview-plan/preview.json Android-arm64 signed
+          fi
+          if [ "$PLATFORM" != android ]; then
+            node .github/scripts/native-preview.mjs manifest signed-windows preview-plan/preview.json Windows-x86_64 signed
+          fi
+      - if: inputs.platform != 'windows'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: Preview-${{ needs.plan.outputs.version }}-${{ matrix.platform }}-${{ needs.plan.outputs.sha }}
-          path: signed/*
+          name: Preview-${{ needs.plan.outputs.version }}-Android-arm64-${{ needs.plan.outputs.sha }}
+          path: signed-android/*
           if-no-files-found: error
           retention-days: 14
+      - if: inputs.platform != 'android'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: Preview-${{ needs.plan.outputs.version }}-Windows-x86_64-${{ needs.plan.outputs.sha }}
+          path: signed-windows/*
+          if-no-files-found: error
+          retention-days: 14
+      - if: inputs.publish_dev
+        name: Publish immutable distribution then recommend after private readiness recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/publish-dev-native.mjs publish release-assets preview-plan/preview.json signed-android signed-windows
