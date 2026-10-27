@@ -28,6 +28,12 @@ STATUS = "Aegis private deployment"
 SAFE_MIGRATIONS = {
     "20261022133709_ReminderInterventions":
         "b9be5eb44e2fa979234d399c1ab79e3b6775e4813d4441128266e9200e60b5e1",
+    # Reviewed Up: nullable SharedIncidentId on existing interventions, new
+    # communication table, partial uniqueness and SetNull FKs. No data rewrite,
+    # dropped object, changed old column or old-client contract. Rehearsal still
+    # must preserve row hashes and prove old API/migrator compatibility.
+    "20261027073015_SharedReminderIncidents":
+        "c0f4a2591bbfe47a31b7c48f66b90b3b5a7104836108cf5db3af42c7dda94a78",
 }
 
 
@@ -350,7 +356,7 @@ class PrivateHost:
                 require(counters is not None and int(counters.get("failed", 0)) == 0, "Backend test failures.")
                 summaries.append(dict(counters.attrib))
                 outcomes = tree.findall(".//{*}UnitTestResult")
-                for name in ("PrivateOperationPostgresTests", "NodePostgresTests"):
+                for name in ("PrivateOperationPostgresTests", "NodePostgresTests", "SharedReminderIncidentPostgresTests"):
                     require(any(name in t.get("testName", "") and t.get("outcome") == "Passed" for t in outcomes),
                             "Required disposable contract test didn't run: " + name)
             save(self.op / "backend-test-summary.json", summaries)
