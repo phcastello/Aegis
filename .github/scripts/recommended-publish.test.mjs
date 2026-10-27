@@ -62,7 +62,7 @@ function fixture(t, changes = {}) {
     for (const name of releaseFiles) assert.ok(published.files.get(name).equals(readFileSync(join(directory, name))));
     recommendations.push(candidate); return 'c'.repeat(40);
   } };
-  const publish = () => publishRecommended({ directory, plan, state, runGh });
+  const publish = (options = {}) => publishRecommended({ directory, plan, state, runGh, ...options });
   return { work, android, windows, directory, plan, result, releases, tags, calls, recommendations, state, publish,
     setFailure: fn => { failure = fn; } };
 }
@@ -116,6 +116,16 @@ test('different published bytes, wrong source tag, absent assets and inconsisten
     if (mode === 'metadata') { const manifest = JSON.parse(readFileSync(join(f.directory, 'latest.json'))); manifest.sourceCommit = 'd'.repeat(40); writeFileSync(join(f.directory, 'latest.json'), json(manifest)); }
     await assert.rejects(f.publish()); assert.equal(f.recommendations.length, 0);
   }
+});
+test('private health lost after immutable upload preserves pointer and retries the same bytes', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.publish({ beforeRecommend: async () => { throw Error('private health lost'); } }), /private health lost/);
+  assert.equal(f.recommendations.length, 0);
+  assert.equal(f.releases.get(`node-v${f.plan.version}`).draft, false);
+  const before = f.calls.length;
+  await f.publish();
+  assert.equal(f.recommendations.length, 1);
+  assert.ok(!f.calls.slice(before).some(args => ['create', 'upload', 'edit'].includes(args[1])));
 });
 test('rollback is rebuilt under a new version/code with exact restored source recorded', async t => {
   const f = fixture(t, { version: '0.7.2-unstable.5.rollback.1', versionCode: 7002006, kind: 'rollback', rollbackOf: '0.7.2-unstable.5', restoresVersion: '0.7.2-unstable.4' });

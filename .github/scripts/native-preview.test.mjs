@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { parameters, assertTrustedDispatch, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview } from './native-preview.mjs';
+import { parameters, assertTrustedDispatch, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview, output } from './native-preview.mjs';
 import { githubFixture } from './distribution-state.fixture.mjs';
 import { recommendedFeed } from './distribution-state.mjs';
 import { metadata } from '../../apps/aegis-node/scripts/release-metadata.mjs';
@@ -50,6 +50,22 @@ test('global Android allocation advances stable and all attempted preview reserv
   assert.throws(() => assertIncreasing(plan.version, [title(22, 'cancelled')]));
   assert.throws(() => assertIncreasing(plan.version, [{ tag_name: 'node-v0.7.2' }]));
   assert.throws(() => assertIncreasing(plan.version, [{ tag_name: 'node-v0.7.3-unstable.1' }]));
+});
+test('workflow outputs reject multiline values independently of metadata validation', () => {
+  const work = mkdtempSync(join(tmpdir(), 'aegis-preview-output-'));
+  const previous = process.env.GITHUB_OUTPUT;
+  try {
+    process.env.GITHUB_OUTPUT = join(work, 'output');
+    output('sha', sha);
+    const original = readFileSync(process.env.GITHUB_OUTPUT, 'utf8');
+    for (const value of [`0.7.2\nsha=${'c'.repeat(40)}`, '0.7.2\rversionCode=1'])
+      assert.throws(() => output('sourceVersion', value), /single-line/);
+    assert.throws(() => output('sha\nversion', sha), /output name/);
+    assert.equal(readFileSync(process.env.GITHUB_OUTPUT, 'utf8'), original);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_OUTPUT; else process.env.GITHUB_OUTPUT = previous;
+    rmSync(work, { recursive: true, force: true });
+  }
 });
 test('temporary synchronization updates all consumers without changing branch files', () => {
   const work = mkdtempSync(join(tmpdir(), 'aegis-preview-version-'));
@@ -112,7 +128,7 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
   const calls = [];
   const git = githubFixture();
   const v2Releases = [], v2Runs = [];
-  let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false;
+  let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false, sourceVersion = '0.7.2';
   const fake = async (url, options) => {
     const parsed = new URL(url); calls.push(parsed.pathname + parsed.search);
     assert.match(parsed.pathname, /^\/repos\/phcastello\/Aegis\//);
@@ -123,7 +139,7 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
       parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ name: 'main', type: 'branch' })) : [{ name: '*', type: 'branch' }] };
     else if (parsed.pathname.endsWith('aegis-native-signing')) body = environment;
     else if (parsed.pathname.includes('/compare/')) body = { status: ancestry, base_commit: { sha } };
-    else if (parsed.pathname.includes('/contents/')) body = { content: Buffer.from('{"version":"0.7.2"}').toString('base64') };
+    else if (parsed.pathname.includes('/contents/')) body = { content: Buffer.from(JSON.stringify({ version: sourceVersion })).toString('base64') };
     else if (parsed.pathname.endsWith('/releases')) body = parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ tag_name: 'v0.7.1' })) : [{ tag_name: 'node-v0.7.1' }, ...v2Releases];
     else if (parsed.pathname.endsWith('/runs')) body = { workflow_runs: [
       { id: 1, head_branch: 'main', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 0.7.2-unstable.20 · android · ${sha}`, conclusion: 'cancelled' },
@@ -141,6 +157,14 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
       GITHUB_REPOSITORY: context.repository, PREVIEW_SHA: sha, PREVIEW_BRANCH: input.branch, PREVIEW_VERSION: plan.version,
       PREVIEW_PLATFORM: input.platform, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: plan.controlSha, GITHUB_OUTPUT: join(work, 'output') });
     globalThis.fetch = fake; process.chdir(work);
+    for (const invalid of [`0.7.2-unstable.1\nsha=${'c'.repeat(40)}`, '0.7.2-unstable.1\rversionCode=1', '0.7.2-beta.1', '0.7.2+build', 702]) {
+      sourceVersion = invalid;
+      await assert.rejects(resolvePreview(), /Use X\.Y\.Z|SemVer string/);
+      assert.equal(existsSync(process.env.GITHUB_OUTPUT), false, 'Invalid source metadata must not write workflow outputs.');
+      assert.equal(git.calls.some(call => call.method !== 'GET'), false, 'Invalid source metadata must not create a reservation.');
+      assert.equal(existsSync(join(work, 'preview-plan')), false);
+    }
+    sourceVersion = '0.7.2';
     await resolvePreview();
     const received = JSON.parse(readFileSync(join(work, 'preview-plan/preview.json')));
     assert.equal(received.sha, sha); assert.equal(received.versionCode, plan.versionCode);
@@ -163,6 +187,10 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     Object.assign(process.env,{PREVIEW_VERSION:'0.7.2-unstable.501',GITHUB_RUN_ID:'501'});
     await resolvePreview();
     assert.equal(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))).versionCode,7002023,'v2 release/run names must not inflate the independent ledger counter');
+    sourceVersion = '0.7.2-stage.10';
+    Object.assign(process.env,{PREVIEW_VERSION:'0.7.2-unstable.502',GITHUB_RUN_ID:'502'});
+    await resolvePreview();
+    assert.equal(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))).sourceVersion,sourceVersion,'Valid historical code provenance is preserved without changing its spelling.');
   } finally {
     process.chdir(cwd); globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];

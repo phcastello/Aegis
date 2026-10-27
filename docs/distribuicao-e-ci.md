@@ -1,5 +1,10 @@
 # Distribuição, atualizações e estágios de CI
 
+Para disponibilizar desenvolvimento para teste, use a operação única
+[publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
+aplicativos, reserva, build, assinatura e recomendação com uma aprovação protegida.
+Os comandos separados descritos abaixo continuam como ferramentas manuais.
+
 A Aegis tem um único fluxo recomendado para Nodes compatíveis. Previews,
 estáveis e rollbacks descrevem eventos de distribuição; não são canais
 selecionáveis. Publicar torna a distribuição disponível. Cada usuário autoriza

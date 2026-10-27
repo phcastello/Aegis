@@ -50,7 +50,7 @@ export function assemble(directory, android, windows, plan) {
   return manifest;
 }
 
-export async function publishRecommended({ directory, plan, runGh = execute, state = new DistributionState() }) {
+export async function publishRecommended({ directory, plan, runGh = execute, state = new DistributionState(), beforeRecommend = async () => {} }) {
   assert.equal(plan.schema, 2); assert.equal(plan.platform, 'both');
   directory = resolve(directory);
   const manifest = readJson(join(directory, 'latest.json'));
@@ -123,6 +123,7 @@ export async function publishRecommended({ directory, plan, runGh = execute, sta
   verifyAssets(published); assertTag(true);
   // No destructive asset replacement. Git atomically advances latest.json only
   // after every public installer, signature and checksum was downloaded/compared.
+  await beforeRecommend();
   const pointer = await state.recommend(plan, manifest);
   if (!plan.version.includes('-')) advanceLegacyStable({ manifest, commit: plan.sha, runGh });
   return { tag, version: plan.version, versionCode: plan.versionCode, pointer, compatibilityFeed: plan.version.includes('-') ? 'unchanged' : 'stable' };

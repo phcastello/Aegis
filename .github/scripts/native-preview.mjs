@@ -68,7 +68,11 @@ async function pages(path, field) {
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-function output(name, value) { appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`); }
+export function output(name, value) {
+  assert.match(name, /^[A-Za-z][A-Za-z0-9_]*$/, 'Invalid workflow output name.');
+  assert.doesNotMatch(String(value), /[\r\n]/, 'Workflow outputs must be single-line values.');
+  appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
 
 export function prepareCandidate(candidate, trusted, version, versionCode) {
   const node = join(candidate, 'apps/aegis-node');
@@ -126,6 +130,10 @@ export async function resolvePreview() {
   assert.equal(comparison.base_commit.sha, args.sha);
   const content = await api(`contents/apps/aegis-node/package.json?ref=${args.sha}`);
   const sourceVersion = JSON.parse(Buffer.from(content.content, 'base64')).version;
+  assert.equal(typeof sourceVersion, 'string', 'Source package version must be a SemVer string.');
+  // Candidate metadata is untrusted input. Reject invalid provenance before any
+  // reservation or output can change the SHA consumed by downstream jobs.
+  parseDistributionVersion(sourceVersion.replace(/-stage\.([1-9]\d*)$/, '-unstable.$1'));
   let recovery = {};
   if (requested.kind === 'rollback') {
     assert.equal(process.env.COMPATIBILITY_CONFIRMED, 'true', 'Recovery requires explicit API and persisted-data compatibility confirmation.');

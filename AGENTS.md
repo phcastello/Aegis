@@ -30,8 +30,20 @@ mais facilitadora.** Prefira soluções simples, eficientes e incrementais.
 - Não abra um PR automaticamente a cada push. Preserve o estado draft quando pedido.
 - Faça commits por responsabilidade e push na branch de desenvolvimento quando
   isso fizer parte da tarefa solicitada, após as verificações pertinentes.
-- Não publique releases, tags, feeds ou deploys sem autorização. Gerar uma preview
-  não autoriza publicar uma release nem atualizar o backend.
+- Implementação comum: implemente, teste, corrija, faça commit e push na branch
+  designada e relate o resultado. Push não publica automaticamente.
+- Quando o proprietário pedir implementação **e disponibilização para teste**,
+  essa solicitação autoriza a publicação privada de desenvolvimento. Após testes,
+  commit e push, execute `python3 scripts/publish-dev.py --ref <branch-ou-SHA>`
+  pelo acesso privado ao servidor e verifique a execução real. Veja
+  [publish-dev](docs/publish-dev.md). Não peça confirmação para cada etapa ordinária.
+- Preserve a aprovação única do environment de assinatura. Não aprove reviewers
+  automaticamente. Publicação de desenvolvimento não autoriza release estável,
+  merge na main, exclusão de dados nem mudança de credenciais.
+- Se a publicação falhar, investigue e corrija o problema técnico possível.
+  Push ou build bem-sucedido não conclui uma tarefa destinada a teste. Bloqueie
+  operações sensíveis quando dependerem de ação administrativa ou risco aos dados;
+  conclua o trabalho independente e informe precisamente a evidência e o bloqueio.
 - Consulte [distribuição e CI](docs/distribuicao-e-ci.md) antes de alterar workflows,
   assinatura, identidade, versões ou atualização dos aplicativos. Use o mecanismo
   existente de sincronização de versão e preserve códigos Android monotônicos.
@@ -82,11 +94,14 @@ mediante autorização e respeitando as configurações atuais. Não exija outra
 implantação permanente do backend, PostgreSQL, Qdrant, Neo4j ou Firebase.
 Nunca execute testes destrutivos contra dados de produção.
 
-Migrations, mudanças de infraestrutura, credenciais e outras operações sensíveis
-exigem cuidados explícitos e autorização adequada. Antes de alterar a operação
-real, consulte [operação privada](docs/operacao-privada.md), prepare backup,
-validação e recuperação e confirme a autorização. Preserve configurações e dados;
-não use produção para satisfazer testes automatizados.
+Migrations compatíveis estão incluídas na autorização de `publish-dev`, após
+identificação exata, revisão vinculada ao hash, testes descartáveis e backup
+restaurado e verificado. Migration desconhecida, destrutiva, incompatível ou sem
+recuperação comprovada exige autorização específica; nunca contorne o bloqueio.
+Consulte [operação privada](docs/operacao-privada.md). Preserve configurações,
+PostgreSQL, Qdrant, Neo4j, FCM, Data Protection e identidades. Nunca remova volumes,
+resete banco nem execute Down como rollback automático. Não rode migrations no
+startup de Production nem testes destrutivos nos dados pessoais.
 
 ## Relatório de conclusão
 
