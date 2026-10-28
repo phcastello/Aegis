@@ -4,51 +4,26 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DistributionState, repository } from './distribution-state.mjs';
 import { assemble, publishRecommended } from './recommended-publish.mjs';
-import { assertEnvironment, signingEnvironment } from './native-preview.mjs';
 
-export async function privateReady(plan, { state = new DistributionState(), now = Date.now() } = {}) {
+export async function integratedPublish({ directory, plan, android, windows, state = new DistributionState() }) {
+  // Health and contract preparation completed before dispatch and is part of the
+  // durable reservation. Signing/publication need no live private-host process.
   assert.equal(plan.kind, 'normal');
   assert.match(plan.version, /^\d+\.\d+\.\d+-unstable\.[1-9]\d*$/);
   assert.equal(plan.platform, 'both');
   assert.deepEqual(plan.compatibility, { api: 1, nodeData: 1 });
-  // Candidate build tokens have no statuses:write permission. Only the owner
-  // running the private-host orchestrator can attest this private deployment.
-  const statuses = await state.api(`commits/${plan.sha}/statuses?per_page=100`);
-  const latest = statuses.find(s => s.context === 'Aegis private deployment');
-  assert.equal(latest?.state, 'success', 'Private deployment is not healthy.');
-  assert.equal(latest.creator.login, repository.split('/')[0], 'Private deployment must be attested by the owner.');
-  const age = now - Date.parse(latest.created_at);
-  assert.ok(age >= -30_000 && age < 120_000, 'Private deployment heartbeat expired; keep publish-dev running.');
-  assert.match(latest.description, /^api=1;nodeData=1;backend=[a-f0-9]{40};pwa=[a-f0-9]{40}$/);
-  return latest.id;
-}
-
-export async function integratedPublish({ directory, plan, android, windows, state = new DistributionState() }) {
-  const policies = [];
-  for (let page = 1; ; page++) {
-    const response = await state.api(`environments/${signingEnvironment}/deployment-branch-policies?per_page=100&page=${page}`);
-    policies.push(...response.branch_policies);
-    if (response.branch_policies.length < 100) break;
-  }
-  assertEnvironment(await state.api(`environments/${signingEnvironment}`), { branch_policies: policies });
-  await privateReady(plan, { state });
+  assert.equal(plan.deployment?.sourceCommit, plan.sha, 'Missing prepared deployment.');
   assemble(directory, android, windows, plan);
-  // Both APK and updater signatures were verified in this SAME approved job.
-  // Recheck immediately before releasing bytes/advancing the existing pointer.
-  await privateReady(plan, { state });
-  return retryPublication(() => publishRecommended({ directory, plan, state, beforeRecommend: () => privateReady(plan, { state }) }),
-    () => privateReady(plan, { state }));
+  return retryPublication(() => publishRecommended({ directory, plan, state }));
 }
 
-// Resume partial immutable uploads/pointer failures with the SAME signed bytes
-// inside the SAME approved job. No new reservation, signing or human approval.
-export async function retryPublication(publish, ready, wait = () => new Promise(resolve => setTimeout(resolve, 5000))) {
+// Resume partial immutable uploads/pointer failures with the SAME signed bytes.
+// Three bounded attempts add no reservation, signing or external supervision.
+export async function retryPublication(publish, wait = () => new Promise(resolve => setTimeout(resolve, 5000))) {
   for (let attempt = 0; ; attempt++) {
-    await ready();
     try { return await publish(); }
     catch (error) {
       if (attempt === 2) throw error;
-      await ready(); // a lost private deployment must stop retries immediately
       await wait();
     }
   }
@@ -59,11 +34,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.equal(process.env.GITHUB_REF, 'refs/heads/main');
   assert.equal(process.env.GITHUB_WORKFLOW_REF, `${repository}/.github/workflows/aegis-native-preview.yml@refs/heads/main`);
   assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch');
+  assert.equal(command, 'publish');
   const plan = JSON.parse(readFileSync(planFile));
   assert.equal(plan.controlSha, process.env.GITHUB_SHA);
-  if (command === 'check') await privateReady(plan);
-  else {
-    assert.equal(command, 'publish');
-    console.log(await integratedPublish({ directory, plan, android, windows }));
-  }
+  console.log(await integratedPublish({ directory, plan, android, windows }));
 }

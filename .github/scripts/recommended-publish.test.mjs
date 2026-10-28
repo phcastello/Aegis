@@ -117,12 +117,15 @@ test('different published bytes, wrong source tag, absent assets and inconsisten
     await assert.rejects(f.publish()); assert.equal(f.recommendations.length, 0);
   }
 });
-test('private health lost after immutable upload preserves pointer and retries the same bytes', async t => {
+test('pointer write failure preserves previous recommendation and retries the same bytes', async t => {
   const f = fixture(t);
-  await assert.rejects(f.publish({ beforeRecommend: async () => { throw Error('private health lost'); } }), /private health lost/);
+  const recommend = f.state.recommend;
+  f.state.recommend = async () => { throw Error('pointer unavailable'); };
+  await assert.rejects(f.publish(), /pointer unavailable/);
   assert.equal(f.recommendations.length, 0);
   assert.equal(f.releases.get(`node-v${f.plan.version}`).draft, false);
   const before = f.calls.length;
+  f.state.recommend = recommend;
   await f.publish();
   assert.equal(f.recommendations.length, 1);
   assert.ok(!f.calls.slice(before).some(args => ['create', 'upload', 'edit'].includes(args[1])));
