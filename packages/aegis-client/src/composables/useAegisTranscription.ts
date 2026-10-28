@@ -3,10 +3,12 @@ import { getTranscriptionStatus, transcribeAudio } from '../services/aegisApi';
 import { DIGITAL_ZERO_FLOOR, classifyPcmSignal, getPreferredVoiceInput, setPreferredVoiceInput } from '../services/voiceInput';
 
 export type TranscriptionState = 'idle' | 'requesting_permission' | 'recording' | 'transcribing' | 'unavailable' | 'error';
-export type CaptureDiagnostic = 'permission_denied' | 'no_device' | 'device_unavailable' | 'track_ended' | 'recording_failed' | 'empty_audio' | 'digital_silence' | 'upload_failed' | 'transcription_failed' | null;
+export type TranscriptionIntent = 'review' | 'send';
+export type CaptureDiagnostic = 'permission_denied' | 'no_device' | 'device_unavailable' | 'track_ended' | 'recording_failed' | 'empty_audio' | 'empty_transcript' | 'digital_silence' | 'upload_failed' | 'transcription_failed' | null;
 
 const DEFAULT_MAX_RECORDING_MILLISECONDS = 90_000;
 const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4'];
+const WAVEFORM_SAMPLES = 19;
 
 type CaptureSession = {
   valid: boolean;
@@ -24,15 +26,17 @@ type CaptureSession = {
   removeTrackListeners: (() => void)[];
   finishing: boolean;
   sawSignal: boolean;
+  intent: TranscriptionIntent;
 };
 
-export function useAegisTranscription(onTranscript: (text: string) => void) {
+export function useAegisTranscription(onTranscript: (text: string, intent: TranscriptionIntent) => void) {
   const state = ref<TranscriptionState>('idle');
   const available = ref(false);
   const errorMessage = ref<string | null>(null);
   const notice = ref<string | null>(null);
   const diagnostic = ref<CaptureDiagnostic>(null);
   const inputLevel = ref(0);
+  const inputLevels = ref<number[]>(Array(WAVEFORM_SAMPLES).fill(0));
   const inputStatus = ref('');
   const maxRecordingMilliseconds = ref(DEFAULT_MAX_RECORDING_MILLISECONDS);
   let current: CaptureSession | null = null;
@@ -77,7 +81,7 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     if (context) void context.close().catch(() => undefined);
     session.stream?.getTracks().forEach(track => track.stop());
     session.stream = null;
-    if (current === session) { inputLevel.value = 0; inputStatus.value = ''; }
+    if (current === session) { inputLevel.value = 0; inputLevels.value = Array(WAVEFORM_SAMPLES).fill(0); inputStatus.value = ''; }
   }
 
   function invalidate(session: CaptureSession): void {
@@ -125,12 +129,14 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
           for (const sample of samples) { squares += sample * sample; peak = Math.max(peak, Math.abs(sample)); }
           if (peak > DIGITAL_ZERO_FLOOR) session.sawSignal = true;
           inputLevel.value = Math.min(1, Math.sqrt(squares / samples.length) * 8);
+          inputLevels.value = [...inputLevels.value.slice(1), inputLevel.value];
           const muted = session.stream?.getAudioTracks().some(track => track.muted);
           inputStatus.value = muted ? 'A entrada está temporariamente sem dados. Verifique o dispositivo e o sistema.'
             : peak > DIGITAL_ZERO_FLOOR ? 'Sinal recebido do microfone.'
               : Date.now() - session.startedAt >= 2000 ? 'Sem sinal detectado. Confira a entrada em Configurações → Sobre → Microfone e as permissões do sistema.' : 'Aguardando sinal do microfone…';
         } else {
           inputLevel.value = 0;
+          inputLevels.value = [...inputLevels.value.slice(1), 0];
           inputStatus.value = 'Medição de entrada indisponível; confira as permissões do sistema.';
         }
         session.meterTimer = window.setTimeout(tick, 80);
@@ -154,7 +160,7 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     const session: CaptureSession = {
       valid: true, stream: null, recorder: null, chunks: [], startedAt: 0,
       durationTimer: null, meterTimer: null, stopTimer: null, controller: null,
-      context: null, source: null, analyser: null, removeTrackListeners: [], finishing: false, sawSignal: false
+      context: null, source: null, analyser: null, removeTrackListeners: [], finishing: false, sawSignal: false, intent: 'review'
     };
     current = session;
     state.value = 'requesting_permission';
@@ -214,9 +220,10 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     }
   }
 
-  function stopRecording(): void {
+  function stopRecording(intent: TranscriptionIntent = 'review'): void {
     const session = current;
     if (!session || !owns(session) || state.value !== 'recording' || !session.recorder) return;
+    session.intent = intent;
     clearTimer(session, 'durationTimer');
     clearTimer(session, 'meterTimer');
     state.value = 'transcribing';
@@ -272,9 +279,12 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     try {
       const result = await transcribeAudio(blob, crypto.randomUUID(), duration, fileNameFor(blob.type), controller.signal);
       if (!owns(session) || controller.signal.aborted) return;
+      const text = typeof result?.text === 'string' ? result.text.trim() : '';
+      if (!text) { fail(session, 'empty_transcript', 'A transcrição não contém texto. Grave novamente.'); return; }
+      const intent = session.intent;
       invalidate(session);
       state.value = available.value ? 'idle' : 'unavailable';
-      onTranscript(result.text);
+      onTranscript(text, intent);
     } catch (error) {
       if (!owns(session) || controller.signal.aborted) return;
       fail(session, error instanceof TypeError ? 'upload_failed' : 'transcription_failed',
@@ -295,7 +305,7 @@ export function useAegisTranscription(onTranscript: (text: string) => void) {
     if (current) invalidate(current);
   }
   onBeforeUnmount(dispose);
-  return { state, available, errorMessage, notice, diagnostic, inputLevel, inputStatus, isRecording, isTranscribing, isBusy, refreshStatus, start, stopRecording, discard, dispose };
+  return { state, available, errorMessage, notice, diagnostic, inputLevel, inputLevels, inputStatus, isRecording, isTranscribing, isBusy, refreshStatus, start, stopRecording, discard, dispose };
 }
 
 function fileNameFor(mimeType: string): string {

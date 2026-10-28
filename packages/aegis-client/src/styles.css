@@ -1255,28 +1255,45 @@ button:disabled {
   stroke-width: 1.8;
 }
 
-.record-button--recording {
-  color: #ffd0cc;
-  background: rgba(231, 118, 112, 0.18);
-}
-
-.record-button--transcribing {
-  color: #91a9ee;
-}
-
-.recording-bars {
-  display: inline-flex;
+.recording-composer {
   align-items: center;
-  gap: 3px;
-  height: 18px;
+  min-height: 58px;
 }
 
-.recording-bars i {
+.recording-waveform {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1px, 0.5vw, 4px);
+  height: 36px;
+  padding-inline: 4px;
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.recording-waveform-bar {
   display: block;
+  flex: 0 1 3px;
+  min-width: 1px;
   width: 3px;
   border-radius: 3px;
   background: currentColor;
   transition: height 80ms linear;
+}
+
+.recording-composer-status {
+  flex: 1;
+  min-width: 0;
+  padding-inline: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-waveform-bar { transition: none; }
 }
 
 .send-button svg {
@@ -1584,9 +1601,6 @@ button:disabled {
     animation: none;
   }
 
-  .recording-bars i {
-    transition: none;
-  }
 }
 
 /* On desktop the sidebar occupies a real column of the usable layout. */
@@ -1784,10 +1798,6 @@ button:disabled {
 }
 
 .settings-content > section > .settings-error { position: sticky; top: 0; z-index: 3; background: var(--surface); }
-
-/* The recording indicator follows captured PCM; it has no idle animation. */
-.voice-input-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
-.voice-input-status meter { width: 72px; min-width: 72px; }
 
 .conversation-actions { position: relative; flex-shrink: 0; }
 .conversation-menu-trigger { display: grid; place-items: center; width: 44px; height: 44px; padding: 10px; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }

@@ -20,18 +20,47 @@ try {
     await server.listen(); servers.push(server);
     const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
     for (const platform of host === 'native' ? ['android', 'windows'] : ['browser']) {
+      if (process.env.TRANSCRIPTION_BROWSER_PLATFORM && process.env.TRANSCRIPTION_BROWSER_PLATFORM !== platform) continue;
       const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
-      let uploads = 0;
+      let uploads = 0, transcriptionText = 'Texto sintético', transcriptionFailure = false, sendFailure = false, transcriptionGate = null, deletionGate = null, deleted = false;
+      const prompts = [], acceptedPrompts = [];
+      const conversationId = 'synthetic-voice-conversation';
+      const conversation = () => ({ id: conversationId, title: 'Voz sintética', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: acceptedPrompts.length * 2,
+        messages: acceptedPrompts.flatMap((content, index) => [{ id: `user-${index}`, conversationId, role: 'user', content, createdAt: new Date().toISOString() }, { id: `assistant-${index}`, conversationId, role: 'assistant', content: 'Resposta sintética.', createdAt: new Date().toISOString() }]) });
       await context.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
         let body;
         if (path === '/api/health') body = { status: 'ok' };
         else if (path === '/api/voice/status') body = { enabled: false, available: false };
         else if (path === '/api/voice/transcription/status') body = { enabled: true, configured: true, maxRecordingSeconds: 90 };
-        else if (path === '/api/voice/transcriptions') { uploads++; body = { text: 'Texto sintético' }; }
+        else if (path === '/api/voice/transcriptions') {
+          uploads++;
+          if (transcriptionGate) await transcriptionGate;
+          if (transcriptionFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha sintética de transcrição.' }) });
+          body = { text: transcriptionText };
+        }
+        else if (path === '/api/chat/messages/stream') {
+          const request = route.request().postDataJSON(); prompts.push(request);
+          if (sendFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha sintética antes da aceitação.' }) });
+          acceptedPrompts.push(request.content);
+          const lines = [
+            { type: 'conversation', turnId: request.turnId, conversationId },
+            { type: 'token', turnId: request.turnId, content: 'Resposta sintética.' },
+            { type: 'done', turnId: request.turnId, conversationId, messageId: `assistant-${acceptedPrompts.length - 1}`, conversationTitle: 'Voz sintética' }
+          ];
+          return route.fulfill({ contentType: 'application/x-ndjson', body: lines.map(line => JSON.stringify(line)).join('\n') + '\n' });
+        }
         else if (path === '/api/email/status') body = { isConnected: false };
         else if (path === '/api/chat/proactive-activity') body = [];
-        else if (path === '/api/chat/conversations') body = { items: [], hasMore: false };
+        else if (path === '/api/chat/conversations') body = { items: acceptedPrompts.length && !deleted ? [conversation()] : [], hasMore: false };
+        else if (path === `/api/chat/conversations/${conversationId}`) {
+          if (route.request().method() === 'DELETE') {
+            if (deletionGate) await deletionGate;
+            deleted = true;
+            return route.fulfill({ status: 204 });
+          }
+          body = conversation();
+        }
         else if (path === '/api/notifications/configuration') body = { enabled: false };
         else body = {};
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
@@ -84,21 +113,41 @@ try {
         const record = page.getByRole('button', { name: 'Gravar mensagem de voz', exact: true });
         await record.waitFor(); await page.waitForFunction(() => !document.querySelector('.record-button')?.disabled);
         assert.equal(await page.evaluate(() => window.syntheticAudio.captures.length), 0, 'idle never captures');
+        await page.locator('.composer textarea').fill('Rascunho preservado');
         await record.click();
-        await page.waitForFunction(() => document.querySelector('meter')?.value > 0);
+        await page.waitForFunction(() => [...document.querySelectorAll('.recording-waveform-bar')].some(bar => parseFloat(bar.style.height) > 3));
+        assert.equal(await page.locator('.composer textarea').count(), 0, 'dedicated recording UI replaces the textarea');
+        assert.equal(await page.locator('meter').count(), 0, 'no diagnostic meter in composer');
+        const controls = await Promise.all(['Descartar gravação', 'Parar e transcrever para revisão', 'Parar, transcrever e enviar'].map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
+        assert.ok(controls.every(Boolean)); assert.ok(controls[0].x < controls[1].x && controls[1].x < controls[2].x, 'cancel, microphone and send ordered horizontally');
+        for (const width of [320, 390, 720, 1100]) {
+          await page.setViewportSize({ width, height: 900 });
+          const boxes = await Promise.all(['Descartar gravação', 'Parar e transcrever para revisão', 'Parar, transcrever e enviar'].map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
+          assert.ok(boxes.every(box => box && box.x >= 0 && box.x + box.width <= width), `recording controls fit ${width}px`);
+          assert.ok(boxes.every(box => Math.abs(box.y - boxes[0].y) <= 1), 'controls share one line');
+        }
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        assert.equal(await page.locator('.recording-waveform-bar').first().evaluate(bar => getComputedStyle(bar).transitionDuration), '0s');
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
         await page.getByRole('button', { name: 'Descartar gravação', exact: true }).click();
         await page.waitForFunction(() => window.syntheticAudio.captures.every(input => input.stream.getTracks().every(track => track.readyState === 'ended')));
         assert.equal(uploads, 0, 'discard never uploads');
+        assert.equal(await page.locator('.composer textarea').inputValue(), 'Rascunho preservado');
+        await page.locator('.composer textarea').evaluate(input => input.setSelectionRange(input.value.length, input.value.length));
         await record.click(); await page.waitForTimeout(250);
-        await page.getByRole('button', { name: 'Encerrar gravação', exact: true }).click();
-        await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Texto sintético');
+        await page.getByRole('button', { name: 'Parar e transcrever para revisão', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Rascunho preservado Texto sintético');
+        assert.equal(await page.locator('.composer textarea').evaluate(input => document.activeElement === input), true, 'review returns focus to the editor after recording UI unmounts');
         assert.equal(uploads, 1, 'quiet synthetic signal uploaded once');
+        assert.equal(prompts.length, 0, 'microphone transcribes for review without sending');
         await page.locator('.composer textarea').fill('');
         await page.evaluate(() => { window.syntheticAudio.silence = true; });
         await record.click(); await page.waitForTimeout(350);
-        await page.getByRole('button', { name: 'Encerrar gravação', exact: true }).click();
+        await page.waitForFunction(() => [...document.querySelectorAll('.recording-waveform-bar')].every(bar => parseFloat(bar.style.height) === 3));
+        await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
         await page.getByText('A gravação contém apenas silêncio digital.', { exact: false }).waitFor();
         assert.equal(uploads, 1, 'digital silence never uploaded');
+        assert.equal(prompts.length, 0, 'digital silence never sends');
         const decoded = await page.evaluate(() => window.syntheticAudio.decodes);
         assert.equal(decoded.length, 2, 'both complete recordings decoded in Chromium');
         assert.ok(decoded[0].peak > 0.001 && decoded[0].peak < 0.01, 'quiet synthetic signal preserved');
@@ -113,8 +162,79 @@ try {
         await record.click();
         await page.waitForFunction(() => window.syntheticAudio.constraints.at(-1).audio.deviceId?.exact === 'synthetic-b');
         await page.getByRole('button', { name: 'Descartar gravação', exact: true }).click();
+
+        await page.locator('.composer textarea').fill('Antes');
+        await page.locator('.composer textarea').evaluate(input => input.setSelectionRange(input.value.length, input.value.length));
+        await record.click(); await page.waitForTimeout(250);
+        await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
+        await page.getByText('Resposta sintética.', { exact: true }).waitFor();
+        assert.deepEqual(prompts.map(prompt => prompt.content), ['Antes Texto sintético'], 'send uses the normal textual turn with prior draft');
+        assert.equal(await page.locator('.composer textarea').inputValue(), '');
+        assert.equal(uploads, 2);
+
+        for (const failure of ['empty', 'transcription', 'send']) {
+          transcriptionText = failure === 'empty' ? '  \n ' : 'Texto sintético';
+          transcriptionFailure = failure === 'transcription'; sendFailure = failure === 'send';
+          const before = prompts.length;
+          await page.locator('.composer textarea').fill('Recuperável');
+          await page.locator('.composer textarea').evaluate(input => input.setSelectionRange(input.value.length, input.value.length));
+          await record.click(); await page.waitForTimeout(250);
+          await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
+          const expectedError = failure === 'empty' ? 'A transcrição não contém texto.' : failure === 'transcription' ? 'Falha sintética de transcrição.' : 'Falha sintética antes da aceitação.';
+          await page.getByText(expectedError, { exact: false }).first().waitFor();
+          const expectedDraft = failure === 'send' ? 'Recuperável Texto sintético' : 'Recuperável';
+          await page.waitForFunction(text => document.querySelector('.composer textarea')?.value === text, expectedDraft);
+          assert.equal(prompts.length, before + (failure === 'send' ? 1 : 0));
+          assert.equal(acceptedPrompts.length, 1, 'failures do not duplicate accepted turns');
+        }
+
+        transcriptionFailure = false; sendFailure = false; transcriptionText = 'Resposta tardia inválida';
+        for (const action of ['escape', 'navigate']) {
+          let release;
+          transcriptionGate = new Promise(resolve => { release = resolve; });
+          const before = prompts.length;
+          await page.locator('.composer textarea').fill('Rascunho de origem');
+          await record.click(); await page.waitForTimeout(250);
+          const request = page.waitForRequest('**/api/voice/transcriptions');
+          await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
+          await request;
+          await page.getByText('Transcrevendo…', { exact: true }).waitFor();
+          assert.equal(await page.getByRole('button', { name: 'Cancelar transcrição', exact: true }).evaluate(button => document.activeElement === button), true, 'upload keeps keyboard cancellation reachable');
+          if (action === 'escape') await page.keyboard.press('Escape');
+          else await page.getByRole('button', { name: 'Nova conversa', exact: true }).click();
+          release(); transcriptionGate = null;
+          await page.waitForTimeout(100);
+          assert.equal(prompts.length, before, 'late STT cannot send after capture/context invalidation');
+          assert.equal(await page.locator('.composer textarea').inputValue(), action === 'escape' ? 'Rascunho de origem' : '');
+          if (action === 'navigate') {
+            await page.getByRole('button', { name: 'Voz sintética', exact: true }).click();
+            assert.equal(await page.locator('.composer textarea').inputValue(), 'Rascunho de origem', 'navigation preserves the original draft');
+          }
+        }
+
+        let releaseTranscription, releaseDeletion;
+        transcriptionGate = new Promise(resolve => { releaseTranscription = resolve; });
+        deletionGate = new Promise(resolve => { releaseDeletion = resolve; });
+        const beforeDeletion = prompts.length;
+        await page.locator('.composer textarea').fill('Não enviar depois de excluir');
+        await record.click(); await page.waitForTimeout(250);
+        const pendingUpload = page.waitForRequest('**/api/voice/transcriptions');
+        await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
+        await pendingUpload;
+        await page.getByRole('button', { name: 'Menu da conversa', exact: true }).click();
+        await page.getByRole('menuitem', { name: 'Excluir', exact: true }).click();
+        const pendingDeletion = page.waitForRequest(request => request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/chat/conversations/${conversationId}`);
+        await page.getByRole('dialog', { name: 'Apagar conversa', exact: true }).getByRole('button', { name: 'Apagar', exact: true }).click();
+        await pendingDeletion;
+        releaseTranscription(); transcriptionGate = null;
+        await page.waitForTimeout(100);
+        assert.equal(prompts.length, beforeDeletion, 'STT cannot start a turn while its conversation is being deleted');
+        releaseDeletion(); deletionGate = null;
+        await page.getByRole('dialog', { name: 'Apagar conversa', exact: true }).waitFor({ state: 'detached' });
+        assert.equal(await page.locator('.composer textarea').inputValue(), '');
+        assert.equal(await page.getByRole('button', { name: 'Voz sintética', exact: true }).count(), 0, 'deleted conversation is not resurrected');
         await page.waitForFunction(() => window.syntheticAudio.captures.every(input => input.context.state === 'closed'));
-        console.log(`${host}/${platform}: synthetic MediaRecorder, PCM meter, discard, silence, input preference and cleanup PASS`);
+        console.log(`${host}/${platform}: real MediaRecorder/WebAudio with synthetic signal, waveform, review, direct send, failures, drafts, silence, input preference and cleanup PASS`);
       } finally { await context.close(); }
     }
   }

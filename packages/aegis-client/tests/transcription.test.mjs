@@ -26,7 +26,7 @@ function stream() {
   return { track, getTracks: () => [track], getAudioTracks: () => [track] };
 }
 function fixture(options = {}) {
-  const streams = [], requests = [], pendingStops = [], uploads = [], inserted = [], recorders = [], contexts = [], timers = new Map(), storage = new Map();
+  const streams = [], requests = [], pendingStops = [], uploads = [], inserted = [], intents = [], recorders = [], contexts = [], timers = new Map(), storage = new Map();
   const documentListeners = new Map(); let now = 10000, nextTimer = 0, unmount;
   if (options.preferred) storage.set('aegis.voice.input.v1', options.preferred);
   class Recorder {
@@ -64,13 +64,17 @@ function fixture(options = {}) {
       if (name === '../services/voiceInput') return voiceInput;
       if (name === '../services/aegisApi') return {
         getTranscriptionStatus: async () => options.status ?? { enabled: true, configured: true, maxRecordingSeconds: 90 },
-        transcribeAudio: async (...args) => { uploads.push({ blob: args[0], duration: args[2], signal: args[4] }); return options.upload ? options.upload.promise : { text: 'transcrição sintética' }; }
+        transcribeAudio: async (...args) => {
+          uploads.push({ blob: args[0], duration: args[2], signal: args[4] });
+          if (options.uploadError) throw options.uploadError;
+          return options.upload ? options.upload.promise : 'uploadResult' in options ? options.uploadResult : { text: 'transcrição sintética' };
+        }
       }; throw Error('Unexpected module: ' + name);
     }
   };
   vm.runInNewContext(`(function(exports) { ${voiceInputCode}\n})(exports);`, sandbox); const voiceInput = sandbox.exports; sandbox.exports = {};
-  vm.runInNewContext(`(function(exports) { ${transcriptionCode}\n})(exports);`, sandbox); const api = sandbox.exports.useAegisTranscription(text => inserted.push(text));
-  return { api, voiceInput, streams, requests, recorders, contexts, timers, uploads, inserted,
+  vm.runInNewContext(`(function(exports) { ${transcriptionCode}\n})(exports);`, sandbox); const api = sandbox.exports.useAegisTranscription((text, intent) => { inserted.push(text); intents.push(intent); });
+  return { api, voiceInput, streams, requests, recorders, contexts, timers, uploads, inserted, intents,
     async ready() { await api.refreshStatus(); return this; }, async start() { await api.start(); return this; },
     async flushStops() { while (pendingStops.length) pendingStops.shift()(); await settle(); },
     fireTimer(milliseconds) { const entry = [...timers].find(([, timer]) => timer.milliseconds === milliseconds); assert.ok(entry, 'timer exists: ' + milliseconds); timers.delete(entry[0]); now += milliseconds; entry[1].callback(); },
@@ -211,4 +215,57 @@ test('max duration finalizes once; idle creates no capture, context or timer', a
   assert.equal(f.contexts.length, 0); assert.equal(f.requests.length, 0); assert.equal(f.timers.size, 0);
   await f.start(); f.fireTimer(3000); await f.flushStops(); assert.equal(f.uploads.length, 1); assert.equal(f.uploads[0].duration, 3000);
   assert.match(f.api.notice.value, /3 segundos/); f.assertReleased();
+});
+
+test('review and direct-send intentions belong to the capture; the first stop wins', async () => {
+  for (const intent of ['review', 'send']) {
+    const f = await fixture({ uploadResult: { text: '  fala revisável  ' } }).ready(); await f.start();
+    f.api.stopRecording(intent); f.api.stopRecording(intent === 'review' ? 'send' : 'review');
+    assert.equal(f.streams[0].track.stopped, true, 'capture released before HTTP');
+    await f.flushStops();
+    assert.deepEqual(f.inserted, ['fala revisável']); assert.deepEqual(f.intents, [intent]);
+    assert.equal(f.uploads.length, 1); f.assertReleased();
+  }
+});
+
+test('empty or missing STT text cannot invoke review or direct-send callbacks', async () => {
+  for (const intent of ['review', 'send']) for (const uploadResult of [{ text: '' }, { text: '  \n ' }, {}, { text: undefined }, null]) {
+    const f = await fixture({ uploadResult }).ready(); await f.start(); f.api.stopRecording(intent); await f.flushStops();
+    assert.deepEqual(f.inserted, []); assert.deepEqual(f.intents, []);
+    assert.equal(f.api.state.value, 'error'); assert.equal(f.api.diagnostic.value, 'empty_transcript');
+    assert.match(f.api.errorMessage.value, /não contém texto/); f.assertReleased();
+  }
+});
+
+test('direct-send does not fire after cancellation, invalidation, silence or upload failure', async () => {
+  for (const stage of ['recording', 'stopping', 'uploading', 'silence', 'upload-error', 'transcription-error']) {
+    const upload = deferred();
+    const options = stage === 'uploading' ? { upload }
+      : stage === 'silence' ? { channels: [new Float32Array(5000)], meterSample: 0 }
+        : stage === 'upload-error' ? { uploadError: new TypeError('offline') }
+          : stage === 'transcription-error' ? { uploadError: Error('Falha temporária de transcrição.') } : {};
+    const f = await fixture(options).ready(); await f.start();
+    if (stage === 'recording') f.api.discard();
+    else {
+      f.api.stopRecording('send');
+      if (stage === 'stopping') f.api.discard();
+      await f.flushStops();
+      if (stage === 'uploading') { f.api.discard(); upload.resolve({ text: 'tarde demais' }); await settle(); }
+    }
+    assert.deepEqual(f.inserted, []); assert.deepEqual(f.intents, []);
+    assert.equal(f.uploads.length, ['uploading', 'upload-error', 'transcription-error'].includes(stage) ? 1 : 0);
+    f.assertReleased();
+  }
+});
+
+test('waveform contains recent measured PCM and returns to rest on release', async () => {
+  for (const sample of [0, 0.02]) {
+    const f = await fixture({ meterSample: sample }).ready();
+    assert.equal(f.api.inputLevels.value.length, 19); assert.ok(f.api.inputLevels.value.every(level => level === 0));
+    await f.start(); f.fireTimer(80);
+    assert.equal(f.api.inputLevels.value.length, 19);
+    assert.equal(f.api.inputLevels.value.at(-1) > 0, sample > 0);
+    assert.equal(f.api.inputLevels.value.at(-2) > 0, sample > 0);
+    f.api.discard(); assert.ok(f.api.inputLevels.value.every(level => level === 0)); f.assertReleased();
+  }
 });
