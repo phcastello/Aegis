@@ -666,11 +666,17 @@ button:disabled {
 
 .messages {
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
   padding: 30px var(--conversation-inset);
   scrollbar-color: #52617b transparent;
   scrollbar-width: thin;
 }
+
+.messages-content { min-height: 100%; display: flow-root; }
+.background-turn-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; color: var(--muted); font-size: 0.75rem; }
+.background-turn-notice button { padding: 6px 0; background: transparent; color: var(--text); cursor: pointer; }
 
 .empty-state {
   width: 100%;

@@ -6,6 +6,7 @@ import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import ConversationInfo from '../components/ConversationInfo.vue';
 import ConversationMenu from '../components/ConversationMenu.vue';
+import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
@@ -27,7 +28,7 @@ import {
   submitMessageFeedback
 } from '../services/aegisApi';
 import { useAegisVoice } from '../composables/useAegisVoice';
-import { useAegisTranscription } from '../composables/useAegisTranscription';
+import { useAegisTranscription, type TranscriptionIntent } from '../composables/useAegisTranscription';
 import { useSidebarGesture } from '../composables/useSidebarGesture';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import { pollMemoryActivity } from '../services/memoryActivityPolling';
@@ -44,12 +45,39 @@ const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
 
-const messages = ref<LocalChatMessage[]>([]);
-const conversationId = ref<string | null>(initialConversationId(localStorage, clientEnvironment().processSessionId));
-const draft = ref('');
+// These contexts belong to this chat view. A running turn keeps its own context
+// even when the reader selects another conversation (including an unsaved one).
+type ConversationContext = {
+  id: string | null;
+  messages: LocalChatMessage[];
+  draft: string;
+  title: string | null;
+  createdAt: string | null;
+  error: string | null;
+  loaded: boolean;
+  revision: number;
+  following: boolean;
+  scrollTop: number | null;
+  retry: { turnId: string; content: string; conversationId: string | null } | null;
+};
+function createConversationContext(id: string | null = null): ConversationContext {
+  return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
+    loaded: false, revision: 0, following: true, scrollTop: null, retry: null });
+}
+const contexts = new Map<string, ConversationContext>();
+const deletedConversations = new Set<string>();
+let newConversation = createConversationContext();
+const initialId = initialConversationId(localStorage, clientEnvironment().processSessionId);
+const selected = ref(initialId ? createConversationContext(initialId) : newConversation);
+const unsentConversations = ref<ConversationContext[]>([]);
+const unsentConversation = computed(() => unsentConversations.value.find(owner => owner !== selected.value && owner.draft.trim()) ?? null);
+if (initialId) contexts.set(initialId, selected.value);
+const messages = computed(() => selected.value.messages);
+const conversationId = computed(() => selected.value.id);
+const draft = computed({ get: () => selected.value.draft, set: value => { selected.value.draft = value; } });
 const isLoading = ref(false);
 const isRestoring = ref(false);
-const errorMessage = ref<string | null>(null);
+const errorMessage = computed({ get: () => selected.value.error, set: value => { selected.value.error = value; } });
 const toolStatusMessage = ref<string | null>(null);
 let toolStatusTimer: number | null = null;
 const toolStatusState = ref<'started' | 'completed' | 'failed' | null>(null);
@@ -58,7 +86,7 @@ const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
 let stopObservingGoogle: (() => void) | null = null;
 const messagesContainer = ref<HTMLElement | null>(null);
-const messagesEnd = ref<HTMLElement | null>(null);
+const messagesContent = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposerScrollable = ref(false);
 const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
@@ -69,8 +97,8 @@ const sidebarDrawerQuery = window.matchMedia('(max-width: 900px)');
 const isSidebarOpen = ref(!sidebarDrawerQuery.matches);
 const sidebarGestureSurface = ref<HTMLElement | null>(null);
 const sidebarGesture = useSidebarGesture(sidebarGestureSurface, isSidebarOpen, sidebarDrawerQuery);
-const activeConversationTitle = ref<string | null>(null);
-const activeConversationCreatedAt = ref<string | null>(null);
+const activeConversationTitle = computed({ get: () => selected.value.title, set: value => { selected.value.title = value; } });
+const activeConversationCreatedAt = computed({ get: () => selected.value.createdAt, set: value => { selected.value.createdAt = value; } });
 const conversations = ref<ConversationSummary[]>([]);
 const nextHistoryCursor = ref<string | null>(null);
 const hasMoreHistory = ref(false);
@@ -82,7 +110,6 @@ const infoTarget = ref<ConversationSummary | null>(null);
 const renameTarget = ref<ConversationSummary | null>(null);
 const renameError = ref<string | null>(null);
 const isRenaming = ref(false);
-const drafts = new Map<string, string>();
 let releaseSidebarLayer: (() => void) | undefined;
 let releaseDeleteLayer: (() => void) | undefined;
 const currentConversationSummary = computed<ConversationSummary>(() => conversations.value.find(c => c.id === conversationId.value) ?? {
@@ -97,11 +124,27 @@ const healthState = ref<'checking' | 'online' | 'offline'>('checking');
 const activeTurnId = ref<string | null>(null);
 const turnStatus = ref<'thinking' | 'responding' | 'preparing_voice' | 'speaking' | 'interrupted' | 'voice_unavailable' | 'idle'>('idle');
 let chatAbortController: AbortController | null = null;
+let activeTurn: { id: string; owner: ConversationContext; user: LocalChatMessage; assistant: LocalChatMessage; accepted: boolean } | null = null;
+const turnOwner = ref<ConversationContext | null>(null);
+const selectedHasActiveTurn = computed(() => hasActiveTurn.value && turnOwner.value === selected.value);
+const backgroundTurn = computed(() => hasActiveTurn.value && turnOwner.value !== selected.value);
 let activeSpeechPlaybackId: string | null = null;
+let activeSpeechOwner: ConversationContext | null = null;
 const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
 const transcription = useAegisTranscription(insertTranscriptIntoDraft);
+let capture: { owner: ConversationContext; text: string; start: number; end: number } | null = null;
 let streamScrollFrame: number | null = null;
+let layoutObserver: ResizeObserver | null = null;
+let conversationLoad = 0;
+let lastScrollTop = 0;
+let lastScrollHeight = 0;
+let lastViewportHeight = 0;
+let touchY: number | null = null;
+let manualScroll = false;
+let manualDirection = 0;
+let manualScrollUntil = 0;
+let programmaticScrollTop: number | null = null;
 let historyRefreshTimer: number | null = null;
 let memoryActivityAbort: AbortController | null = null;
 let memoryActivityGeneration = 0;
@@ -176,12 +219,13 @@ async function syncProactiveMessages(): Promise<void> {
       readSequences.set(row.conversationId, read);
       const summary = conversations.value.find(c => c.id === row.conversationId);
       if (summary) summary.hasUnreadProactive = (latestProactiveSequences.get(row.conversationId) ?? 0) > read;
-      if (row.conversationId !== conversationId.value || isRestoring.value || hasActiveTurn.value) continue;
+      if (row.conversationId !== conversationId.value || isRestoring.value || selectedHasActiveTurn.value) continue;
       const after = Math.max(0, ...messages.value.map(m => m.proactiveSequence ?? 0));
       if (row.lastProactiveSequence <= after) continue;
       const incoming = await getProactiveMessages(row.conversationId, after, proactiveAbort.signal);
-      if (proactiveAbort.signal.aborted || row.conversationId !== conversationId.value || isRestoring.value || hasActiveTurn.value) continue;
+      if (proactiveAbort.signal.aborted || row.conversationId !== conversationId.value || isRestoring.value || selectedHasActiveTurn.value) continue;
       const ids = new Set(messages.value.map(m => m.serverId ?? m.id));
+      selected.value.revision++;
       messages.value.push(...incoming.filter(m => !ids.has(m.id)).map(m => ({ ...m, serverId: m.id })));
       messages.value.sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.id.localeCompare(b.id));
       // Preserve the reader's scroll; incoming messages are marked only at actual visibility.
@@ -202,7 +246,8 @@ function proactiveVisibilityChanged(): void {
 function proactiveForeground(): void { void syncProactiveMessages(); void markVisibleProactive(); scheduleProactiveSync(); }
 watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
-const canSend = computed(() => draft.value.trim().length > 0 && !isRestoring.value && emailConnectionState.value !== 'pending');
+const deletingSelectedConversation = computed(() => isDeletingConversation.value && deleteTarget.value?.id === conversationId.value);
+const canSend = computed(() => draft.value.trim().length > 0 && !hasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
   emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
   transcription.errorMessage.value,
@@ -214,6 +259,7 @@ watch(() => hasActiveTurn.value || transcription.isBusy.value || voice.isBusy.va
 const canStartRecording = computed(() =>
   !hasActiveTurn.value &&
   !isRestoring.value &&
+  !deletingSelectedConversation.value &&
   transcription.available.value &&
   (transcription.state.value === 'idle' || transcription.state.value === 'error'));
 const conversationLabel = computed(() => {
@@ -244,21 +290,107 @@ function showToolStatus(message: string, state: 'started' | 'completed' | 'faile
   }
 }
 
-function scrollToLatest(smooth = true): void {
-  nextTick(() => {
-    messagesEnd.value?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+function scrollToLatest(): void {
+  const owner = selected.value;
+  void nextTick(() => {
+    const container = messagesContainer.value;
+    if (!container || selected.value !== owner || !owner.following) return;
+    // Scroll only this region. scrollIntoView also moved the host/viewport and
+    // restarted smooth scrolling on every chunk and loading-state transition.
+    container.scrollTop = container.scrollHeight;
+    programmaticScrollTop = container.scrollTop;
+    lastScrollTop = container.scrollTop;
+    lastScrollHeight = container.scrollHeight;
+    lastViewportHeight = container.clientHeight;
+    owner.scrollTop = container.scrollTop;
   });
 }
 
 function scrollToLatestDuringStream(): void {
+  if (!selected.value.following) return;
   if (streamScrollFrame !== null) {
     return;
   }
 
   streamScrollFrame = requestAnimationFrame(() => {
     streamScrollFrame = null;
-    scrollToLatest(false);
+    scrollToLatest();
   });
+}
+
+function suspendFollowing(): void {
+  selected.value.following = false;
+  noteScrollIntent(-1);
+  programmaticScrollTop = null;
+}
+function noteScrollIntent(direction: number): void {
+  manualScroll = true;
+  manualDirection = direction;
+  manualScrollUntil = performance.now() + 1500;
+}
+function handleMessagesWheel(event: WheelEvent): void {
+  if (event.deltaY < 0) suspendFollowing();
+  else if (event.deltaY > 0) noteScrollIntent(1);
+}
+function handleMessagesTouchStart(event: TouchEvent): void {
+  touchY = event.touches[0]?.clientY ?? null;
+  noteScrollIntent(0);
+}
+function handleMessagesTouchMove(event: TouchEvent): void {
+  const y = event.touches[0]?.clientY ?? null;
+  if (y !== null && touchY !== null && y > touchY) suspendFollowing();
+  else if (y !== null && touchY !== null && y < touchY) noteScrollIntent(1);
+  touchY = y;
+}
+function handleMessagesKey(event: KeyboardEvent): void {
+  if (event.target instanceof Element && event.target.closest('textarea, input, button, [contenteditable]')) return;
+  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) suspendFollowing();
+  else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) noteScrollIntent(1);
+}
+function handleMessagesScroll(): void {
+  const container = messagesContainer.value;
+  if (!container) return;
+  const top = container.scrollTop;
+  const nearEnd = container.scrollHeight - top - container.clientHeight <= 48;
+  const ownScroll = programmaticScrollTop !== null && Math.abs(top - programmaticScrollTop) <= 1;
+  const recentInput = manualScroll && performance.now() <= manualScrollUntil;
+  // Scrollbar dragging and assistive navigation can scroll without DOM input
+  // events. Stable geometry distinguishes them from reflow/keyboard resizing.
+  const stableGeometry = container.scrollHeight === lastScrollHeight && container.clientHeight === lastViewportHeight;
+  const userScroll = recentInput || stableGeometry;
+  const movingUp = top < lastScrollTop - 1;
+  if (!ownScroll && userScroll && movingUp) selected.value.following = false;
+  if (nearEnd && !ownScroll && userScroll && !movingUp && (recentInput ? manualDirection >= 0 : top > lastScrollTop + 1)) selected.value.following = true;
+  lastScrollTop = top;
+  lastScrollHeight = container.scrollHeight;
+  lastViewportHeight = container.clientHeight;
+  selected.value.scrollTop = top;
+  programmaticScrollTop = null;
+}
+
+function restoreReadingPosition(owner: ConversationContext): void {
+  manualScroll = false;
+  void nextTick(() => {
+    const container = messagesContainer.value;
+    if (!container || selected.value !== owner) return;
+    if (owner.following || owner.scrollTop === null) scrollToLatest();
+    else {
+      container.scrollTop = owner.scrollTop;
+      lastScrollTop = container.scrollTop;
+      lastScrollHeight = container.scrollHeight;
+      lastViewportHeight = container.clientHeight;
+      programmaticScrollTop = container.scrollTop;
+    }
+  });
+}
+
+function handleMessagesLayout(): void {
+  if (selected.value.following) { scrollToLatestDuringStream(); return; }
+  const container = messagesContainer.value;
+  if (!container) return;
+  lastScrollHeight = container.scrollHeight;
+  lastViewportHeight = container.clientHeight;
+  lastScrollTop = container.scrollTop;
 }
 
 function resizeComposer(): void {
@@ -274,23 +406,34 @@ function resizeComposer(): void {
   });
 }
 
-function focusComposer(): void {
-  if (isRestoring.value || window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId) return;
+function focusComposer(explicit = false): void {
+  if (isRestoring.value || (!explicit && (window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId))) return;
 
+  const owner = selected.value;
+  // On touch, keep the immediate focus in the user activation when the existing
+  // textarea is available; nextTick also covers the recording UI disappearing.
+  if (explicit) composerInput.value?.focus({ preventScroll: true });
   void nextTick(() => {
-    if (isSidebarOpen.value && sidebarDrawerQuery.matches) return;
+    if (selected.value !== owner || (isSidebarOpen.value && sidebarDrawerQuery.matches)) return;
     composerInput.value?.focus({ preventScroll: true });
+    if (explicit) composerInput.value?.setSelectionRange(draft.value.length, draft.value.length);
   });
 }
 
-function insertTranscriptIntoDraft(transcript: string): void {
-  const text = transcript.trim();
-  if (!text) return;
+function cancelRecording(): void {
+  capture = null;
+  transcription.discard();
+  resizeComposer();
+}
 
-  const input = composerInput.value;
-  const current = draft.value;
-  const start = input?.selectionStart ?? current.length;
-  const end = input?.selectionEnd ?? start;
+function insertTranscriptIntoDraft(transcript: string, intent: TranscriptionIntent): void {
+  const text = transcript.trim();
+  const session = capture;
+  capture = null;
+  if (!text || !session || selected.value !== session.owner || draft.value !== session.text) return;
+
+  const current = session.text;
+  const { start, end } = session;
   const before = current.slice(0, start);
   const after = current.slice(end);
   const leftSeparator = before && !/\s$/u.test(before) ? ' ' : '';
@@ -298,9 +441,18 @@ function insertTranscriptIntoDraft(transcript: string): void {
   const insertion = `${leftSeparator}${text}${rightSeparator}`;
   draft.value = `${before}${insertion}${after}`;
 
+  if (intent === 'send') {
+    // The same submit path owns acceptance, idempotency and recoverable drafts.
+    void handleSubmit();
+    return;
+  }
+
   void nextTick(() => {
+    if (selected.value !== session.owner) return;
     const nextCursor = before.length + insertion.length;
-    composerInput.value?.focus({ preventScroll: true });
+    if (!hasNavigationLayer() && !document.querySelector('dialog[open]') && !(isSidebarOpen.value && sidebarDrawerQuery.matches)) {
+      composerInput.value?.focus({ preventScroll: true });
+    }
     composerInput.value?.setSelectionRange(nextCursor, nextCursor);
     resizeComposer();
   });
@@ -418,37 +570,13 @@ function resumeMemoryActivityPolling(): void {
 }
 
 async function restoreConversation(): Promise<void> {
-  if (!conversationId.value) {
-    return;
-  }
-
-  isRestoring.value = true;
-  errorMessage.value = null;
-  clearToolStatus();
-
-  try {
-    const conversation = await getConversation(conversationId.value);
-    activeConversationTitle.value = conversation.title ?? 'Nova conversa';
-    activeConversationCreatedAt.value = conversation.createdAt;
-    messages.value = conversation.messages.map((message) => ({
-      ...message,
-      serverId: message.id
-    }));
-    resumeMemoryActivityPolling();
-    scrollToLatest();
-    focusComposer();
-  } catch {
-    localStorage.removeItem(STORAGE_KEY);
-    conversationId.value = null;
-    activeConversationTitle.value = null;
-    activeConversationCreatedAt.value = null;
-    errorMessage.value = 'Não foi possível carregar a conversa anterior.';
-  } finally {
-    isRestoring.value = false;
-  }
+  if (conversationId.value) await openConversation(conversationId.value, true);
 }
 
 function mergeConversationSummary(summary: ConversationSummary): void {
+  if (deletedConversations.has(summary.id)) return;
+  const context = contexts.get(summary.id);
+  if (context) { context.title = summary.title ?? 'Nova conversa'; context.createdAt = summary.createdAt; }
   if (summary.id === conversationId.value) activeConversationCreatedAt.value = summary.createdAt;
   const withoutCurrent = conversations.value.filter((conversation) => conversation.id !== summary.id);
   conversations.value = [summary, ...withoutCurrent].sort((first, second) => {
@@ -485,7 +613,7 @@ async function loadConversationHistory(reset = false): Promise<void> {
     const incoming = reset ? page.items : [...conversations.value, ...page.items];
     const seen = new Set<string>();
     conversations.value = incoming.filter((conversation) => {
-      if (seen.has(conversation.id)) {
+      if (seen.has(conversation.id) || deletedConversations.has(conversation.id)) {
         return false;
       }
 
@@ -507,14 +635,15 @@ async function loadConversationHistory(reset = false): Promise<void> {
   }
 }
 
-function refreshHistoryAfterResponse(): void {
+function refreshHistoryAfterResponse(ownerId: string): void {
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
   void loadConversationHistory(true);
   const retry = (attempt: number): void => {
-    if (attempt >= 2 || activeConversationTitle.value !== 'Nova conversa') return;
+    const title = conversations.value.find(c => c.id === ownerId)?.title?.trim();
+    if (attempt >= 2 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
     historyRefreshTimer = window.setTimeout(async () => {
       historyRefreshTimer = null;
-      if (activeConversationTitle.value !== 'Nova conversa') return;
+      if (deletedConversations.has(ownerId)) return;
       await loadConversationHistory(true);
       retry(attempt + 1);
     }, attempt === 0 ? 1800 : 3400);
@@ -533,199 +662,220 @@ function closeSidebarDrawer(): void {
   if (sidebarDrawerQuery.matches) isSidebarOpen.value = false;
 }
 
-async function openConversation(targetConversationId: string): Promise<void> {
-  dismissKeyboard();
-  drafts.set(conversationId.value ?? 'new', draft.value);
-  if (isRestoring.value || targetConversationId === conversationId.value) {
+async function openConversation(targetConversationId: string, restoring = false): Promise<void> {
+  if (!restoring && targetConversationId === conversationId.value && !isRestoring.value) {
     closeSidebarDrawer();
     return;
   }
-  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
-  historyRefreshTimer = null;
+  dismissKeyboard();
   cancelMemoryActivityPolling();
-
-  transcription.discard();
-  await stopActiveTurn('conversation_changed');
-
-  isRestoring.value = true;
-  errorMessage.value = null;
+  cancelRecording();
+  stopPlayback();
+  clearToolStatus();
+  const request = ++conversationLoad;
+  const previous = selected.value;
+  const owner = contexts.get(targetConversationId) ?? createConversationContext(targetConversationId);
+  contexts.set(targetConversationId, owner);
+  selected.value = owner;
+  localStorage.setItem(STORAGE_KEY, targetConversationId);
   feedbackTarget.value = null;
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
+  closeSidebarDrawer();
+  resizeComposer();
 
+  // A history response must never replace the live messages of its own turn.
+  if (activeTurn?.owner === owner) {
+    isRestoring.value = false;
+    restoreReadingPosition(owner);
+    return;
+  }
+  isRestoring.value = !owner.loaded;
+  const revision = owner.revision;
   try {
     const conversation = await getConversation(targetConversationId);
-    conversationId.value = conversation.id;
-    draft.value = drafts.get(conversation.id) ?? '';
-    resizeComposer();
-    activeConversationTitle.value = conversation.title ?? 'Nova conversa';
-    activeConversationCreatedAt.value = conversation.createdAt;
-    localStorage.setItem(STORAGE_KEY, conversation.id);
-    messages.value = conversation.messages.map((message) => ({
-      ...message,
-      serverId: message.id
-    }));
+    if (request !== conversationLoad || selected.value !== owner || owner.revision !== revision) return;
+    owner.title = conversation.title ?? 'Nova conversa';
+    owner.createdAt = conversation.createdAt;
+    owner.messages = conversation.messages.map(message => ({ ...message, serverId: message.id }));
+    owner.loaded = true;
     resumeMemoryActivityPolling();
-    closeSidebarDrawer();
-    scrollToLatest(false);
-    focusComposer();
   } catch {
-    errorMessage.value = 'Não foi possível abrir esta conversa.';
-    await loadConversationHistory(true);
+    if (request !== conversationLoad || selected.value !== owner || owner.revision !== revision) return;
+    owner.error = restoring ? 'Não foi possível carregar a conversa anterior.' : 'Não foi possível abrir esta conversa.';
+    if (!owner.loaded) {
+      selected.value = previous !== owner ? previous : newConversation;
+      selected.value.error = owner.error;
+      if (selected.value.id) localStorage.setItem(STORAGE_KEY, selected.value.id);
+      else localStorage.removeItem(STORAGE_KEY);
+      isRestoring.value = false;
+      resizeComposer();
+      restoreReadingPosition(selected.value);
+    }
   } finally {
-    isRestoring.value = false;
+    if (request === conversationLoad && selected.value === owner) {
+      isRestoring.value = false;
+      restoreReadingPosition(owner);
+    }
   }
 }
 
-async function handleSubmit(): Promise<void> {
-  if (!canSend.value) {
-    return;
-  }
+function associateTurnConversation(turn: NonNullable<typeof activeTurn>, id: string): void {
+  const owner = turn.owner;
+  owner.id = id;
+  owner.createdAt ??= turn.user.createdAt;
+  owner.loaded = true;
+  contexts.set(id, owner);
+  turn.user.conversationId = id;
+  turn.user.pending = false;
+  turn.assistant.conversationId = id;
+  turn.accepted = true;
+  owner.retry = null;
+  if (owner === selected.value) localStorage.setItem(STORAGE_KEY, id);
+  const previous = conversations.value.find(c => c.id === id);
+  mergeConversationSummary({ ...previous, id, title: owner.title ?? previous?.title, createdAt: owner.createdAt,
+    updatedAt: new Date().toISOString(), messageCount: Math.max(owner.messages.length, previous?.messageCount ?? 0),
+    lastMessagePreview: turn.user.content });
+}
 
-  const content = draft.value.trim();
+async function handleSubmit(): Promise<void> {
+  if (!canSend.value) return;
+  const owner = selected.value;
+  owner.revision++;
+  const content = owner.draft.trim();
+  unsentConversations.value = unsentConversations.value.filter(context => context !== owner);
   cancelMemoryActivityPolling();
-  transcription.discard();
-  const turnId = crypto.randomUUID();
+  cancelRecording();
+  const retry = owner.retry?.content === content ? owner.retry : null;
+  const turnId = retry?.turnId ?? crypto.randomUUID();
+  const requestConversationId = retry ? retry.conversationId : owner.id;
   const localMessage = createLocalUserMessage(content);
   const assistantMessage = createLocalAssistantMessage();
-
-  draft.value = drafts.get('new') ?? '';
+  const turn = { id: turnId, owner, user: localMessage, assistant: assistantMessage, accepted: false };
+  activeTurn = turn;
+  turnOwner.value = owner;
+  // Consume the submitted draft, including the unsaved-conversation slot.
+  if (newConversation === owner) newConversation = createConversationContext();
+  owner.draft = '';
+  owner.retry = { turnId, content, conversationId: requestConversationId };
   resizeComposer();
-  errorMessage.value = null;
+  owner.error = null;
   clearToolStatus();
-  if (emailConnectionState.value === 'connected') {
-    emailConnectionMessage.value = null;
-  }
+  if (emailConnectionState.value === 'connected') emailConnectionMessage.value = null;
   isLoading.value = true;
   turnStatus.value = 'thinking';
   activeTurnId.value = turnId;
-  chatAbortController = new AbortController();
-  messages.value.push(localMessage, assistantMessage);
+  const controller = new AbortController();
+  chatAbortController = controller;
+  owner.messages.push(localMessage, assistantMessage);
+  owner.following = true;
   scrollToLatest();
-
   let streamedContent = '';
+  const owns = (): boolean => activeTurn === turn && !controller.signal.aborted;
 
   try {
-    await sendMessageStream(
-      {
-        turnId,
-        conversationId: conversationId.value,
-        content
+    await sendMessageStream({ turnId, conversationId: requestConversationId, content }, {
+      onConversation: (eventTurnId, id) => {
+        if (!owns() || eventTurnId !== turnId) return;
+        associateTurnConversation(turn, id);
       },
-      {
-        onConversation: (eventTurnId, streamConversationId) => {
-          if (eventTurnId !== activeTurnId.value) return;
-          if (!conversationId.value) activeConversationCreatedAt.value = localMessage.createdAt;
-          conversationId.value = streamConversationId;
-          localStorage.setItem(STORAGE_KEY, streamConversationId);
-          localMessage.conversationId = streamConversationId;
-          assistantMessage.conversationId = streamConversationId;
-          localMessage.pending = false;
-        },
-        onToken: (eventTurnId, token) => {
-          if (eventTurnId !== activeTurnId.value) return;
-          streamedContent += token;
-          turnStatus.value = 'responding';
-          assistantMessage.content = getCompletedWordPrefix(streamedContent);
-          scrollToLatestDuringStream();
-        },
-        onToolStatus: (eventTurnId, status) => {
-          if (eventTurnId !== activeTurnId.value) return;
-          turnStatus.value = 'thinking';
-          showToolStatus(status.message, status.state);
-        },
-        onDone: ({ turnId: completedTurnId, conversationId: completedConversationId, messageId, conversationTitle, memoryActivity }) => {
-          if (completedTurnId !== activeTurnId.value) return;
-          if (!conversationId.value) activeConversationCreatedAt.value = localMessage.createdAt;
-          conversationId.value = completedConversationId;
-          localStorage.setItem(STORAGE_KEY, completedConversationId);
-          activeConversationTitle.value = conversationTitle ?? activeConversationTitle.value ?? 'Nova conversa';
-          localMessage.conversationId = completedConversationId;
-          localMessage.pending = false;
-          assistantMessage.conversationId = completedConversationId;
-          assistantMessage.serverId = messageId;
-          assistantMessage.memoryActivity = memoryActivity;
-          assistantMessage.content = streamedContent;
-          assistantMessage.pending = false;
-          isLoading.value = false;
-          if (toolStatusState.value === 'completed' || toolStatusState.value === 'failed') {
-            showToolStatus(toolStatusMessage.value ?? '', toolStatusState.value);
-          } else {
-            clearToolStatus();
-          }
+      onToken: (eventTurnId, token) => {
+        if (!owns() || eventTurnId !== turnId) return;
+        streamedContent += token;
+        turnStatus.value = 'responding';
+        assistantMessage.content = getCompletedWordPrefix(streamedContent);
+        if (selected.value === owner) scrollToLatestDuringStream();
+      },
+      onToolStatus: (eventTurnId, status) => {
+        if (!owns() || eventTurnId !== turnId) return;
+        turnStatus.value = 'thinking';
+        if (selected.value === owner) showToolStatus(status.message, status.state);
+      },
+      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, memoryActivity }) => {
+        if (!owns() || completedTurnId !== turnId) return;
+        owner.title = conversationTitle ?? owner.title ?? 'Nova conversa';
+        associateTurnConversation(turn, id);
+        assistantMessage.serverId = messageId;
+        assistantMessage.memoryActivity = memoryActivity;
+        assistantMessage.content = streamedContent;
+        assistantMessage.pending = false;
+        assistantMessage.streaming = false;
+        activeTurn = null;
+        activeTurnId.value = null;
+        turnOwner.value = null;
+        isLoading.value = false;
+        turnStatus.value = 'idle';
+        if (selected.value === owner && (toolStatusState.value === 'completed' || toolStatusState.value === 'failed')) {
+          showToolStatus(toolStatusMessage.value ?? '', toolStatusState.value);
+        } else clearToolStatus();
+        refreshHistoryAfterResponse(id);
+        if (selected.value === owner) {
           scrollToLatest();
-
-          window.setTimeout(() => {
-            assistantMessage.streaming = false;
-          }, 600);
-
-          refreshHistoryAfterResponse();
           startMemoryActivityPolling(assistantMessage);
-          if (voice.autoSpeak.value) {
-            activeTurnId.value = null;
-            void playSpeech(completedTurnId, messageId);
-          } else {
-            void completeTurnWithoutSpeech(completedTurnId).catch(() => undefined);
-            activeTurnId.value = null;
-            turnStatus.value = 'idle';
-          }
-        },
-        onError: (message) => {
-          if (activeTurnId.value !== turnId) return;
-          errorMessage.value = message;
         }
+        // Background completions remain silent and never reclaim navigation/focus.
+        if (voice.autoSpeak.value && selected.value === owner) void playSpeech(turnId, messageId);
+        else void completeTurnWithoutSpeech(turnId).catch(() => undefined);
       },
-      chatAbortController.signal
-    );
+      onError: message => { if (owns()) owner.error = message; }
+    }, controller.signal);
   } catch (error) {
-    if (activeTurnId.value !== turnId) return;
-    if ((error as DOMException).name === 'AbortError') {
-      turnStatus.value = 'interrupted';
+    if (!owns()) return;
+    owner.error ??= error instanceof TypeError
+      ? 'Servidor indisponível. Tente novamente em instantes.'
+      : error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
+    if (!turn.accepted) {
+      // No acceptance acknowledgement: retain the prompt for a manual retry,
+      // with the same turn ID. Never automatically resend a possibly accepted turn.
+      owner.draft = owner.draft ? `${content}\n${owner.draft}` : content;
+      owner.messages = owner.messages.filter(message => message !== localMessage && message !== assistantMessage);
+      if (!owner.id && !unsentConversations.value.includes(owner)) unsentConversations.value.push(owner);
+      if (selected.value === owner) resizeComposer();
     } else {
-      errorMessage.value ??= error instanceof TypeError
-        ? 'Servidor indisponível. Tente novamente em instantes.'
-        : error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
-    }
-    localMessage.pending = false;
-    assistantMessage.pending = false;
-    assistantMessage.streaming = false;
-    clearToolStatus();
-    if (!assistantMessage.content) {
-      messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
+      localMessage.pending = false;
+      assistantMessage.pending = false;
+      assistantMessage.streaming = false;
+      assistantMessage.content = streamedContent;
+      if (!streamedContent) owner.messages = owner.messages.filter(message => message !== assistantMessage);
     }
   } finally {
-    if (activeTurnId.value === turnId) isLoading.value = false;
+    if (activeTurn === turn) {
+      activeTurn = null;
+      activeTurnId.value = null;
+      turnOwner.value = null;
+      isLoading.value = false;
+      turnStatus.value = 'idle';
+      clearToolStatus();
+    }
+    if (chatAbortController === controller) chatAbortController = null;
   }
 }
 
 async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
+  const turn = activeTurn;
   clearToolStatus();
-  const turnId = activeTurnId.value;
-  if (reason === 'user_stop' && turnId) {
-    errorMessage.value = null;
-    const assistantMessage = messages.value[messages.value.length - 1];
-    const userMessage = messages.value[messages.value.length - 2];
-    if (assistantMessage?.role === 'assistant' && assistantMessage.pending) {
-      assistantMessage.pending = false;
-      assistantMessage.streaming = false;
-      assistantMessage.interrupted = true;
-      if (userMessage?.role === 'user') userMessage.pending = false;
-      scrollToLatest(false);
-    }
-  }
+  activeTurn = null; // Invalidate callbacks before abort/cancel cross async boundaries.
   activeTurnId.value = null;
+  turnOwner.value = null;
   chatAbortController?.abort();
   chatAbortController = null;
-  stopPlayback();
   isLoading.value = false;
-  if (turnId) {
-    turnStatus.value = 'interrupted';
-    void cancelTurn(turnId).catch(() => undefined);
-  }
+  if (reason === 'view_unmounted' || activeSpeechOwner === turn?.owner) stopPlayback();
+  if (!turn) return;
+  turn.assistant.pending = false;
+  turn.assistant.streaming = false;
+  turn.assistant.interrupted = true;
+  turn.user.pending = false;
+  turn.owner.retry = null;
+  turnStatus.value = 'interrupted';
+  if (reason === 'user_stop') turn.owner.error = null;
+  // Await explicit cancellation before deleting the owner conversation.
+  await cancelTurn(turn.id).catch(() => undefined);
 }
 
 function stopPlayback(): void {
   activeSpeechPlaybackId = null;
+  activeSpeechOwner = null;
   activeSpeechMessageId.value = null;
   void voice.stop();
   if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
@@ -734,11 +884,13 @@ function stopPlayback(): void {
 async function playSpeech(turnId: string, assistantMessageId: string): Promise<void> {
   const playbackId = crypto.randomUUID();
   activeSpeechPlaybackId = playbackId;
+  activeSpeechOwner = selected.value;
   activeSpeechMessageId.value = assistantMessageId;
-  turnStatus.value = 'preparing_voice';
+  if (!hasActiveTurn.value) turnStatus.value = 'preparing_voice';
   await voice.speak(turnId, assistantMessageId, true);
   if (activeSpeechPlaybackId === playbackId) {
     activeSpeechPlaybackId = null;
+    activeSpeechOwner = null;
     activeSpeechMessageId.value = null;
     if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
   }
@@ -752,16 +904,16 @@ async function checkServerHealth(): Promise<void> {
 function replayMessage(message: LocalChatMessage): void {
   if (!message.serverId) return;
   void (async () => {
-    await stopActiveTurn('replay');
+    stopPlayback();
     const turnId = crypto.randomUUID();
     await playSpeech(turnId, message.serverId!);
   })();
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && transcription.isRecording.value) {
+  if (event.key === 'Escape' && transcription.isBusy.value) {
     event.preventDefault();
-    transcription.discard();
+    cancelRecording();
     return;
   }
 
@@ -772,36 +924,59 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 async function toggleRecording(): Promise<void> {
-  if (transcription.isRecording.value) {
-    transcription.stopRecording();
-    return;
-  }
-
   if (!canStartRecording.value) return;
   stopPlayback();
+  const input = composerInput.value;
+  capture = { owner: selected.value, text: draft.value,
+    start: input?.selectionStart ?? draft.value.length, end: input?.selectionEnd ?? draft.value.length };
+  void dismissKeyboard();
   await transcription.start();
 }
 
-function startNewConversation(): void {
-  dismissKeyboard();
+function startNewConversation(explicit = true): void {
   cancelMemoryActivityPolling();
-  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
-  historyRefreshTimer = null;
-  transcription.discard();
-  void stopActiveTurn('new_conversation');
+  cancelRecording();
+  stopPlayback();
+  clearToolStatus();
+  ++conversationLoad;
+  isRestoring.value = false;
   localStorage.removeItem(STORAGE_KEY);
-  conversationId.value = null;
-  activeConversationTitle.value = null;
-  activeConversationCreatedAt.value = null;
-  messages.value = [];
-  draft.value = drafts.get('new') ?? '';
-  resizeComposer();
-  errorMessage.value = null;
+  selected.value = newConversation;
+  selected.value.error = null;
   feedbackTarget.value = null;
   feedbackErrorMessage.value = null;
   feedbackStatusByMessageId.value = {};
   closeSidebarDrawer();
-  focusComposer();
+  resizeComposer();
+  restoreReadingPosition(selected.value);
+  if (explicit) focusComposer(true);
+}
+
+function openActiveConversation(): void {
+  const owner = activeTurn?.owner;
+  if (!owner) return;
+  if (owner.id) { void openConversation(owner.id); return; }
+  cancelRecording();
+  cancelMemoryActivityPolling();
+  ++conversationLoad;
+  isRestoring.value = false;
+  selected.value = owner;
+  closeSidebarDrawer();
+  resizeComposer();
+  restoreReadingPosition(owner);
+}
+
+function recoverUnsentConversation(): void {
+  const owner = unsentConversation.value;
+  if (!owner) return;
+  cancelRecording();
+  cancelMemoryActivityPolling();
+  ++conversationLoad;
+  isRestoring.value = false;
+  selected.value = owner;
+  closeSidebarDrawer();
+  resizeComposer();
+  restoreReadingPosition(owner);
 }
 
 function requestRenameConversation(conversation: ConversationSummary): void {
@@ -842,11 +1017,14 @@ async function confirmDeleteConversation(): Promise<void> {
   isDeletingConversation.value = true;
 
   try {
+    if (capture?.owner.id === targetId) cancelRecording();
+    if (activeTurn?.owner.id === targetId) await stopActiveTurn('conversation_deleted');
     await deleteConversation(targetId);
+    deletedConversations.add(targetId);
+    contexts.delete(targetId);
     conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
   if (conversationId.value === targetId) {
-      await stopActiveTurn('conversation_deleted');
-      startNewConversation();
+      startNewConversation(false);
     }
 
     deleteTarget.value = null;
@@ -910,6 +1088,9 @@ watch(isRestoring, restoring => {
 defineExpose({ openConversation: navigateToConversation });
 onMounted(() => {
   syncViewportHeight();
+  layoutObserver = new ResizeObserver(handleMessagesLayout);
+  if (messagesContainer.value) layoutObserver.observe(messagesContainer.value);
+  if (messagesContent.value) layoutObserver.observe(messagesContent.value);
   proactiveObserver = new IntersectionObserver(proactiveVisibilityChanged, { root: messagesContainer.value, threshold: [0, 1] });
   messagesContainer.value?.addEventListener('scroll', proactiveVisibilityChanged, { passive: true });
   window.addEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.addEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
@@ -957,7 +1138,6 @@ onMounted(() => {
   void voice.refreshStatus();
   void transcription.refreshStatus();
   void checkServerHealth();
-  focusComposer();
 });
 
 onBeforeUnmount(() => {
@@ -972,6 +1152,10 @@ onBeforeUnmount(() => {
   emailConnectionAbortController?.abort();
   stopObservingGoogle?.();
   transcription.dispose();
+  capture = null;
+  ++conversationLoad;
+  layoutObserver?.disconnect();
+  if (streamScrollFrame !== null) cancelAnimationFrame(streamScrollFrame);
   void stopActiveTurn('view_unmounted');
   if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
 
@@ -1000,7 +1184,6 @@ onBeforeUnmount(() => {
         :app-version="appVersion"
         :conversations="conversations"
         :active-conversation-id="conversationId"
-        :disabled="isLoading || isRestoring"
         :open="isSidebarOpen"
         :has-more="hasMoreHistory"
         :is-loading-more="isLoadingHistory"
@@ -1033,7 +1216,11 @@ onBeforeUnmount(() => {
       </header>
 
       <div v-if="$slots.notice" class="chat-notices"><slot name="notice" /></div>
-      <div ref="messagesContainer" class="messages" aria-live="polite">
+      <div ref="messagesContainer" class="messages" aria-live="polite" tabindex="0"
+        @scroll="handleMessagesScroll" @wheel.passive="handleMessagesWheel"
+        @touchstart.passive="handleMessagesTouchStart" @touchmove.passive="handleMessagesTouchMove"
+        @pointerdown="noteScrollIntent(0)" @pointermove="($event.buttons === 1) && noteScrollIntent(0)" @keydown="handleMessagesKey">
+        <div ref="messagesContent" class="messages-content">
         <div v-if="isRestoring" class="empty-state">
           <AegisMark />
           <span>Carregando conversa...</span>
@@ -1055,7 +1242,7 @@ onBeforeUnmount(() => {
             :feedback-status="feedbackStatusByMessageId[message.serverId ?? message.id]"
             :is-playing="voice.isBusy.value && message.serverId === activeSpeechMessageId"
             :activity-status="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id
-              ? (toolStatusMessage ?? (message.pending && isLoading && (turnStatus === 'thinking' || !message.content.trim()) ? 'Pensando…' : null))
+              ? (toolStatusMessage ?? (message.pending && selectedHasActiveTurn && isLoading && (turnStatus === 'thinking' || !message.content.trim()) ? 'Pensando…' : null))
               : null"
             :activity-state="toolStatusState === 'completed' ? 'completed' : toolStatusState === 'failed' ? 'failed' : 'working'"
             @feedback="openFeedback"
@@ -1065,13 +1252,25 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
-        <div ref="messagesEnd" class="messages-end"></div>
+        <div class="messages-end"></div>
+        </div>
       </div>
 
-      <form class="composer" @submit.prevent="hasActiveTurn ? stopActiveTurn() : handleSubmit()">
+      <form class="composer" @submit.prevent="selectedHasActiveTurn ? stopActiveTurn() : handleSubmit()">
+        <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
+          Uma mensagem não pôde ser enviada.
+          <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
+        </p>
+        <p v-if="backgroundTurn" class="background-turn-notice" role="status">
+          Aegis está respondendo em outra conversa.
+          <button type="button" @click="openActiveConversation">Ver conversa</button>
+          <button type="button" aria-label="Interromper geração em outra conversa" @click="stopActiveTurn()">Interromper</button>
+        </p>
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
-        <div class="composer-field">
+        <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
+          @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
+        <div v-else class="composer-field">
           <textarea
             v-model="draft"
             rows="1"
@@ -1085,35 +1284,23 @@ onBeforeUnmount(() => {
 
           <button
             class="record-button"
-            :class="{ 'record-button--recording': transcription.isRecording.value, 'record-button--transcribing': transcription.isTranscribing.value }"
             type="button"
-            :disabled="transcription.isTranscribing.value || (!transcription.isRecording.value && !canStartRecording)"
-            :aria-label="transcription.isRecording.value ? 'Encerrar gravação' : transcription.isTranscribing.value ? 'Transcrevendo gravação' : 'Gravar mensagem de voz'"
-            :title="transcription.isRecording.value ? 'Encerrar gravação' : transcription.isTranscribing.value ? 'Transcrevendo…' : 'Gravar mensagem de voz'"
+            :disabled="!canStartRecording"
+            aria-label="Gravar mensagem de voz"
+            title="Gravar mensagem de voz"
             @click="toggleRecording"
           >
-            <span v-if="transcription.isRecording.value" class="recording-bars" aria-hidden="true"><i :style="{ height: `${2 + transcription.inputLevel.value * 18}px` }"/><i :style="{ height: `${2 + transcription.inputLevel.value * 24}px` }"/><i :style="{ height: `${2 + transcription.inputLevel.value * 18}px` }"/></span>
-            <svg v-else viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
           </button>
 
-          <button
-            v-if="transcription.isBusy.value"
-            class="record-discard-button"
-            type="button"
-            :aria-label="transcription.isTranscribing.value ? 'Cancelar transcrição' : 'Descartar gravação'"
-            :title="transcription.isTranscribing.value ? 'Cancelar transcrição' : 'Descartar gravação'"
-            @click="transcription.discard"
-          ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></button>
-
-          <button class="send-button" :class="{ 'send-button--stop': hasActiveTurn }" type="submit" :disabled="(!hasActiveTurn && !canSend) || isRestoring || emailConnectionState === 'pending'" :aria-label="hasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
-            <svg v-if="hasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
+          <button class="send-button" :class="{ 'send-button--stop': selectedHasActiveTurn }" type="submit" :disabled="(!selectedHasActiveTurn && !canSend) || isRestoring || emailConnectionState === 'pending'" :aria-label="selectedHasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
+            <svg v-if="selectedHasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
             <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
           </button>
         </div>
-        <div v-if="transcription.isRecording.value" class="voice-input-status"><meter min="0" max="1" :value="transcription.inputLevel.value" aria-label="Nível real da entrada de áudio" /><span role="status">{{ transcription.inputStatus.value }}</span></div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
-        <span class="composer-hint">{{ transcription.isRecording.value ? 'Gravando… · Esc para descartar' : transcription.isTranscribing.value ? 'Transcrevendo…' : transcription.notice.value ?? 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
       </form>
       </section>
     </div>
