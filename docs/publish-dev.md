@@ -1,7 +1,8 @@
 # Publicar desenvolvimento para teste
 
 No host privado já autorizado, com Docker local, Python 3, Git, Node.js e `gh` autenticado
-como proprietário, use o checkout dos controles revisados:
+como identidade autorizada do repositório, use o checkout dos controles revisados.
+Após implementar, testar, fazer commit e push:
 
 ```bash
 python3 scripts/publish-dev.py --ref fix/v0.7.2-ux-proactivity
@@ -22,14 +23,18 @@ verificável é reconstruído uma vez. `--rebuild backend` ou `--rebuild pwa` fo
 somente esse componente privado, sem forçar uma versão nativa; `--full` força todos.
 API nova provoca apenas reload do nginx da PWA para resolver seu novo IP.
 
-São executados testes pertinentes nos bytes selecionados, builds e verificação da
-imagem efetivamente iniciada, HTTPS, API v1 e disponibilidade/cache do service
-worker (incluindo o teste de upgrade em Chromium instalado no host). O comando usa a configuração efetiva, preservando os mounts, volumes,
+O agente executa os testes pertinentes antes do commit/push. `publish-dev` constrói
+somente os componentes privados selecionados e verifica a integridade da implantação:
+imagem/SHA efetivamente iniciados, HTTPS, API v1 e disponibilidade/cache do service
+worker. Não repete as suítes de desenvolvimento nem a homologação extensa de
+consumo. O comando usa a configuração efetiva, preservando mounts, volumes,
 credenciais e bancos; alterações de Compose exigem reconciliar a instalação antes
-da publicação. Testes de consumo e homologação estável continuam separados.
+da publicação. Os health checks reais são concluídos nessa preparação, sem
+repetição durante os builds nativos.
 
-Migration pendente precisa de revisão exata em `SAFE_MIGRATIONS` no script. Nome
-ou palavras como AddColumn não provam segurança. A revisão considera Up, dados e
+Sem migrations pendentes, não há backup, restauração de ensaio nem execução do
+migrador. Migration pendente precisa de revisão exata em `SAFE_MIGRATIONS` no
+script. Nome ou palavras como AddColumn não provam segurança. A revisão considera Up, dados e
 contratos antigos; Down nunca é executado. A API escritora para por uma janela
 curta; o dump PostgreSQL e Data Protection são salvos com a configuração/FCM em
 diretório privado. O dump é restaurado em PostgreSQL descartável isolado; os hashes
@@ -42,35 +47,50 @@ restauração do banco exige procedimento administrativo próprio, em destino se
 Qdrant e Neo4j não são alterados nem reiniciados por publicação de imagens.
 
 Quando o diff afeta aplicativos, a operação escolhe a próxima `unstable.N` no
-ledger e chama **uma vez** `aegis-native-preview.yml` da main com `publish_dev=true`.
-O workflow reutiliza a reserva, builds sem segredos e verificadores existentes.
-Um único job protegido assina Android e Windows e publica/promove os mesmos bytes,
-com uma aprovação de `aegis-native-signing`. O candidato não executa nesse job.
-Não há segundo workflow de promoção na rotina. O comando permanece aberto e
-atesta a saúde privada a cada 20 segundos; o job confere atestado recente do
-proprietário para o SHA selecionado, inclusive imediatamente antes de avançar o
-feed. Sem atestado válido, o feed não avança. A instalação nos Nodes continua
-dependendo da confirmação no aplicativo, em Configurações → Atualizações.
+ledger e despacha **uma vez** `aegis-native-preview.yml` da `main` com
+`publish_dev=true`. A preparação fixa SHA, identidades implantadas e contratos de
+compatibilidade API/dados. O input `deployment` contém `sourceCommit`, os SHAs
+implantados de `backend`/`pwa` e `compatibility: { api: 1, nodeData: 1 }`; o plano
+e a reserva conservam esses metadados, sem prazo de validade. O workflow
+confere a solicitação autorizada e os contratos, reserva versão/código, compila
+sem segredos, verifica os artefatos, assina Android e Windows com código confiável
+e publica os mesmos bytes no feed recomendado. O código candidato nunca executa
+no job que recebe as chaves oficiais.
 
-Não altere reviewers, permissões nem environments para evitar a aprovação. O
-bootstrap dessa opção precisa entrar na main por PR de infraestrutura com o check
-`Aegis Node CI result` aprovado. Depois, qualquer branch de desenvolvimento pode
-ser a fonte. Preview manual e `aegis-native-promote.yml` continuam disponíveis;
-rollbacks continuam eventos novos e versionados. Build ou assinatura falhos
-consomem a reserva; uma nova tentativa usa o próximo número, nunca outros bytes
-sob a mesma versão. A publicação imutável é retomável com os mesmos bytes pelos
-controles existentes; não remova releases, ledger ou feed para repetir.
-Falhas transitórias de upload/promoção têm até três tentativas com os mesmos bytes
-no mesmo job aprovado, sem outra reserva, assinatura ou aprovação. Se persistirem,
-a operação falha e conserva o recomendado anterior.
+O comando termina depois de solicitar a execução; o terminal pode ser fechado.
+Não envia heartbeat nem status com validade curta, não acompanha o workflow por
+horas e não precisa de uma sessão no servidor privado durante a assinatura.
+O GitHub conclui a publicação sem aprovação interativa e sem um segundo workflow
+de promoção. O resultado do comando distingue solicitação iniciada de publicação
+concluída. `phase=native-requested` e `success=true` significam solicitação aceita;
+confira a execução no GitHub e o feed recomendado para afirmar publicação concluída.
+Nos Nodes compatíveis, a atualização aparece em **Configurações → Atualizações**;
+a instalação continua exigindo a ação normal do usuário no aplicativo.
+
+Os controles entram na `main` pelo PR de infraestrutura com `Aegis Node CI result`
+aprovado; a proteção da branch permanece obrigatória. O environment
+`aegis-native-signing` conserva as chaves oficiais e a allowlist de `main`/`node-v*`,
+sem reviewer obrigatório para a rotina autorizada. Mudanças administrativas devem
+usar a configuração do GitHub, sem bypass nem aprovação automática de reviewers.
+Preview focada, promoção manual de artefatos existentes e release estável continuam
+operações explícitas separadas; não participam da rotina `publish-dev`.
+
+Build ou assinatura falhos consomem a reserva e preservam o recomendado anterior.
+Uma nova tentativa de build usa o próximo número; nunca outros bytes sob a mesma
+versão. Falha parcial de upload mantém o draft e o feed anterior; a publicação
+imutável pode retomar somente os mesmos bytes. Falhas transitórias de upload têm
+até três tentativas no mesmo job, sem reconstrução, nova assinatura ou intervenção
+humana. Não remova releases, ledger ou feed para repetir.
 
 Cada execução grava plano, SHA, identidades Docker, migrations, checks existentes,
-resultados de testes, backup e estado final em
+evidência de integridade, backup quando necessário e solicitação nativa em
 `~/.local/state/aegis/publish-dev/<execução>/`. `current.json` registra a implantação
-privada saudável e as versões recomendada/anterior. Arquivos `private` contêm
+privada saudável e o feed observado; a conclusão nativa é registrada no GitHub.
+`native-run.json` guarda versão, SHA, metadados e o link da execução quando já
+disponível. Arquivos `private` contêm
 configuração e evidência sensível: não envie esses arquivos ao GitHub. Uma trava
-local e comparações de containers/Compose/feed bloqueiam execução concorrente;
-o ledger e o feed mantêm seu avanço por compare-and-swap no GitHub.
+local e comparações de containers/Compose/feed protegem a preparação privada;
+a concorrência do workflow e o avanço fast-forward protegem ledger e feed no GitHub.
 
 Falha de build não altera a instalação. Falha de migration ou saúde tenta recuperar
 as imagens anteriores somente com compatibilidade comprovada. Falha nativa depois

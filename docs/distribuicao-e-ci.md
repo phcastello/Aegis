@@ -2,8 +2,9 @@
 
 Para disponibilizar desenvolvimento para teste, use a operação única
 [publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
-aplicativos, reserva, build, assinatura e recomendação com uma aprovação protegida.
-Os comandos separados descritos abaixo continuam como ferramentas manuais.
+aplicativos, reserva, build, assinatura e recomendação em uma execução autônoma,
+sem aprovação interativa. Os comandos separados descritos abaixo permanecem para
+homologação focada, estáveis e manutenção explícita.
 
 Este documento descreve os caminhos implementados e distingue suas pendências operacionais. Os instaladores v0.7.1 publicados permanecem inalterados; editar workflows não demonstra uma distribuição nova.
 
@@ -57,7 +58,7 @@ separado e pode ser v0.7.0; testes em runners não comprovam hardware do proprie
 1. Crie a branch designada a partir de `origin/main`, por exemplo `git switch -c fix/assunto origin/main`. Se ela já existir, reutilize-a e sincronize sem sobrescrever alterações locais; preserve outras worktrees.
 2. Execute as verificações dos componentes afetados antes do commit/push, conforme [AGENTS.md](../AGENTS.md). Para UI: testes, typecheck/build e expectativas visuais; para backend: camadas/integrações pertinentes; para capability: contratos de todas as plataformas. Informe limitações do ambiente.
 3. Faça commit e `git push -u origin <branch>`. Push de desenvolvimento não inicia a matriz remota. Abra ou mantenha o PR em draft enquanto estiver iterando.
-4. Solicite uma preview manual do SHA completo pelo procedimento abaixo. Gerar instaladores não atualiza o backend.
+4. Quando o proprietário solicitar a disponibilização para teste, execute `python3 scripts/publish-dev.py --ref <branch-ou-SHA>` no host privado autorizado. O comando publica API/PWA conforme o diff e inicia a distribuição nativa quando necessária; o terminal pode ser fechado após o retorno.
 5. Instale deliberadamente sobre uma instalação compatível e teste os dispositivos reais, preservando identidade e dados.
 6. Quando a alteração estiver pronta, marque o PR como pronto para revisão. Confira **Aegis Node CI result** no candidato atual antes da integração autorizada.
 7. Antes de lançar, solicite homologação de release proporcional ao risco ou a matriz completa. A publicação estável continua sendo outra operação protegida e autorizada.
@@ -69,7 +70,7 @@ A seleção permanece em [select-node-ci.mjs](../.github/scripts/select-node-ci.
 | Estágio | Gatilho e verificações |
 | --- | --- |
 | Desenvolvimento | Push em `fix/*`, `feat/*` ou outra branch não dispara workflow. Eventos de PR draft executam apenas testes dos scripts de CI e checagem documental, sem builds nativos ou medições. O gate de integração fica **falhando deliberadamente**, com mensagem de que draft não é aceite; não apresenta um skip como aprovação. |
-| Preview | Somente **Aegis Native Preview**, manual, com SHA e versão explícitos. Compilação, contratos essenciais, identidade, versão, distribuição e assinatura isolada; sem emuladores de consumo, baselines recompilados ou homologação integral. |
+| Preview | **Aegis Native Preview**, por solicitação explícita de `publish-dev` ou homologação manual. Compilação, contratos essenciais, identidade, versão, distribuição e assinatura isolada; `publish-dev` também publica e recomenda na mesma execução. Sem emuladores de consumo, baselines recompilados ou homologação integral. |
 | Integração | PR aberto/pronto, `ready_for_review`, `synchronize`, `reopened`, `edited` e `merge_group/checks_requested`; também push em `main` e execução manual. Seleciona backend/migrations/transportes, interfaces, Windows/Android e identidade pertinentes. Android conserva framework API 26/35 debug e minificado; Windows conserva instalação/upgrade/inicialização e armazenamento. **Sem janelas longas de consumo nem recompilação de baseline para idle.** |
 | Release | Execução manual `stage=release`, com `base_ref` completo para selecionar riscos, ou `full_matrix=true`. Mudanças de geofencing/background/energia/áudio, dependências e escopo desconhecido conservam medições relacionadas. UI/documentação conhecidas não justificam bateria. O publicador continua exigindo a **matriz completa**, incluindo identidade e validações de release assinada. |
 
@@ -100,46 +101,62 @@ Nenhuma regra existente foi removida. Preview e validação focada não substitu
 esse gate, que deve aprovar o candidato real antes do merge. PR #19 permanece
 draft; somente o PR separado de infraestrutura pode ser integrado nesta ativação.
 
-## Preview e promoção protegidas
+## Publicação de desenvolvimento e manutenção manual
 
-Os workflows são despachados de `main`. O SHA de fonte é resolvido e registrado
-por completo; pode pertencer à branch de desenvolvimento deste repositório.
-A primeira candidata v2 natural é `.2`, mas deve-se conferir ledger, releases e
-runs admitidos antes de escolher a versão. Nunca reutilizar uma reserva.
+A rotina é [publish-dev](publish-dev.md): uma identidade autorizada solicita a
+publicação, o comando valida a implantação privada e despacha o workflow da
+`main`. SHA, implantações e contratos API/dados são registrados na preparação e
+conferidos pelo plano confiável. Não há heartbeat, status com TTL nem consulta
+contínua ao servidor privado. Uma execução reserva, compila, verifica, assina,
+publica os arquivos imutáveis e atualiza o feed; o processo local já pode ter
+terminado. Push e PR não publicam automaticamente.
+
+O environment `aegis-native-signing` mantém as chaves oficiais e sua allowlist
+exata de `main` e tags `node-v*`, sem reviewer obrigatório. A solicitação explícita
+é verificada pelo controle confiável; não há aprovação de assinatura ou promoção
+na rotina de desenvolvimento. Mudanças administrativas são feitas na configuração
+do GitHub, preservando restrições de branch e segredos. A variável pública
+`AEGIS_ANDROID_FIREBASE_CLIENT_B64` contém apenas o cliente Firebase Android
+existente, nunca service account.
+
+O SHA de fonte é registrado por completo e deve pertencer à branch indicada do
+mesmo repositório. O build tem token somente de leitura e não recebe as chaves:
+Android usa chave descartável e Windows gera NSIS sem assinatura oficial do
+updater. Runners separados executam somente código confiável da `main` para
+verificar/reassinar os bytes; instaladores candidatos não são executados no job
+de assinatura. Os finais incluem instalador, `preview.json`, `SHA256SUMS` e
+assinatura Windows. Assinatura do updater Windows não é Authenticode nem remove
+SmartScreen.
+
+Confira ledger, releases e runs admitidos antes de escolher uma distribuição.
+Uma falha consome a reserva; nova compilação exige versão/código novos. Nunca
+reutilize uma reserva antiga para bytes diferentes ou reexecute um run antigo
+para produzir outra assinatura. Artefatos expirados exigem uma nova distribuição.
+
+Para homologação focada ou preparação explícita de uma estável, o caminho manual
+continua disponível; ele não substitui a rotina de desenvolvimento:
 
 ```bash
 gh workflow run aegis-native-preview.yml --repo phcastello/Aegis --ref main \
-  -f sha=<SHA-completo-revisado> -f branch=fix/v0.7.2-ux-proactivity \
-  -f version=0.7.2-unstable.2 -f kind=normal -f platform=both
+  -f sha=<SHA-completo-revisado> -f branch=<branch-do-repositorio> \
+  -f version=<nova-versao-nao-reservada> -f kind=normal -f platform=both
 ```
 
-`platform=android` ou `windows` permite homologação focada; a promoção exige
-`both`. O build não recebe chaves oficiais: Android usa chave descartável;
-Windows gera NSIS sem assinatura oficial do updater. Runners separados executam
-somente código confiável da main para verificar/reassinar os bytes. O environment
-`aegis-native-signing` exige reviewer, mantém bypass administrativo desabilitado
-e allowlist exata de `main` e tags `node-v*`. As chaves oficiais ficam somente
-nesse environment. A variável pública `AEGIS_ANDROID_FIREBASE_CLIENT_B64` contém
-apenas o cliente Firebase Android existente, nunca service account.
-
-Aprove no GitHub a assinatura somente após revisar SHA, versão, plano e builds.
-Os finais incluem instalador, `preview.json`, `SHA256SUMS` e assinatura Windows.
-Os intermediários duram um dia; os finais,14 dias. Build e assinatura não publicam
-atualização. Artefatos expirados exigem nova reserva/build, sem novos bytes sob
-uma identidade já reservada.
-
-Após sucesso e autorização explícita da distribuição:
+Sem `publish_dev=true`, esse caminho produz artefatos assinados e não recomenda
+uma atualização. `platform=android` ou `windows` permite homologação focada; uma
+recomendação exige `both`. Para publicar os mesmos bytes de uma execução manual
+bem-sucedida, com autorização explícita:
 
 ```bash
 gh workflow run aegis-native-promote.yml --repo phcastello/Aegis --ref main \
-  -f run_id=<run-v2-aprovado> -f publish=true
+  -f run_id=<run-v2-bem-sucedido> -f publish=true
 ```
 
-A promoção pede nova aprovação do environment, verifica plano/reserva/origem,
-hashes e assinaturas e só então publica a release e avança o recomendado.
-`publish=false` não publica. Assinatura do updater Windows não é Authenticode
-nem remove SmartScreen. Estáveis conservam a matriz completa de release;
-previews e recuperações não exigem automaticamente medições longas de consumo.
+Essa ferramenta de manutenção verifica plano/reserva/origem, hashes e assinaturas
+antes de publicar a release e avançar o recomendado. Não é uma segunda etapa de
+`publish-dev`. `publish=false` não publica. Estáveis conservam a matriz completa
+de release e exigem autorização própria; previews e recuperações não repetem
+automaticamente medições longas de consumo.
 
 Para a instalação inicial, baixar da release versionada o APK ou NSIS assinado.
 Android: mesmo `com.aegis.node`, certificado oficial e código superior; instalar
@@ -150,13 +167,32 @@ publicações compatíveis, usar **Configurações → Atualizações**, sem ZIP
 Se o aplicativo não abrir, usar externamente o instalador oficial de recuperação
 com código superior; nunca instalar um histórico inferior nem apagar o perfil.
 
-## Backend e lançamento estável
+## Backend, dados e lançamento estável
 
-Preview do aplicativo não implica deploy da API. Para teste integrado da v0.7.2 contra a infraestrutura privada existente, a API correspondente e a migration **`20261022133709_ReminderInterventions`** são pré-requisitos. Não é necessário manter outro ambiente permanente.
+`publish-dev` atualiza a API/PWA somente quando seus componentes mudam. Uma
+alteração apenas de backend não compila Android/Windows. A preparação valida a
+saúde real e os contratos necessários aos clientes existentes; os metadados
+verificáveis acompanham a distribuição nativa, sem novos health checks durante
+compilação, assinatura ou publicação.
 
-Obtenha autorização explícita para atualizar a infraestrutura real. Siga [operação privada](operacao-privada.md): registre imagem/commit anterior; preserve projeto Compose, volumes, Data Protection, FCM e configurações; pare escritores numa janela autorizada; produza backup e valide restauração em destino descartável; compile a imagem aprovada; execute o migrador administrativo **antes de iniciar a API nova**; valide health, schema, pareamento, lembretes e intervenções; só então teste os Nodes preview. Em falha, pare escritores e recupere imagem/esquema compatíveis ou restaure backup em destino controlado. Não execute testes destrutivos nem migrations de CI nos bancos reais. Nenhum desses comandos é executado pela preview.
+O script consulta o histórico EF real. Sem migrations pendentes, não executa
+backup/restauração de ensaio nem o migrador. Com migration pendente, preserva a
+revisão exata, backup restaurado e verificado, compatibilidade com a API anterior
+e aplicação administrativa antes da nova API. Migrations destrutivas ou incertas
+continuam bloqueadas. Consulte [operação privada](operacao-privada.md). Volumes,
+Data Protection, FCM, credenciais e identidades são preservados; PostgreSQL,
+Qdrant e Neo4j não são reiniciados para publicar código. Não execute testes de CI
+ou testes destrutivos nos bancos reais.
 
-Depois de integração e aceite físico, prepare a release estável com versão sincronizada, tags e publicação somente mediante autorização. **Aegis Native Preview** também aceita estável, exigindo a matriz completa antes do build; a publicação continua separada em **Aegis Native Promote**. A ativação atual autoriza somente preview. **Aegis Node Release** permanece histórico/manual, restrito ao controle da main e a fontes ancestrais revisadas; distribuições v2 são recusadas nesse caminho. As verificações de instalador Windows assinado e APK oficial foram preservadas. O caminho legado só pode compilar código histórico integrado à main após aprovação; código arbitrário de branches utiliza exclusivamente o isolamento v2. Por isso a revisão do código/tag autorizado continua necessária.
+Depois de integração e aceite físico, prepare a release estável com versão
+sincronizada, tags e publicação somente mediante autorização específica.
+**Aegis Native Preview** também aceita estável, exigindo a matriz completa antes
+do build; a manutenção manual publica por **Aegis Native Promote**. `publish-dev`
+aceita apenas uma nova `unstable.N`. **Aegis Node Release** permanece histórico e
+manual, restrito ao controle da `main` e a fontes ancestrais revisadas;
+distribuições v2 são recusadas nesse caminho. As verificações de instalador
+Windows assinado e APK oficial permanecem obrigatórias. Código arbitrário de
+branches utiliza exclusivamente o isolamento v2.
 
 ## Verificação da infraestrutura e desempenho
 
@@ -169,6 +205,6 @@ npm run test:rust --prefix apps/aegis-node
 actionlint
 ```
 
-Os testes do seletor cobrem eventos draft/pronto, novos commits/base, subsistemas, dependências, preview/release, falha de histórico e gates omitidos/falhos. Os testes dos workflows verificam concorrência, isolamento, ausência de publicação/feeds e preservação dos gates de release. Os testes de preview cobrem SHA/branch, versão monotônica, sincronização temporária, procedência e falha de API/configuração. A validação sintática usa actionlint. Não se executa a matriz de duas horas para validar YAML.
+Os testes do seletor cobrem eventos draft/pronto, novos commits/base, subsistemas, dependências, preview/release, falha de histórico e gates omitidos/falhos. Os testes dos workflows verificam concorrência, isolamento, publicação explícita e preservação dos gates de release. Os testes de preview cobrem SHA/branch, versão monotônica, sincronização temporária, procedência e falha de API/configuração. A validação sintática usa actionlint. Não se executa a matriz de duas horas para validar YAML.
 
-Evidência anterior: run [39803911696](https://github.com/phcastello/Aegis/actions/runs/39803911696), Android API 35 **2h02min31s** (15:22:12–17:24:43 UTC); API 26 **23min01s**; ARM64 **11min47s**. A remoção das seis janelas de dez minutos e duas de repouso do estágio de integração elimina **80 minutos programados**, além da recompilação do baseline. Isso não é uma medição de duração final: compilação, testes framework, filas e caches continuam variáveis. Preview tampouco tem prazo garantido antes da primeira execução real. O run [39852679629](https://github.com/phcastello/Aegis/actions/runs/39852679629), SHA `e1ebd7f`, comprovou o caminho draft em **25 segundos** (20:53:14–20:53:39 UTC): testes JS/Python e documentação aprovados, nenhum job nativo executado e gate de integração recusado deliberadamente por estar em desenvolvimento. A duração anterior total desse pipeline no draft foi **2h04min20s** (15:20:31–17:24:51 UTC), incluindo o job API 35 acima. Essa redução mede a iteração em draft, não uma integração ou preview aprovada. Homologação e assinatura continuam pendentes até sua execução autorizada.
+Evidência anterior: run [39803911696](https://github.com/phcastello/Aegis/actions/runs/39803911696), Android API 35 **2h02min31s** (15:22:12–17:24:43 UTC); API 26 **23min01s**; ARM64 **11min47s**. A remoção das seis janelas de dez minutos e duas de repouso do estágio de integração elimina **80 minutos programados**, além da recompilação do baseline. Isso não é uma medição de duração final: compilação, testes framework, filas e caches continuam variáveis. Preview tampouco tem prazo garantido antes da primeira execução real. O run [39852679629](https://github.com/phcastello/Aegis/actions/runs/39852679629), SHA `e1ebd7f`, comprovou o caminho draft em **25 segundos** (20:53:14–20:53:39 UTC): testes JS/Python e documentação aprovados, nenhum job nativo executado e gate de integração recusado deliberadamente por estar em desenvolvimento. A duração anterior total desse pipeline no draft foi **2h04min20s** (15:20:31–17:24:51 UTC), incluindo o job API 35 acima. Essa redução mede a iteração em draft, não uma integração ou preview aprovada. Essa evidência histórica não demonstra a publicação nativa atual; cada nova distribuição exige seu próprio resultado e conferência do feed.

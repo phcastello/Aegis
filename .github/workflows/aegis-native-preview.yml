@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       publish_dev:
-        description: Publish both signed previews and recommend in the same protected approval after private-host validation
+        description: Publish both signed previews and recommend after private-host preparation
         required: false
         default: false
         type: boolean
+      deployment:
+        description: Prepared deployment JSON with sourceCommit, backend and pwa SHAs and compatibility contracts
+        required: false
+        type: string
       sha:
         description: Full 40-character commit SHA in this repository
         required: true
@@ -104,6 +108,8 @@ jobs:
           ROLLBACK_OF: ${{ inputs.rollback_of }}
           RESTORES_VERSION: ${{ inputs.restores_version }}
           COMPATIBILITY_CONFIRMED: ${{ inputs.compatibility_confirmed }}
+          PUBLISH_DEV: ${{ inputs.publish_dev }}
+          DEPLOYMENT: ${{ inputs.deployment }}
         run: node .github/scripts/native-preview.mjs resolve
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -207,13 +213,12 @@ jobs:
   sign:
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' }}
-    # Owner approval is required here. Only trusted main code runs in this job;
+    # Explicit authorized dispatch is the request. Only trusted main code runs here;
     # candidate installers are parsed/signed as data, never installed or executed.
     environment: aegis-native-signing
     permissions:
-      contents: write # Only trusted code inside the one approved signing/publication job.
+      contents: write # Trusted main code signs and publishes in this single job.
       actions: read
-      statuses: read
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -250,11 +255,6 @@ jobs:
           if [ "$PLATFORM" != android ]; then
             node .github/scripts/native-preview.mjs verify-input candidate-windows preview-plan/preview.json Windows-x86_64
           fi
-      - if: inputs.publish_dev
-        name: Require freshly validated private deployment before protected signing
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/publish-dev-native.mjs check unused preview-plan/preview.json
       - if: inputs.platform != 'windows'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -332,7 +332,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - if: inputs.publish_dev
-        name: Publish immutable distribution then recommend after private readiness recheck
+        name: Publish immutable distribution and update the recommended feed
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/publish-dev-native.mjs publish release-assets preview-plan/preview.json signed-android signed-windows

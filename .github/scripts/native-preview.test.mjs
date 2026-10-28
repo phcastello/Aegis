@@ -15,7 +15,7 @@ const sha = 'a'.repeat(40);
 const input = { sha, branch: 'fix/v0.7.2-ux-proactivity', number: '21', platform: 'both' };
 const context = { eventName: 'workflow_dispatch', ref: 'refs/heads/main', repository: 'phcastello/Aegis',
   workflowRef: 'phcastello/Aegis/.github/workflows/aegis-native-preview.yml@refs/heads/main' };
-const environment = { name: 'aegis-native-signing', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'owner' } }] }],
+const environment = { name: 'aegis-native-signing', protection_rules: [],
   deployment_branch_policy: { custom_branch_policies: true } };
 const policies = { branch_policies: [{ name: 'main', type: 'branch' }, { name: 'node-v*', type: 'tag' }] };
 const plan = { schema: 2, platform: 'both', sha, sourceCommit: sha, sourceVersion: '0.7.2', kind: 'normal', compatibility: {api:1,nodeData:1}, publishedAt:'2026-10-23T00:00:00.000Z',
@@ -35,10 +35,10 @@ test('signing control must be manually dispatched from the registered main workf
     assert.throws(() => assertTrustedDispatch({ ...context, ...fields }));
   }
 });
-test('missing review approval or unbounded environment branch policy fails closed', () => {
+test('signing accepts noninteractive authorization while unbounded environment policies fail closed', () => {
   assertEnvironment(environment, policies);
   assertEnvironment(environment, { branch_policies: [{ name: 'main' }] }); // Legacy API branch response.
-  assert.throws(() => assertEnvironment({ ...environment, protection_rules: [] }, policies));
+  assertEnvironment({ ...environment, protection_rules: [] }, policies);
   assert.throws(() => assertEnvironment({ ...environment, deployment_branch_policy: null }, policies));
   assert.throws(() => assertEnvironment(environment, { branch_policies: [{ name: '*', type: 'branch' }] }));
   assert.throws(() => assertEnvironment(environment, { branch_policies: [...policies.branch_policies, { name: '*', type: 'tag' }] }));
@@ -128,7 +128,9 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
   const calls = [];
   const git = githubFixture();
   const v2Releases = [], v2Runs = [];
-  let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false, sourceVersion = '0.7.2';
+  let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false, sourceVersion = '0.7.2', permission = 'admin';
+  const prepared = { sourceCommit: sha, backend: 'c'.repeat(40), pwa: 'd'.repeat(40), compatibility: {api:1,nodeData:1} };
+  let feedCompatibility = prepared.compatibility;
   const fake = async (url, options) => {
     const parsed = new URL(url); calls.push(parsed.pathname + parsed.search);
     assert.match(parsed.pathname, /^\/repos\/phcastello\/Aegis\//);
@@ -138,6 +140,9 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     if (parsed.pathname.endsWith('deployment-branch-policies')) body = !hiddenPermissivePolicy ? policies : { branch_policies:
       parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ name: 'main', type: 'branch' })) : [{ name: '*', type: 'branch' }] };
     else if (parsed.pathname.endsWith('aegis-native-signing')) body = environment;
+    else if (parsed.pathname.includes('/collaborators/')) body = { permission };
+    else if (parsed.pathname.includes('/commits/')) body = { sha: parsed.pathname.split('/').at(-1) };
+    else if (parsed.pathname.endsWith('/contents/latest.json')) body = { content: Buffer.from(JSON.stringify({compatibility:feedCompatibility})).toString('base64') };
     else if (parsed.pathname.includes('/compare/')) body = { status: ancestry, base_commit: { sha } };
     else if (parsed.pathname.includes('/contents/')) body = { content: Buffer.from(JSON.stringify({ version: sourceVersion })).toString('base64') };
     else if (parsed.pathname.endsWith('/releases')) body = parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ tag_name: 'v0.7.1' })) : [{ tag_name: 'node-v0.7.1' }, ...v2Releases];
@@ -150,11 +155,11 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     else if (parsed.pathname.endsWith('/jobs')) body = { jobs: [{ name: 'plan', status: 'completed',
       conclusion: parsed.pathname.includes('/runs/1/') ? 'success' : 'failure' }] };
     else throw Error(`Unexpected endpoint ${url}`);
-    return { status: 200, json: async () => body };
+    return { status: 200, ok: true, json: async () => body };
   };
   try {
     Object.assign(process.env, { GITHUB_EVENT_NAME: context.eventName, GITHUB_REF: context.ref, GITHUB_WORKFLOW_REF: context.workflowRef,
-      GITHUB_REPOSITORY: context.repository, PREVIEW_SHA: sha, PREVIEW_BRANCH: input.branch, PREVIEW_VERSION: plan.version,
+      GITHUB_REPOSITORY: context.repository, GITHUB_ACTOR: 'phcastello', PREVIEW_SHA: sha, PREVIEW_BRANCH: input.branch, PREVIEW_VERSION: plan.version,
       PREVIEW_PLATFORM: input.platform, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: plan.controlSha, GITHUB_OUTPUT: join(work, 'output') });
     globalThis.fetch = fake; process.chdir(work);
     for (const invalid of [`0.7.2-unstable.1\nsha=${'c'.repeat(40)}`, '0.7.2-unstable.1\rversionCode=1', '0.7.2-beta.1', '0.7.2+build', 702]) {
@@ -165,6 +170,10 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
       assert.equal(existsSync(join(work, 'preview-plan')), false);
     }
     sourceVersion = '0.7.2';
+    permission = 'read';
+    await assert.rejects(resolvePreview(), /write permission/);
+    assert.equal(git.calls.some(call => call.method !== 'GET'), false, 'Unauthorized dispatch cannot reserve a distribution.');
+    permission = 'admin';
     await resolvePreview();
     const received = JSON.parse(readFileSync(join(work, 'preview-plan/preview.json')));
     assert.equal(received.sha, sha); assert.equal(received.versionCode, plan.versionCode);
@@ -191,6 +200,17 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     Object.assign(process.env,{PREVIEW_VERSION:'0.7.2-unstable.502',GITHUB_RUN_ID:'502'});
     await resolvePreview();
     assert.equal(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))).sourceVersion,sourceVersion,'Valid historical code provenance is preserved without changing its spelling.');
+    Object.assign(process.env, {PUBLISH_DEV:'true', DEPLOYMENT:JSON.stringify(prepared), PREVIEW_VERSION:'0.7.2-unstable.503', GITHUB_RUN_ID:'503'});
+    feedCompatibility = {api:2,nodeData:1};
+    const callsBefore = git.calls.filter(call => call.method !== 'GET').length;
+    await assert.rejects(resolvePreview(), /existing Node contracts/);
+    assert.equal(git.calls.filter(call => call.method !== 'GET').length, callsBefore, 'Incompatible deployment cannot consume a reservation.');
+    feedCompatibility = prepared.compatibility;
+    await resolvePreview();
+    const preparedPlan = JSON.parse(readFileSync(join(work,'preview-plan/preview.json')));
+    assert.deepEqual(preparedPlan.deployment, prepared);
+    assert.deepEqual((await git.state.read()).ledger.reservations.at(-1).deployment, prepared, 'Prepared contracts and deployed sources are durable with the reservation.');
+    assert.equal(calls.some(call => call.includes('/statuses')), false, 'The workflow never polls private deployment status.');
   } finally {
     process.chdir(cwd); globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];
@@ -237,6 +257,7 @@ test('rollback resolver requires published compatible provenance, exact restored
     if(parsed.hostname==='github.com') return ok(path.includes(restored.version)?restored:faulty);
     if(path.includes('/git/')||path.endsWith('/contents/ledger.json')) return git.fetcher(url,options);
     if(path.endsWith('/aegis-native-signing')) return ok(environment);
+    if(path.includes('/collaborators/')) return ok({permission:'admin'});
     if(path.endsWith('/deployment-branch-policies')) return ok(policies);
     if(path.includes('/compare/')) return ok({status:'ahead',base_commit:{sha}});
     if(path.includes('/contents/apps/')) return ok({content:Buffer.from('{"version":"0.7.2"}').toString('base64')});
@@ -246,7 +267,7 @@ test('rollback resolver requires published compatible provenance, exact restored
     throw Error(`Unexpected rollback endpoint ${url}`);
   };
   try {
-    Object.assign(process.env,{GITHUB_EVENT_NAME:context.eventName,GITHUB_REF:context.ref,GITHUB_WORKFLOW_REF:context.workflowRef,GITHUB_REPOSITORY:context.repository,
+    Object.assign(process.env,{GITHUB_EVENT_NAME:context.eventName,GITHUB_REF:context.ref,GITHUB_WORKFLOW_REF:context.workflowRef,GITHUB_REPOSITORY:context.repository,GITHUB_ACTOR:'phcastello',
       PREVIEW_SHA:sha,PREVIEW_BRANCH:input.branch,PREVIEW_VERSION:'0.7.2-unstable.5.rollback.1',PREVIEW_PLATFORM:'both',DISTRIBUTION_KIND:'rollback',
       ROLLBACK_OF:faulty.version,RESTORES_VERSION:restored.version,COMPATIBILITY_CONFIRMED:'false',GITHUB_RUN_ID:'66',GITHUB_RUN_ATTEMPT:'1',GITHUB_SHA:plan.controlSha,GITHUB_OUTPUT:join(work,'output')});
     globalThis.fetch=fake;process.chdir(work);
