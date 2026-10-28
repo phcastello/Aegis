@@ -32,14 +32,17 @@ mais facilitadora.** Prefira soluções simples, eficientes e incrementais.
   isso fizer parte da tarefa solicitada, após as verificações pertinentes.
 - Implementação comum: implemente, teste, corrija, faça commit e push na branch
   designada e relate o resultado. Push não publica automaticamente.
-- Quando o proprietário pedir implementação **e disponibilização para teste**,
-  essa solicitação autoriza a publicação privada de desenvolvimento. Após testes,
-  commit e push, execute `python3 scripts/publish-dev.py --ref <branch-ou-SHA>`
-  pelo acesso privado ao servidor e verifique a execução real. Veja
-  [publish-dev](docs/publish-dev.md). Não peça confirmação para cada etapa ordinária.
-- Preserve a aprovação única do environment de assinatura. Não aprove reviewers
-  automaticamente. Publicação de desenvolvimento não autoriza release estável,
-  merge na main, exclusão de dados nem mudança de credenciais.
+- Quando o proprietário pedir que uma implementação seja **disponibilizada para
+  teste**, implemente, execute os testes pertinentes, faça commit e push, execute
+  `python3 scripts/publish-dev.py --ref <branch-ou-SHA>` pelo acesso privado ao
+  servidor e informe o resultado. Essa solicitação autoriza a publicação de
+  desenvolvimento; executar `publish-dev` basta para iniciar a distribuição.
+  Veja [publish-dev](docs/publish-dev.md).
+- Não exija aprovações redundantes nem mantenha um processo ativo para sustentar
+  a publicação. O workflow confiável da `main` compila, assina e publica sozinho;
+  as chaves ficam no environment restrito e o código candidato não executa com
+  elas. Pushes comuns não publicam. Publicação de desenvolvimento não autoriza
+  release estável, merge na main, exclusão de dados nem mudança de credenciais.
 - Se a publicação falhar, investigue e corrija o problema técnico possível.
   Push ou build bem-sucedido não conclui uma tarefa destinada a teste. Bloqueie
   operações sensíveis quando dependerem de ação administrativa ou risco aos dados;
@@ -96,8 +99,10 @@ Nunca execute testes destrutivos contra dados de produção.
 
 Migrations compatíveis estão incluídas na autorização de `publish-dev`, após
 identificação exata, revisão vinculada ao hash, testes descartáveis e backup
-restaurado e verificado. Migration desconhecida, destrutiva, incompatível ou sem
-recuperação comprovada exige autorização específica; nunca contorne o bloqueio.
+restaurado e verificado. Sem migrations pendentes, não execute backup, ensaio de
+restauração ou migrador apenas para publicar código. Migration desconhecida,
+destrutiva, incompatível ou sem recuperação comprovada exige autorização
+específica; nunca contorne o bloqueio.
 Consulte [operação privada](docs/operacao-privada.md). Preserve configurações,
 PostgreSQL, Qdrant, Neo4j, FCM, Data Protection e identidades. Nunca remova volumes,
 resete banco nem execute Down como rollback automático. Não rode migrations no
