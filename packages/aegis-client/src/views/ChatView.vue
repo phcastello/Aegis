@@ -1025,8 +1025,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="chat-voice-controls">
-          <ConversationMenu :title="activeConversationTitle || 'Nova conversa'" show-title :disabled="!conversationId || isRestoring" @info="infoTarget = currentConversationSummary" @rename="requestRenameConversation(currentConversationSummary)" @delete="requestDeleteConversation(currentConversationSummary)" />
+        <div v-if="conversationId" class="chat-voice-controls">
+          <ConversationMenu :title="activeConversationTitle || 'Nova conversa'" show-title :disabled="isRestoring" @info="infoTarget = currentConversationSummary" @rename="requestRenameConversation(currentConversationSummary)" @delete="requestDeleteConversation(currentConversationSummary)" />
         </div>
 
         <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>

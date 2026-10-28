@@ -516,7 +516,7 @@ try {
    await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
    await page.locator('#conversation-sidebar').evaluate(element=>Promise.all(element.getAnimations().map(animation=>animation.finished.catch(()=>undefined))));
    if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${host}-chat-mobile.png`});
-   assert.equal(await page.getByLabel('Menu da conversa',{exact:true}).isDisabled(),true,'Empty conversation requires no persisted ID');
+   assert.equal(await page.getByLabel('Menu da conversa',{exact:true}).count(),0,'An unpersisted conversation has no action menu');
    proactiveMessages = [{id:'proactive-one',conversationId:'c1',role:'assistant',content:'Preciso que você abra o aplicativo no celular para ativar o lembrete.',createdAt:new Date().toISOString(),isProactive:true,proactiveSequence:1}];
    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
    await page.getByLabel('Abrir histórico',{exact:true}).click();await page.getByLabel('Mensagem da Aegis não lida',{exact:true}).waitFor();
