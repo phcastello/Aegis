@@ -2,8 +2,9 @@
 
 Para disponibilizar desenvolvimento para teste, use a operação única
 [publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
-aplicativos, reserva, build, assinatura e recomendação com uma aprovação protegida.
-Os comandos separados descritos abaixo continuam como ferramentas manuais.
+aplicativos, reserva, build, assinatura e recomendação em uma execução autônoma,
+sem aprovação interativa. Os comandos separados descritos abaixo permanecem para
+homologação focada, estáveis e manutenção explícita.
 
 A Aegis tem um único fluxo recomendado para Nodes compatíveis. Previews,
 estáveis e rollbacks descrevem eventos de distribuição; não são canais
@@ -19,9 +20,13 @@ fonte `ee95f43`. Ela usa o contrato anterior e só existe como artefato do Actio
 As releases nativas públicas inspecionadas em 23/10/2026 são `node-v0.7.0` e
 `node-v0.7.1`. O feed legado recomenda `0.7.1`, código `7001999`.
 
-A implementação v2 deste PR ainda precisa de bootstrap e distribuição real
-para ser considerada operacional. Esta tarefa não publica instaladores,
-tags, branch de estado, feeds, migrations ou deploys.
+Em 27/10/2026, antes da nova publicação, ledger e feed recomendam
+`0.7.2-unstable.2`, código `7002002`, fonte `64dc334`. A reserva
+`0.7.2-unstable.3`, código `7002003`, fonte `da567b9`, permanece consumida:
+o [run 40469210800](https://github.com/phcastello/Aegis/actions/runs/40469210800)
+compilou ambas as plataformas e falhou antes da assinatura. Não reutilizar essa
+reserva nem reexecutar o run antigo. O resultado de cada distribuição nova deve
+ser conferido no feed; editar controles não demonstra publicação concluída.
 
 | Instalação | Migração |
 | --- | --- |
@@ -97,22 +102,19 @@ substitui a comparação SemVer do updater. O comportamento consta do
 [código da versão de CLI utilizada](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs).
 A instalação real de recuperação em Windows ainda exige homologação.
 
-Exemplo projetado a partir das reservas reais conhecidas, sem executar reservas:
+Reservas verificadas em 27/10/2026, antes da nova publicação:
 
 | Evento | Distribuição | Código interno |
 | --- | --- | --- |
-| Estável já publicada | `0.7.1` | `7001999` |
-| Preview já gerada | `0.7.2-unstable.1` | `7002001` |
-| Primeira preview v2 | `0.7.2-unstable.2` | `7002002` |
-| Preview v2 defeituosa | `0.7.2-unstable.3` | `7002003` |
-| Recuperação da .3 para o código da .2 | `0.7.2-unstable.3.rollback.1` | `7002004` |
-| Próxima evolução normal | `0.7.2-unstable.4` | `7002005` |
-| Estável | `0.7.2` | `7002999` |
-| Recuperação da estável | `0.7.3-rollback.1` | `7003001` |
-| Próxima preview normal | `0.7.3-unstable.1` | `7003002` |
+| Estável publicada | `0.7.1` | `7001999` |
+| Preview histórica | `0.7.2-unstable.1` | `7002001` |
+| Preview v2 recomendada | `0.7.2-unstable.2` | `7002002` |
+| Reserva consumida pelo build cuja assinatura falhou | `0.7.2-unstable.3` | `7002003` |
 
-Somente as duas primeiras linhas são histórico efetivo. Falhas ou outras
-reservas alteram os números futuros. Não editar códigos de APKs históricos.
+Sem novas reservas intermediárias, a próxima preview é `0.7.2-unstable.4`,
+código `7002004`. Esse número só se torna efetivo quando o workflow grava a
+reserva; sempre consultar o ledger. Recuperações publicadas também consomem
+códigos novos. Não editar códigos de APKs históricos.
 
 ## Reserva e publicação resistentes a falhas
 
@@ -153,51 +155,62 @@ no GitHub: falha após exclusão pode deixá-lo temporariamente ausente. Repetir
 promoção dos mesmos bytes recupera esse feed. O ponteiro recomendado v2 não
 sofre essa janela e permanece válido. Previews e recuperações não tocam o legado.
 
-## Gerar e autorizar uma distribuição
+## Publicação de desenvolvimento e manutenção manual
 
-Após bootstrap dos controles revisados na `main`, use sempre `--ref main`.
-O código candidato é fixado pelo SHA completo de uma branch deste repositório.
-Push, PR draft e build não recomendam uma atualização.
+A rotina é [publish-dev](publish-dev.md): uma identidade autorizada solicita a
+publicação, o comando valida a implantação privada e despacha o workflow da
+`main`. SHA, implantações e contratos API/dados são registrados na preparação e
+conferidos pelo plano confiável. Não há heartbeat, status com TTL nem consulta
+contínua ao servidor privado. Uma execução reserva, compila, verifica, assina,
+publica os arquivos imutáveis e atualiza o feed; o processo local já pode ter
+terminado. Push e PR não publicam automaticamente.
+
+O environment `aegis-native-signing` mantém as chaves oficiais e sua allowlist
+exata de `main` e tags `node-v*`, sem reviewer obrigatório. A solicitação explícita
+é verificada pelo controle confiável; não há aprovação de assinatura ou promoção
+na rotina de desenvolvimento. Mudanças administrativas são feitas na configuração
+do GitHub, preservando restrições de branch e segredos. A variável pública
+`AEGIS_ANDROID_FIREBASE_CLIENT_B64` contém apenas o cliente Firebase Android
+existente, nunca service account.
+
+O SHA de fonte é registrado por completo e deve pertencer à branch indicada do
+mesmo repositório. O build tem token somente de leitura e não recebe as chaves:
+Android usa chave descartável e Windows gera NSIS sem assinatura oficial do
+updater. Runners separados executam somente código confiável da `main` para
+verificar/reassinar os bytes; instaladores candidatos não são executados no job
+de assinatura. Os finais incluem instalador, `preview.json`, `SHA256SUMS` e
+assinatura Windows. Assinatura do updater Windows não é Authenticode nem remove
+SmartScreen.
+
+Confira ledger, releases e runs admitidos antes de escolher uma distribuição.
+Uma falha consome a reserva; nova compilação exige versão/código novos. Nunca
+reutilize uma reserva antiga para bytes diferentes ou reexecute um run antigo
+para produzir outra assinatura. Artefatos expirados exigem uma nova distribuição.
+
+Para homologação focada ou preparação explícita de uma estável, o caminho manual
+continua disponível; ele não substitui a rotina de desenvolvimento:
 
 ```bash
 gh workflow run aegis-native-preview.yml --repo phcastello/Aegis --ref main \
-  -f sha=<SHA-completo-revisado> -f branch=fix/v0.7.2-ux-proactivity \
-  -f version=0.7.2-unstable.2 -f kind=normal -f platform=both
+  -f sha=<SHA-completo-revisado> -f branch=<branch-do-repositorio> \
+  -f version=<nova-versao-nao-reservada> -f kind=normal -f platform=both
 ```
 
-O plano reserva versão/código. O build usa somente chave Android descartável,
-sem credenciais oficiais. A assinatura ocorre em runners separados, controlados
-pela `main`, com aprovação de `aegis-native-signing`; não executa o candidato.
-Valida certificado, pacote, ARM64, distribuição release, Firebase, rede,
-fixtures, identidade Windows e assinatura vinculada à versão. A assinatura
-Windows do updater não é Authenticode e não elimina SmartScreen.
-
-As opções `android`/`windows` continuam úteis para homologação focada; uma
-recomendação exige `both`, para que o mesmo manifesto tenha todos os artefatos
-suportados. Não há assinatura nem build privilegiado iniciado por clientes.
-
-Depois de uma execução v2 bem-sucedida, revisão e autorização explícita:
+Sem `publish_dev=true`, esse caminho produz artefatos assinados e não recomenda
+uma atualização. `platform=android` ou `windows` permite homologação focada; uma
+recomendação exige `both`. Para publicar os mesmos bytes de uma execução manual
+bem-sucedida, com autorização explícita:
 
 ```bash
 gh workflow run aegis-native-promote.yml --repo phcastello/Aegis --ref main \
-  -f run_id=<run-v2-bem-sucedido-com-ambas-plataformas> -f publish=true
+  -f run_id=<run-v2-bem-sucedido> -f publish=true
 ```
 
-Aprove novamente o environment após revisar versão/SHA/artefatos. A promoção
-reconfere reserva, origem do workflow e sucesso, baixa os finais, verifica
-hashes e assinaturas, publica a release imutável e só então recomenda.
-`publish=false` não publica. O run antigo `40038742314` não tem reserva v2 e
-não pode ser promovido por esse caminho. Artefatos expirados exigem uma nova
-reserva/build; não reconstruir outros bytes sob uma versão já reservada.
-
-Uma estável usa o mesmo caminho com `version=0.7.2`; nesse caso o workflow
-exige a matriz completa de release antes do build. Previews e recuperações
-não exigem automaticamente as janelas longas de consumo. O workflow antigo
-`Aegis Node Release` permanece manual para tags históricas, somente com controle
-da `main` e fonte ancestral da `main` revisada; não aceita código arbitrário de
-branches como atalho para assinatura. Distribuições v2
-são direcionadas ao caminho unificado. Criar tag não publica automaticamente.
-
+Essa ferramenta de manutenção verifica plano/reserva/origem, hashes e assinaturas
+antes de publicar a release e avançar o recomendado. Não é uma segunda etapa de
+`publish-dev`. `publish=false` não publica. Estáveis conservam a matriz completa
+de release e exigem autorização própria; previews e recuperações não repetem
+automaticamente medições longas de consumo.
 ## Gerar um rollback
 
 Selecione duas distribuições v2 públicas: a defeituosa e a funcional. O plano
@@ -214,8 +227,9 @@ gh workflow run aegis-native-preview.yml --repo phcastello/Aegis --ref main \
   -f compatibility_confirmed=true -f platform=both
 ```
 
-Esses nomes são exemplo, não distribuições existentes. Depois do build e da
-aprovação de assinatura, promover seu run pelo mesmo `aegis-native-promote.yml`.
+Esses nomes são exemplo, não distribuições existentes. Essa recuperação manual
+exige autorização explícita; depois do build e da assinatura, promover os mesmos
+bytes pelo `aegis-native-promote.yml`, sem aprovação interativa do environment.
 O SHA restaurado deve ser alcançável pela branch indicada e coincidir com a
 procedência da distribuição funcional. Rollback de outro rollback incrementa
 o evento e aponta `rollback_of` para a distribuição defeituosa publicada.
@@ -239,7 +253,7 @@ o evento defeituoso e a distribuição restaurada e usa o mesmo botão de instal
 Download, progresso e erros são preservados; não há instalação silenciosa.
 
 **Recuperar este Node** consulta o recomendado e oferece a recuperação já
-publicada. Para uma versão histórica, explica a reconstrução e aprovação no
+publicada. Para uma versão histórica, explica a reconstrução autorizada no
 GitHub e oferece o acesso ao workflow. Não despacha assinatura, não promete
 recuperação imediata e não tenta instalar código Android inferior.
 
@@ -252,27 +266,24 @@ Se não existir recuperação instalável, o proprietário publica um novo event
 pelo procedimento acima. Não reutilizar instalador antigo nem apagar o perfil.
 Não há watchdog ou supervisor novo.
 
-## Bootstrap necessário
+## Controles confiáveis na main
 
-O bootstrap #20 já funciona para previews v1. Para ativar v2, os novos controles
-confiáveis precisam estar na `main`: workflows preview/promote, scripts de
-reserva/publicação/assinatura e suas dependências de versionamento/manifests.
-Isso pode ocorrer pela integração autorizada do PR #19 ou por backport de
-infraestrutura revisto separadamente. Esta tarefa não abre outro PR nem altera
-`main`. Um workflow de branch não recebe chaves oficiais como atalho.
+Os controles de publicação entram na `main` por PR de infraestrutura com o
+check obrigatório `Aegis Node CI result`, preservando a proteção existente.
+Não é necessário integrar o PR #19 para publicar seu candidato de desenvolvimento.
+O workflow é sempre despachado de `main`; código candidato ou de pull requests
+não recebe as chaves oficiais.
 
-Preservar `aegis-native-signing`, seu reviewer, allowlist de `main`/`node-v*` e
-chaves apenas no environment. A configuração registrada no bootstrap de
-23/10/2026 tem reviewer `phcastello`, bypass administrativo desabilitado e as
-cinco credenciais oficiais removidas do escopo geral. Preservar a variável
-pública `AEGIS_ANDROID_FIREBASE_CLIENT_B64` do cliente `com.aegis.node`, jamais
-usar service account no build.
+Preservar `aegis-native-signing`, sua allowlist de `main`/`node-v*` e as chaves
+somente no environment. A rotina autorizada não exige reviewer nem aprovação
+separada de assinatura/publicação. Ajustes administrativos usam a configuração
+do GitHub e não um bypass. A variável pública `AEGIS_ANDROID_FIREBASE_CLIENT_B64`
+conserva o cliente `com.aegis.node`; nunca usar service account no build.
 
-O token de `plan` pode gravar somente a reserva pelo controle confiável;
-o candidato recebe permissões de leitura e nenhum segredo oficial. A promoção
-recebe escrita após aprovação. A branch de estado será criada apenas na primeira
-reserva autorizada; nenhum passo desta implementação a cria remotamente.
-
+O token de `plan` grava somente a reserva pelo controle confiável. O candidato
+recebe permissões de leitura e nenhum segredo oficial; o job de código confiável
+assina e publica os mesmos bytes. O ledger existente e seu histórico são
+preservados, inclusive reservas de tentativas que falharam.
 ## Estágios e seleção
 
 A seleção permanece em [select-node-ci.mjs](../.github/scripts/select-node-ci.mjs). Ela registra separadamente `affected` (backend, UI, Windows, Android, distribuição, geolocalização, notificações, áudio, energia, identidade e dependências) e `stage`. Falha de histórico seleciona os subsistemas conservadoramente, mas respeita a profundidade do estágio.
@@ -280,7 +291,7 @@ A seleção permanece em [select-node-ci.mjs](../.github/scripts/select-node-ci.
 | Estágio | Gatilho e verificações |
 | --- | --- |
 | Desenvolvimento | Push em `fix/*`, `feat/*` ou outra branch não dispara workflow. Eventos de PR draft executam apenas testes dos scripts de CI e checagem documental, sem builds nativos ou medições. O gate de integração fica **falhando deliberadamente**, com mensagem de que draft não é aceite; não apresenta um skip como aprovação. |
-| Preview | Somente **Aegis Native Preview**, manual, com SHA e versão explícitos. Compilação, contratos essenciais, identidade, versão, distribuição e assinatura isolada; sem emuladores de consumo, baselines recompilados ou homologação integral. |
+| Preview | **Aegis Native Preview**, por solicitação explícita de `publish-dev` ou homologação manual. Compilação, contratos essenciais, identidade, versão, distribuição e assinatura isolada; `publish-dev` também publica e recomenda na mesma execução. Sem emuladores de consumo, baselines recompilados ou homologação integral. |
 | Integração | PR aberto/pronto, `ready_for_review`, `synchronize`, `reopened`, `edited` e `merge_group/checks_requested`; também push em `main` e execução manual. Seleciona backend/migrations/transportes, interfaces, Windows/Android e identidade pertinentes. Android conserva framework API 26/35 debug e minificado; Windows conserva instalação/upgrade/inicialização e armazenamento. **Sem janelas longas de consumo nem recompilação de baseline para idle.** |
 | Release | Execução manual `stage=release`, com `base_ref` completo para selecionar riscos, ou `full_matrix=true`. Mudanças de geofencing/background/energia/áudio, dependências e escopo desconhecido conservam medições relacionadas. UI/documentação conhecidas não justificam bateria. O publicador continua exigindo a **matriz completa**, incluindo identidade e validações de release assinada. |
 
@@ -300,21 +311,41 @@ gh workflow run aegis-node-ci.yml --repo phcastello/Aegis \
 ```
 
 Para homologação por risco, use `stage=release`, `full_matrix=false` e `base_ref=<SHA-base-completo>`. Sem base verificável, o seletor conserva a matriz completa do estágio, incluindo consumo. Para v0.7.2, geofencing e execução contextual exigem as medições antes do lançamento estável; elas não se repetem a cada preview.
-
 ## Proteção real da main
 
-Inspeção em **22/10/2026**: ruleset [Protect main, 19912815](https://github.com/phcastello/Aegis/rules/19912815) ativo, sem bypass, exigindo PR e impedindo exclusão/force push. **Nenhum status check obrigatório e nenhuma merge queue estavam configurados.** O endpoint de proteção clássica respondeu 404 porque a proteção vem de ruleset. Nenhuma regra, permissão, variável ou segredo foi alterado nesta implementação.
+O ruleset [Protect main,19912815](https://github.com/phcastello/Aegis/rules/19912815)
+permanece ativo, sem bypass, exigindo PR e impedindo exclusão/force push.
+Na ativação v2, foi acrescentado **Aegis Node CI result**, origem **GitHub Actions**
+(app15368), com **branch atualizada obrigatória**, confirmado pela API GitHub.
+Nenhuma regra existente foi removida. Preview e validação focada não substituem
+esse gate, que deve aprovar o candidato real antes do merge. PR #19 permanece
+draft; somente o PR separado de infraestrutura pode ser integrado nesta ativação.
+## Backend, dados e lançamento estável
 
-Após validar a infraestrutura no GitHub, o administrador deve editar esse ruleset preservando suas regras existentes e adicionar **Require status checks to pass → Aegis Node CI result**, origem **GitHub Actions** (app observada `15368`), com **Require branches to be up to date**. Não exigir jobs condicionais individuais, o resultado de preview ou o contexto de release. Se adotar merge queue posteriormente, o workflow já trata `merge_group`.
+`publish-dev` atualiza a API/PWA somente quando seus componentes mudam. Uma
+alteração apenas de backend não compila Android/Windows. A preparação valida a
+saúde real e os contratos necessários aos clientes existentes; os metadados
+verificáveis acompanham a distribuição nativa, sem novos health checks durante
+compilação, assinatura ou publicação.
 
-Antes de considerar a proteção operacional: confirme um PR pronto com o candidato atual aprovado; prove em PR descartável que uma falha/omissão selecionada bloqueia o gate; confirme que novo commit/base exige nova evidência. Os testes locais provam a política dos scripts; **não demonstram a aplicação administrativa do requisito**, que permanece pendente. O PR #19 permanece draft, sem promoção deliberada para testar a matriz.
+O script consulta o histórico EF real. Sem migrations pendentes, não executa
+backup/restauração de ensaio nem o migrador. Com migration pendente, preserva a
+revisão exata, backup restaurado e verificado, compatibilidade com a API anterior
+e aplicação administrativa antes da nova API. Migrations destrutivas ou incertas
+continuam bloqueadas. Consulte [operação privada](operacao-privada.md). Volumes,
+Data Protection, FCM, credenciais e identidades são preservados; PostgreSQL,
+Qdrant e Neo4j não são reiniciados para publicar código. Não execute testes de CI
+ou testes destrutivos nos bancos reais.
 
-## Backend e lançamento estável
-
-Preview do aplicativo não implica deploy da API. Para teste integrado da v0.7.2 contra a infraestrutura privada existente, a API correspondente e a migration **`20261022133709_ReminderInterventions`** são pré-requisitos. Não é necessário manter outro ambiente permanente.
-
-Obtenha autorização explícita para atualizar a infraestrutura real. Siga [operação privada](operacao-privada.md): registre imagem/commit anterior; preserve projeto Compose, volumes, Data Protection, FCM e configurações; pare escritores numa janela autorizada; produza backup e valide restauração em destino descartável; compile a imagem aprovada; execute o migrador administrativo **antes de iniciar a API nova**; valide health, schema, pareamento, lembretes e intervenções; só então teste os Nodes preview. Em falha, pare escritores e recupere imagem/esquema compatíveis ou restaure backup em destino controlado. Não execute testes destrutivos nem migrations de CI nos bancos reais. Nenhum desses comandos é executado pela preview.
-
+Depois de integração e aceite físico, prepare a release estável com versão
+sincronizada, tags e publicação somente mediante autorização específica.
+**Aegis Native Preview** também aceita estável, exigindo a matriz completa antes
+do build; a manutenção manual publica por **Aegis Native Promote**. `publish-dev`
+aceita apenas uma nova `unstable.N`. **Aegis Node Release** permanece histórico e
+manual, restrito ao controle da `main` e a fontes ancestrais revisadas;
+distribuições v2 são recusadas nesse caminho. As verificações de instalador
+Windows assinado e APK oficial permanecem obrigatórias. Código arbitrário de
+branches utiliza exclusivamente o isolamento v2.
 ## Nodes headless futuros
 
 O contrato descreve distribuição, instalação, plataformas e procedência sem
@@ -329,6 +360,7 @@ serviço privilegiado nesta etapa.
 ```bash
 node --test .github/scripts/*.test.mjs
 python3 -m unittest discover -s .github/scripts -p '*_test.py'
+python3 -m unittest discover -s scripts -p publish_dev_test.py
 npm run test:release --prefix apps/aegis-node
 npm test --prefix apps/aegis-node
 npm run build --prefix apps/aegis-node
@@ -341,13 +373,15 @@ interrupção de upload e avanço do ponteiro; manifests simulados não substitu
 uma publicação real. Não se executa homologação de duas horas para validar YAML.
 UI deve ser validada nos dois hosts e no layout móvel, inclusive recuperação.
 
-Antes de declarar o mecanismo operacional: bootstrap autorizado, build v2,
-aprovação, promoção real, conferência de todos os bytes/manifest e detecção nos
-clientes. Depois, homologação física Android/Windows sobre instalação existente:
+Antes de declarar uma publicação concluída: execução nativa bem-sucedida,
+conferência de todos os bytes/manifest, avanço real do feed e detecção nos clientes.
+A solicitação aceita por `publish-dev` não demonstra esses resultados. Depois, homologação física Android/Windows sobre instalação existente:
 NodeId, credenciais, pareamento e preferências preservados; preview detectada;
 recuperação instalada; próxima atualização normal instalada; funcionalidades
 existentes operacionais. Emulação/browser/mocks não comprovam esses resultados.
 
 O registro de testes desta implementação fica em
 [v0.7.2 — implementação](v0.7.2-implementation.md). Nenhuma migration ou implantação
-real é autorizada implicitamente pela assinatura ou publicação do aplicativo.
+real é autorizada implicitamente pela assinatura isolada do aplicativo. A rotina
+`publish-dev` aplica somente os componentes e migrations compatíveis previstos
+na solicitação autorizada.

@@ -29,13 +29,28 @@ export function assertTrustedDispatch(context) {
 
 export function assertEnvironment(environment, policies) {
   assert.equal(environment.name, signingEnvironment);
-  const reviewer = environment.protection_rules?.find(rule => rule.type === 'required_reviewers');
-  assert.ok(reviewer?.reviewers?.length, 'Configure required reviewers on aegis-native-signing before use.');
   assert.equal(environment.deployment_branch_policy?.custom_branch_policies, true, 'Restrict signing to main and release tags.');
   assert.ok(policies.branch_policies?.some(policy => policy.name === 'main' && (policy.type ?? 'branch') === 'branch'), 'Signing must permit the trusted main branch.');
   assert.ok(policies.branch_policies.every(policy =>
     ((policy.type ?? 'branch') === 'branch' && policy.name === 'main') || (policy.type === 'tag' && policy.name === 'node-v*')),
   'Signing may allow only main and existing node-v* release tags.');
+}
+
+export async function assertAuthorizedActor(actor, request = api) {
+  assert.match(actor ?? '', /^[A-Za-z0-9][A-Za-z0-9-]*$/, 'Explicit repository identity required.');
+  const identity = await request(`collaborators/${encodeURIComponent(actor)}/permission`);
+  assert.ok(['admin', 'maintain', 'write'].includes(identity.permission), 'Development publication requires a repository identity with write permission.');
+}
+
+// The private host checks health once, before dispatch. This immutable snapshot
+// records the API/Node contracts and deployed source, without a live status gate.
+export function deploymentSnapshot(value, sha) {
+  const snapshot = typeof value === 'string' ? JSON.parse(value) : value;
+  assert.deepEqual(Object.keys(snapshot).sort(), ['backend', 'compatibility', 'pwa', 'sourceCommit']);
+  assert.equal(snapshot.sourceCommit, sha, 'Deployment preparation belongs to a different candidate.');
+  for (const component of ['backend', 'pwa']) assert.match(snapshot[component], /^[a-f0-9]{40}$/, `Missing deployed ${component} source.`);
+  assert.deepEqual(snapshot.compatibility, { api: 1, nodeData: 1 }, 'Unsupported API or persisted Node contracts.');
+  return snapshot;
 }
 
 export function assertIncreasing(version, previous) {
@@ -116,6 +131,7 @@ export async function publishedManifest(version) {
 export async function resolvePreview() {
   assertTrustedDispatch({ eventName: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
     workflowRef: process.env.GITHUB_WORKFLOW_REF, repository: process.env.GITHUB_REPOSITORY, attempt: process.env.GITHUB_RUN_ATTEMPT });
+  await assertAuthorizedActor(process.env.GITHUB_ACTOR);
   const version = process.env.PREVIEW_VERSION ?? '';
   const requested = parseDistributionVersion(version);
   assert.equal(requested.kind, process.env.DISTRIBUTION_KIND ?? 'normal', 'Version does not match the requested distribution kind.');
@@ -148,6 +164,20 @@ export async function resolvePreview() {
   const [releases, runs] = await Promise.all([pages('releases'), pages('actions/workflows/aegis-native-preview.yml/runs', 'workflow_runs')]);
   const state = new DistributionState();
   const snapshot = await state.read();
+  let deployment;
+  if (process.env.PUBLISH_DEV === 'true') {
+    assert.equal(requested.kind, 'normal');
+    assert.equal(requested.stable, false, 'publish-dev cannot publish stable distributions.');
+    assert.equal(args.platform, 'both');
+    deployment = deploymentSnapshot(process.env.DEPLOYMENT, args.sha);
+    for (const commit of new Set([deployment.backend, deployment.pwa])) {
+      const provenance = await api(`commits/${commit}`);
+      assert.equal(provenance.sha, commit, 'Deployed source must be present in this repository.');
+    }
+    const current = await state.api(`contents/latest.json?ref=${snapshot.head}`);
+    const recommended = JSON.parse(Buffer.from(current.content, 'base64'));
+    assert.deepEqual(recommended.compatibility, deployment.compatibility, 'Prepared distribution differs from existing Node contracts.');
+  }
   const knownRuns = new Set(snapshot.ledger.reservations.map(item => item.runId));
   const knownVersions = new Set(snapshot.ledger.reservations.map(item => item.version));
   for (const item of releases) {
@@ -177,9 +207,10 @@ export async function resolvePreview() {
     if (name && !knownVersions.has(name)) { try { floor = Math.max(floor, androidVersionCode(name)); } catch { /* v2 codes are durably recorded in the ledger. */ } }
   }
   const identity = { schema: 2, ...args, version, kind: requested.kind, sourceCommit: args.sha, sourceVersion,
-    compatibility: { api: 1, nodeData: 1 }, ...recovery, publishedAt: new Date().toISOString(), repository: process.env.GITHUB_REPOSITORY,
+    compatibility: { api: 1, nodeData: 1 }, ...(deployment ? { deployment } : {}), ...recovery, publishedAt: new Date().toISOString(), repository: process.env.GITHUB_REPOSITORY,
     runId: process.env.GITHUB_RUN_ID, controlSha: process.env.GITHUB_SHA,
-    limits: 'Build/signing only; publication requires separate protected promotion. No backend deployment or physical acceptance.' };
+    limits: deployment ? 'Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.'
+      : 'Build/signing only; publication requires explicit promotion. No backend deployment or physical acceptance.' };
   const plan = await state.reserve(identity, floor);
   mkdirSync('preview-plan', { recursive: true });
   writeJson('preview-plan/preview.json', plan);

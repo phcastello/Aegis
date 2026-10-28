@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import subprocess
@@ -37,8 +38,9 @@ class FixtureHost:
         dev.require(plan.get("safe", True), "Migration uncertain")
 
     def prepare(self, plan):
-        for component in plan["components"]:
-            self.step("build-" + component)
+        for component in ("backend", "pwa"):
+            if component in plan["components"]:
+                self.step("build-" + component)
 
     def backup_and_rehearse(self, plan):
         self.writers_stopped = True
@@ -66,19 +68,13 @@ class FixtureHost:
 
     def native(self, plan):
         dev.require(self.checkpointed, "API not validated")
-        self.step("sign")
-        self.step("publish-distribution")
-        self.distributions["candidate"] = b"new-immutable-signed-bytes"
-        self.step("promote-feed")
-        self.feed = "candidate"
+        self.step("dispatch-native")
+        return {"status": "requested", "sha": plan["sha"], "url": "https://github.com/fixture/run"}
 
     def recover(self, plan):
         self.step("recover-images")
         self.api = "old"
         self.writers_stopped = False
-
-    def on_failure(self, plan):
-        self.step("cancel-native-revoke-readiness")
 
     def cleanup(self):
         self.step("cleanup-disposable")
@@ -93,7 +89,7 @@ class PublicationTests(unittest.TestCase):
         host = FixtureHost()
         self.assertTrue(dev.publish(host, plan(), {})["success"])
         self.assertEqual(host.feed, "old")
-        self.assertNotIn("sign", host.events)
+        self.assertNotIn("dispatch-native", host.events)
         self.assertNotIn("build-native", host.events)
 
     def test_component_dependency_selection(self):
@@ -124,21 +120,108 @@ class PublicationTests(unittest.TestCase):
         dev.publish(host, plan(("pwa",)), {})
         self.assertIn("build-pwa", host.events)
         self.assertNotIn("build-backend", host.events)
-        self.assertNotIn("sign", host.events)
+        self.assertNotIn("dispatch-native", host.events)
 
-    def test_native_only_uses_signed_distribution_then_existing_feed(self):
+    def test_native_only_returns_after_dispatch_without_claiming_feed_publication(self):
         host = FixtureHost()
-        dev.publish(host, plan(("native",)), {})
+        result = dev.publish(host, plan(("native",)), {})
         self.assertNotIn("deploy", host.events)
-        self.assertEqual(host.feed, "candidate")
-        self.assertLess(host.events.index("health"), host.events.index("sign"))
-        self.assertLess(host.events.index("publish-distribution"), host.events.index("promote-feed"))
+        self.assertNotIn("build-native", host.events)
+        self.assertEqual(host.feed, "old")
+        self.assertEqual(result["phase"], "native-requested")
+        self.assertEqual(result["native"]["status"], "requested")
+        self.assertLess(host.events.index("health"), host.events.index("dispatch-native"))
+        self.assertEqual(host.events.count("health"), 1)
 
-    def test_backend_and_native_health_precedes_signing_and_feed(self):
+    def test_backend_health_and_checkpoint_precede_native_dispatch(self):
         host = FixtureHost()
         dev.publish(host, plan(("backend", "native")), {})
         self.assertLess(host.events.index("deploy"), host.events.index("health"))
-        self.assertLess(host.events.index("checkpoint"), host.events.index("sign"))
+        self.assertLess(host.events.index("checkpoint"), host.events.index("dispatch-native"))
+
+    def test_no_pending_migration_never_backs_up_rehearses_or_runs_migrator(self):
+        host = FixtureHost()
+        dev.publish(host, plan(), {})
+        self.assertFalse({"backup", "restore", "migrate"} & set(host.events))
+
+    def test_preparation_builds_changed_image_without_repeating_suites_or_database_tests(self):
+        for component in ("backend", "pwa"):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as directory:
+                host = object.__new__(dev.PrivateHost)
+                host.source = host.op = Path(directory)
+                host.api = host.pwa = {"Image": "old-image"}
+                host.images = {}
+                commands = []
+                host.run = lambda args, **kw: commands.append(list(map(str, args))) or ""
+                host.inspect = lambda name: {"Id": "new-image"}
+                host.prepare(plan((component,)))
+                self.assertTrue(host.recovery_proved)
+                self.assertEqual(host.images, {component: "new-image"})
+                self.assertEqual(sum(c[:2] == ["docker", "build"] for c in commands), 1)
+                self.assertFalse(any("test" in c or "createdb" in c or "pg_dump" in c for c in commands))
+
+    def native_fixture(self, directory, *, listing_failure=False, incompatible=False):
+        import base64
+        host = dev.PrivateHost(Path(directory), Path(directory))
+        package = host.source / "apps/aegis-node/package.json"
+        package.parent.mkdir(parents=True)
+        package.write_text(json.dumps({"version": "0.7.2"}))
+        dev.save(host.state / "current.json", {"sourceCommit": "a" * 40,
+                 "backend": {"sha": "b" * 40}, "pwa": {"sha": "c" * 40},
+                 "health": {"clientApiV1": True}, "compatibility": {"api": 2 if incompatible else 1, "nodeData": 1}})
+        calls = []
+        listings = 0
+        def github(path, method="GET", body=None):
+            nonlocal listings
+            calls.append((path, method, body))
+            if path.startswith("contents/ledger.json"):
+                return {"content": base64.b64encode(json.dumps({"reservations": [
+                    {"version": "0.7.2-unstable.2"}, {"version": "0.7.2-unstable.3"}]}).encode()).decode()}
+            if "/runs?" in path:
+                listings += 1
+                if listings == 2 and listing_failure:
+                    raise dev.Blocked("temporary listing failure")
+                return {"workflow_runs": [] if listings == 1 else [{"id": 123,
+                        "display_title": "Aegis Native Preview · 0.7.2-unstable.4 · " + "a" * 40,
+                        "html_url": "https://github.com/phcastello/Aegis/actions/runs/123"}]}
+            if path.endswith("/dispatches"):
+                return None
+            self.fail("Unexpected GitHub request: " + path)
+        host.gh = github
+        return host, calls
+
+    def test_native_dispatch_is_once_with_fixed_contract_snapshot_and_next_unused_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host, calls = self.native_fixture(directory)
+            with patch.object(dev.time, "sleep", side_effect=AssertionError("No wait after dispatch")):
+                publication = host.native(plan(("native",), branch="development", compatibility={"api": 1, "nodeData": 1}))
+            self.assertEqual(publication["status"], "requested")
+            self.assertEqual(publication["version"], "0.7.2-unstable.4")
+            self.assertEqual(publication["runId"], 123)
+            dispatched = [c for c in calls if c[1] == "POST"]
+            self.assertEqual(len(dispatched), 1)
+            inputs = dispatched[0][2]["inputs"]
+            self.assertEqual(dispatched[0][2]["ref"], "main")
+            self.assertEqual(inputs["publish_dev"], "true")
+            self.assertEqual(json.loads(inputs["deployment"]), {"sourceCommit": "a" * 40,
+                             "backend": "b" * 40, "pwa": "c" * 40, "compatibility": {"api": 1, "nodeData": 1}})
+            self.assertFalse(any("statuses" in c[0] or c[0].endswith("/cancel") for c in calls))
+            self.assertEqual(json.loads((host.op / "native-run.json").read_text()), publication)
+
+    def test_accepted_native_dispatch_survives_run_listing_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host, calls = self.native_fixture(directory, listing_failure=True)
+            publication = host.native(plan(("native",), branch="development", compatibility={"api": 1, "nodeData": 1}))
+            self.assertEqual(publication["status"], "requested")
+            self.assertIn("actions/workflows/aegis-native-preview.yml", publication["url"])
+            self.assertEqual(sum(c[1] == "POST" for c in calls), 1)
+
+    def test_unsupported_private_contract_blocks_before_native_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host, calls = self.native_fixture(directory, incompatible=True)
+            with self.assertRaisesRegex(dev.Blocked, "contract"):
+                host.native(plan(("native",), branch="development", compatibility={"api": 1, "nodeData": 1}))
+            self.assertFalse(any(c[1] == "POST" for c in calls))
 
     def test_safe_migration_requires_restore_before_production_write(self):
         host = FixtureHost()
@@ -201,23 +284,22 @@ class PublicationTests(unittest.TestCase):
                 self.assertFalse(result["success"])
                 self.assertEqual(host.api, "old")
                 self.assertEqual(host.feed, "old")
-                self.assertNotIn("sign", host.events)
+                self.assertNotIn("dispatch-native", host.events)
 
-    def test_sign_distribution_or_feed_failure_retains_healthy_backend_and_legacy(self):
-        for failure in ("sign", "publish-distribution", "promote-feed"):
-            with self.subTest(failure=failure):
-                host = FixtureHost(failure)
-                result = {}
-                with self.assertRaises(dev.Blocked):
-                    dev.publish(host, plan(("backend", "native")), result)
-                self.assertFalse(result["success"])
-                self.assertEqual(host.feed, "old")
-                self.assertEqual(host.api, "candidate")
-                self.assertEqual(host.legacy, b"legacy-stable-feed")
-                self.assertEqual(host.distributions["old"], b"immutable-signed-bytes")
+    def test_dispatch_failure_retains_healthy_backend_and_existing_feed(self):
+        host = FixtureHost("dispatch-native")
+        result = {}
+        with self.assertRaises(dev.Blocked):
+            dev.publish(host, plan(("backend", "native")), result)
+        self.assertFalse(result["success"])
+        self.assertEqual(host.feed, "old")
+        self.assertEqual(host.api, "candidate")
+        self.assertEqual(host.legacy, b"legacy-stable-feed")
+        self.assertEqual(host.distributions["old"], b"immutable-signed-bytes")
+        self.assertNotIn("recover-images", host.events)
 
     def test_retry_partial_failure_native_without_redeploying_api(self):
-        host = FixtureHost("sign")
+        host = FixtureHost("dispatch-native")
         with self.assertRaises(dev.Blocked):
             dev.publish(host, plan(("backend", "native")), {})
         self.assertTrue(host.checkpointed)
@@ -232,7 +314,7 @@ class PublicationTests(unittest.TestCase):
         host.events.clear()
         dev.publish(host, plan(components=()), {})
         self.assertNotIn("deploy", host.events)
-        self.assertNotIn("sign", host.events)
+        self.assertNotIn("dispatch-native", host.events)
 
     def test_different_commit_and_concurrent_deployment_block(self):
         for failure in ("wrong-sha", "unchanged"):
@@ -334,7 +416,6 @@ class PublicationTests(unittest.TestCase):
                 self.assertEqual(ups[0][-1], service)
                 self.assertIn("--no-deps", ups[0])
                 self.assertIn("--no-build", ups[0])
-                import json
                 config = json.loads((host.op / "deployment.compose.private.json").read_text())
                 other = "aegis-pwa" if service == "aegis-api" else "aegis-api"
                 self.assertEqual(config["services"][other], host.config["services"][other])
