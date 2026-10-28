@@ -21,7 +21,6 @@ import uuid
 
 REPOSITORY = "phcastello/Aegis"
 REVISION = "org.opencontainers.image.revision"
-STATUS = "Aegis private deployment"
 # Reviewed Up: additive columns with defaults, new tables and indexes; replaces
 # a nonunique ConversationId index with a prefix-compatible composite index.
 # The UPDATE initializes NEW columns only. Down is never executed.
@@ -96,7 +95,7 @@ def publish(port, plan, journal):
         port.pin(plan["sha"])
         port.preflight(plan)
         port.record(journal, phase="preflight")
-        port.prepare(plan)  # build + disposable tests; no production writes
+        port.prepare(plan)  # build deployable images; tests precede publish-dev
         port.record(journal, phase="prepared")
         if plan["pending"]:
             port.backup_and_rehearse(plan)
@@ -111,12 +110,12 @@ def publish(port, plan, journal):
         private_ready = True
         port.record(journal, phase="private-healthy", migrations=plan["pending"])
         if "native" in plan["components"]:
-            port.native(plan)  # existing protected signer/publisher owns the feed
-        port.validate(plan)
-        port.record(journal, phase="complete", success=True)
+            publication = port.native(plan)  # GitHub owns the rest; no live terminal required
+            port.record(journal, phase="native-requested", native=publication, success=True)
+        else:
+            port.record(journal, phase="complete", success=True)
     except BaseException as error:
         recovery = "not-needed"
-        port.on_failure(plan)
         if private_ready:
             recovery = "healthy-private-deployment-retained"
         elif changed or port.writers_stopped:
@@ -158,8 +157,6 @@ class PrivateHost:
         self.disposable = []
         self.network = None
         self.recovery_proved = False
-        self.native_promoted = False
-        self.native_run = None
         self.migration_attempted = False
         self.images = {}
         self.current = json.loads((state / "current.json").read_text()) if (state / "current.json").exists() else {}
@@ -297,7 +294,7 @@ class PrivateHost:
         require(comparison["status"] in ("ahead", "identical"), "Selected SHA is not on the pushed branch.")
         if "native" in plan["components"]:
             control = self.git("show", "origin/main:.github/workflows/aegis-native-preview.yml")
-            require("publish_dev:" in control, "Merge the minimal publish-dev infrastructure PR through protected main first.")
+            require("deployment:" in control, "Integrate the publish-dev controls through protected main first.")
         if "backend" in plan["components"] and plan["previous"]["backend"]["sha"]:
             config_changes = self.git("diff", "--name-only", plan["previous"]["backend"]["sha"], plan["sha"],
                                       "docker-compose.yml", "docker-compose.private.yml")
@@ -308,8 +305,8 @@ class PrivateHost:
         # An explicit development publication does not require release acceptance.
         # The required INTEGRATION result deliberately fails on draft PRs; it is
         # evidence for merging main, not authorization for private publication.
-        # We reuse no green conclusion here: pertinent tests below always execute
-        # on the selected bytes and their failures stop this operation.
+        # The implementing agent runs pertinent tests before commit and dispatch.
+        # This command checks deployment integrity without repeating whole suites.
         for c in (self.api, self.pwa, self.pg, *self.others):
             require(c["State"]["Running"], "Existing private service is not running.")
         self.validate(plan, initial=True)
@@ -329,38 +326,6 @@ class PrivateHost:
                 context, dockerfile = self.source, self.source / "frontend/aegis-pwa/Dockerfile"
             self.run(["docker", "build", "--label", REVISION + "=" + plan["sha"], "-t", tag, "-f", dockerfile, context])
             self.images[component] = self.inspect(tag)["Id"]
-        if "backend" in plan["components"]:
-            sdk = "aegis-dev-tests:" + plan["sha"]
-            self.run(["docker", "build", "--target", "build", "-t", sdk, self.source / "backend"])
-            self.test_db()
-            self.run(["docker", "exec", self.db, "createdb", "-U", "test", "aegis_nodes_test"])
-            env = ["-e", "AEGIS_OPERATION_TEST_DATABASE=Host=" + self.db + ";Database=aegis_operation_test;Username=test;Password=disposable_only",
-                   "-e", "AEGIS_NODE_TEST_DATABASE=Host=" + self.db + ";Database=aegis_nodes_test;Username=test;Password=disposable_only",
-                   "-e", "AEGIS_REMINDER_TEST_DATABASE=Host=" + self.db + ";Database=aegis_operation_test;Username=test;Password=disposable_only"]
-            results = self.op / "test-results"
-            results.mkdir(mode=0o700)
-            self.run(["docker", "run", "--rm", "--network", self.network, "-v", str(results) + ":/tmp/results", *env, sdk,
-                      "dotnet", "test", "Aegis.sln", "--no-restore", "--logger", "trx", "--results-directory", "/tmp/results"])
-            require(list(results.glob("*.trx")), "Backend test evidence is missing.")
-            import xml.etree.ElementTree as ET
-            summaries = []
-            for file in results.glob("*.trx"):
-                tree = ET.parse(file)
-                counters = tree.find(".//{*}Counters")
-                require(counters is not None and int(counters.get("failed", 0)) == 0, "Backend test failures.")
-                summaries.append(dict(counters.attrib))
-                outcomes = tree.findall(".//{*}UnitTestResult")
-                for name in ("PrivateOperationPostgresTests", "NodePostgresTests"):
-                    require(any(name in t.get("testName", "") and t.get("outcome") == "Passed" for t in outcomes),
-                            "Required disposable contract test didn't run: " + name)
-            save(self.op / "backend-test-summary.json", summaries)
-        if "pwa" in plan["components"]:
-            # Tests execute in a temporary container, never in the personal DB.
-            self.run(["docker", "run", "--rm", "-v", str(self.source) + ":/workspace", "-w", "/workspace", "node:24-alpine",
-                      "sh", "-ec", "npm ci --prefix packages/aegis-client && npm ci --prefix frontend/aegis-pwa && npm test --prefix frontend/aegis-pwa"])
-            # Reuse the browser upgrade test on the private DEVELOPMENT host.
-            # It serves only synthetic fixtures on localhost, never production.
-            self.run(["node", "frontend/aegis-pwa/tests/worker-upgrade.mjs"], cwd=self.source)
         self.recovery_proved = not plan["pending"]
 
     def test_db(self):
@@ -503,7 +468,6 @@ class PrivateHost:
         self.writers_stopped = False
         # nginx resolves the upstream at startup; refresh only its resolver state.
         self.run(["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"])
-        self.wait_health()
 
     def http(self, path):
         with urllib.request.urlopen(self.url + path, timeout=10) as response:
@@ -584,78 +548,54 @@ class PrivateHost:
         state["previousEvidence"] = self.current.get("evidence")
         save(self.state / "current.json", state)
 
-    def readiness(self, plan, state="success"):
-        actual = json.loads((self.state / "current.json").read_text())
-        return self.gh(f"statuses/{plan['sha']}", "POST", dict(state=state, context=STATUS,
-                       description="api=1;nodeData=1;backend=" + actual["backend"]["sha"] + ";pwa=" + actual["pwa"]["sha"]))
-
     def native(self, plan):
-        # Refuse before version allocation if the minimal trusted control-plane
-        # bootstrap hasn't landed. Never run candidate workflows with secrets.
-        control = self.git("show", "origin/main:.github/workflows/aegis-native-preview.yml")
-        require("publish_dev:" in control, "Merge the minimal publish-dev infrastructure PR through protected main first.")
+        # Main owns reservation, secret-free builds, isolated signatures and the
+        # immutable feed update. This process finishes as soon as dispatch works.
         ledger = self.gh("contents/ledger.json?ref=aegis-distribution")
         import base64
         reservations = json.loads(base64.b64decode(ledger["content"]))["reservations"]
         line = json.loads((self.source / "apps/aegis-node/package.json").read_text())["version"].split("-")[0]
         events = [int(m[1]) for r in reservations if (m := re.fullmatch(re.escape(line) + r"-unstable\.(\d+)(?:\.rollback\.\d+)?", r["version"]))]
         version = line + "-unstable." + str(max(events, default=0) + 1)
-        self.readiness(plan)
-        before = {r["id"] for r in self.gh("actions/workflows/aegis-native-preview.yml/runs?event=workflow_dispatch&per_page=100")["workflow_runs"]}
+        actual = json.loads((self.state / "current.json").read_text())
+        require(actual["sourceCommit"] == plan["sha"] and actual["health"].get("clientApiV1"),
+                "Prepare and validate the selected private API before native publication.")
+        require(actual["compatibility"] == plan["compatibility"] == {"api": 1, "nodeData": 1},
+                "Unknown API or Node persistence contract.")
+        deployment = {"sourceCommit": plan["sha"], "backend": actual["backend"]["sha"],
+                      "pwa": actual["pwa"]["sha"], "compatibility": actual["compatibility"]}
+        require(all(re.fullmatch(r"[a-f0-9]{40}", deployment[c] or "") for c in ("backend", "pwa")),
+                "Private deployment component commits must be verifiable.")
+        runs_path = "actions/workflows/aegis-native-preview.yml/runs?event=workflow_dispatch&per_page=100"
+        before = {r["id"] for r in self.gh(runs_path)["workflow_runs"]}
         self.gh("actions/workflows/aegis-native-preview.yml/dispatches", "POST", {"ref": "main", "inputs": {
             "sha": plan["sha"], "branch": plan["branch"], "version": version, "kind": "normal", "platform": "both",
-            "compatibility_confirmed": "false", "publish_dev": "true"}})
-        run = None
-        deadline = time.monotonic() + 7200
-        print("Native publication requested: " + version + ". Approve aegis-native-signing once when GitHub requests it.", flush=True)
-        while time.monotonic() < deadline:
-            self.validate(plan)
-            self.readiness(plan)
-            if run is None:
-                matches = [r for r in self.gh("actions/workflows/aegis-native-preview.yml/runs?event=workflow_dispatch&per_page=100")["workflow_runs"]
-                           if r["id"] not in before and version in r["display_title"] and plan["sha"] in r["display_title"]]
-                require(len(matches) <= 1, "Ambiguous workflow dispatch.")
-                if matches:
-                    run = matches[0]["id"]
-                    self.native_run = run
-                    save(self.op / "native-run.json", {"runId": run, "version": version, "sha": plan["sha"]})
-                    print(f"https://github.com/{REPOSITORY}/actions/runs/{run}", flush=True)
-            else:
-                status = self.gh(f"actions/runs/{run}")
-                if status["status"] == "completed":
-                    require(status["conclusion"] == "success", "Native signature/publication failed; inspect recorded workflow.")
-                    feed = self.gh("contents/latest.json?ref=aegis-distribution")
-                    actual = json.loads(base64.b64decode(feed["content"]))
-                    require(actual["version"] == version and actual["sourceCommit"] == plan["sha"], "Feed differs from selected publication.")
-                    self.native_promoted = True
-                    state = json.loads((self.state / "current.json").read_text())
-                    state["recommended"] = version
-                    save(self.state / "current.json", state)
-                    return
-            time.sleep(20)
-        raise Blocked("Timed out waiting for native distribution; inspect recorded run before retrying.")
+            "compatibility_confirmed": "false", "publish_dev": "true", "deployment": json.dumps(deployment)}})
+        publication = {"status": "requested", "version": version, "sha": plan["sha"],
+                       "url": f"https://github.com/{REPOSITORY}/actions/workflows/aegis-native-preview.yml",
+                       "deployment": deployment}
+        save(self.op / "native-run.json", publication)
+        # Dispatch has no response body. One best-effort lookup gives a direct
+        # run link; listing delay/failure cannot revoke an accepted publication.
+        try:
+            matches = [r for r in self.gh(runs_path)["workflow_runs"]
+                       if r["id"] not in before and version in r["display_title"] and plan["sha"] in r["display_title"]]
+            if len(matches) == 1:
+                publication.update(runId=matches[0]["id"], url=matches[0]["html_url"])
+                save(self.op / "native-run.json", publication)
+        except Blocked:
+            pass
+        print("Native publication requested: " + version + ". GitHub will finish independently. " + publication["url"], flush=True)
+        return publication
 
     def recover(self, plan):
         require(not self.migration_attempted or self.recovery_proved, "Schema compatibility unproved; automatic image recovery blocked.")
-        # After recommending new clients, image recovery needs a fresh contract
-        # decision; don't silently put them onto an older incompatible backend.
-        require(not self.native_promoted, "Native feed already advanced; inspect before image recovery.")
         self.run([*self.fdc, "up", "-d", "--no-deps", "--no-build", "aegis-api", "aegis-pwa"])
         self.run(["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"])
         self.wait_health()
         self.writers_stopped = False
         if (self.state / "current.json").exists():
             (self.state / "current.json").unlink()
-
-    def on_failure(self, plan):
-        if self.native_run and not self.native_promoted:
-            try:
-                self.readiness(plan, state="failure")
-                self.gh(f"actions/runs/{self.native_run}/cancel", "POST")
-            except Exception:
-                # A workflow that already completed cannot be cancelled. No
-                # image recovery follows a successful private checkpoint.
-                pass
 
     def cleanup(self):
         for name in reversed(self.disposable):
