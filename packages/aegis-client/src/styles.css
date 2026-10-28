@@ -996,7 +996,8 @@ button:disabled {
 }
 
 .stream-fade-fragment {
-  display: inline-block;
+  /* Streaming fades must not change wrapping or the Markdown scroll extent. */
+  display: inline;
 }
 
 .markdown-message > :first-child {
