@@ -64,7 +64,16 @@ const add = (number, long = false) => {
   const content = `Aviso proativo ${number}.` + (long ? '\n\n' + Array.from({length: 35}, (_, i) => `Parágrafo ${i + 1} do aviso ${number}, para verificar a posição real de leitura.`).join('\n\n') : ' Ative a localização para recuperar os lembretes.');
   data.get(first).messages.push({ id: `proactive-${number}`, conversationId: first, role: 'assistant', content, createdAt: `2026-10-27T12:${String(number).padStart(2, '0')}:00Z`, isProactive: true, proactiveSequence: number });
 };
-const end = page => page.locator('.messages').evaluate(element => { element.scrollTop = element.scrollHeight; });
+// Pair the deterministic position with user intent; scrollTop alone also occurs
+// during layout restoration and does not represent a manual reading gesture.
+const top = page => page.locator('.messages').evaluate(element => {
+  element.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+  element.scrollTop = 0;
+});
+const end = page => page.locator('.messages').evaluate(element => {
+  element.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true }));
+  element.scrollTop = element.scrollHeight;
+});
 const waitRead = async sequence => {
   for (let i = 0; i < 50 && data.get(first).read !== sequence; i++) await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(data.get(first).read, sequence);
@@ -114,11 +123,13 @@ try {
   await phone.getByLabel('Fechar histórico', { exact: true }).click();
 
   // New, long content below the current scroll position is not read early.
-  await phone.locator('.messages').evaluate(element => { element.scrollTop = 0; });
+  await top(phone);
   add(2, true); await poll(phone); await phone.locator('[data-proactive-sequence="2"]').waitFor();
   assert.equal(data.get(first).read, 1);
   await phone.locator('[data-proactive-sequence="2"]').evaluate(element => {
-    const root = element.closest('.messages'); root.scrollTop += element.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom - 5;
+    const root = element.closest('.messages');
+    root.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true }));
+    root.scrollTop += element.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom - 5;
   });
   await pause(); assert.equal(data.get(first).read, 1, 'The message end is still clipped by five pixels');
 
@@ -144,7 +155,9 @@ try {
   assert.equal(data.get(first).read, 2, 'A visible document cannot override a background Activity');
   // Return to foreground with only message 3 fully seen, message 4 still below.
   await phone.locator('[data-proactive-sequence="3"]').evaluate(element => {
-    const root = element.closest('.messages'); root.scrollTop += element.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom + 12;
+    const root = element.closest('.messages');
+    root.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+    root.scrollTop += element.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom + 12;
   });
   await phone.evaluate(() => { window.fixtureForeground = true; window.dispatchEvent(new Event('aegis-app-visibility')); });
   await waitRead(3); assert.equal(data.get(first).read, 3);
@@ -158,13 +171,15 @@ try {
   await phone.evaluate(() => { document.getElementById('read-cover').remove(); window.dispatchEvent(new Event('aegis-chat-visible')); });
   await waitRead(4);
 
+  // Keep the next arrival outside the reader's viewport, then attempt its read
+  // acknowledgement offline; following an already-visible end would read it first.
   // Offline acknowledgement is retried through the existing online/foreground hook.
-  add(5); await poll(phone); await phone.locator('[data-proactive-sequence="5"]').waitFor();
+  await top(phone); add(5); await poll(phone); await phone.locator('[data-proactive-sequence="5"]').waitFor();
   await android.setOffline(true); await end(phone); await pause(); assert.equal(data.get(first).read, 4);
   await android.setOffline(false); await phone.evaluate(() => window.dispatchEvent(new Event('online'))); await waitRead(5);
 
   // A delayed native visibility reply from the previous selection cannot read it.
-  await phone.locator('.messages').evaluate(element => { element.scrollTop = 0; });
+  await top(phone);
   add(6); await poll(phone); await phone.locator('[data-proactive-sequence="6"]').waitFor();
   await phone.evaluate(() => { window.fixtureDeferVisibility = true; }); await end(phone);
   await phone.waitForFunction(() => Boolean(window.fixtureReleaseVisibility));
