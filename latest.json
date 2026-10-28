@@ -1,27 +1,27 @@
 {
-  "version": "0.7.2-unstable.4",
-  "notes": "Aegis 0.7.2-unstable.4",
-  "pub_date": "2026-10-28T00:36:50.255Z",
+  "version": "0.7.2-unstable.5",
+  "notes": "Aegis 0.7.2-unstable.5",
+  "pub_date": "2026-10-28T20:17:35.659Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.2-unstable.4/Aegis-Windows-x86_64-Setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcTZSMlBkaUNNS1laNkpDaURMMVpIZmtoRUdyMjBQekl6cEFvMTZpaWg0czFtdm8yVFpzdjVBTHRFb2x3OCt2WXhDNER1SXkyRFp6T3JwSCs0NlNTK0FnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMTQ4MzEyCWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC43LjItdW5zdGFibGUuNAo5ajBUd0lYYWVLMWJIdXJCdUdVVTVkMFBxYVNqQ21Eb3JXdDd2c1dmay9FVkMyWTB3b000d0VoRlBWOU5XQ2pJWk9pTXFoRDgzZXA0UDB3VTc1ZklDQT09Cg==",
-      "sha256": "87a830ab867cbf5fa8ec4fe1c2d08a585522c00a1625baf763d819576fd2d6a0"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.2-unstable.5/Aegis-Windows-x86_64-Setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcS9MdE10c1N6ZTlSejFlMHF4QVBZN09tWFc0bkNLcFVha2o2Z1pTSDFVaXZBQVhnT3F0Sk95VDRPTnYwQUREVWZVV2cvZWE5SUFseTFQMHpyUG1SQlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE5Mjc2CWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC43LjItdW5zdGFibGUuNQo5NTQyTHM0MjV5My9BbkNxK01QQ3FzY3dVTEdtTytSelpTZHRQMzFXTDdsOHlyTW8vYjlZbHRlT3VPd1oyUzJneFI5dUZVVGFwVlZPSVc3OEJuWW5BQT09Cg==",
+      "sha256": "8856056eb26a06632d2fa8f5b076d6eadd23fa155caaca73d9a706829862d9d0"
     }
   },
   "android": {
     "aarch64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.2-unstable.4/Aegis-Android-arm64.apk",
-      "versionCode": 7002004,
-      "sha256": "f25041c527c35cf6afef16aed5cc10ca56301ce3f3a5fcc713a5ad865f80f5a3"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.7.2-unstable.5/Aegis-Android-arm64.apk",
+      "versionCode": 7002005,
+      "sha256": "e6757f56e7b45e3c0ea5e54285c8b41c1d8b85f7802c5910cec645876271c728"
     }
   },
   "schema": 2,
-  "versionCode": 7002004,
+  "versionCode": 7002005,
   "kind": "normal",
-  "sourceCommit": "52e4459f55f3d3baec697cfd265d405c7e683f51",
+  "sourceCommit": "a891e53665ef4f7bbb7878925b2864baa88218f6",
   "sourceVersion": "0.7.2",
-  "publishedAt": "2026-10-28T00:36:50.255Z",
+  "publishedAt": "2026-10-28T20:17:35.659Z",
   "compatibility": {
     "api": 1,
     "nodeData": 1
