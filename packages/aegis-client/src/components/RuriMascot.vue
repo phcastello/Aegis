@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import spritesheet from '../assets/ruri-spritesheet.png';
+import wavingSpritesheet from '../assets/ruri-waving-consistent.png';
 
-// Canonical v2 atlas: eight 192×208 cells per row, with unchanged pixels.
-// Skip idle's closed-eye pose, whose face changes abruptly. Long resting holds
-// keep the subtle breathing calm; the same raised-hand pose bridges both ways.
+// Idle keeps the approved canonical sequence. The derived wave uses idle0's
+// unchanged body plus a local arm layer; it never uses the old waving bodies.
 const idleFrames = [0, 1, 3, 4, 5];
 const idleDurations = [1800, 500, 500, 500, 1700];
-const wavingFrames = [0, 1, 2, 1, 2, 1, 3];
-const wavingDurations = [500, 350, 400, 350, 400, 350, 600];
+const wavingFrames = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0];
+const wavingDurations = [350, 120, 120, 120, 120, 180, 220, 220, 220, 180, 120, 120, 120, 120, 670];
 const element = ref<HTMLElement | null>(null);
 const state = ref<'idle' | 'waving'>('idle');
 const step = ref(0);
@@ -22,8 +22,9 @@ let disposed = false;
 let idleCycles = 0;
 
 const spriteStyle = computed(() => ({
-  backgroundImage: `url(${spritesheet})`,
-  backgroundPosition: `${frame.value * -144}px ${state.value === 'waving' ? -468 : 0}px`
+  backgroundImage: `url(${state.value === 'waving' ? wavingSpritesheet : spritesheet})`,
+  backgroundSize: `1152px ${state.value === 'waving' ? 156 : 1716}px`,
+  backgroundPosition: `${frame.value * -144}px 0px`
 }));
 
 function schedule(): void {
@@ -56,11 +57,14 @@ onMounted(() => {
   motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   motion.addEventListener('change', motionChanged);
   document.addEventListener('visibilitychange', visibilityChanged);
-  const atlas = new Image();
-  atlas.src = spritesheet;
-  // A cold mobile fetch can outlast the greeting itself. Start the sequence only
-  // once these exact pixels are decoded, and ignore a late load after unmount.
-  void atlas.decode().then(() => {
+  // Start only after both atlases decode, including on a cold mobile fetch.
+  // A missing derivative leaves the canonical neutral pose static.
+  const atlases = [spritesheet, wavingSpritesheet].map(src => {
+    const image = new Image();
+    image.src = src;
+    return image.decode();
+  });
+  void Promise.all(atlases).then(() => {
     if (disposed) return;
     ready = true;
     state.value = motion?.matches ? 'idle' : 'waving';
@@ -94,7 +98,6 @@ onBeforeUnmount(() => {
   width: 144px;
   height: 156px;
   background-repeat: no-repeat;
-  background-size: 1152px 1716px;
   image-rendering: pixelated;
 }
 </style>

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "canonicalAtlas": "packages/aegis-client/src/assets/ruri-spritesheet.png",
+  "canonicalAtlasSha256": "05c42c26f59ea4a7fae2f8fcdb42d7a3a99087bb052de0407c38f944d6bc2da1",
+  "cell": { "width": 192, "height": 208 },
+  "base": { "row": 0, "column": 0 },
+  "donor": { "row": 3, "column": 1 },
+  "pivot": [117, 133],
+  "offset": [4, 0],
+  "localArmScale": 0.86,
+  "armPolygon": [[127,101],[131,100],[135,103],[136,107],[135,112],[134,116],[136,127],[134,131],[129,133],[122,131],[116,133],[112,135],[110,131],[113,127],[119,122],[124,120],[126,116],[125,112],[125,105]],
+  "gloveFill": {
+    "polygon": [[103,151],[111,151],[116,155],[116,163],[111,165],[103,162]],
+    "sourceOffset": [0, 13]
+  },
+  "angles": [null, 160, 120, 80, 40, 0, -12, 8]
+}
