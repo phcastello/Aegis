@@ -170,25 +170,25 @@ try {
   await page.waitForTimeout(100);
   const pose=async()=>ruri.evaluate(el=>({state:el.dataset.state,frame:Number(el.dataset.frame),position:getComputedStyle(el).backgroundPosition,image:getComputedStyle(el).backgroundImage,size:getComputedStyle(el).backgroundSize}));
   await page.getByRole('textbox',{name:'Mensagem'}).fill('Continuo digitando enquanto a Ruri acena');
-  // The hand rises through four intermediate poses and returns through those
-  // same poses, preserving the approved approximately three-second greeting.
+  // Drawn preparation, elbow bend and lifted palm precede two wrist gestures.
+  // Descent has its own relaxed pose instead of reversing a rigid arm layer.
   await page.clock.runFor(349);
   equal((await pose()).frame,0,'greeting holds its resting pose before raising the hand');
-  const wave=[1,2,3,4,5,6,7,6,5,4,3,2,1,0];
-  for (const [index,hold] of [1,120,120,120,120,180,220,220,220,180,120,120,120,120].entries()) {
+  const wave=[1,2,3,4,5,4,6,4,5,4,6,4,3,7,1,0];
+  for (const [index,hold] of [1,140,160,160,180,200,120,200,120,200,120,200,160,160,200,140].entries()) {
    await page.clock.runFor(hold);
    const current=await pose();
    equal(current.state,'waving','arm transition stays within one wave sequence');
-   equal(current.frame,wave[index],'hand follows the outward-and-return sequence');
+   equal(current.frame,wave[index],'drawn preparation, hand gestures and relaxed return follow the reviewed sequence');
    equal(current.position,`${wave[index]*-144}px 0px`,'wave uses the intended cell on the derived atlas row');
    ok(current.image.includes('ruri-waving-consistent'),'all waving steps keep the stable-body derivative');
    equal(current.size,'1152px 156px','derived cells keep the exact approved scale and framing');
-   if(index===5)await page.screenshot({path:join(screenshots,`${width}-wave-raised.png`)});
+   if(index===4)await page.screenshot({path:join(screenshots,`${width}-wave-raised.png`)});
   }
   equal((await pose()).frame,0,'the completed hand return reaches canonical idle0 before switching atlases');
   await page.screenshot({path:join(screenshots,`${width}-wave-return.png`)});
-  await page.clock.runFor(669);
-  equal((await pose()).state,'waving','the full wave retains its final neutral hold until three seconds');
+  await page.clock.runFor(499);
+  equal((await pose()).state,'waving','the wave retains its final neutral hold until 3310ms');
   await page.clock.runFor(1);
   for (let cycle=0;cycle<2;cycle++) {
    equal((await pose()).state,'idle','each wave is followed by two idle cycles');
@@ -206,6 +206,18 @@ try {
    await page.clock.runFor(1);
   }
   equal((await pose()).state,'waving','the next wave repeats after exactly two idle cycles');
+  // A second complete wave → idle → idle cycle catches recurrence errors that
+  // checking only the first greeting and the next starting frame would miss.
+  for (const [index,hold] of [350,140,160,160,180,200,120,200,120,200,120,200,160,160,200,140,500].entries()) {
+   equal((await pose()).frame,[0,...wave][index],'the second greeting repeats every reviewed drawn pose');
+   await page.clock.runFor(hold);
+  }
+  equal((await pose()).state,'idle','second greeting reaches idle');
+  await page.clock.runFor(5000);
+  equal((await pose()).state,'idle','second greeting receives its second idle cycle');
+  await page.clock.runFor(5000);
+  equal((await pose()).state,'waving','two complete wave → idle → idle cycles return to waving');
+  equal((await pose()).frame,0,'third greeting starts from rest');
   equal(await page.getByRole('textbox',{name:'Mensagem'}).inputValue(),'Continuo digitando enquanto a Ruri acena','typing is preserved across the repeating cycle');
   equal(await page.getByRole('textbox',{name:'Mensagem'}).evaluate(el=>el===document.activeElement),true,'repeated waving leaves the composer focused');
   // Pausing never catches up a hidden animation or leaves recurring work while

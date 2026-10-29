@@ -3,12 +3,12 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import spritesheet from '../assets/ruri-spritesheet.png';
 import wavingSpritesheet from '../assets/ruri-waving-consistent.png';
 
-// Idle keeps the approved canonical sequence. The derived wave uses idle0's
-// unchanged body plus a local arm layer; it never uses the old waving bodies.
+// Idle keeps the approved canonical sequence. Each waving cell redraws the
+// local arm, sleeve and palm; the raised wrist gestures have their own poses.
 const idleFrames = [0, 1, 3, 4, 5];
 const idleDurations = [1800, 500, 500, 500, 1700];
-const wavingFrames = [0, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0];
-const wavingDurations = [350, 120, 120, 120, 120, 180, 220, 220, 220, 180, 120, 120, 120, 120, 670];
+const wavingFrames = [0, 1, 2, 3, 4, 5, 4, 6, 4, 5, 4, 6, 4, 3, 7, 1, 0];
+const wavingDurations = [350, 140, 160, 160, 180, 200, 120, 200, 120, 200, 120, 200, 160, 160, 200, 140, 500];
 const element = ref<HTMLElement | null>(null);
 const state = ref<'idle' | 'waving'>('idle');
 const step = ref(0);

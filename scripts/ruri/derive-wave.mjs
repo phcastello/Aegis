@@ -1,4 +1,4 @@
-// Development-only, deterministic arm compositing. Never imported by the app.
+// Development-only, rasterization of individually drawn local arm poses. Never imported by the app.
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -15,78 +15,50 @@ export function pointInPolygon(x, y, polygon) {
   return inside;
 }
 
-function sourceOver(target, targetIndex, source, sourceIndex) {
-  const sourceAlpha = source[sourceIndex + 3] / 255;
-  if (sourceAlpha === 0) return;
-  const targetAlpha = target[targetIndex + 3] / 255;
-  // Copy donor pixels exactly when no blend is necessary, including soft alpha.
-  if (sourceAlpha === 1 || targetAlpha === 0) {
-    source.copy(target, targetIndex, sourceIndex, sourceIndex + 4);
-    return;
-  }
-  const alpha = sourceAlpha + targetAlpha * (1 - sourceAlpha);
-  for (let channel = 0; channel < 3; channel++) {
-    target[targetIndex + channel] = Math.round((source[sourceIndex + channel] * sourceAlpha
-      + target[targetIndex + channel] * targetAlpha * (1 - sourceAlpha)) / alpha);
-  }
-  target[targetIndex + 3] = Math.round(alpha * 255);
-}
-
-export function armSourcePoint(x, y, angle, spec) {
-  const radians = angle * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
-  const dx = x + 0.5 - spec.pivot[0], dy = y + 0.5 - spec.pivot[1];
-  return [(cosine * dx + sine * dy) / spec.localArmScale + spec.pivot[0] - spec.offset[0],
-    (-sine * dx + cosine * dy) / spec.localArmScale + spec.pivot[1] - spec.offset[1]];
-}
-
+// Each contour is authored separately in wave-spec.json, at native resolution.
+// No donor-arm sampling, rotation, scaling or bone transform is used.
 export function buildWave(atlas, spec) {
   const { width, height } = spec.cell;
   const canonical = cropPng(atlas, spec.base.column * width, spec.base.row * height, width, height);
-  const donor = cropPng(atlas, spec.donor.column * width, spec.donor.row * height, width, height);
   const body = { width, height, data: Buffer.from(canonical.data) };
   const gloveMask = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     if (!pointInPolygon(x + 0.5, y + 0.5, spec.gloveFill.polygon)) continue;
     const sourceX = x + spec.gloveFill.sourceOffset[0], sourceY = y + spec.gloveFill.sourceOffset[1];
     if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) throw Error('Glove fill exceeds canonical cell.');
-    const targetIndex = (y * width + x) * 4, sourceIndex = (sourceY * width + sourceX) * 4;
-    canonical.data.copy(body.data, targetIndex, sourceIndex, sourceIndex + 4);
+    canonical.data.copy(body.data, (y * width + x) * 4, (sourceY * width + sourceX) * 4, (sourceY * width + sourceX) * 4 + 4);
     gloveMask[y * width + x] = 1;
   }
-  const masks = [], frames = spec.angles.map(angle => {
+  const masks = [], frames = spec.poses.map((pose, index) => {
     const mask = new Uint8Array(width * height);
-    if (angle === null) {
-      masks.push(mask);
-      return { width, height, data: Buffer.from(canonical.data) };
-    }
-    const frame = { width, height, data: Buffer.from(body.data) };
-    mask.set(gloveMask);
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      const [sourceX, sourceY] = armSourcePoint(x, y, angle, spec);
-      if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height
-        || !pointInPolygon(sourceX, sourceY, spec.armPolygon)) continue;
-      const sourceIndex = (Math.floor(sourceY) * width + Math.floor(sourceX)) * 4;
-      // Polygon membership is independent of final differences. A transparent
-      // source does not erase the canonical cape and cannot punch holes in it.
-      mask[y * width + x] = 1;
-      sourceOver(frame.data, (y * width + x) * 4, donor.data, sourceIndex);
+    const frame = { width, height, data: Buffer.from(index === 0 ? canonical.data : body.data) };
+    if (index) mask.set(gloveMask);
+    for (const layer of pose.layers) {
+      const color = spec.palette[layer.color];
+      if (!color || !layer.polygon || layer.polygon.length < 3) throw Error('Invalid drawn contour.');
+      const [sourceX, sourceY] = color.source;
+      const sourceIndex = (sourceY * width + sourceX) * 4;
+      if (!color.rgba.every((value, channel) => canonical.data[sourceIndex + channel] === value)) throw Error('Palette differs from canonical eyedropper.');
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        if (!pointInPolygon(x + .5, y + .5, layer.polygon)) continue;
+        frame.data.set(color.rgba, (y * width + x) * 4);
+        mask[y * width + x] = 1;
+      }
     }
     masks.push(mask);
     return frame;
   });
   const image = { width: width * frames.length, height, data: Buffer.alloc(width * frames.length * height * 4) };
-  frames.forEach((frame, index) => {
-    for (let y = 0; y < height; y++) {
-      frame.data.copy(image.data, (y * image.width + index * width) * 4, y * width * 4, (y + 1) * width * 4);
-    }
-  });
+  for (let index = 0; index < frames.length; index++) for (let y = 0; y < height; y++) {
+    frames[index].data.copy(image.data, (y * image.width + index * width) * 4, y * width * 4, (y + 1) * width * 4);
+  }
   const unionMask = new Uint8Array(width * height);
-  masks.forEach(mask => mask.forEach((value, index) => { if (value) unionMask[index] = 1; }));
-  return { image, frames, canonical, masks, allowedMasks: masks, unionMask };
+  for (const mask of masks) mask.forEach((value, index) => { if (value) unionMask[index] = 1; });
+  return { canonical, frames, image, allowedMasks: masks, unionMask };
 }
 
 export function inspectWave(result, atlas) {
-  const { canonical, frames, masks } = result, { width, height } = canonical;
+  const { canonical, frames, allowedMasks: masks } = result, { width, height } = canonical;
   const palette = new Set();
   for (let index = 0; index < atlas.data.length; index += 4) palette.add(atlas.data.readUInt32BE(index));
   const bbox = data => {

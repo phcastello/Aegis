@@ -1,4 +1,5 @@
-// Independent, semantic checks of the published PNG, not a similarity score.
+// Secondary integrity diagnostics for the published PNG. Visual review decides
+// whether the drawings and timed movement are acceptable.
 import { cropPng } from './png.mjs';
 
 // Half-open coordinates in the canonical 192×208 cell. The chin is separate
@@ -30,12 +31,10 @@ export function compareWave(canonical, variant, allowedMasks, sourceAtlas) {
       [name, { box, checkedPixels: (box[2] - box[0]) * (box[3] - box[1]), changedPixels: 0 }]));
     let changedPixels = 0, outsideMask = 0, alphaDecreases = 0, newColorPixels = 0, maskPixels = 0, borderAlpha = 0;
     const newColors = new Set(), changedBbox = [width, height, -1, -1];
-    let maskOutsideReviewedBounds = 0;
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
       const p = y * width + x, i = p * 4;
       if (mask[p]) {
         union[p] = 1; maskPixels++;
-        if (x < 98 || x >= 149 || y < 101 || y >= 166) maskOutsideReviewedBounds++;
       }
       if ((x === 0 || y === 0 || x === width - 1 || y === height - 1) && frame.data[i + 3]) borderAlpha++;
       if (frame.data[i + 3] < canonical.data[i + 3]) alphaDecreases++;
@@ -52,7 +51,7 @@ export function compareWave(canonical, variant, allowedMasks, sourceAtlas) {
       }
     }
     return { index, changedPixels, changedBbox: changedPixels ? changedBbox : null, outsideMask,
-      checkedStaticPixels: width * height - maskPixels, maskPixels, maskOutsideReviewedBounds,
+      checkedStaticPixels: width * height - maskPixels, maskPixels,
       alphaDecreases, borderAlpha, bbox: alphaBbox(frame), feetBbox: alphaBbox(frame, protectedRegions.feet),
       newColorPixels, newColorCount: newColors.size, namedRegions };
   });
