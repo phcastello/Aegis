@@ -12,6 +12,7 @@ export function useAegisVoice() {
   let activeTurnId: string | null = null;
   let activeSpeechRequestId: string | null = null;
   let controller: AbortController | null = null;
+  let playbackRequest = 0;
   player.onState((state) => { playbackState.value = state; });
 
   const isBusy = computed(() => playbackState.value === 'buffering' || playbackState.value === 'playing' || playbackState.value === 'initializing');
@@ -33,28 +34,33 @@ export function useAegisVoice() {
   }
 
   async function speak(turnId: string, assistantMessageId: string, manual = false): Promise<void> {
-    await stop();
-    if (!(await prepare())) return;
+    const stopping = stop();
+    const request = playbackRequest;
+    await stopping;
+    if (request !== playbackRequest || !(await prepare()) || request !== playbackRequest) return;
     if (!manual && !autoSpeak.value) return;
     const speechRequestId = crypto.randomUUID();
     const generation = player.begin();
     activeTurnId = turnId;
     activeSpeechRequestId = speechRequestId;
-    controller = new AbortController();
+    const speechController = new AbortController();
+    controller = speechController;
+    const ownsSpeech = (): boolean => request === playbackRequest && activeTurnId === turnId &&
+      activeSpeechRequestId === speechRequestId && !speechController.signal.aborted;
     voiceMessage.value = 'Preparando voz';
     try {
       await streamSpeech({ turnId, speechRequestId, assistantMessageId }, async (chunk) => {
-        if (activeTurnId !== turnId || activeSpeechRequestId !== speechRequestId || controller?.signal.aborted) return;
+        if (!ownsSpeech()) return;
         await player.enqueuePcm(chunk, generation);
-        voiceMessage.value = 'Falando';
-      }, controller.signal);
+        if (ownsSpeech()) voiceMessage.value = 'Falando';
+      }, speechController.signal);
       await player.finish(generation);
-      if (activeTurnId === turnId) {
+      if (ownsSpeech()) {
         voiceAvailable.value = true;
         voiceMessage.value = null;
       }
     } catch (error) {
-      if (!controller?.signal.aborted && activeTurnId === turnId) {
+      if (ownsSpeech()) {
         player.fail();
         voiceAvailable.value = false;
         voiceMessage.value = error instanceof TypeError ? 'Serviço de voz indisponível.'
@@ -64,6 +70,7 @@ export function useAegisVoice() {
   }
 
   async function stop(): Promise<void> {
+    playbackRequest++;
     const speechRequestId = activeSpeechRequestId;
     activeTurnId = null;
     activeSpeechRequestId = null;

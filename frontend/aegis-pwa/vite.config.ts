@@ -48,7 +48,11 @@ export default defineConfig({
           }
         ]
       },
-      injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico}'] }
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // Keep the canonical transparent Ruri atlas byte-identical and offline.
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024
+      }
     })
   ]
 });

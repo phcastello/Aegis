@@ -25,10 +25,12 @@ function createFixture(viteOrigin) {
   const initial = id => ({ id: `${id}-history`, conversationId: id, role: 'assistant', createdAt: date,
     content: `Histórico ${id === a ? 'Alfa' : 'Beta'}.\n\n` + Array.from({ length: 12 }, (_, i) => `Parágrafo ${i + 1}. Texto anterior para ler durante a geração.\n\n- Primeiro item\n- Segundo item\n\n\`\`\`js\nconst item${i} = ${i};\n\`\`\``).join('\n\n') });
   const data = new Map([a, b].map(id => [id, { id, title: id === a ? 'Alfa' : 'Beta', createdAt: date, updatedAt: date, messages: [initial(id)], read: 0 }]));
+  const streams = new Map();
+  let newConversations = 0;
   const requests = [], cancellations = [], completions = [], deletions = [], speech = [];
   let current, failNext = false, heldConversation = null, holdConversationId = null;
   const summary = row => ({ id: row.id, title: row.title, createdAt: row.createdAt, updatedAt: row.updatedAt, messageCount: row.messages.length,
-    hasUnreadProactive: row.messages.some(m => (m.proactiveSequence ?? 0) > row.read) });
+    titleSource: row.titleSource ?? 'default', hasUnreadProactive: row.messages.some(m => (m.proactiveSequence ?? 0) > row.read) });
   const json = (res, body, code = 200) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
@@ -56,7 +58,7 @@ function createFixture(viteOrigin) {
     const turnPath = /^\/api\/chat\/turns\/([^/]+)(\/complete)?$/.exec(path);
     if (turnPath) {
       (turnPath[2] ? completions : cancellations).push(turnPath[1]);
-      if (req.method === 'DELETE' && current?.request.turnId === turnPath[1]) current.res.end();
+      if (req.method === 'DELETE') streams.get(turnPath[1])?.res.end();
       return json(res, null, 204);
     }
     const conversationPath = /^\/api\/chat\/conversations\/([^/]+)(?:\/(proactive-messages|proactive-read))?$/.exec(path);
@@ -79,7 +81,7 @@ function createFixture(viteOrigin) {
       requests.push(body);
       if (failNext) { failNext = false; return json(res, { error: 'Falha de envio antes da aceitação.' }, 503); }
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); res.flushHeaders();
-      const id = body.conversationId ?? created;
+      const id = body.conversationId ?? (newConversations++ === 0 ? created : crypto.randomUUID());
       current = { request: body, id, res, content: '', accepted: false,
         event(event) { if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify({ turnId: body.turnId, ...event }) + '\n'); },
         accept() {
@@ -94,10 +96,11 @@ function createFixture(viteOrigin) {
             row.title = title; row.updatedAt = new Date().toISOString();
             row.messages.push({ id: `${body.turnId}-assistant`, conversationId: id, role: 'assistant', content: this.content, createdAt: row.updatedAt });
           }
-          this.event({ type: 'done', conversationId: id, messageId: `${body.turnId}-assistant`, conversationTitle: title }); res.end();
+          this.event({ type: 'done', conversationId: id, messageId: `${body.turnId}-assistant`, conversationTitle: title, titleSource: row?.titleSource }); res.end();
         },
         fail() { this.event({ type: 'error', message: 'Falha de rede na conversa de origem.' }); res.end(); }
       };
+      streams.set(body.turnId, current);
       return;
     }
     return json(res, { error: `Unknown fixture path: ${path}` }, 404);
@@ -186,13 +189,20 @@ try {
       equal(await menu().count(), 0, 'pending local messages do not expose the menu');
       await select('Beta');
       equal(await composer().inputValue(), 'Rascunho Beta', 'navigation restores only the target draft');
-      const pendingRequests = fixture.requests.length;
-      await composer().press('Enter'); await delay(80);
-      equal(fixture.requests.length, pendingRequests, 'another conversation cannot submit an ambiguous concurrent turn');
-      equal(await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).isDisabled(), true, 'second-turn submission is visibly disabled');
+      const simultaneous = await send('Pergunta Beta simultânea');
+      simultaneous.accept(); simultaneous.token('Resposta exclusivamente Beta. ');
+      equal(await page.locator('.composer').getByText('Aegis está respondendo em outra conversa.', { exact: true }).count(), 0, 'background notice is absent');
+      first.accept(); first.token('Token exclusivo da primeira conversa. ');
+      await page.locator('.messages').getByText('Resposta exclusivamente Beta.', { exact: true }).waitFor();
+      equal(await page.locator('.messages').getByText('Token exclusivo da primeira conversa.', { exact: false }).count(), 0, 'simultaneous streams have isolated tokens');
+      await history();
+      equal(await page.locator('.history-generating-dot').count(), 2, 'both generations have sidebar indicators even before a title exists');
+      await select('Beta');
+      simultaneous.done(); await settled();
+      equal(fixture.completions.includes(first.request.turnId), false, 'later conversation finishes before the earlier one');
       await composer().fill('Rascunho Beta');
       equal(fixture.cancellations.length, 0, 'navigation before conversation persistence never cancels');
-      first.accept(); first.token('Resposta criada em segundo plano. '); await delay(120);
+      first.token('Resposta criada em segundo plano. '); await delay(120);
       equal((await header().textContent()).trim(), 'Beta', 'late persistence and tokens do not replace target identity');
       equal(await page.locator('.messages').getByText('Resposta criada em segundo plano.', { exact: false }).count(), 0, 'late tokens remain with the origin');
       equal(await composer().inputValue(), 'Rascunho Beta', 'background callbacks preserve the target draft');
@@ -212,7 +222,7 @@ try {
       await select('Criada pelo teste');
       equal(await composer().inputValue(), '', 'sent new draft was not left under the persisted ID');
       equal(await page.locator('.messages').getByText('Rascunho novo original', { exact: true }).count(), 1, 'history restoration does not duplicate the accepted prompt');
-      equal(await page.locator('.messages').getByText('Resposta criada em segundo plano.', { exact: true }).count(), 1, 'history restoration does not duplicate the response');
+      equal(await page.locator('.messages').getByText('Token exclusivo da primeira conversa. Resposta criada em segundo plano.', { exact: true }).count(), 1, 'history restoration does not duplicate the response');
       const second = await send('Segunda mensagem'); second.accept(); second.token('Segunda resposta. '); second.done(); await settled();
       equal(await composer().inputValue(), '', 'second send does not resurrect the obsolete new draft');
       await select('Beta'); await select('Criada pelo teste');
@@ -235,10 +245,10 @@ try {
       await page.evaluate(() => { window.fixtureCopyFailure = false; });
       const geometry = await page.locator('.chat-header').evaluate(el => {
         const style = getComputedStyle(el), bounds = el.getBoundingClientRect(), menu = el.querySelector('.conversation-menu-trigger').getBoundingClientRect(), server = el.querySelector('.server-indicator').getBoundingClientRect();
-        return { border: style.borderBottomWidth, fade: getComputedStyle(el, '::after').backgroundImage, right: bounds.right - parseFloat(style.paddingRight) - menu.right, serverBeforeMenu: server.right <= menu.left };
+        return { border: style.borderBottomWidth, fade: getComputedStyle(el.closest('.chat-panel'), '::before').backgroundImage, right: bounds.right - parseFloat(style.paddingRight) - menu.right, position: style.position, pointerEvents: style.pointerEvents, serverBeforeMenu: server.right <= menu.left };
       });
-      equal(geometry.border, '0px', 'header has no separator'); ok(geometry.fade.includes('linear-gradient'), 'header uses a discreet fade');
-      ok(Math.abs(geometry.right) <= 2, 'menu sits at the useful right edge'); ok(geometry.serverBeforeMenu, 'availability indicator does not displace the right-aligned menu');
+      equal(geometry.border, '0px', 'header has no separator'); ok(geometry.fade.includes('linear-gradient'), 'content uses an independent discreet fade');
+      equal(geometry.position, 'absolute', 'header controls float outside normal layout'); equal(geometry.pointerEvents, 'none', 'transparent header never captures pointer gestures'); ok(geometry.serverBeforeMenu, 'availability indicator does not displace the right-aligned menu');
 
       await select('Alfa');
       const streaming = await send('Fluxo longo'); streaming.accept();
@@ -343,6 +353,41 @@ try {
       await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Outro rascunho de Nova conversa');
       equal(await composer().inputValue(), 'Outro rascunho de Nova conversa', 'the second failed new prompt is independently recoverable');
       await fresh(); equal(await composer().inputValue(), 'Terceiro rascunho ainda não enviado', 'recovering both failed prompts preserves a third unsent new draft');
+      // Three independent owners, including one still awaiting its persistent ID.
+      await select('Alfa');
+      const parallelA = await send('Paralelo A'); parallelA.accept(); parallelA.token('A independente. ');
+      await select('Beta');
+      const parallelB = await send('Paralelo B'); parallelB.accept(); parallelB.token('B independente. ');
+      await fresh();
+      const parallelNew = await send('Paralelo novo sem ID');
+      await select('Criada pelo teste');
+      const beforeLimit = fixture.requests.length;
+      await composer().fill('Rascunho preservado no limite');
+      await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).click();
+      await page.locator('.composer').getByText('Já há três conversas respondendo. Aguarde uma terminar para enviar.', { exact: true }).waitFor();
+      equal(fixture.requests.length, beforeLimit, 'limit never sends or cancels an existing stream');
+      equal(await composer().inputValue(), 'Rascunho preservado no limite', 'limit preserves the draft');
+      await select('Alfa'); await page.getByRole('button', { name: 'Interromper geração', exact: true }).click(); await settled();
+      ok(fixture.cancellations.includes(parallelA.request.turnId), 'cancellation addresses A');
+      equal(fixture.cancellations.includes(parallelB.request.turnId), false, 'cancellation of A does not cancel B');
+      parallelB.token('B continua depois da interrupção. ');
+      await select('Beta');
+      await page.locator('.messages').getByText('B independente. B continua depois da interrupção.', { exact: true }).waitFor();
+      parallelNew.accept(); parallelNew.token('Novo segue isolado. '); parallelNew.fail(); await delay(100);
+      equal(await page.locator('.composer').getByText('Falha de rede na conversa de origem.', { exact: true }).count(), 0, 'failure of the new conversation never contaminates B');
+      parallelB.done(); await settled();
+      equal((await header().textContent()).trim(), 'Beta', 'background failure does not change navigation');
+      // Lost transport after acceptance preserves the accepted prompt, without retry duplication.
+      const lost = await send('Resposta com transporte perdido'); lost.accept(); lost.token('Trecho antes da desconexão. ');
+      await page.locator('.messages').getByText('Trecho antes da desconexão.', { exact: true }).waitFor();
+      lost.res.destroy();
+      await page.locator('.composer-error').first().waitFor(); await settled();
+      equal(await composer().inputValue(), '', 'accepted network failure does not restore the prompt for duplicate retry');
+      await page.evaluate(() => window.dispatchEvent(new Event('online')));
+      const reconnected = await send('Mensagem depois da reconexão'); reconnected.accept(); reconnected.token('Reconectada. '); reconnected.done(); await settled();
+      equal(await page.locator('.messages').getByText('Mensagem depois da reconexão', { exact: true }).count(), 1, 'reconnection adds exactly one new prompt');
+      await composer().fill('Rascunho Beta durante resposta');
+
       await select('Alfa');
       const deleted = await send('Excluir turno ativo'); deleted.accept(); deleted.token('Resposta antes da exclusão. ');
       await select('Beta'); await history();

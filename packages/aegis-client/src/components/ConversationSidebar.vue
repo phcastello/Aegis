@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ConversationMenu from './ConversationMenu.vue';
+import ConversationTitle from './ConversationTitle.vue';
 import type { ConversationSummary } from '../types/chat';
 import AegisIdentityCard from './AegisIdentityCard.vue';
 
@@ -8,6 +9,7 @@ const props = defineProps<{
   conversations: ConversationSummary[];
   appVersion?: string;
   activeConversationId?: string | null;
+  generatingConversationIds?: readonly string[];
   disabled?: boolean;
   open?: boolean;
   hasMore?: boolean;
@@ -124,8 +126,9 @@ onBeforeUnmount(() => {
           class="history-item"
           :class="{ 'history-item--active': conversation.id === activeConversationId }"
         >
-          <button type="button" class="history-item__main" :disabled="disabled" @click="emit('openConversation', conversation.id)">
-            <strong>{{ getTitle(conversation) }}</strong>
+          <button type="button" class="history-item__main" :aria-label="getTitle(conversation)" :disabled="disabled" @click="emit('openConversation', conversation.id)">
+            <ConversationTitle :title="getTitle(conversation)" :source="conversation.titleSource" />
+            <span v-if="generatingConversationIds?.includes(conversation.id)" class="history-generating-dot" role="img" aria-label="Aegis está respondendo"></span>
             <span v-if="conversation.hasUnreadProactive" class="unread-dot" role="img" aria-label="Mensagem da Aegis não lida"></span>
           </button>
           <ConversationMenu :title="getTitle(conversation)" :disabled="disabled" @info="emit('infoConversation', conversation)" @rename="emit('renameConversation', conversation)" @delete="emit('requestDeleteConversation', conversation)" />

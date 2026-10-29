@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowReactive, watch } from 'vue';
 import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
+import RuriMascot from '../components/RuriMascot.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import ConversationInfo from '../components/ConversationInfo.vue';
@@ -58,11 +59,13 @@ type ConversationContext = {
   revision: number;
   following: boolean;
   scrollTop: number | null;
+  toolMessage: string | null;
+  toolState: 'started' | 'completed' | 'failed' | null;
   retry: { turnId: string; content: string; conversationId: string | null } | null;
 };
 function createConversationContext(id: string | null = null): ConversationContext {
   return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
-    loaded: false, revision: 0, following: true, scrollTop: null, retry: null });
+    loaded: false, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
 }
 const contexts = new Map<string, ConversationContext>();
 const deletedConversations = new Set<string>();
@@ -75,12 +78,12 @@ if (initialId) contexts.set(initialId, selected.value);
 const messages = computed(() => selected.value.messages);
 const conversationId = computed(() => selected.value.id);
 const draft = computed({ get: () => selected.value.draft, set: value => { selected.value.draft = value; } });
-const isLoading = ref(false);
+const isLoading = computed(() => selectedHasActiveTurn.value);
 const isRestoring = ref(false);
 const errorMessage = computed({ get: () => selected.value.error, set: value => { selected.value.error = value; } });
-const toolStatusMessage = ref<string | null>(null);
-let toolStatusTimer: number | null = null;
-const toolStatusState = ref<'started' | 'completed' | 'failed' | null>(null);
+const toolStatusMessage = computed(() => selected.value.toolMessage);
+const toolStatusState = computed(() => selected.value.toolState);
+const toolStatusTimers = new Map<ConversationContext, number>();
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
@@ -121,13 +124,17 @@ watch(isSidebarOpen, open => {
 });
 watch(deleteTarget, target => { releaseDeleteLayer?.(); releaseDeleteLayer = target ? navigationLayer(cancelDeleteConversation) : undefined; });
 const healthState = ref<'checking' | 'online' | 'offline'>('checking');
-const activeTurnId = ref<string | null>(null);
-const turnStatus = ref<'thinking' | 'responding' | 'preparing_voice' | 'speaking' | 'interrupted' | 'voice_unavailable' | 'idle'>('idle');
-let chatAbortController: AbortController | null = null;
-let activeTurn: { id: string; owner: ConversationContext; user: LocalChatMessage; assistant: LocalChatMessage; accepted: boolean } | null = null;
-const turnOwner = ref<ConversationContext | null>(null);
-const selectedHasActiveTurn = computed(() => hasActiveTurn.value && turnOwner.value === selected.value);
-const backgroundTurn = computed(() => hasActiveTurn.value && turnOwner.value !== selected.value);
+const MAX_CONCURRENT_TURNS = 3;
+type ActiveTurn = {
+  id: string; owner: ConversationContext; user: LocalChatMessage; assistant: LocalChatMessage;
+  controller: AbortController; accepted: boolean; status: 'thinking' | 'responding';
+};
+const activeTurns = shallowReactive(new Map<string, ActiveTurn>());
+const selectedTurn = computed(() => [...activeTurns.values()].find(turn => turn.owner === selected.value));
+const selectedHasActiveTurn = computed(() => !!selectedTurn.value);
+const hasActiveTurn = computed(() => activeTurns.size > 0);
+const turnStatus = computed(() => selectedTurn.value?.status ?? 'idle');
+const generatingConversationIds = computed(() => [...activeTurns.values()].flatMap(turn => turn.owner.id ? [turn.owner.id] : []));
 let activeSpeechPlaybackId: string | null = null;
 let activeSpeechOwner: ConversationContext | null = null;
 const activeSpeechMessageId = ref<string | null>(null);
@@ -145,7 +152,9 @@ let manualScroll = false;
 let manualDirection = 0;
 let manualScrollUntil = 0;
 let programmaticScrollTop: number | null = null;
-let historyRefreshTimer: number | null = null;
+const historyRefreshTimers = new Map<string, number>();
+let historyReloadRequested = false;
+let disposed = false;
 let memoryActivityAbort: AbortController | null = null;
 let memoryActivityGeneration = 0;
 let viewportCleanup: (() => void) | null = null;
@@ -247,17 +256,16 @@ function proactiveForeground(): void { void syncProactiveMessages(); void markVi
 watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
 const deletingSelectedConversation = computed(() => isDeletingConversation.value && deleteTarget.value?.id === conversationId.value);
-const canSend = computed(() => draft.value.trim().length > 0 && !hasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
+const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
   emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
   transcription.errorMessage.value,
   !voice.voiceAvailable.value ? voice.voiceMessage.value : null,
   toolStatusState.value === 'failed' ? toolStatusMessage.value : null
 ].includes(errorMessage.value));
-const hasActiveTurn = computed(() => activeTurnId.value !== null || isLoading.value);
 watch(() => hasActiveTurn.value || transcription.isBusy.value || voice.isBusy.value, active => emit('activityChanged', active));
 const canStartRecording = computed(() =>
-  !hasActiveTurn.value &&
+  !selectedHasActiveTurn.value &&
   !isRestoring.value &&
   !deletingSelectedConversation.value &&
   transcription.available.value &&
@@ -274,19 +282,20 @@ const conversationCreatedLabel = computed(() => {
 });
 const COMPOSER_MAX_HEIGHT = 168;
 
-function clearToolStatus(): void {
-  if (toolStatusTimer !== null) window.clearTimeout(toolStatusTimer);
-  toolStatusTimer = null;
-  toolStatusState.value = null;
-  toolStatusMessage.value = null;
+function clearToolStatus(owner = selected.value): void {
+  const timer = toolStatusTimers.get(owner);
+  if (timer !== undefined) window.clearTimeout(timer);
+  toolStatusTimers.delete(owner);
+  owner.toolState = null;
+  owner.toolMessage = null;
 }
 
-function showToolStatus(message: string, state: 'started' | 'completed' | 'failed'): void {
-  clearToolStatus();
-  toolStatusState.value = state;
-  toolStatusMessage.value = message;
+function showToolStatus(message: string, state: 'started' | 'completed' | 'failed', owner = selected.value): void {
+  clearToolStatus(owner);
+  owner.toolState = state;
+  owner.toolMessage = message;
   if (state !== 'started') {
-    toolStatusTimer = window.setTimeout(clearToolStatus, state === 'completed' ? 1400 : 2400);
+    toolStatusTimers.set(owner, window.setTimeout(() => clearToolStatus(owner), state === 'completed' ? 1400 : 2400));
   }
 }
 
@@ -598,6 +607,7 @@ async function refreshProactiveHistory(): Promise<void> {
 
 async function loadConversationHistory(reset = false): Promise<void> {
   if (isLoadingHistory.value) {
+    if (reset) historyReloadRequested = true;
     return;
   }
 
@@ -632,23 +642,22 @@ async function loadConversationHistory(reset = false): Promise<void> {
     historyErrorMessage.value = 'Não foi possível carregar o histórico.';
   } finally {
     isLoadingHistory.value = false;
+    if (!disposed && historyReloadRequested) { historyReloadRequested = false; void loadConversationHistory(true); }
   }
 }
 
 function refreshHistoryAfterResponse(ownerId: string): void {
-  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
-  void loadConversationHistory(true);
-  const retry = (attempt: number): void => {
+  const existing = historyRefreshTimers.get(ownerId);
+  if (existing !== undefined) window.clearTimeout(existing);
+  const refresh = async (attempt: number): Promise<void> => {
+    historyRefreshTimers.delete(ownerId);
+    if (disposed || deletedConversations.has(ownerId)) return;
+    await loadConversationHistory(true);
     const title = conversations.value.find(c => c.id === ownerId)?.title?.trim();
-    if (attempt >= 2 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
-    historyRefreshTimer = window.setTimeout(async () => {
-      historyRefreshTimer = null;
-      if (deletedConversations.has(ownerId)) return;
-      await loadConversationHistory(true);
-      retry(attempt + 1);
-    }, attempt === 0 ? 1800 : 3400);
+    if (disposed || attempt >= 4 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
+    historyRefreshTimers.set(ownerId, window.setTimeout(() => { void refresh(attempt + 1); }, attempt === 0 ? 1800 : 3400));
   };
-  retry(0);
+  void refresh(0);
 }
 
 function setSidebarOpen(open: boolean): void {
@@ -671,7 +680,6 @@ async function openConversation(targetConversationId: string, restoring = false)
   cancelMemoryActivityPolling();
   cancelRecording();
   stopPlayback();
-  clearToolStatus();
   const request = ++conversationLoad;
   const previous = selected.value;
   const owner = contexts.get(targetConversationId) ?? createConversationContext(targetConversationId);
@@ -685,7 +693,7 @@ async function openConversation(targetConversationId: string, restoring = false)
   resizeComposer();
 
   // A history response must never replace the live messages of its own turn.
-  if (activeTurn?.owner === owner) {
+  if ([...activeTurns.values()].some(turn => turn.owner === owner)) {
     isRestoring.value = false;
     restoreReadingPosition(owner);
     return;
@@ -720,7 +728,7 @@ async function openConversation(targetConversationId: string, restoring = false)
   }
 }
 
-function associateTurnConversation(turn: NonNullable<typeof activeTurn>, id: string): void {
+function associateTurnConversation(turn: ActiveTurn, id: string, titleSource?: string | null): void {
   const owner = turn.owner;
   owner.id = id;
   owner.createdAt ??= turn.user.createdAt;
@@ -733,7 +741,7 @@ function associateTurnConversation(turn: NonNullable<typeof activeTurn>, id: str
   owner.retry = null;
   if (owner === selected.value) localStorage.setItem(STORAGE_KEY, id);
   const previous = conversations.value.find(c => c.id === id);
-  mergeConversationSummary({ ...previous, id, title: owner.title ?? previous?.title, createdAt: owner.createdAt,
+  mergeConversationSummary({ ...previous, titleSource: titleSource ?? previous?.titleSource, id, title: owner.title ?? previous?.title, createdAt: owner.createdAt,
     updatedAt: new Date().toISOString(), messageCount: Math.max(owner.messages.length, previous?.messageCount ?? 0),
     lastMessagePreview: turn.user.content });
 }
@@ -741,6 +749,11 @@ function associateTurnConversation(turn: NonNullable<typeof activeTurn>, id: str
 async function handleSubmit(): Promise<void> {
   if (!canSend.value) return;
   const owner = selected.value;
+  if (activeTurns.size >= MAX_CONCURRENT_TURNS) {
+    owner.error = 'Já há três conversas respondendo. Aguarde uma terminar para enviar.';
+    return;
+  }
+  stopPlayback();
   owner.revision++;
   const content = owner.draft.trim();
   unsentConversations.value = unsentConversations.value.filter(context => context !== owner);
@@ -751,9 +764,9 @@ async function handleSubmit(): Promise<void> {
   const requestConversationId = retry ? retry.conversationId : owner.id;
   const localMessage = createLocalUserMessage(content);
   const assistantMessage = createLocalAssistantMessage();
-  const turn = { id: turnId, owner, user: localMessage, assistant: assistantMessage, accepted: false };
-  activeTurn = turn;
-  turnOwner.value = owner;
+  const controller = new AbortController();
+  const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller, accepted: false, status: 'thinking' });
+  activeTurns.set(turnId, turn);
   // Consume the submitted draft, including the unsaved-conversation slot.
   if (newConversation === owner) newConversation = createConversationContext();
   owner.draft = '';
@@ -762,16 +775,11 @@ async function handleSubmit(): Promise<void> {
   owner.error = null;
   clearToolStatus();
   if (emailConnectionState.value === 'connected') emailConnectionMessage.value = null;
-  isLoading.value = true;
-  turnStatus.value = 'thinking';
-  activeTurnId.value = turnId;
-  const controller = new AbortController();
-  chatAbortController = controller;
   owner.messages.push(localMessage, assistantMessage);
   owner.following = true;
   scrollToLatest();
   let streamedContent = '';
-  const owns = (): boolean => activeTurn === turn && !controller.signal.aborted;
+  const owns = (): boolean => activeTurns.get(turnId) === turn && !controller.signal.aborted;
 
   try {
     await sendMessageStream({ turnId, conversationId: requestConversationId, content }, {
@@ -782,39 +790,35 @@ async function handleSubmit(): Promise<void> {
       onToken: (eventTurnId, token) => {
         if (!owns() || eventTurnId !== turnId) return;
         streamedContent += token;
-        turnStatus.value = 'responding';
+        turn.status = 'responding';
         assistantMessage.content = getCompletedWordPrefix(streamedContent);
         if (selected.value === owner) scrollToLatestDuringStream();
       },
       onToolStatus: (eventTurnId, status) => {
         if (!owns() || eventTurnId !== turnId) return;
-        turnStatus.value = 'thinking';
-        if (selected.value === owner) showToolStatus(status.message, status.state);
+        turn.status = 'thinking';
+        showToolStatus(status.message, status.state, owner);
       },
-      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, memoryActivity }) => {
+      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity }) => {
         if (!owns() || completedTurnId !== turnId) return;
         owner.title = conversationTitle ?? owner.title ?? 'Nova conversa';
-        associateTurnConversation(turn, id);
+        associateTurnConversation(turn, id, titleSource);
         assistantMessage.serverId = messageId;
         assistantMessage.memoryActivity = memoryActivity;
         assistantMessage.content = streamedContent;
         assistantMessage.pending = false;
         assistantMessage.streaming = false;
-        activeTurn = null;
-        activeTurnId.value = null;
-        turnOwner.value = null;
-        isLoading.value = false;
-        turnStatus.value = 'idle';
-        if (selected.value === owner && (toolStatusState.value === 'completed' || toolStatusState.value === 'failed')) {
-          showToolStatus(toolStatusMessage.value ?? '', toolStatusState.value);
-        } else clearToolStatus();
+        activeTurns.delete(turnId);
+        if (owner.toolState === 'completed' || owner.toolState === 'failed') {
+          showToolStatus(owner.toolMessage ?? '', owner.toolState, owner);
+        } else clearToolStatus(owner);
         refreshHistoryAfterResponse(id);
         if (selected.value === owner) {
           scrollToLatest();
           startMemoryActivityPolling(assistantMessage);
         }
         // Background completions remain silent and never reclaim navigation/focus.
-        if (voice.autoSpeak.value && selected.value === owner) void playSpeech(turnId, messageId);
+        if (voice.autoSpeak.value && selected.value === owner && document.visibilityState === 'visible' && !activeSpeechPlaybackId) void playSpeech(turnId, messageId);
         else void completeTurnWithoutSpeech(turnId).catch(() => undefined);
       },
       onError: message => { if (owns()) owner.error = message; }
@@ -839,37 +843,26 @@ async function handleSubmit(): Promise<void> {
       if (!streamedContent) owner.messages = owner.messages.filter(message => message !== assistantMessage);
     }
   } finally {
-    if (activeTurn === turn) {
-      activeTurn = null;
-      activeTurnId.value = null;
-      turnOwner.value = null;
-      isLoading.value = false;
-      turnStatus.value = 'idle';
-      clearToolStatus();
+    if (activeTurns.get(turnId) === turn) {
+      activeTurns.delete(turnId);
+      clearToolStatus(owner);
     }
-    if (chatAbortController === controller) chatAbortController = null;
   }
 }
 
-async function stopActiveTurn(reason = 'user_stop'): Promise<void> {
-  const turn = activeTurn;
-  clearToolStatus();
-  activeTurn = null; // Invalidate callbacks before abort/cancel cross async boundaries.
-  activeTurnId.value = null;
-  turnOwner.value = null;
-  chatAbortController?.abort();
-  chatAbortController = null;
-  isLoading.value = false;
-  if (reason === 'view_unmounted' || activeSpeechOwner === turn?.owner) stopPlayback();
+async function stopActiveTurn(reason = 'user_stop', turn = selectedTurn.value): Promise<void> {
   if (!turn) return;
+  // Invalidate only this turn before abort/cancel crosses an async boundary.
+  activeTurns.delete(turn.id);
+  clearToolStatus(turn.owner);
+  turn.controller.abort();
+  if (activeSpeechOwner === turn.owner) stopPlayback();
   turn.assistant.pending = false;
   turn.assistant.streaming = false;
   turn.assistant.interrupted = true;
   turn.user.pending = false;
   turn.owner.retry = null;
-  turnStatus.value = 'interrupted';
   if (reason === 'user_stop') turn.owner.error = null;
-  // Await explicit cancellation before deleting the owner conversation.
   await cancelTurn(turn.id).catch(() => undefined);
 }
 
@@ -878,7 +871,6 @@ function stopPlayback(): void {
   activeSpeechOwner = null;
   activeSpeechMessageId.value = null;
   void voice.stop();
-  if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
 }
 
 async function playSpeech(turnId: string, assistantMessageId: string): Promise<void> {
@@ -886,13 +878,11 @@ async function playSpeech(turnId: string, assistantMessageId: string): Promise<v
   activeSpeechPlaybackId = playbackId;
   activeSpeechOwner = selected.value;
   activeSpeechMessageId.value = assistantMessageId;
-  if (!hasActiveTurn.value) turnStatus.value = 'preparing_voice';
   await voice.speak(turnId, assistantMessageId, true);
   if (activeSpeechPlaybackId === playbackId) {
     activeSpeechPlaybackId = null;
     activeSpeechOwner = null;
     activeSpeechMessageId.value = null;
-    if (!hasActiveTurn.value) turnStatus.value = voice.voiceAvailable.value ? 'idle' : 'voice_unavailable';
   }
 }
 
@@ -937,7 +927,6 @@ function startNewConversation(explicit = true): void {
   cancelMemoryActivityPolling();
   cancelRecording();
   stopPlayback();
-  clearToolStatus();
   ++conversationLoad;
   isRestoring.value = false;
   localStorage.removeItem(STORAGE_KEY);
@@ -952,19 +941,6 @@ function startNewConversation(explicit = true): void {
   if (explicit) focusComposer(true);
 }
 
-function openActiveConversation(): void {
-  const owner = activeTurn?.owner;
-  if (!owner) return;
-  if (owner.id) { void openConversation(owner.id); return; }
-  cancelRecording();
-  cancelMemoryActivityPolling();
-  ++conversationLoad;
-  isRestoring.value = false;
-  selected.value = owner;
-  closeSidebarDrawer();
-  resizeComposer();
-  restoreReadingPosition(owner);
-}
 
 function recoverUnsentConversation(): void {
   const owner = unsentConversation.value;
@@ -1018,7 +994,8 @@ async function confirmDeleteConversation(): Promise<void> {
 
   try {
     if (capture?.owner.id === targetId) cancelRecording();
-    if (activeTurn?.owner.id === targetId) await stopActiveTurn('conversation_deleted');
+    const turn = [...activeTurns.values()].find(turn => turn.owner.id === targetId);
+    if (turn) await stopActiveTurn('conversation_deleted', turn);
     await deleteConversation(targetId);
     deletedConversations.add(targetId);
     contexts.delete(targetId);
@@ -1141,6 +1118,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   proactiveAbort.abort(); clearTimeout(proactiveTimer); proactiveObserver?.disconnect();
   if (proactiveReadFrame !== undefined) cancelAnimationFrame(proactiveReadFrame);
   messagesContainer.value?.removeEventListener('scroll', proactiveVisibilityChanged);
@@ -1156,8 +1134,12 @@ onBeforeUnmount(() => {
   ++conversationLoad;
   layoutObserver?.disconnect();
   if (streamScrollFrame !== null) cancelAnimationFrame(streamScrollFrame);
-  void stopActiveTurn('view_unmounted');
-  if (historyRefreshTimer !== null) window.clearTimeout(historyRefreshTimer);
+  for (const turn of [...activeTurns.values()]) void stopActiveTurn('view_unmounted', turn);
+  stopPlayback();
+  for (const timer of historyRefreshTimers.values()) window.clearTimeout(timer);
+  historyRefreshTimers.clear();
+  for (const timer of toolStatusTimers.values()) window.clearTimeout(timer);
+  toolStatusTimers.clear();
 
   viewportCleanup?.();
   releaseSidebarLayer?.(); releaseDeleteLayer?.();
@@ -1183,6 +1165,7 @@ onBeforeUnmount(() => {
       <ConversationSidebar
         :app-version="appVersion"
         :conversations="conversations"
+        :generating-conversation-ids="generatingConversationIds"
         :active-conversation-id="conversationId"
         :open="isSidebarOpen"
         :has-more="hasMoreHistory"
@@ -1227,7 +1210,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="messages.length === 0" class="empty-state">
-          <div class="empty-state__mark"><AegisMark /></div>
+          <RuriMascot />
           <span class="empty-state__eyebrow">Aegis</span>
           <strong>Nova conversa</strong>
           <span>Digite ou fale uma mensagem.</span>
@@ -1260,11 +1243,6 @@ onBeforeUnmount(() => {
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
           Uma mensagem não pôde ser enviada.
           <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
-        </p>
-        <p v-if="backgroundTurn" class="background-turn-notice" role="status">
-          Aegis está respondendo em outra conversa.
-          <button type="button" @click="openActiveConversation">Ver conversa</button>
-          <button type="button" aria-label="Interromper geração em outra conversa" @click="stopActiveTurn()">Interromper</button>
         </p>
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>

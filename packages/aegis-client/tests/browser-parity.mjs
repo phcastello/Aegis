@@ -160,7 +160,7 @@ try {
    assert.equal(await page.getByRole('button',{name:'Configurações da Aegis',exact:true}).count(),0,'Collapsed mobile navigation exposes only the normal sidebar opener');
    assert.equal(await page.locator('.global-navigation-floating').count(),0);
    await page.getByRole('button',{name:'Abrir histórico',exact:true}).waitFor();
-   assert.equal(await page.locator('.conversation-heading').isVisible(), false, 'Mobile hides title/date/category');
+   assert.equal(await page.locator('.conversation-heading').evaluate(el => { const style = getComputedStyle(el); return style.clipPath === 'inset(50%)' && el.getBoundingClientRect().width <= 1; }), true, 'Floating controls preserve an accessible heading without a visible title/date/category bar');
    assert.equal(await page.locator('.voice-toggle').count(), 0);
    await page.locator('textarea').fill('Rascunho preservado'); await page.locator('textarea').focus();
    await page.getByLabel('Abrir histórico', { exact: true }).click();
