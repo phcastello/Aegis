@@ -244,11 +244,11 @@ try {
       await page.keyboard.press('Escape'); await info.waitFor({ state: 'hidden' });
       await page.evaluate(() => { window.fixtureCopyFailure = false; });
       const geometry = await page.locator('.chat-header').evaluate(el => {
-        const style = getComputedStyle(el), bounds = el.getBoundingClientRect(), menu = el.querySelector('.conversation-menu-trigger').getBoundingClientRect(), server = el.querySelector('.server-indicator').getBoundingClientRect();
-        return { border: style.borderBottomWidth, fade: getComputedStyle(el.closest('.chat-panel'), '::before').backgroundImage, right: bounds.right - parseFloat(style.paddingRight) - menu.right, position: style.position, pointerEvents: style.pointerEvents, serverBeforeMenu: server.right <= menu.left };
+        const style = getComputedStyle(el), bounds = el.getBoundingClientRect(), menu = el.querySelector('.conversation-menu-trigger').getBoundingClientRect();
+        return { border: style.borderBottomWidth, fade: getComputedStyle(el.closest('.chat-panel'), '::before').backgroundImage, right: bounds.right - menu.right, position: style.position, pointerEvents: style.pointerEvents, serverIndicators: el.querySelectorAll('.server-indicator').length };
       });
       equal(geometry.border, '0px', 'header has no separator'); ok(geometry.fade.includes('linear-gradient'), 'content uses an independent discreet fade');
-      equal(geometry.position, 'absolute', 'header controls float outside normal layout'); equal(geometry.pointerEvents, 'none', 'transparent header never captures pointer gestures'); ok(geometry.serverBeforeMenu, 'availability indicator does not displace the right-aligned menu');
+      equal(geometry.position, 'absolute', 'header controls float outside normal layout'); equal(geometry.pointerEvents, 'none', 'transparent header never captures pointer gestures'); equal(geometry.serverIndicators, 0, 'healthy server needs no availability indicator'); ok(geometry.right >= 16 && geometry.right <= 17, 'conversation menu remains right-aligned');
 
       await select('Alfa');
       const streaming = await send('Fluxo longo'); streaming.accept();

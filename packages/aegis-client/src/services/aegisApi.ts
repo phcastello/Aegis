@@ -182,9 +182,12 @@ export async function cancelTurn(turnId: string): Promise<void> {
   await requestJson<void>(`/api/chat/turns/${encodeURIComponent(turnId)}`, { method: 'DELETE' });
 }
 
-export async function getHealth(signal?: AbortSignal): Promise<boolean> {
+export async function getHealth(signal?: AbortSignal): Promise<boolean | null> {
   const response = await fetch(`${getApiBaseUrl()}/api/health`, { cache: 'no-store', signal });
-  if (!response.ok) return false;
+  // Authentication, throttling and other request errors say nothing about
+  // server availability. Only an unavailable health service means offline.
+  if (response.status >= 500) return false;
+  if (!response.ok) return null;
   try { return ((await response.json()) as { status?: string }).status === 'ok'; } catch { return false; }
 }
 

@@ -16,6 +16,7 @@
     "test:email": "node --test tests/emailConnectionFeedback.test.mjs tests/emailConnectionLinks.test.mjs tests/emailConnectionPolling.test.mjs",
     "test:ux-stream": "node tests/ux-stream-browser.mjs",
     "test:visual-refinements": "node tests/visual-refinements-browser.mjs",
+    "test:server-indicator": "node tests/server-indicator-browser.mjs",
     "test:transcription-browser": "node tests/transcription-browser.mjs",
     "test:markdown-stream": "node tests/markdown-stream-browser.mjs"
   },

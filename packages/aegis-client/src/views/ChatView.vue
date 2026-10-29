@@ -124,6 +124,8 @@ watch(isSidebarOpen, open => {
 });
 watch(deleteTarget, target => { releaseDeleteLayer?.(); releaseDeleteLayer = target ? navigationLayer(cancelDeleteConversation) : undefined; });
 const healthState = ref<'checking' | 'online' | 'offline'>('checking');
+let healthController: AbortController | null = null;
+let lastHealthCheck = 0;
 const MAX_CONCURRENT_TURNS = 3;
 type ActiveTurn = {
   id: string; owner: ConversationContext; user: LocalChatMessage; assistant: LocalChatMessage;
@@ -825,6 +827,9 @@ async function handleSubmit(): Promise<void> {
     }, controller.signal);
   } catch (error) {
     if (!owns()) return;
+    // Confirm transport failures with the health endpoint; model/tool errors and
+    // failed operations do not establish that the server is unavailable.
+    if (error instanceof TypeError) void checkServerHealth(true);
     owner.error ??= error instanceof TypeError
       ? 'Servidor indisponível. Tente novamente em instantes.'
       : error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
@@ -886,10 +891,24 @@ async function playSpeech(turnId: string, assistantMessageId: string): Promise<v
   }
 }
 
-async function checkServerHealth(): Promise<void> {
-  healthState.value = 'checking'; const controller = new AbortController(); const timeout = window.setTimeout(() => controller.abort(), 3000);
-  try { healthState.value = await getHealth(controller.signal) ? 'online' : 'offline'; } catch { healthState.value = 'offline'; } finally { window.clearTimeout(timeout); }
+async function checkServerHealth(force = false): Promise<void> {
+  if (disposed || document.visibilityState !== 'visible' || healthController || (!force && Date.now() - lastHealthCheck < 30000)) return;
+  const controller = new AbortController();
+  healthController = controller;
+  lastHealthCheck = Date.now();
+  const timeout = window.setTimeout(() => controller.abort(), 3000);
+  try {
+    const healthy = await getHealth(controller.signal);
+    if (!disposed) healthState.value = healthy === null ? 'checking' : healthy ? 'online' : 'offline';
+  } catch (error) {
+    if (!disposed && (error instanceof TypeError || controller.signal.aborted)) healthState.value = 'offline';
+  } finally {
+    window.clearTimeout(timeout);
+    healthController = null;
+  }
 }
+function serverForeground(): void { void checkServerHealth(); }
+function serverNetworkChanged(): void { void checkServerHealth(true); }
 
 function replayMessage(message: LocalChatMessage): void {
   if (!message.serverId) return;
@@ -1064,6 +1083,11 @@ watch(isRestoring, restoring => {
 });
 defineExpose({ openConversation: navigateToConversation });
 onMounted(() => {
+  document.addEventListener('visibilitychange', serverForeground);
+  window.addEventListener('focus', serverForeground);
+  window.addEventListener('aegis-app-visibility', serverForeground);
+  window.addEventListener('online', serverNetworkChanged);
+  window.addEventListener('offline', serverNetworkChanged);
   syncViewportHeight();
   layoutObserver = new ResizeObserver(handleMessagesLayout);
   if (messagesContainer.value) layoutObserver.observe(messagesContainer.value);
@@ -1119,6 +1143,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true;
+  healthController?.abort();
+  document.removeEventListener('visibilitychange', serverForeground);
+  window.removeEventListener('focus', serverForeground);
+  window.removeEventListener('aegis-app-visibility', serverForeground);
+  window.removeEventListener('online', serverNetworkChanged);
+  window.removeEventListener('offline', serverNetworkChanged);
   proactiveAbort.abort(); clearTimeout(proactiveTimer); proactiveObserver?.disconnect();
   if (proactiveReadFrame !== undefined) cancelAnimationFrame(proactiveReadFrame);
   messagesContainer.value?.removeEventListener('scroll', proactiveVisibilityChanged);
@@ -1191,11 +1221,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="conversationId" class="chat-voice-controls">
-          <ConversationMenu :title="activeConversationTitle || 'Nova conversa'" show-title :disabled="isRestoring" @info="infoTarget = currentConversationSummary" @rename="requestRenameConversation(currentConversationSummary)" @delete="requestDeleteConversation(currentConversationSummary)" />
+        <div v-if="conversationId || healthState === 'offline'" class="chat-voice-controls">
+          <span v-if="healthState === 'offline'" class="server-indicator" role="status" title="Servidor indisponível">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M9.5 4.4A16.4 16.4 0 0 1 22 8M2 8a16.6 16.6 0 0 1 3.3-2.1M13.5 9.2A11.3 11.3 0 0 1 18.5 12M5.5 12a11.2 11.2 0 0 1 3-1.9M9 16a4.7 4.7 0 0 1 6 0M12 20h.01" /></svg>
+            <span class="sr-only">Servidor indisponível</span>
+          </span>
+          <ConversationMenu v-if="conversationId" :title="activeConversationTitle || 'Nova conversa'" show-title :disabled="isRestoring" @info="infoTarget = currentConversationSummary" @rename="requestRenameConversation(currentConversationSummary)" @delete="requestDeleteConversation(currentConversationSummary)" />
         </div>
-
-        <span class="server-indicator" :class="`server-indicator--${healthState}`" role="img" :aria-label="healthState === 'checking' ? 'Verificando servidor' : healthState === 'online' ? 'Servidor disponível' : 'Servidor indisponível'"><i></i></span>
       </header>
 
       <div v-if="$slots.notice" class="chat-notices"><slot name="notice" /></div>

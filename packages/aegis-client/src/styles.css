@@ -510,6 +510,7 @@ button:disabled {
   top: var(--floating-controls-top);
   right: max(16px, env(safe-area-inset-right));
   pointer-events: auto;
+  gap: 0;
 }
 
 .chat-header .conversation-heading {
@@ -520,12 +521,6 @@ button:disabled {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.chat-header .server-indicator {
-  position: absolute;
-  top: calc(var(--floating-controls-top) + 11px);
-  right: max(66px, calc(env(safe-area-inset-right) + 50px));
-}
-
 .conversation-info { display: flex; }
 .conversation-info__trigger {
   width: 34px;
@@ -637,48 +632,22 @@ button:disabled {
 }
 
 .server-indicator {
-  width: 22px;
-  height: 22px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
+  color: var(--warn);
 }
 
-.server-indicator i {
-  width: 10px;
-  height: 10px;
-  display: block;
-  border: 1.5px solid var(--quiet);
-  border-radius: 50%;
-}
-
-.server-indicator--checking i {
-  border-color: #8b98ad;
-  background: transparent;
-}
-
-.server-indicator--online i {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(145, 169, 238, 0.1);
-}
-
-.server-indicator--offline i {
-  position: relative;
-  border-color: var(--warn);
-  background: rgba(255, 182, 174, 0.08);
-}
-
-.server-indicator--offline i::after {
-  position: absolute;
-  top: 3px;
-  left: -2px;
-  width: 11px;
-  height: 1.5px;
-  border-radius: 999px;
-  background: var(--warn);
-  content: "";
-  transform: rotate(-45deg);
+.server-indicator svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .messages {
@@ -1618,7 +1587,6 @@ button:disabled {
   }
 
   .generation-marker,
-  .server-indicator--online i,
   .audio-bars i {
     animation: none;
   }
