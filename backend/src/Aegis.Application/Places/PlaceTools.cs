@@ -44,7 +44,7 @@ public sealed class PlaceListTool(IPlaceService places) : PlaceTool(places)
 public sealed class PlaceResolveTool(IPlaceService places) : PlaceTool(places)
 {
     public override string Name => "place_resolve";
-    public override string Description => "Resolve nome explícito ou apelido contextual como casa usando o celular pessoal selecionado; computador/RDP não determina a posição. Nome explícito prevalece. Sem contexto recente/confiável retorna candidatos para esclarecer. Para 'qualquer uma das minhas casas' envie allCandidates=true; não faça isso sem pedido explícito. IDs resolvidos ficam observados por30min. Confirme nome completo na resposta e fixe PlaceId ao criar: viajar depois não altera o alvo. Nunca use destino da tarefa como geofence: 'sair de casa para passar na padaria' requer somente casa.";
+    public override string Description => "Resolve nome explícito ou apelido contextual como casa usando o celular pessoal selecionado; computador/RDP não determina a posição. Referência explícita do usuário ou contexto inequívoco da conversa prevalece: envie o nome completo conhecido, não o apelido ambíguo. Usa posição recente ou histórica ainda discriminante por tempo, distância e precisão; isso interpreta a referência e não confirma presença atual. Tenta atualizar antes de esclarecer quando inconclusivo. Para 'qualquer uma das minhas casas' envie allCandidates=true; não faça isso sem pedido explícito. IDs resolvidos ficam observados por30min. Confirme nome completo na resposta e fixe PlaceId ao criar: viajar depois não altera o alvo. Nunca use destino da tarefa como geofence: 'sair de casa para passar na padaria' requer somente casa.";
     public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"reference":{"type":"string","minLength":1,"maxLength":100},"allCandidates":{"type":"boolean"}},"required":["reference"],"additionalProperties":false}""");
     private sealed record Request(string Reference, bool AllCandidates = false);
     protected override async Task<AegisToolResult> Run(JsonElement arguments, ToolExecutionContext context, CancellationToken ct)
@@ -52,7 +52,7 @@ public sealed class PlaceResolveTool(IPlaceService places) : PlaceTool(places)
         var request = arguments.Deserialize<Request>(Json)!; var result = await Places.ResolveAsync(request.Reference, request.AllCandidates, ct);
         var ids = result.PlaceId is { } selected ? new[] { selected } : result.Status == "resolved_set" ? result.Candidates.Select(p => p.Id) : [];
         await Places.RememberAsync(context.ConversationId, "place", ids, ct);
-        return Ok(new { result.Status, result.PlaceId, result.Reason, result.LocationAgeSeconds, candidates = result.Candidates.Select(Summary) });
+        return Ok(new { result.Status, result.PlaceId, result.Reason, result.LocationAgeSeconds, result.ObservationReason, result.RefreshStatus, presenceConfirmed = false, candidates = result.Candidates.Select(Summary) });
     }
 }
 public sealed class LocationStatusTool(IPlaceService places) : PlaceTool(places)
@@ -62,10 +62,13 @@ public sealed class LocationStatusTool(IPlaceService places) : PlaceTool(places)
     public override JsonElement ParametersSchema { get; } = Schema("""{"type":"object","properties":{"refresh":{"type":"boolean"}},"additionalProperties":false}""");
     protected override async Task<AegisToolResult> Run(JsonElement arguments, ToolExecutionContext context, CancellationToken ct)
     {
-        if (arguments.TryGetProperty("refresh", out var refresh) && refresh.GetBoolean()) await Places.RefreshAsync(ct);
+        LocationRefreshView? refreshResult = null;
+        if (arguments.TryGetProperty("refresh", out var refresh) && refresh.GetBoolean()) refreshResult = await Places.RefreshAsync(ct) as LocationRefreshView;
         var settings = await Places.SettingsAsync(ct); var latest = settings.Latest;
         var place = latest?.PlaceId is { } id ? (await Places.ListAsync(ct)).SingleOrDefault(p => p.Id == id) : null;
-        return Ok(new { sourceSelected = settings.SourceNodeId is not null, available = latest is not null, ageSeconds = latest?.AgeSeconds, capturedAt = latest?.CapturedAt, source = latest?.Source, place = place is null ? null : Summary(place), approximate = latest?.AccuracyMeters > 200 });
+        return Ok(new { sourceSelected = settings.SourceNodeId is not null, available = latest is not null, ageSeconds = latest?.AgeSeconds, capturedAt = latest?.CapturedAt,
+            source = latest?.Source, place = place is null ? null : Summary(place), approximate = latest?.AccuracyMeters > 200,
+            refreshStatus = refreshResult?.Reason ?? refreshResult?.Status, presenceConfirmed = false });
     }
 }
 public sealed class GeographicReminderCreateTool(IPlaceService places) : PlaceTool(places)
@@ -78,7 +81,8 @@ public sealed class GeographicReminderCreateTool(IPlaceService places) : PlaceTo
     {
         var request = arguments.Deserialize<Request>(Json)!;
         var resolution = await Places.ResolveAsync(request.Reference, request.AllCandidates, ct);
-        if (resolution.Status is not ("resolved" or "resolved_set")) return new(false, JsonSerializer.Serialize(new { error = "place_clarification_required", status = resolution.Status, reason = resolution.Reason, candidates = resolution.Candidates.Select(Summary), created = false }, Json), "place_clarification_required");
+        if (resolution.Status is not ("resolved" or "resolved_set")) return new(false, JsonSerializer.Serialize(new { error = "place_clarification_required", status = resolution.Status, reason = resolution.Reason,
+            resolution.ObservationReason, resolution.RefreshStatus, candidates = resolution.Candidates.Select(Summary), created = false }, Json), "place_clarification_required");
         var placeIds = resolution.PlaceId is { } selected ? new[] { selected } : resolution.Candidates.Select(p => p.Id).ToArray();
         var source = (await Places.SettingsAsync(ct)).SourceNodeId ?? throw new NodeException("location_source_required", "Escolha o celular pessoal em Dispositivos antes de criar um lembrete por lugar.");
         var rule = await Places.SaveRuleAsync(null, new(request.Text, placeIds, source, request.Transition, request.Repeat, request.StartsAt, request.EndsAt, request.TimeZoneId), context.ConversationId, ct);

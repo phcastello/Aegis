@@ -91,7 +91,7 @@ public sealed class PlaceCompletionTests
         Assert.Null(PlaceGeometry.ResolveContext([a, b], Observation(4), options));
         Assert.Null(PlaceGeometry.ResolveContext([a, b with { Circles = [Circle(.1)] }], Observation(.05), options));
         Assert.Equal(a.Id, PlaceGeometry.ResolveContext([a, b], Observation(.2), options));
-        Assert.Null(PlaceGeometry.ResolveContext([a, b], Observation(0) with { AgeSeconds = 901 }, options));
+        Assert.Equal(a.Id, PlaceGeometry.ResolveContext([a, b], Observation(0, clock.Now.AddSeconds(-901)), options, clock.Now));
     }
     [Fact] public async Task DynamicObservationCannotOverwriteFixedConfigurationAndOlderReadingCannotReplaceNew()
     {

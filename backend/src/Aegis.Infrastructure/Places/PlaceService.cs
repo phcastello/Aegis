@@ -110,8 +110,12 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
     }, ct);
     private LocationObservationView? Observation(NodeLocationProfile? p)
     {
-        if (p?.Latitude is not { } latitude || p.Longitude is not { } longitude || p.CapturedAt is not { } captured || p.ReceivedAt is not { } received) return null;
-        return new(p.NodeId, latitude, longitude, p.AccuracyMeters!.Value, captured, received, p.Source!, p.ResolvedPlaceId, Math.Max(0, (Now - captured).TotalSeconds));
+        if (p is null || p.Latitude is null && p.Longitude is null && p.AccuracyMeters is null && p.CapturedAt is null && p.ReceivedAt is null && p.Source is null) return null;
+        var complete = p.Latitude is not null && p.Longitude is not null && p.AccuracyMeters is not null && p.CapturedAt is not null && p.ReceivedAt is not null && p.Source is not null;
+        // Keep incomplete persisted observations diagnosable, without throwing or
+        // emitting non-finite JSON numbers. An empty source marks them invalid.
+        return new(p.NodeId, p.Latitude ?? 0, p.Longitude ?? 0, p.AccuracyMeters ?? 0, p.CapturedAt ?? default, p.ReceivedAt ?? default,
+            complete ? p.Source! : "", p.ResolvedPlaceId, p.CapturedAt is { } captured ? (Now - captured).TotalSeconds : 0);
     }
     public async Task<LocationSettingsView> SettingsAsync(CancellationToken ct = default)
     {
@@ -153,19 +157,21 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
         try { return await signals.SendAsync(node, capability, input, ct); }
         catch (Exception e) when (e is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested) { return "pending"; }
     }
-    public async Task<object> RefreshAsync(CancellationToken ct = default)
+    public async Task<object> RefreshAsync(CancellationToken ct = default) => await RefreshLocationAsync(ct);
+    private async Task<LocationRefreshView> RefreshLocationAsync(CancellationToken ct)
     {
         var settings = await SettingsAsync(ct);
-        if (settings.SourceNodeId is not { } node) return new { status = "source_required", latest = settings.Latest };
+        if (settings.SourceNodeId is not { } node) return new("source_required", settings.Latest);
         var requestId = Guid.NewGuid(); var status = await Signal(node, "location.current", new { operation = "refresh", requestId }, ct);
         var deadline = clock.GetUtcNow().AddSeconds(contextOptions.Value.RefreshTimeoutSeconds);
-        // A bounded, explicit consumer request, not an idle poll. DB is read at most 15 times.
+        // A bounded, explicit consumer request, not an idle poll.
         if (status is "success" or "accepted") for (var i = 0; i < contextOptions.Value.RefreshTimeoutSeconds && clock.GetUtcNow() < deadline; i++) {
             var current = await Profiles.AsNoTracking().SingleOrDefaultAsync(p => p.NodeId == node, ct);
-            if (current?.LastRequestId == requestId) return new { status = "updated", latest = Observation(current) };
+            if (current?.LastRequestId == requestId) return new("updated", Observation(current));
             await Task.Delay(TimeSpan.FromSeconds(1), clock, ct);
         }
-        return new { status = status == "unavailable" ? "source_unreachable" : "pending", latest = (await SettingsAsync(ct)).Latest };
+        return new(status == "unavailable" ? "source_unreachable" : "pending", (await SettingsAsync(ct)).Latest,
+            status is "success" or "accepted" ? "refresh_timed_out" : "refresh_unavailable");
     }
     public async Task<object> RequestGeofenceSyncAsync(CancellationToken ct = default)
     {
@@ -185,11 +191,14 @@ public sealed class PlaceService(AegisDbContext db, TimeProvider clock, IOptions
         if (allCandidates) return new("resolved_set", candidates, null, "explicit_set", null);
         if (candidates.Length == 1) return new("resolved", candidates, candidates[0].Id, "unique_alias", null);
         var latest = (await SettingsAsync(ct)).Latest;
-        var resolved = PlaceGeometry.ResolveContext(candidates, latest, contextOptions.Value);
-        if (resolved is null) {
-            await RefreshAsync(ct); latest = (await SettingsAsync(ct)).Latest; resolved = PlaceGeometry.ResolveContext(candidates, latest, contextOptions.Value);
+        var result = PlaceGeometry.EvaluateContext(candidates, latest, contextOptions.Value, Now);
+        string? refreshStatus = null;
+        if (result.PlaceId is null) {
+            var refresh = await RefreshLocationAsync(ct); refreshStatus = refresh.Reason ?? refresh.Status; latest = refresh.Latest;
+            result = PlaceGeometry.EvaluateContext(candidates, latest, contextOptions.Value, Now);
         }
-        return new(resolved is null ? "clarification_required" : "resolved", candidates, resolved, resolved is null ? "ambiguous_or_stale" : "recent_personal_phone_context", latest?.AgeSeconds);
+        return new(result.PlaceId is null ? "clarification_required" : "resolved", candidates, result.PlaceId, result.Reason,
+            latest?.AgeSeconds, result.PlaceId is null ? result.Reason : null, refreshStatus);
     }
     public async Task<IReadOnlyList<GeographicRuleView>> RulesAsync(CancellationToken ct = default) => (await Rules.AsNoTracking().OrderByDescending(r => r.CreatedAt).Take(500).ToArrayAsync(ct)).Select(r => {
         var view = View(r);

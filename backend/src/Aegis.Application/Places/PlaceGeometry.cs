@@ -43,19 +43,54 @@ public static class PlaceGeometry
         while (parent is { } next) { if (!seen.Add(next)) return true; parent = parents.GetValueOrDefault(next); }
         return false;
     }
-    public static Guid? ResolveContext(IReadOnlyList<PlaceView> candidates, LocationObservationView? observation, LocationContextOptions options)
+    public static Guid? ResolveContext(IReadOnlyList<PlaceView> candidates, LocationObservationView? observation, LocationContextOptions options, DateTimeOffset? now = null)
+        => EvaluateContext(candidates, observation, options, now).PlaceId;
+
+    public static string? ObservationIssue(LocationObservationView? observation, LocationContextOptions options, DateTimeOffset? now = null)
     {
-        if (observation is null || observation.AgeSeconds < 0 || observation.AgeSeconds > options.MaximumAgeSeconds || observation.AccuracyMeters > options.MaximumCityAccuracyMeters) return null;
-        var inside = candidates.Where(p => Classify(p.Circles, observation.Latitude, observation.Longitude, observation.AccuracyMeters) == "inside").ToArray();
-        if (inside.Length == 1) return inside[0].Id;
-        if (inside.Length > 1) return null;
-        if (candidates.Any(p => p.Circles.Count == 0)) return null;
-        var nearest = candidates.Where(p => p.Circles.Count > 0).Select(p => new {
-            p.Id, Distance = p.Circles.Min(c => Math.Max(0, DistanceMeters(observation.Latitude, observation.Longitude, c.Latitude, c.Longitude) - c.RadiusMeters))
-        }).OrderBy(p => p.Distance).ToArray();
-        if (nearest.Length == 0 || nearest[0].Distance > options.LocalResidenceMeters) return null;
-        if (nearest.Length == 1 || nearest[1].Distance - nearest[0].Distance >= options.CandidateMarginMeters && nearest[1].Distance >= Math.Max(nearest[0].Distance, 1) * options.CandidateDistanceRatio) return nearest[0].Id;
+        if (observation is null) return "location_missing";
+        if (!double.IsFinite(observation.Latitude) || observation.Latitude is < -90 or > 90 ||
+            !double.IsFinite(observation.Longitude) || observation.Longitude is < -180 or > 180 ||
+            !double.IsFinite(observation.AccuracyMeters) || observation.AccuracyMeters <= 0 ||
+            !double.IsFinite(observation.AgeSeconds) || observation.AgeSeconds < 0 ||
+            observation.CapturedAt == default || observation.ReceivedAt == default || observation.CapturedAt > observation.ReceivedAt ||
+            (observation.ReceivedAt - observation.CapturedAt).TotalSeconds > observation.AgeSeconds + 1 ||
+            observation.Source is not ("fused" or "gps" or "network" or "passive")) return "observation_invalid";
+        if (now is { } current && (observation.CapturedAt > current || observation.ReceivedAt > current ||
+            Math.Abs((current - observation.CapturedAt).TotalSeconds - observation.AgeSeconds) > 1)) return "observation_invalid";
+        if (observation.AccuracyMeters > options.MaximumCityAccuracyMeters) return "location_too_imprecise";
+        if (observation.AgeSeconds > options.MaximumHistoricalAgeSeconds) return "observation_too_old";
         return null;
+    }
+
+    // This interprets a reference to a region. It never establishes current presence
+    // and must not be used to arm or trigger a geofence.
+    public static PlaceContextResolution EvaluateContext(IReadOnlyList<PlaceView> candidates, LocationObservationView? observation, LocationContextOptions options, DateTimeOffset? now = null)
+    {
+        if (ObservationIssue(observation, options, now) is { } issue) return new(null, issue);
+        var observed = observation!;
+        if (candidates.Count == 0 || candidates.Any(p => p.Circles.Count == 0 || p.Circles.Count > CircleUnionCoverage.MaximumCircles ||
+            p.Circles.Any(c => !double.IsFinite(c.Latitude) || c.Latitude is < -90 or > 90 || !double.IsFinite(c.Longitude) ||
+                c.Longitude is < -180 or > 180 || !double.IsFinite(c.RadiusMeters) || c.RadiusMeters is <= 0 or > 100000)))
+            return new(null, "candidate_geometry_unavailable");
+        var nearest = candidates.Select(p => new {
+            p.Id, Distance = p.Circles.Min(c => Math.Max(0, DistanceMeters(observed.Latitude, observed.Longitude, c.Latitude, c.Longitude) - c.RadiusMeters))
+        }).OrderBy(p => p.Distance).ToArray();
+        // A remote observation cannot select the nearest home merely because other
+        // homes are even farther away. Require evidence associating this fix to its region.
+        if (nearest[0].Distance + observed.AccuracyMeters > options.LocalResidenceMeters) return new(null, "outside_candidate_regions");
+        var inside = candidates.Where(p => Classify(p.Circles, observed.Latitude, observed.Longitude, observed.AccuracyMeters) == "inside").ToArray();
+        var regionAnchored = inside.Length == 1 || nearest.Length == 1 ||
+            nearest[1].Distance - nearest[0].Distance >= options.CandidateMarginMeters &&
+            nearest[1].Distance >= Math.Max(nearest[0].Distance, 1) * options.CandidateDistanceRatio;
+        if (!regionAnchored) return new(null, "multiple_plausible_candidates");
+        // Expand real candidate areas by the existing regional context allowance.
+        // Accuracy is an uncertainty estimate, not a guaranteed physical boundary.
+        // The speed deliberately allows air travel; no urban-speed assumption or route API.
+        var reach = options.ConservativeTravelSpeedKmh / 3.6 * observed.AgeSeconds + observed.AccuracyMeters + options.TravelUncertaintyMeters;
+        var possible = nearest.Where(p => p.Distance <= reach + options.LocalResidenceMeters).ToArray();
+        if (possible.Length != 1) return new(null, "multiple_plausible_candidates");
+        return new(possible[0].Id, observed.AgeSeconds <= options.MaximumAgeSeconds ? "recent_personal_phone_context" : "historical_temporal_plausibility");
     }
 }
 
