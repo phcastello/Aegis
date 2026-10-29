@@ -151,7 +151,7 @@ public sealed partial class CalendarTests
     public async Task InvalidDatesAreRecoverableWithoutSendingMutations(string start, string end, bool allDay)
     {
         using var f = new Fixture();
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Dentista", start, end, allDay }), await f.Context());
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start, end, allDay }), await f.Context());
         Assert.False(result.Success);
         Assert.Contains("invalid_calendar_tool_arguments", result.Content);
         Assert.Empty(f.Db.PendingCalendarActions);
@@ -162,7 +162,7 @@ public sealed partial class CalendarTests
     public async Task CreateWithoutDurationFailsAndTimezoneIsValidated()
     {
         using var f = new Fixture();
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Dentista", start = Start, allDay = false }), await f.Context());
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start = Start, allDay = false }), await f.Context());
         Assert.False(result.Success);
         Assert.Empty(f.Db.PendingCalendarActions);
         await Assert.ThrowsAsync<CalendarException>(() => f.Calendar.PrepareAsync(CalendarActionTypes.Create, "primary", "abcde", new("Dentista", Start, End, false, "Invalid/Zone")));
@@ -194,13 +194,13 @@ public sealed partial class CalendarTests
     [InlineData(CalendarActionTypes.Create)]
     [InlineData(CalendarActionTypes.Update)]
     [InlineData(CalendarActionTypes.Delete)]
-    public async Task EveryMutationPreparesOnlyAndRequiresLaterTurn(string type)
+    public async Task LegacyProposalsAndExistingEventMutationsRequireLaterTurn(string type)
     {
         using var f = new Fixture();
         f.Google.AddEvent();
         await f.Observe();
         var ctx = await f.Context("sim");
-        var tool = type switch { CalendarActionTypes.Create => (IAegisTool)f.Create, CalendarActionTypes.Update => f.Update, _ => new CalendarDeleteEventTool(f.Db, f.Calendar, f.ToolContext) };
+        var tool = type switch { CalendarActionTypes.Create => (IAegisTool)f.LegacyCreate, CalendarActionTypes.Update => f.Update, _ => new CalendarDeleteEventTool(f.Db, f.Calendar, f.ToolContext) };
         var args = type == CalendarActionTypes.Create ? Args(new { summary = "Dentista", start = Start, end = End, allDay = false }) :
             type == CalendarActionTypes.Update ? Args(new { eventId = "event1", summary = "Changed" }) : Args(new { eventId = "event1" });
         Assert.True((await tool.ExecuteAsync(args, ctx)).Success);
@@ -303,7 +303,7 @@ public sealed partial class CalendarTests
         Assert.True((await f.Confirm.ExecuteAsync(Empty, await f.Context("sim"))).Success);
         Assert.Single(f.Google.Events);
         Assert.Equal(action.EventId, f.Google.Events.Single().Key);
-        Assert.Equal(2, f.Google.Mutations); // POST 409 on retry, GET proves original insert.
+        Assert.Equal(1, f.Google.Mutations); // Verify the fixed ID before retry: no second POST.
     }
 
     [Fact]
@@ -472,7 +472,7 @@ public sealed partial class CalendarTests
         var list = new CalendarListEventsTool(f.Calendar, f.ToolContext);
         Assert.Equal("invalid_tool_arguments", (await list.ExecuteAsync(Args(new { timeMin = End, timeMax = Start }), await f.Context())).ErrorCode);
         Assert.Equal("invalid_tool_arguments", (await list.ExecuteAsync(Args(new { limit = "all" }), await f.Context())).ErrorCode);
-        Assert.Equal("invalid_tool_arguments", (await f.Create.ExecuteAsync(Args(new { summary = "A", start = Start, end = End, allDay = false, attendees = new[] { "anyone" } }), await f.Context())).ErrorCode);
+        Assert.Equal("invalid_tool_arguments", (await f.LegacyCreate.ExecuteAsync(Args(new { summary = "A", start = Start, end = End, allDay = false, attendees = new[] { "anyone" } }), await f.Context())).ErrorCode);
         Assert.Equal(0, f.Google.Mutations);
     }
 
@@ -670,7 +670,7 @@ public sealed partial class CalendarTests
         const string destination = "diario@group.calendar.google.com";
         f.Google.AddCalendar(destination, "Diario");
         await new CalendarListCalendarsTool(f.Calendar, f.ToolContext).ExecuteAsync(Empty, await f.Context());
-        var prepared = await f.Create.ExecuteAsync(Args(new { calendarId = destination, summary = "Dentista", start = Start, end = End, allDay = false }), await f.Context("Marca no Diario"));
+        var prepared = await f.LegacyCreate.ExecuteAsync(Args(new { calendarId = destination, summary = "Dentista", start = Start, end = End, allDay = false }), await f.Context("Marca no Diario"));
         Assert.True(prepared.Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
         Assert.Equal(destination, action.CalendarId);
@@ -758,7 +758,7 @@ public sealed partial class CalendarTests
         Assert.False((await f.Update.ExecuteAsync(Args(new { calendarId = "primary", eventId = "only-secondary", summary = "A" }), ctx)).Success);
         Assert.False((await f.Update.ExecuteAsync(Args(new { calendarId = "invented", eventId = "same", summary = "A" }), ctx)).Success);
         Assert.False((await get.ExecuteAsync(Args(new { calendarId = "diario", eventId = "invented" }), ctx)).Success);
-        Assert.False((await f.Create.ExecuteAsync(Args(new { calendarId = "invented", summary = "A", start = Start, end = End, allDay = false }), ctx)).Success);
+        Assert.False((await f.LegacyCreate.ExecuteAsync(Args(new { calendarId = "invented", summary = "A", start = Start, end = End, allDay = false }), ctx)).Success);
         Assert.Equal(0, f.Google.Mutations);
     }
 
@@ -774,7 +774,7 @@ public sealed partial class CalendarTests
         await f.Db.SaveChangesAsync();
         Assert.False(await f.ToolContext.WasObservedAsync(f.ConversationId, "diario", "event1"));
         Assert.False((await f.Update.ExecuteAsync(Args(new { calendarId = "diario", eventId = "event1", summary = "A" }), await f.Context())).Success);
-        Assert.False((await f.Create.ExecuteAsync(Args(new { calendarId = "diario", summary = "A", start = Start, end = End, allDay = false }), await f.Context())).Success);
+        Assert.False((await f.LegacyCreate.ExecuteAsync(Args(new { calendarId = "diario", summary = "A", start = Start, end = End, allDay = false }), await f.Context())).Success);
     }
 
     [Theory]
@@ -957,7 +957,7 @@ public sealed partial class CalendarTests
         AddHoliday(f.Google, calendarId, "holiday", "Feriado regional", "2026-10-10");
         f.Google.AddEvent("existing-appointment");
         var context = await f.Context("Marca dentista amanhã às 14h por uma hora");
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false }), context);
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false }), context);
         Assert.True(result.Success);
         var warning = Assert.Single(JsonDocument.Parse(result.Content).RootElement.GetProperty("holidayWarnings").EnumerateArray());
         Assert.Equal("Feriado regional", warning.GetProperty("name").GetString());
@@ -1028,7 +1028,7 @@ public sealed partial class CalendarTests
         f.Google.AddCalendar(calendarId, "Feriados", "reader");
         AddHoliday(f.Google, calendarId, "multi-day", "Feriado prolongado", "2026-10-10", "2026-10-12");
         AddHoliday(f.Google, calendarId, "outside", "Dia posterior", "2026-10-12");
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Viagem", start, end, allDay = true }), await f.Context());
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Viagem", start, end, allDay = true }), await f.Context());
         Assert.True(result.Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
         var payload = JsonSerializer.Deserialize<CalendarActionPayload>(action.PayloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
@@ -1067,7 +1067,7 @@ public sealed partial class CalendarTests
             f.Google.AddCalendar(id, "Feriados", "reader");
             for (var i = 0; i < 30; i++) AddHoliday(f.Google, id, "h" + i, "Feriado " + i, "2026-10-10");
         }
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Estudo", start = Start, end = End, allDay = false }), await f.Context());
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Estudo", start = Start, end = End, allDay = false }), await f.Context());
         Assert.True(result.Success);
         var document = JsonDocument.Parse(result.Content).RootElement;
         Assert.Equal(50, document.GetProperty("holidayWarnings").GetArrayLength());
@@ -1116,7 +1116,7 @@ public sealed partial class CalendarTests
     public async Task AmendPendingCreatePreservesOmittedFieldsAndSupersedesWithoutExternalMutation()
     {
         using var f = new Fixture();
-        await f.Create.ExecuteAsync(Args(new { summary = "Entregar encomenda", start = "2026-10-28T14:00:00-03:00",
+        await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Entregar encomenda", start = "2026-10-28T14:00:00-03:00",
             end = "2026-10-28T15:00:00-03:00", allDay = false, description = "Pacote", location = "Correios" }), await f.Context());
         var first = Assert.Single(f.Db.PendingCalendarActions);
         var originalJson = first.PayloadJson;
@@ -1189,7 +1189,7 @@ public sealed partial class CalendarTests
         var first = await f.PrepareCreate();
         var amend = new CalendarAmendPendingActionTool(f.Db, f.Calendar, f.ToolContext);
         Assert.False((await amend.ExecuteAsync(Args(new { end = "2026-10-10T13:00:00-03:00" }), await f.Context())).Success);
-        Assert.False((await f.Create.ExecuteAsync(Args(new { summary = "A", start = Start, allDay = false }), await f.Context())).Success);
+        Assert.False((await f.LegacyCreate.ExecuteAsync(Args(new { summary = "A", start = Start, allDay = false }), await f.Context())).Success);
         Assert.True(first.IsOpen());
         Assert.Null(first.SupersededAt);
         Assert.Single(f.Db.PendingCalendarActions);
@@ -1210,7 +1210,7 @@ public sealed partial class CalendarTests
         f.Db.AddPendingCalendarAction(action);
         await f.Db.SaveChangesAsync();
         var context = await f.Context("Troca para outro dia");
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Outro", start = Start, end = End, allDay = false }), context);
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Outro", start = Start, end = End, allDay = false }), context);
         Assert.Equal("calendar_action_outcome_unknown", result.ErrorCode);
         Assert.False((await new CalendarAmendPendingActionTool(f.Db, f.Calendar, f.ToolContext).ExecuteAsync(Args(new { summary = "Outro" }), context)).Success);
         Assert.Null(action.SupersededAt);
@@ -1281,7 +1281,7 @@ public sealed partial class CalendarTests
     public async Task ConcreteValuesChosenByModelAreAcceptedWithNormalTechnicalValidation(string content, string start, string end, bool allDay)
     {
         using var f = new Fixture();
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Evento", start, end, allDay }), await f.Context(content));
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Evento", start, end, allDay }), await f.Context(content));
         Assert.True(result.Success);
         Assert.Single(f.Db.PendingCalendarActions);
         Assert.Equal(0, f.Google.Mutations);
@@ -1305,6 +1305,17 @@ public sealed partial class CalendarTests
         item["end"]!["dateTime"] = end;
     }
 
+    // Seed the pre-v0.7.2 preparation pipeline to preserve recovery and confirmation
+    // compatibility for legacy creates. This helper is never registered as a tool.
+    private sealed class LegacyCalendarCreateTool(AegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext)
+        : CalendarPrepareActionTool(db, calendar, toolContext)
+    {
+        public override string Name => "legacy_calendar_create";
+        protected override string ActionType => CalendarActionTypes.Create;
+        public override string Description => "Legacy preparation fixture.";
+        public override JsonElement ParametersSchema { get; } = MutationSchema(true);
+    }
+
     private sealed class Fixture : IDisposable
     {
         public AegisDbContext Db { get; } = new(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -1317,6 +1328,7 @@ public sealed partial class CalendarTests
         public GoogleCalendarService Calendar { get; }
         public CalendarToolContextService ToolContext { get; }
         public CalendarCreateEventTool Create { get; }
+        public LegacyCalendarCreateTool LegacyCreate { get; }
         public CalendarUpdateEventTool Update { get; }
         public CalendarConfirmPendingActionTool Confirm { get; }
         public Guid ConversationId { get; }
@@ -1337,6 +1349,7 @@ public sealed partial class CalendarTests
             Calendar = new(Http, Tokens, Connection, Log, Options.Create(calendarOptions ?? new GoogleCalendarOptions()));
             ToolContext = new(Db);
             Create = new(Db, Calendar, ToolContext);
+            LegacyCreate = new(Db, Calendar, ToolContext);
             Update = new(Db, Calendar, ToolContext);
             Confirm = new(Db, Calendar, ToolContext, NullLogger<CalendarConfirmPendingActionTool>.Instance);
         }
@@ -1350,7 +1363,7 @@ public sealed partial class CalendarTests
         public Task Observe() => ToolContext.RememberAsync(ConversationId, Google.Events.Values.Select(e => new CalendarEventData(e["id"]!.ToString(), "primary", "Principal", "Evento", Start, End, false, "America/Sao_Paulo", null, null, "confirmed", null)), "calendar_list_events");
         public async Task<PendingCalendarAction> PrepareCreate()
         {
-            Assert.True((await Create.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false }), await Context())).Success);
+            Assert.True((await LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false }), await Context())).Success);
             return (await Db.GetLatestOpenPendingCalendarActionAsync(ConversationId))!;
         }
         public void Dispose() { Http.Dispose(); Db.Dispose(); }

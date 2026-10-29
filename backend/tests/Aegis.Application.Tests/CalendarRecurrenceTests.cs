@@ -120,7 +120,7 @@ public sealed partial class CalendarTests
     {
         using var f = new Fixture();
         var recurrence = new { frequency, interval, count, until, daysOfWeek = day is null ? null : new[] { day } };
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Atividade", start = "2026-10-05T18:00:00-03:00",
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Atividade", start = "2026-10-05T18:00:00-03:00",
             end = "2026-10-05T19:00:00-03:00", allDay = false, recurrence }), await f.Context());
         Assert.Equal("invalid_tool_arguments", result.ErrorCode);
         Assert.Empty(f.Db.PendingCalendarActions);
@@ -131,14 +131,14 @@ public sealed partial class CalendarTests
     public async Task ContradictoryNoneAndFirstDayMismatchAreRejected()
     {
         using var f = new Fixture();
-        var none = await f.Create.ExecuteAsync(Args(new { summary = "X", start = Start, end = End, allDay = false,
+        var none = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "X", start = Start, end = End, allDay = false,
             recurrence = new { frequency = "none", count = 2 } }), await f.Context());
         Assert.False(none.Success);
-        var mismatch = await f.Create.ExecuteAsync(Args(new { summary = "X", start = "2026-10-05T18:00:00-03:00",
+        var mismatch = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "X", start = "2026-10-05T18:00:00-03:00",
             end = "2026-10-05T19:00:00-03:00", allDay = false,
             recurrence = new { frequency = "weekly", daysOfWeek = new[] { "tuesday" } } }), await f.Context());
         Assert.False(mismatch.Success);
-        var offset = await f.Create.ExecuteAsync(Args(new { summary = "X", start = "2026-10-05T18:00:00-04:00",
+        var offset = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "X", start = "2026-10-05T18:00:00-04:00",
             end = "2026-10-05T19:00:00-04:00", allDay = false, timeZone = "America/Sao_Paulo",
             recurrence = new { frequency = "weekly" } }), await f.Context());
         Assert.False(offset.Success);
@@ -151,7 +151,7 @@ public sealed partial class CalendarTests
     {
         using var f = new Fixture();
         var firstContext = await f.Context();
-        var create = await f.Create.ExecuteAsync(Args(new { summary = "Academia", start = "2026-10-05T18:00:00-03:00",
+        var create = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Academia", start = "2026-10-05T18:00:00-03:00",
             end = "2026-10-05T19:00:00-03:00", allDay = false,
             recurrence = new { frequency = "weekly", daysOfWeek = new[] { "monday" } } }), firstContext);
         Assert.True(create.Success);
@@ -210,7 +210,7 @@ public sealed partial class CalendarTests
         using var f = new Fixture();
         f.Google.AddCalendar("diario", "Diario");
         await new CalendarListCalendarsTool(f.Calendar, f.ToolContext).ExecuteAsync(Empty, await f.Context());
-        var result = await f.Create.ExecuteAsync(Args(new { calendarId = "diario", summary = "Aula",
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { calendarId = "diario", summary = "Aula",
             start = "2026-10-06T13:20:00-03:00", end = "2026-10-06T15:00:00-03:00", allDay = false,
             recurrence = new { frequency = "weekly", daysOfWeek = new[] { "tuesday", "thursday" } } }), await f.Context());
         Assert.True(result.Success);
@@ -240,7 +240,7 @@ public sealed partial class CalendarTests
     public async Task AmbiguousRecurringInsertIsRecoveredWithoutAnotherSeries()
     {
         using var f = new Fixture();
-        Assert.True((await f.Create.ExecuteAsync(Args(new { summary = "Academia", start = "2026-10-05T18:00:00-03:00",
+        Assert.True((await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Academia", start = "2026-10-05T18:00:00-03:00",
             end = "2026-10-05T19:00:00-03:00", allDay = false,
             recurrence = new { frequency = "weekly", daysOfWeek = new[] { "monday", "wednesday" } } }), await f.Context())).Success);
         f.Google.ThrowAfterMutation = true;
@@ -250,7 +250,7 @@ public sealed partial class CalendarTests
         f.Google.FailGetsAfterMutation = false;
         Assert.True((await f.Confirm.ExecuteAsync(Empty, await f.Context("Sim"))).Success);
         Assert.Single(f.Google.Events);
-        Assert.Equal(2, f.Google.Mutations);
+        Assert.Equal(1, f.Google.Mutations); // Recovery verifies before any new POST.
         Assert.Equal("RRULE:FREQ=WEEKLY;BYDAY=MO,WE", f.Google.Events.Single().Value["recurrence"]![0]!.ToString());
     }
 
