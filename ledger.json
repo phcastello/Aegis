@@ -166,8 +166,8 @@
     }
   ],
   "recommended": {
-    "version": "0.7.2-unstable.6",
-    "versionCode": 7002006,
-    "sha256": "9112c570180e3e7df8afb81013f9dba56711a27afd4b3f393eaf434f1b7292e6"
+    "version": "0.7.2-unstable.7",
+    "versionCode": 7002007,
+    "sha256": "47ae2ed6c03c57c218fc2fea6fd38d166d49cdaa4acfd3a499469f13302e3bb3"
   }
 }
