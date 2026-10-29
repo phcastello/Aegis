@@ -472,8 +472,10 @@ class PrivateHost:
             if component in self.images:
                 self.run([*self.ndc, "up", "-d", "--no-deps", "--no-build", "aegis-api" if component == "backend" else "aegis-pwa"])
         self.writers_stopped = False
-        # nginx resolves the upstream at startup; refresh only its resolver state.
-        self.run(["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"])
+        # A new PWA resolves the upstream at startup. Reload only an existing
+        # nginx after an API replacement; compose up can precede its PID file.
+        if "backend" in self.images and "pwa" not in self.images:
+            self.run(["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"])
 
     def http(self, path):
         with urllib.request.urlopen(self.url + path, timeout=10) as response:
