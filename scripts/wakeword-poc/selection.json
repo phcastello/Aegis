@@ -1,0 +1,66 @@
+{
+  "method": "Selection fixed before detector tests. Local faster-whisper 1.2.1 small (CPU int8, pt, no prompt, word timestamps), plus 10 ms RMS envelopes and inspection of surrounding silence. No human listening. ASR misspells the proper name; labels come from owner-provided positive folders. No command words in selected samples. Crop margins preserve final fricatives and exclude surrounding silence. No continuous recording used as reference.",
+  "references": [
+    {
+      "id": "android-positive-01",
+      "start": 0.65,
+      "end": 1.3
+    },
+    {
+      "id": "android-positive-07",
+      "start": 0.34,
+      "end": 0.93
+    },
+    {
+      "id": "android-positive-09",
+      "start": 0.95,
+      "end": 1.65
+    },
+    {
+      "id": "windows-positive-08",
+      "start": 0.53,
+      "end": 1.09
+    },
+    {
+      "id": "windows-positive-09",
+      "start": 0.39,
+      "end": 0.99
+    },
+    {
+      "id": "windows-positive-12",
+      "start": 0.28,
+      "end": 0.94
+    }
+  ],
+  "forms": {
+    "android-positive-01": "isolated",
+    "android-positive-02": "continuous",
+    "android-positive-03": "continuous",
+    "android-positive-04": "continuous",
+    "android-positive-05": "continuous",
+    "android-positive-06": "continuous",
+    "android-positive-07": "isolated",
+    "android-positive-08": "continuous",
+    "android-positive-09": "isolated",
+    "android-positive-10": "continuous",
+    "android-positive-11": "continuous",
+    "android-positive-12": "isolated",
+    "android-positive-13": "continuous",
+    "windows-positive-01": "continuous",
+    "windows-positive-02": "continuous",
+    "windows-positive-03": "continuous",
+    "windows-positive-04": "continuous",
+    "windows-positive-05": "continuous",
+    "windows-positive-06": "continuous",
+    "windows-positive-07": "continuous",
+    "windows-positive-08": "isolated",
+    "windows-positive-09": "isolated",
+    "windows-positive-10": "isolated",
+    "windows-positive-11": "isolated",
+    "windows-positive-12": "isolated",
+    "windows-positive-13": "isolated",
+    "windows-positive-14": "continuous",
+    "windows-positive-15": "continuous",
+    "windows-positive-16": "isolated"
+  }
+}
