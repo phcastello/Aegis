@@ -1,6 +1,6 @@
 {
   "name": "@aegis/client",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,8 +11,14 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser-parity.mjs",
-    "test:email": "node --test tests/emailConnectionFeedback.test.mjs tests/emailConnectionLinks.test.mjs tests/emailConnectionPolling.test.mjs"
+    "test:browser": "node tests/browser-parity.mjs && node tests/proactive-read-browser.mjs",
+    "test:proactive-read": "node tests/proactive-read-browser.mjs",
+    "test:email": "node --test tests/emailConnectionFeedback.test.mjs tests/emailConnectionLinks.test.mjs tests/emailConnectionPolling.test.mjs",
+    "test:ux-stream": "node tests/ux-stream-browser.mjs",
+    "test:visual-refinements": "node tests/visual-refinements-browser.mjs",
+    "test:server-indicator": "node tests/server-indicator-browser.mjs",
+    "test:transcription-browser": "node tests/transcription-browser.mjs",
+    "test:markdown-stream": "node tests/markdown-stream-browser.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.8",

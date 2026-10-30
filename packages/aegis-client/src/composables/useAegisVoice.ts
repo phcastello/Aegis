@@ -1,25 +1,24 @@
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { cancelSpeech, getVoiceStatus, streamSpeech } from '../services/aegisApi';
 import { VoicePlaybackService, type VoicePlaybackState } from '../services/voicePlaybackService';
 
-const AUTO_SPEAK_KEY = 'aegis.voice.autoSpeak';
+import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 
 export function useAegisVoice() {
   const player = new VoicePlaybackService();
-  const autoSpeak = ref(localStorage.getItem(AUTO_SPEAK_KEY) !== 'false');
   const playbackState = ref<VoicePlaybackState>('idle');
   const voiceAvailable = ref(true);
   const voiceMessage = ref<string | null>(null);
   let activeTurnId: string | null = null;
   let activeSpeechRequestId: string | null = null;
   let controller: AbortController | null = null;
+  let playbackRequest = 0;
   player.onState((state) => { playbackState.value = state; });
 
   const isBusy = computed(() => playbackState.value === 'buffering' || playbackState.value === 'playing' || playbackState.value === 'initializing');
 
   function setAutoSpeak(value: boolean): void {
-    autoSpeak.value = value;
-    localStorage.setItem(AUTO_SPEAK_KEY, String(value));
+    setAutoSpeakPreference(value);
     if (value) void prepare();
   }
 
@@ -35,28 +34,33 @@ export function useAegisVoice() {
   }
 
   async function speak(turnId: string, assistantMessageId: string, manual = false): Promise<void> {
-    await stop();
-    if (!(await prepare())) return;
+    const stopping = stop();
+    const request = playbackRequest;
+    await stopping;
+    if (request !== playbackRequest || !(await prepare()) || request !== playbackRequest) return;
     if (!manual && !autoSpeak.value) return;
     const speechRequestId = crypto.randomUUID();
     const generation = player.begin();
     activeTurnId = turnId;
     activeSpeechRequestId = speechRequestId;
-    controller = new AbortController();
+    const speechController = new AbortController();
+    controller = speechController;
+    const ownsSpeech = (): boolean => request === playbackRequest && activeTurnId === turnId &&
+      activeSpeechRequestId === speechRequestId && !speechController.signal.aborted;
     voiceMessage.value = 'Preparando voz';
     try {
       await streamSpeech({ turnId, speechRequestId, assistantMessageId }, async (chunk) => {
-        if (activeTurnId !== turnId || activeSpeechRequestId !== speechRequestId || controller?.signal.aborted) return;
+        if (!ownsSpeech()) return;
         await player.enqueuePcm(chunk, generation);
-        voiceMessage.value = 'Falando';
-      }, controller.signal);
+        if (ownsSpeech()) voiceMessage.value = 'Falando';
+      }, speechController.signal);
       await player.finish(generation);
-      if (activeTurnId === turnId) {
+      if (ownsSpeech()) {
         voiceAvailable.value = true;
         voiceMessage.value = null;
       }
     } catch (error) {
-      if (!controller?.signal.aborted && activeTurnId === turnId) {
+      if (ownsSpeech()) {
         player.fail();
         voiceAvailable.value = false;
         voiceMessage.value = error instanceof TypeError ? 'Serviço de voz indisponível.'
@@ -66,6 +70,7 @@ export function useAegisVoice() {
   }
 
   async function stop(): Promise<void> {
+    playbackRequest++;
     const speechRequestId = activeSpeechRequestId;
     activeTurnId = null;
     activeSpeechRequestId = null;
@@ -82,6 +87,7 @@ export function useAegisVoice() {
     try { voiceAvailable.value = (await getVoiceStatus()).available; } catch { voiceAvailable.value = false; }
   }
 
+  watch(autoSpeak, enabled => { if (!enabled) void stop(); });
   onBeforeUnmount(() => { void stop(); });
   return { autoSpeak, playbackState, voiceAvailable, voiceMessage, isBusy, setAutoSpeak, prepare, speak, stop, refreshStatus };
 }

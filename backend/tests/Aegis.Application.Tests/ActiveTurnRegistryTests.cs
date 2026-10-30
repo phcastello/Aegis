@@ -73,6 +73,45 @@ public sealed class ActiveTurnRegistryTests
     }
 
     [Fact]
+    public async Task ConversationsKeepIndependentCancellationAndCompletion()
+    {
+        using var registry = CreateRegistry();
+        var first = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+        var second = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+        var third = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+        Assert.True(registry.TryTransition(first.TurnId, TurnStatus.Created, TurnStatus.GeneratingText));
+        Assert.True(registry.TryTransition(second.TurnId, TurnStatus.Created, TurnStatus.GeneratingText));
+
+        // The later conversation may finish while the first is still generating.
+        Assert.True(registry.TrySetTextCompleted(second.TurnId, Guid.NewGuid()));
+        Assert.True(registry.TryCompleteWithoutSpeech(second.TurnId));
+        Assert.True(registry.IsActive(first.TurnId));
+        await registry.CancelAsync(first.TurnId, "user_stop");
+
+        Assert.True(first.Cancellation.IsCancellationRequested);
+        Assert.False(second.Cancellation.IsCancellationRequested);
+        Assert.Equal(TurnStatus.Completed, second.Status);
+        Assert.True(registry.IsActive(third.TurnId));
+        Assert.False(third.Cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void SupersessionStaysInsideTheOwningConversation()
+    {
+        using var registry = CreateRegistry();
+        var firstConversation = Guid.NewGuid();
+        var first = registry.Register(Guid.NewGuid(), firstConversation);
+        var other = registry.Register(Guid.NewGuid(), Guid.NewGuid());
+
+        var replacement = registry.Register(Guid.NewGuid(), firstConversation);
+
+        Assert.True(first.Cancellation.IsCancellationRequested);
+        Assert.True(registry.IsActive(replacement.TurnId));
+        Assert.True(registry.IsActive(other.TurnId));
+        Assert.False(other.Cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
     public void CompletionIsTerminalAndIdempotent()
     {
         using var registry = CreateRegistry();

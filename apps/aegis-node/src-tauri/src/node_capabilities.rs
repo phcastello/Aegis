@@ -15,7 +15,12 @@ impl CapabilityRegistry {
             crate::platform::Platform::Windows | crate::platform::Platform::Android => {
                 let mut capabilities = Self::audio(true, true);
                 if cfg!(feature = "native-runtime") {
-                    for name in ["notification.show", "reminder.notify", "reminder.withdraw"] {
+                    for name in [
+                        "notification.show",
+                        "conversation.notify",
+                        "reminder.notify",
+                        "reminder.withdraw",
+                    ] {
                         capabilities.push(NodeCapability {
                             name: name.into(),
                             version: 1,
@@ -77,30 +82,36 @@ mod tests {
     }
     #[test]
     fn actual_build_provider_matches_supported_runtime() {
-        let capabilities = CapabilityRegistry::current();
-        if matches!(
-            crate::platform::current(),
-            crate::platform::Platform::Windows | crate::platform::Platform::Android
-        ) {
-            assert_eq!(&capabilities[..2], CapabilityRegistry::audio(true, true));
-            assert_eq!(
-                capabilities.len(),
+        let mut actual: Vec<_> = CapabilityRegistry::current()
+            .into_iter()
+            .map(|capability| (capability.name, capability.version))
+            .collect();
+        let mut expected = match crate::platform::current() {
+            crate::platform::Platform::Windows | crate::platform::Platform::Android => {
+                let mut capabilities = vec![("audio.input", 1), ("audio.output", 1)];
                 if cfg!(feature = "native-runtime") {
-                    if matches!(
-                        crate::platform::current(),
-                        crate::platform::Platform::Android
-                    ) {
-                        7
-                    } else {
-                        5
+                    capabilities.extend([
+                        ("notification.show", 1),
+                        ("conversation.notify", 1),
+                        ("reminder.notify", 1),
+                        ("reminder.withdraw", 1),
+                    ]);
+                    if crate::platform::current() == crate::platform::Platform::Android {
+                        capabilities.extend([("location.current", 1), ("geofence.monitor", 1)]);
                     }
-                } else {
-                    2
                 }
-            );
-        } else {
-            assert!(capabilities.is_empty());
+                capabilities
+            }
+            crate::platform::Platform::Unsupported => Vec::new(),
         }
+        .into_iter()
+        .map(|(name, version)| (name.to_owned(), version))
+        .collect::<Vec<_>>();
+        // Compare the complete name/version contract, independent of advertisement order.
+        // Keeping vectors also detects duplicate capabilities instead of hiding them in a set.
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 }
 

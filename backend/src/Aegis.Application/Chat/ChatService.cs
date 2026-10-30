@@ -342,14 +342,21 @@ public sealed class ChatService(
                 (email.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter aplicado alterações; retry é idempotente. " : "") +
                 (email.IsOpen() ? "Aceitação: email_confirm_pending_action; desistência: email_cancel_pending_action; correção: prepare uma nova proposta." :
                     "A proposta expirou, mas possíveis efeitos permanecem; consulte os emails. Cancelar a tentativa não reverte alterações."));
-        var calendar = (await dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken))
-            .FirstOrDefault(action => action.IsOpen() || action.MayHaveAppliedChanges);
-        if (calendar is not null)
-            states.Add($"Ação pendente Calendar: {calendar.HumanSummary}; válida até {calendar.ExpiresAt:O}. " +
-                (calendar.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter alterado a agenda; retry é idempotente. " : "") +
-                (calendar.IsOpen() ? "Aceitação: calendar_confirm_pending_action; desistência: calendar_cancel_pending_action; correção da proposta: calendar_amend_pending_action." :
-                    "A proposta expirou, mas possíveis efeitos permanecem; consulte a agenda. Cancelar a tentativa não reverte alterações."));
-        if (states.Count > 1) states.Add("Há propostas pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
+        var calendarActions = await dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken);
+        foreach (var calendar in calendarActions.Where(action => action.IsOpen() || action.MayHaveAppliedChanges).Take(10))
+        {
+            var directCreation = System.Text.Json.JsonSerializer.Deserialize<Aegis.Application.Calendar.CalendarActionPayload>(calendar.PayloadJson,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))?.CreationRequest is not null;
+            states.Add($"Ação Calendar: {calendar.HumanSummary}; válida até {calendar.ExpiresAt:O}. " +
+                (calendar.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter alterado a agenda; não afirme sucesso nem ausência de efeitos. " : "") +
+                (directCreation
+                    ? "Criação solicitada diretamente. Não é proposta aguardando autorização. Só retome esta criação se o usuário pedir sua continuação/retry; calendar_create_event com os mesmos dados verifica o registro e preserva o ID. Nunca execute ao mudar de assunto."
+                    : calendar.IsOpen()
+                        ? "Proposta aguardando confirmação: execute calendar_confirm_pending_action somente se a mensagem atual aceitar especificamente esta proposta anterior; nunca execute por menção casual ou mudança de assunto. Desistência: calendar_cancel_pending_action; correção: calendar_amend_pending_action."
+                        : "A proposta expirou, mas possíveis efeitos permanecem; consulte a agenda. Cancelar a tentativa não reverte alterações."));
+        }
+        if (email is not null && calendarActions.Any(action => action.IsOpen() || action.MayHaveAppliedChanges))
+            states.Add("Há ações pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
         if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
             states.Add(reminderContext);
         var pendingState = string.Join("\n", states);
@@ -401,7 +408,7 @@ public sealed class ChatService(
             message.Content,
             message.CreatedAt,
             message.Model,
-            memoryActivity);
+            memoryActivity, message.IsProactive, message.ProactiveSequence);
     }
 
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(
@@ -460,7 +467,7 @@ public sealed class ChatService(
             conversation.UpdatedAt,
             conversation.TitleSource,
             conversation.Messages.Count,
-            CreatePreview(lastMessage?.Content));
+            CreatePreview(lastMessage?.Content), conversation.HasUnreadProactive);
     }
 
     private static ConversationSummaryResponse MapConversationSummary(ConversationSummaryData conversation)
@@ -472,7 +479,7 @@ public sealed class ChatService(
             conversation.UpdatedAt,
             conversation.TitleSource,
             conversation.MessageCount,
-            CreatePreview(conversation.LastMessageContent));
+            CreatePreview(conversation.LastMessageContent), conversation.HasUnreadProactive);
     }
 
     private async Task QueueConversationTitleGenerationAsync(

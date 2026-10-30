@@ -400,25 +400,31 @@ class PublicationTests(unittest.TestCase):
                 host.pin("b" * 40)
 
     def test_docker_adapter_updates_only_the_affected_private_service(self):
-        for component, service in (("backend", "aegis-api"), ("pwa", "aegis-pwa")):
-            with self.subTest(component=component), tempfile.TemporaryDirectory() as directory:
+        for components in (("backend",), ("pwa",), ("backend", "pwa")):
+            with self.subTest(components=components), tempfile.TemporaryDirectory() as directory:
                 host = object.__new__(dev.PrivateHost)
                 host.op = host.deploy_root = Path(directory)
                 host.project = "fixture"
                 host.config = {"services": {"aegis-api": {"image": "old-api"}, "aegis-pwa": {"image": "old-pwa"}}}
-                host.images = {component: "new-image"}
+                host.images = {component: "new-image" for component in components}
                 commands = []
                 host.run = lambda args, **kw: commands.append(args) or ""
                 host.wait_health = lambda: None
-                host.deploy(plan((component,)))
+                host.deploy(plan(components))
                 ups = [c for c in commands if "up" in c]
-                self.assertEqual(len(ups), 1)
-                self.assertEqual(ups[0][-1], service)
-                self.assertIn("--no-deps", ups[0])
-                self.assertIn("--no-build", ups[0])
+                expected_services = ["aegis-api" if component == "backend" else "aegis-pwa" for component in components]
+                self.assertEqual([c[-1] for c in ups], expected_services)
+                for command in ups:
+                    self.assertIn("--no-deps", command)
+                    self.assertIn("--no-build", command)
+                reloads = [c for c in commands if c[:2] == ["docker", "exec"]]
+                self.assertEqual(reloads, [["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"]]
+                                 if components == ("backend",) else [],
+                                 "a newly started PWA must not race an unnecessary nginx reload")
                 config = json.loads((host.op / "deployment.compose.private.json").read_text())
-                other = "aegis-pwa" if service == "aegis-api" else "aegis-api"
-                self.assertEqual(config["services"][other], host.config["services"][other])
+                for component, service in (("backend", "aegis-api"), ("pwa", "aegis-pwa")):
+                    if component not in components:
+                        self.assertEqual(config["services"][service], host.config["services"][service])
 
 
 if __name__ == "__main__":

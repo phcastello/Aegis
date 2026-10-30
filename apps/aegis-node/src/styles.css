@@ -6,6 +6,8 @@
 .update-title-mobile, .update-version { display: none; }
 .update-notice strong { color: var(--accent-strong); font-size: .88rem; }
 .update-notice span { color: var(--muted); }
+.update-recovery { overflow-wrap: anywhere; }
+.update-notice--recovery .update-version { display: block; overflow-wrap: anywhere; }
 .update-notice button { min-height: 44px; padding: 9px 13px; border-radius: var(--radius-sm); color: var(--accent-ink); background: var(--accent); cursor: pointer; }
 .update-notice button.update-dismiss { color: var(--muted); background: transparent; }
 @media (max-width: 620px) {

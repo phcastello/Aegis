@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aegis.Application.Common;
@@ -178,7 +180,7 @@ public abstract class CalendarPrepareActionTool(IAegisDbContext db, ICalendarSer
             payload.ReminderMode, reminders = payload.Fields["reminders"], holidayWarnings = payload.HolidayWarnings ?? [], payload.HolidayWarningsHasMore,
             userMessage = "Ação preparada. Apresente o resumo e peça confirmação em uma nova mensagem; ainda não executei a alteração." });
     }
-    protected static JsonElement MutationSchema(bool create)
+    protected internal static JsonElement MutationSchema(bool create)
     {
         var schema = System.Text.Json.Nodes.JsonNode.Parse("""
         {"type":"object","properties":{
@@ -234,12 +236,147 @@ public abstract class CalendarPrepareActionTool(IAegisDbContext db, ICalendarSer
     }
 }
 
-public sealed class CalendarCreateEventTool(IAegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext) : CalendarPrepareActionTool(db, calendar, toolContext)
+public sealed class CalendarCreateEventTool(IAegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext,
+    ILogger<CalendarCreateEventTool>? logger = null) : CalendarToolBase
 {
     public override string Name => "calendar_create_event";
-    protected override string ActionType => CalendarActionTypes.Create;
-    public override string Description => "Prepara criação de evento na agenda, único ou recorrente, com título, início e fim concretos da PRIMEIRA ocorrência; sua duração vale para a série. Para 'toda segunda, quarta e sexta', use recurrence={frequency:weekly,daysOfWeek:[monday,wednesday,friday]}; quinzenal usa weekly + interval=2; mensal e anual repetem a data da primeira ocorrência. count ou until (data inclusiva YYYY-MM-DD) são opcionais e exclusivos; sem ambos, a série não tem término. Omitir recurrence cria evento único. Uma rotina concreta informada com dias e horários, como 'tenho aula toda terça e quinta das 13h20 às 15h', pode ser preparada para confirmação. Para compromisso recorrente com hora e sem duração, escolha duração razoável, por exemplo uma hora, e apresente-a. Pedido apenas para lembrar em um horário, sem compromisso/agenda, pertence às tools Reminder; elas não criam séries Calendar. Usa primary por padrão. O nome simples da atividade já serve como summary: 'cria uma reunião' pode usar 'Reunião', sem pedir título elaborado. description é anotação opcional: só envie quando solicitada. Sem preferência de lembretes, omita reminderMode/reminders para usar a policy Aegis; pedidos explícitos podem usar custom, none ou calendar_default. Outro calendário somente quando o usuário indicar o destino; resolva calendarId. Se o usuário delegou título, horário ou duração, escolha valores razoáveis e apresente-os; esclareça ausências essenciais sem delegação. Correções da proposta usam calendar_amend_pending_action. Exige confirmação em turno posterior; não altera Google agora. holidayWarnings para série cobrem somente a primeira ocorrência; feriados não bloqueiam. Sem convidados ou Meet.";
-    public override JsonElement ParametersSchema { get; } = MutationSchema(true);
+    public override string Description => "Cria e verifica imediatamente evento único, recorrente ou lote de até dez eventos no Google Calendar, somente após pedido explícito do usuário, sem confirmação adicional, com título, início e fim concretos da PRIMEIRA ocorrência; sua duração vale para a série. Para 'toda segunda, quarta e sexta', use recurrence={frequency:weekly,daysOfWeek:[monday,wednesday,friday]}; quinzenal usa weekly + interval=2; mensal e anual repetem a data da primeira ocorrência. count ou until (data inclusiva YYYY-MM-DD) são opcionais e exclusivos; sem ambos, a série não tem término. Omitir recurrence cria evento único. Mencionar uma rotina, como 'tenho aula toda terça e quinta', não autoriza criação. Para vários eventos diferentes explicitamente pedidos, prefira events=[{summary,start,end,allDay,...},...] em uma chamada (máximo dez), com os dados completos de cada evento. Não combine events com campos singulares; informe sucessos, falhas e resultados incertos separadamente, sem repetir criações incertas. Se faltar duração sem delegação, pergunte somente a duração. Sob delegação explícita, escolha valor razoável e informe-o no resultado. Pedido apenas para lembrar em um horário, sem compromisso/agenda, pertence às tools Reminder; elas não criam séries Calendar. Usa primary por padrão. O nome simples da atividade já serve como summary: 'cria uma reunião' pode usar 'Reunião', sem pedir título elaborado. description é anotação opcional: só envie quando solicitada. Sem preferência de lembretes, omita reminderMode/reminders para usar a policy Aegis; pedidos explícitos podem usar custom, none ou calendar_default. Outro calendário somente quando o usuário indicar o destino; resolva calendarId. Se o usuário delegou título, horário ou duração, escolha valores razoáveis e apresente-os; esclareça ausências essenciais sem delegação. Não peça nova autorização após receber os dados essenciais. Esta ferramenta valida, registra, executa e verifica o resultado; só afirme criação se verified=true. Retry de uma mesma criação usa o registro e ID estáveis; resultado incerto exige verificação; não repita automaticamente a criação nesta interação. Informe a pendência e só retome se o usuário pedir retry. Para corrigir um evento já criado, use calendar_update_event com confirmação posterior. holidayWarnings para série cobrem somente a primeira ocorrência; feriados não bloqueiam. Sem convidados ou Meet.";
+    private readonly string? batchFingerprint;
+    private CalendarCreateEventTool(IAegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext,
+        ILogger<CalendarCreateEventTool>? logger, string batchFingerprint) : this(db, calendar, toolContext, logger)
+    { this.batchFingerprint = batchFingerprint; }
+
+    private static readonly JsonElement SingleSchema = CalendarPrepareActionTool.MutationSchema(true);
+    public override JsonElement ParametersSchema { get; } = CreateSchema();
+
+    private static JsonElement CreateSchema()
+    {
+        var schema = System.Text.Json.Nodes.JsonNode.Parse(SingleSchema.GetRawText())!.AsObject();
+        schema.Remove("required");
+        schema["properties"]!["events"] = new System.Text.Json.Nodes.JsonObject {
+            ["type"] = "array", ["minItems"] = 1, ["maxItems"] = 10,
+            ["description"] = "Lote de eventos diferentes explicitamente solicitados; cada item usa os mesmos campos da criação singular. Use somente events no objeto principal. Cada resultado é independente: não repita automaticamente itens incertos e informe sucesso parcial.",
+            ["items"] = System.Text.Json.Nodes.JsonNode.Parse(SingleSchema.GetRawText())
+        };
+        schema["oneOf"] = new System.Text.Json.Nodes.JsonArray(
+            new System.Text.Json.Nodes.JsonObject { ["required"] = new System.Text.Json.Nodes.JsonArray("events") },
+            new System.Text.Json.Nodes.JsonObject { ["required"] = SingleSchema.GetProperty("required").Deserialize<System.Text.Json.Nodes.JsonArray>() });
+        return JsonSerializer.SerializeToElement(schema);
+    }
+
+    protected override async Task<AegisToolResult> RunAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (arguments.TryGetProperty("events", out var events))
+        {
+            if (arguments.EnumerateObject().Count() != 1 || events.ValueKind != JsonValueKind.Array || events.GetArrayLength() is < 1 or > 10)
+                return Error("invalid_calendar_tool_arguments", "Use somente events com um a dez eventos completos; não combine lote e campos singulares.");
+            // Stable plan identity lets a resent partial batch reuse completed siblings too,
+            // even when the new user message says "retry" instead of repeating its original text.
+            var plan = new List<string>();
+            foreach (var item in events.EnumerateArray())
+            {
+                try
+                {
+                    var itemFields = item.EnumerateObject().Where(p => p.Name != "calendarId").ToDictionary(p => p.Name, p => p.Value);
+                    var plannedChanges = JsonSerializer.SerializeToElement(itemFields).Deserialize<CalendarEventChanges>(JsonOptions)!;
+                    plan.Add(JsonSerializer.Serialize(NormalizeChanges(plannedChanges), JsonOptions));
+                }
+                catch (Exception e) when (e is JsonException or CalendarException or InvalidOperationException)
+                { plan.Add(item.GetRawText()); } // Invalid items still receive their own failure below.
+            }
+            var batchId = Hash(JsonSerializer.Serialize(plan.Order(StringComparer.Ordinal), JsonOptions));
+            var itemTool = new CalendarCreateEventTool(db, calendar, toolContext, logger, batchId);
+            var results = new List<object>();
+            var succeeded = 0; var failed = 0; var unknown = 0;
+            foreach (var item in events.EnumerateArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = item.ValueKind != JsonValueKind.Object || item.TryGetProperty("events", out _)
+                    ? Error("invalid_calendar_tool_arguments", "Cada item deve ser um evento singular; lotes aninhados não são permitidos.")
+                    : await itemTool.ExecuteAsync(item, context, cancellationToken);
+                var body = JsonSerializer.Deserialize<JsonElement>(result.Content);
+                var uncertain = body.TryGetProperty("status", out var state) && state.GetString() == "unknown" || result.ErrorCode == "calendar_action_outcome_unknown";
+                if (result.Success) succeeded++; else if (uncertain) unknown++; else failed++;
+                results.Add(new { index = results.Count + 1, result.Success, result.ErrorCode, result = body });
+            }
+            var complete = succeeded == results.Count;
+            var status = complete ? "completed" : succeeded > 0 ? "partial" : unknown > 0 ? "unknown" : "failed";
+            return new(complete, JsonSerializer.Serialize(new { status, verified = complete, succeeded, failed, unknown, results,
+                userMessage = complete ? "Todos os eventos foram criados e verificados. Informe o resultado, sem nova autorização."
+                    : "Informe separadamente os eventos criados, as falhas e os resultados incertos. Não afirme sucesso do lote completo nem repita automaticamente itens incertos." }, JsonOptions), complete ? null : "calendar_batch_" + status);
+        }
+        if (SingleSchema.GetProperty("required").EnumerateArray().Any(p => !arguments.TryGetProperty(p.GetString()!, out var value) || value.ValueKind == JsonValueKind.Null))
+            return Error("invalid_calendar_tool_arguments", "Faltam título, início, fim ou allDay. Pergunte somente o dado essencial ausente.");
+        // The model evaluates explicit creation intent; the backend checks persisted ownership and
+        // keeps request identity separate from the human-confirmation requirement of update/delete.
+        if (!await PendingActionGuard.HasValidUserMessageAsync(db, context, cancellationToken: cancellationToken))
+            return Error("invalid_calendar_tool_arguments", "A mensagem atual precisa pertencer a esta conversa.");
+        var calendarId = OptionalCalendarId(arguments) ?? "primary";
+        await toolContext.RequireCalendarAsync(context.ConversationId, calendarId, cancellationToken);
+        var fields = arguments.EnumerateObject().Where(p => p.Name != "calendarId").ToDictionary(p => p.Name, p => p.Value);
+        var changes = JsonSerializer.SerializeToElement(fields).Deserialize<CalendarEventChanges>(JsonOptions)!;
+        // Match the original request before provider defaults or OAuth account changes can
+        // alter the prepared payload. Recovery always uses the persisted account and fields.
+        var normalized = NormalizeChanges(changes);
+        var inputFingerprint = Hash(JsonSerializer.Serialize(normalized, JsonOptions));
+        var targetFingerprint = Hash(JsonSerializer.Serialize(new { normalized.Summary, normalized.Start, normalized.End, normalized.AllDay, normalized.Recurrence }, JsonOptions));
+        var userMessage = (await db.GetChatMessageAsync(context.UserMessageId, cancellationToken))!;
+        var requestHash = Hash(userMessage.Content.Trim());
+        var unresolved = await db.GetUnresolvedPendingCalendarActionsAsync(context.ConversationId, cancellationToken);
+        // Never silently retry a legacy proposal or replace an uncertain mutation.
+        if (unresolved.Any(a => a.MayHaveAppliedChanges && Payload(a).CreationRequest is null))
+            return Error("calendar_action_outcome_unknown", "Uma tentativa anterior pode ter alterado a agenda. Consulte o evento antes de criar novamente; cancelar a tentativa não reverte efeitos externos.");
+        var priorCreations = db.PendingCalendarActions.Where(a => a.ConversationId == context.ConversationId &&
+            a.ActionType == CalendarActionTypes.Create && (a.CancelledAt == null || a.MayHaveAppliedChanges) && a.SupersededAt == null).ToList();
+        bool SameCalendar(PendingCalendarAction a) => a.CalendarId == calendarId ||
+            a.CalendarId == "primary" && Payload(a).AccountEmail == calendarId ||
+            calendarId == "primary" && a.CalendarId == Payload(a).AccountEmail;
+        if (priorCreations.Any(a => a.ExecutedAt is null && a.MayHaveAppliedChanges && !SameCalendar(a) &&
+            Payload(a).CreationRequest?.InputFingerprint == inputFingerprint))
+            return Error("calendar_action_outcome_unknown", "A criação anterior deste pedido está incerta em outra conta ou calendário. Verifique o destino anterior antes de criar em outro; não duplique a operação.");
+        var attempts = priorCreations.Where(SameCalendar).ToList();
+        var action = attempts.FirstOrDefault(a => Payload(a).CreationRequest is { } request && request.InputFingerprint == inputFingerprint &&
+            (a.ExecutedAt is null && a.MayHaveAppliedChanges || request.UserMessageId == context.UserMessageId || request.UserRequestHash == requestHash ||
+                batchFingerprint is not null && request.BatchFingerprint == batchFingerprint));
+        if (action is not null)
+            return await ExecuteCreationAsync(action, context, cancellationToken);
+        if (attempts.Any(a => a.ExecutedAt is null && a.MayHaveAppliedChanges &&
+            Payload(a).CreationRequest is { } request && request.TargetFingerprint == targetFingerprint))
+            return Error("calendar_action_outcome_unknown", "Há uma criação deste compromisso com resultado incerto e dados diferentes. Consulte o evento antes de alterar os dados ou criar novamente; não duplique a tentativa.");
+        var payload = await calendar.PrepareAsync(CalendarActionTypes.Create, calendarId, "preflight", changes, cancellationToken);
+        var fingerprint = Hash(JsonSerializer.Serialize(new { calendarId, payload.AccountEmail, payload.Fields }, JsonOptions));
+        action = attempts.FirstOrDefault(a => Payload(a).CreationRequest is { } request && request.Fingerprint == fingerprint &&
+            (a.ExecutedAt is null && a.MayHaveAppliedChanges || request.UserMessageId == context.UserMessageId || request.UserRequestHash == requestHash ||
+                batchFingerprint is not null && request.BatchFingerprint == batchFingerprint));
+        if (action is null)
+        {
+            // Google's client-supplied ID deduplicates even if a process dies before it records success.
+            var eventId = Hash(context.ConversationId.ToString("N") + context.UserMessageId.ToString("N") + fingerprint);
+            payload = payload with { CreationRequest = new(context.UserMessageId, fingerprint, requestHash, targetFingerprint, inputFingerprint, batchFingerprint) };
+            action = new(context.ConversationId, CalendarActionTypes.Create, eventId,
+                JsonSerializer.Serialize(payload, JsonOptions), payload.HumanSummary, DateTimeOffset.UtcNow.AddMinutes(10), calendarId);
+            db.AddPendingCalendarAction(action);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        return await ExecuteCreationAsync(action, context, cancellationToken);
+    }
+
+    private Task<AegisToolResult> ExecuteCreationAsync(PendingCalendarAction action, ToolExecutionContext context, CancellationToken cancellationToken) =>
+        CalendarConfirmPendingActionTool.ExecutePreparedAsync(db, calendar, toolContext, action, context,
+            logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CalendarCreateEventTool>.Instance, Name, cancellationToken);
+    private static CalendarEventChanges NormalizeChanges(CalendarEventChanges changes) => changes with {
+        Summary = changes.Summary?.Trim(), Start = CanonicalTime(changes.Start, changes.AllDay), End = CanonicalTime(changes.End, changes.AllDay),
+        Reminders = changes.Reminders?.OrderBy(r => r.Method, StringComparer.Ordinal).ThenBy(r => r.Minutes).ToArray(),
+        Recurrence = changes.Recurrence is null ? null : changes.Recurrence with {
+            Interval = changes.Recurrence.Interval ?? 1, DaysOfWeek = changes.Recurrence.DaysOfWeek?.Order(StringComparer.Ordinal).ToArray()
+        }
+    };
+    private static string? CanonicalTime(string? value, bool? allDay) => allDay != true && DateTimeOffset.TryParse(value, out var time)
+        ? time.ToUniversalTime().ToString("O") : value;
+
+    internal static CalendarActionPayload Payload(PendingCalendarAction action) =>
+        JsonSerializer.Deserialize<CalendarActionPayload>(action.PayloadJson, JsonOptions)!;
+    private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
 
 public sealed class CalendarUpdateEventTool(IAegisDbContext db, ICalendarService calendar, CalendarToolContextService toolContext) : CalendarPrepareActionTool(db, calendar, toolContext)
@@ -267,7 +404,8 @@ public sealed class CalendarAmendPendingActionTool(IAegisDbContext db, ICalendar
     protected override async Task<AegisToolResult> RunAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     {
         if (!arguments.EnumerateObject().Any()) return Error("invalid_calendar_tool_arguments", "Informe pelo menos um campo da proposta a alterar.");
-        var previous = await db.GetLatestOpenPendingCalendarActionAsync(context.ConversationId, cancellationToken);
+        var previous = (await db.GetUnresolvedPendingCalendarActionsAsync(context.ConversationId, cancellationToken))
+            .FirstOrDefault(a => a.IsOpen() && CalendarCreateEventTool.Payload(a).CreationRequest is null);
         if (previous is null) return Error("no_pending_calendar_action", "Não há proposta Calendar pendente válida nesta conversa.");
         if (previous.MayHaveAppliedChanges) return Error("calendar_action_outcome_unknown", "Esta ação pode ter alterado a agenda. Verifique o estado externo antes de preparar outra proposta.");
         if (previous.ActionType == CalendarActionTypes.Delete) return Error("invalid_calendar_tool_arguments", "Uma proposta de exclusão não possui campos editáveis. Prepare a nova ação desejada para substituí-la.");
@@ -322,12 +460,21 @@ public sealed class CalendarConfirmPendingActionTool(IAegisDbContext db, ICalend
     protected override async Task<AegisToolResult> RunAsync(JsonElement arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     {
         RequireEmpty(arguments);
-        var action = await db.GetLatestOpenPendingCalendarActionAsync(context.ConversationId, cancellationToken);
+        var action = (await db.GetUnresolvedPendingCalendarActionsAsync(context.ConversationId, cancellationToken))
+            .FirstOrDefault(a => a.IsOpen() && CalendarCreateEventTool.Payload(a).CreationRequest is null);
         if (action is null) return Error("no_pending_calendar_action", "Não há ação Calendar pendente válida nesta conversa.");
         if (action.ConversationId != context.ConversationId || !action.IsOpen() ||
             !await PendingActionGuard.HasValidUserMessageAsync(db, context, action.CreatedAt, cancellationToken))
             return Error("confirmation_required", "Apresente a ação antes de uma confirmação em outro turno.");
+        return await ExecutePreparedAsync(db, calendar, toolContext, action, context, logger, Name, cancellationToken);
+    }
+
+    internal static async Task<AegisToolResult> ExecutePreparedAsync(IAegisDbContext db, ICalendarService calendar,
+        CalendarToolContextService toolContext, PendingCalendarAction action, ToolExecutionContext context,
+        ILogger logger, string sourceTool, CancellationToken cancellationToken)
+    {
         var payload = JsonSerializer.Deserialize<CalendarActionPayload>(action.PayloadJson, JsonOptions)!;
+        var immediateCreation = payload.CreationRequest is not null && action.ActionType == CalendarActionTypes.Create;
         var confirmedAt = DateTimeOffset.UtcNow;
         var previousPossibleEffects = action.MayHaveAppliedChanges;
         var requestMayHaveBeenSent = false;
@@ -337,9 +484,23 @@ public sealed class CalendarConfirmPendingActionTool(IAegisDbContext db, ICalend
             action.RecordPossibleExternalEffects();
             await db.SaveChangesAsync(cancellationToken);
             CalendarMutationException? failure = null;
+            var alreadyVerified = false;
+            if (previousPossibleEffects || action.ExecutedAt is not null)
+            {
+                try { alreadyVerified = await calendar.VerifyAsync(action.ActionType, action.CalendarId, action.EventId, payload, cancellationToken); }
+                catch (Exception e) when (e is CalendarException or HttpRequestException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    db.AddCalendarActionAudit(new(action.Id, context.ConversationId, action.ActionType, action.EventId,
+                        context.UserMessageId, false, "Verificação indisponível; nenhuma nova mutação enviada.", action.CalendarId));
+                    await db.SaveChangesAsync(cancellationToken);
+                    return Unknown(action, e as CalendarException);
+                }
+                if (!alreadyVerified && (action.ExecutedAt is not null || immediateCreation && payload.CreationRequest!.UserMessageId == context.UserMessageId))
+                    return Unknown(action);
+            }
             try
             {
-                await calendar.ExecuteAsync(action.ActionType, action.CalendarId, action.EventId, payload, cancellationToken);
+                if (!alreadyVerified) await calendar.ExecuteAsync(action.ActionType, action.CalendarId, action.EventId, payload, cancellationToken);
                 requestMayHaveBeenSent = true;
             }
             catch (CalendarMutationCancelledException e) when (cancellationToken.IsCancellationRequested)
@@ -354,14 +515,14 @@ public sealed class CalendarConfirmPendingActionTool(IAegisDbContext db, ICalend
                 return Error(failure.Code, failure.Message + " A ação continua aberta; efeitos anteriores não foram revertidos.");
             }
             bool verified;
-            try { verified = await calendar.VerifyAsync(action.ActionType, action.CalendarId, action.EventId, payload, cancellationToken); }
+            try { verified = alreadyVerified || await calendar.VerifyAsync(action.ActionType, action.CalendarId, action.EventId, payload, cancellationToken); }
             catch (CalendarException) { verified = false; }
             catch (HttpRequestException) { verified = false; }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { verified = false; }
             if (verified)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                action.Confirm(confirmedAt);
+                if (!immediateCreation) action.Confirm(confirmedAt);
                 action.MarkExecuted();
                 db.AddCalendarActionAudit(new(action.Id, context.ConversationId, action.ActionType, action.EventId,
                     context.UserMessageId, true, failure is null ? null : "Estado confirmado após falha da requisição.", action.CalendarId));
@@ -373,16 +534,19 @@ public sealed class CalendarConfirmPendingActionTool(IAegisDbContext db, ICalend
                     try
                     {
                         observedEvent = await calendar.GetEventAsync(action.CalendarId, action.EventId, cancellationToken);
-                        await toolContext.RememberAsync(context.ConversationId, [observedEvent], Name, cancellationToken);
+                        await toolContext.RememberAsync(context.ConversationId, [observedEvent], sourceTool, cancellationToken);
                     }
                     catch (Exception e) when (e is not OperationCanceledException) { logger.LogWarning(e, "Could not remember verified Calendar event {EventId}", action.EventId); }
                 }
-                return Ok(new { pendingActionId = action.Id, calendarId = observedEvent?.CalendarId ?? action.CalendarId, action.EventId, action.HumanSummary, verified = true, recoveredAfterFailure = failure is not null });
+                return Ok(new { pendingActionId = action.Id, calendarId = observedEvent?.CalendarId ?? action.CalendarId, action.EventId, action.HumanSummary,
+                    status = "completed", verified = true, recoveredAfterFailure = failure is not null || previousPossibleEffects,
+                    payload.ReminderMode, reminders = payload.Fields["reminders"], holidayWarnings = payload.HolidayWarnings ?? [], payload.HolidayWarningsHasMore,
+                    userMessage = immediateCreation ? "Evento criado e verificado no Google. Informe o resultado, sem pedir autorização novamente." : "Ação concluída e verificada no Google." });
             }
             db.AddCalendarActionAudit(new(action.Id, context.ConversationId, action.ActionType, action.EventId,
                 context.UserMessageId, false, failure?.Code ?? "Estado final não confirmado.", action.CalendarId));
             await db.SaveChangesAsync(cancellationToken);
-            return Error("calendar_action_outcome_unknown", "A requisição pode ter alterado a agenda, mas não confirmei o estado final. A ação continua aberta; confirmar novamente é seguro. Não afirme que nada mudou.");
+            return Unknown(action);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -410,6 +574,18 @@ public sealed class CalendarConfirmPendingActionTool(IAegisDbContext db, ICalend
             catch (Exception auditError) { logger.LogError(auditError, "Could not audit Calendar failure {ActionId}", action.Id); }
             return Error("calendar_action_outcome_unknown", "A agenda pode ter sido alterada, mas não consegui concluir o registro da ação. Consulte o evento antes de preparar outra ação; não afirme que nada mudou.");
         }
+    }
+
+    private static AegisToolResult Unknown(PendingCalendarAction action, CalendarException? cause = null)
+    {
+        // Preserve OAuth failures so the model can offer the existing authorization flow,
+        // while retaining the uncertain external outcome instead of claiming no change.
+        var code = cause?.Code is "calendar_not_connected" or "calendar_scope_missing" or "calendar_list_scope_missing" or "calendar_authentication_failed"
+            ? cause.Code : "calendar_action_outcome_unknown";
+        return new(false, JsonSerializer.Serialize(new { error = code, status = "unknown", verified = false,
+            pendingActionId = action.Id, action.CalendarId, action.EventId, action.HumanSummary,
+            message = "A agenda pode ter sido alterada, mas o resultado não foi confirmado. Verifique o evento antes de repetir a mesma criação; não afirme sucesso nem ausência de alterações.",
+            authorizationMessage = code == "calendar_action_outcome_unknown" ? null : cause?.Message }, JsonOptions), code);
     }
 }
 

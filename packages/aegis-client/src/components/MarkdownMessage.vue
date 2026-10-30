@@ -174,12 +174,10 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
     const animation = wrapper.animate(
       [
         {
-          opacity: 0,
-          transform: 'translateY(0.65px)'
+          opacity: 0
         },
         {
-          opacity: 1,
-          transform: 'translateY(0)'
+          opacity: 1
         }
       ],
       {

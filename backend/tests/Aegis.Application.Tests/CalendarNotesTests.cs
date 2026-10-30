@@ -16,7 +16,7 @@ public sealed partial class CalendarTests
         using var f = new Fixture();
         var args = new Dictionary<string, object?> { ["summary"] = "Dentista", ["start"] = Start, ["end"] = End, ["allDay"] = false };
         if (empty) args["description"] = "";
-        Assert.True((await f.Create.ExecuteAsync(Args(args), await f.Context("Marca dentista; já conversamos sobre exames, mas não pedi anotação."))).Success);
+        Assert.True((await f.LegacyCreate.ExecuteAsync(Args(args), await f.Context("Marca dentista; já conversamos sobre exames, mas não pedi anotação."))).Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
         var fields = Payload(action).Fields;
         Assert.True(string.IsNullOrEmpty(fields["description"]?.GetValue<string>()));
@@ -31,7 +31,7 @@ public sealed partial class CalendarTests
     {
         using var f = new Fixture();
         const string note = "Preciso levar os exames.";
-        var result = await f.Create.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false,
+        var result = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false,
             description = note }), await f.Context());
         Assert.True(result.Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
@@ -156,7 +156,7 @@ public sealed partial class CalendarTests
             : operation == "update" ? Args(new { eventId = "event1", description = (string?)null }) : Args(new { description = (string?)null });
         var result = operation switch
         {
-            "create" => await f.Create.ExecuteAsync(args, await f.Context()),
+            "create" => await f.LegacyCreate.ExecuteAsync(args, await f.Context()),
             "update" => await f.Update.ExecuteAsync(args, await f.Context()),
             _ => await new CalendarAmendPendingActionTool(f.Db, f.Calendar, f.ToolContext).ExecuteAsync(args, await f.Context())
         };
@@ -186,7 +186,7 @@ public sealed partial class CalendarTests
     public async Task PendingNoteCanBeReplacedOrClearedWithoutExternalEffects(bool clear)
     {
         using var f = new Fixture();
-        Assert.True((await f.Create.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false,
+        Assert.True((await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Dentista", start = Start, end = End, allDay = false,
             description = "Levar exames." }), await f.Context())).Success);
         var previous = Assert.Single(f.Db.PendingCalendarActions);
         var amend = new CalendarAmendPendingActionTool(f.Db, f.Calendar, f.ToolContext);

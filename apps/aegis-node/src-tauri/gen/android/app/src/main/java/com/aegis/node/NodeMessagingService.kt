@@ -12,7 +12,7 @@ class NodeMessagingService:FirebaseMessagingService() {
    val data=message.data
    val bound=NodeNativeNotifications.prefs(this).getString("nodeId",null)
    if(bound==null || data["nodeId"]!=bound) return
-   if(data["type"] in setOf("reminder.notify","reminder.withdraw","domain.sync")) {
+   if(data["type"] in setOf("reminder.notify","reminder.withdraw","conversation.notify","domain.sync")) {
     val base=setOf("nodeId","type","version","commandId","expiresAt")
     val input=if(data["type"]=="domain.sync") {
      require(data.keys==base+setOf("capability","input")); org.json.JSONObject(data.getValue("input"))

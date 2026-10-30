@@ -40,7 +40,10 @@ public sealed record CalendarEventChanges(string? Summary = null, string? Start 
 // Normalized changes and contextual warnings are stored; no model input is needed at confirmation.
 public sealed record CalendarActionPayload(string AccountEmail, string? ExpectedETag, JsonObject Fields, string HumanSummary,
     IReadOnlyList<CalendarHolidayWarning>? HolidayWarnings = null, bool HolidayWarningsHasMore = false, string? ReminderMode = null,
-    CalendarRecurrenceData? Recurrence = null);
+    CalendarRecurrenceData? Recurrence = null, CalendarCreationRequest? CreationRequest = null);
+
+// Durable request identity lives in the existing payload JSON; legacy proposals have no request.
+public sealed record CalendarCreationRequest(Guid UserMessageId, string Fingerprint, string UserRequestHash, string? TargetFingerprint = null, string? InputFingerprint = null, string? BatchFingerprint = null);
 
 public class CalendarException(string code, string message) : Exception(message)
 {

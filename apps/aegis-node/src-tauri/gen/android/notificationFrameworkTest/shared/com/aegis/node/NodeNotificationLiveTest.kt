@@ -48,11 +48,56 @@ class NodeNotificationLiveTest {
       if (raw != "null") {
         val result = JSONObject(raw)
         check(result.getBoolean("ok")) { "native_invocation_failed" }
-        return when(val value=result.get("value")){is JSONObject->value;is org.json.JSONArray->JSONObject().put("items",value);else->JSONObject()}
+        return when(val value=result.get("value")){is JSONObject->value;is org.json.JSONArray->JSONObject().put("items",value);is Boolean->JSONObject().put("value",value);else->JSONObject()}
       }
       SystemClock.sleep(100)
     }
     error("native_invocation_timeout")
+  }
+  /** Actual Activity, WebView focus, native dialog and lifecycle; runs on debug and R8 APKs. */
+  private fun exerciseReadVisibility(webview:WebView,scenario:ActivityScenario<out android.app.Activity>) {
+    fun awaitVisibility(expected:Boolean) {
+      val deadline=SystemClock.elapsedRealtime()+10000
+      var actual=!expected
+      while(actual!=expected && SystemClock.elapsedRealtime()<deadline) {
+        actual=invoke(webview,"node_read_visibility").getBoolean("value")
+        if(actual!=expected)SystemClock.sleep(50)
+      }
+      assertEquals("Read visibility follows the Activity window, not WebView input focus",expected,actual)
+    }
+    awaitVisibility(true)
+    invoke(webview,"node_hide_keyboard")
+    var focusTarget:View?=null
+    try {
+      scenario.onActivity { activity ->
+        // Keep native focus outside the WebView deterministically; a bare
+        // clearFocus may let Android immediately choose its default view again.
+        val target=View(activity).apply{isFocusableInTouchMode=true}
+        activity.findViewById<ViewGroup>(android.R.id.content).addView(target,ViewGroup.LayoutParams(1,1))
+        focusTarget=target
+        assertTrue(target.requestFocus())
+        webview.clearFocus()
+        assertFalse("The native input view is deliberately unfocused",webview.hasFocus())
+      }
+      awaitVisibility(true)
+    } finally {
+      scenario.onActivity { focusTarget?.let{(it.parent as? ViewGroup)?.removeView(it)} }
+    }
+    var covering:android.app.Dialog?=null
+    try {
+      scenario.onActivity { activity -> covering=android.app.Dialog(activity).apply{setContentView(android.widget.TextView(activity).apply{text="Read visibility fixture"});show()} }
+      awaitVisibility(false)
+    } finally {
+      scenario.onActivity { covering?.dismiss() }
+    }
+    awaitVisibility(true)
+    scenario.moveToState(Lifecycle.State.CREATED)
+    var background="true"
+    scenario.onActivity { activity -> background=activity.javaClass.getMethod("readVisibility",String::class.java).invoke(activity,"{}") as String }
+    assertEquals("A stopped Activity never acknowledges reading","false",background)
+    scenario.moveToState(Lifecycle.State.RESUMED)
+    awaitVisibility(true)
+    checkpoint("read_visibility_native_focus_dialog_background_resume")
   }
   /** Actual target WebView, Android touch input, IME and native back dispatcher. */
   private fun exerciseReminderEditing(webview:WebView,scenario:ActivityScenario<out android.app.Activity>,ruleId:String) {
@@ -164,7 +209,7 @@ class NodeNotificationLiveTest {
       var candidate: WebView? = null
       scenario.onActivity { activity ->
         // Verify exact fixed method descriptors in the actual installed/minified activity.
-        for (method in listOf("showNodeNotification", "showNodeNotificationLive", "nodePushState", "bindNodePush","settingsOpen","nodeActionState","consumeReminderOpen")) {
+        for (method in listOf("showNodeNotification", "showNodeNotificationLive", "nodePushState", "bindNodePush","settingsOpen","hideKeyboard","readVisibility","nodeActionState","consumeReminderOpen")) {
           assertEquals(String::class.java, activity.javaClass.getMethod(method, String::class.java).returnType)
         }
         assertEquals(Build.VERSION.SDK_INT < 33, frameworkNotificationPermission(activity))
@@ -183,6 +228,7 @@ class NodeNotificationLiveTest {
       val runtime=invoke(webview,"runtime_info")
       assertEquals("http://127.0.0.1:18104",runtime.getString("backendUrl"))
       checkpoint("live_runtime_ready")
+      exerciseReadVisibility(webview,scenario)
       val permissions=invoke(webview,"node_location",JSONObject().put("operation","permissions"))
       assertTrue(permissions.getBoolean("supported"))
       assertFalse(permissions.getBoolean("foreground"))

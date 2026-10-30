@@ -8,7 +8,7 @@ public sealed class ChatMessage : AuditableEntity
     {
     }
 
-    public ChatMessage(Guid conversationId, string role, string content)
+    public ChatMessage(Guid conversationId, string role, string content, DateTimeOffset? now = null)
     {
         if (!ChatRoles.IsKnown(role))
         {
@@ -20,7 +20,7 @@ public sealed class ChatMessage : AuditableEntity
             throw new ArgumentException("Message content cannot be empty.", nameof(content));
         }
 
-        InitializeAudit();
+        InitializeAudit(now);
         ConversationId = conversationId;
         Role = role;
         Content = content.Trim();
@@ -31,6 +31,10 @@ public sealed class ChatMessage : AuditableEntity
     public string Role { get; private set; } = string.Empty;
 
     public string Content { get; private set; } = string.Empty;
+
+    public bool IsProactive { get; private set; }
+    public long? ProactiveSequence { get; private set; }
+    public void MarkProactive(long sequence) { if (Role != "assistant" || sequence <= 0) throw new InvalidOperationException(); IsProactive = true; ProactiveSequence = sequence; }
 
     public string? Model { get; private set; }
 

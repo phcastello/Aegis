@@ -48,6 +48,8 @@ node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/maintenan
 node apps/aegis-node/tests/places-browser.mjs
 node apps/aegis-node/tests/reminders-browser.mjs
 node packages/aegis-client/tests/transcription-browser.mjs
+node packages/aegis-client/tests/ux-stream-browser.mjs
+node packages/aegis-client/tests/markdown-stream-browser.mjs
 node frontend/aegis-pwa/tests/worker-upgrade.mjs
 ```
 
@@ -56,3 +58,13 @@ WebView2, Android físico, captura real, notificações do SO ou consumo do bin�
 Os scripts Windows/Android em `packages/aegis-client/tests/` e os workflows nativos
 exigem a plataforma correspondente. Aceite físico do microfone do proprietário
 permanece pendente até um teste no computador afetado.
+
+Os testes `ux-stream-browser.mjs`, `transcription-browser.mjs` e
+`markdown-stream-browser.mjs` iniciam seus próprios servidores Vite e fixtures
+isoladas. O primeiro controla chunks HTTP e respostas de histórico atrasadas para
+verificar navegação, turnos, rascunhos e intenção de rolagem. O segundo usa áudio
+sintético em MediaRecorder/WebAudio reais para revisar, enviar e cancelar STT;
+não usa um provedor externo. O terceiro mantém as scrollbars do Chromium visíveis
+e mede o layout durante o fade de Markdown para detectar overflow transitório.
+Também podem ser executados por `test:ux-stream`, `test:transcription-browser` e
+`test:markdown-stream` no pacote compartilhado.

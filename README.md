@@ -6,7 +6,7 @@ Aegis é uma assistente pessoal desenvolvida para uso próprio, com foco em priv
 
 O backend e os dados são administrados pelo proprietário. Os modelos de linguagem são acessados por API; a Aegis não é uma IA inteiramente local nem um serviço público de cadastro.
 
-**Versão atual: v0.7.1.** [Notas do lançamento](https://github.com/phcastello/Aegis/releases/tag/v0.7.1)
+**Versão atual: v0.7.2.** [Notas do lançamento](https://github.com/phcastello/Aegis/releases/tag/v0.7.2)
 
 ## O que ela faz
 
@@ -14,6 +14,7 @@ O backend e os dados são administrados pelo proprietário. Os modelos de lingua
 - **Memória e integrações:** recuperação de informações pessoais e operações conversacionais com Gmail e Google Calendar.
 - **Lembretes:** avisos únicos ou recorrentes, reconhecimento e adiamento, com entrega aos dispositivos elegíveis.
 - **Lugares:** lembretes de chegada e saída no Android, considerando os locais cadastrados e o celular escolhido como fonte de localização.
+- **Proatividade:** acompanhamento de falhas que exigem atenção, com comunicação relevante e correlação de incidentes para reduzir avisos redundantes.
 
 Cada instalação nativa pareada é um **Node**: um dispositivo com identidade, permissões, capacidades e disponibilidade próprias.
 
@@ -31,10 +32,10 @@ Não há distribuição nativa para Linux, macOS ou iOS nesta versão.
 
 | Plataforma | Instalador oficial |
 | --- | --- |
-| Android | [Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.1/Aegis-Android-arm64.apk) |
-| Windows | [Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.1/Aegis-Windows-x86_64-Setup.exe) |
+| Android | [Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.2/Aegis-Android-arm64.apk) |
+| Windows | [Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.2/Aegis-Windows-x86_64-Setup.exe) |
 
-As assinaturas e os hashes estão na [distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.1). Os instaladores são configurados para o backend pessoal do projeto; baixá-los não cria uma instância independente.
+As assinaturas e os hashes estão na [distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.2). Os instaladores são configurados para o backend pessoal do projeto; baixá-los não cria uma instância independente.
 
 **Atualize por Configurações → Atualizações ou instale sobre a versão existente. Não desinstale para atualizar.** O Android solicita confirmação para instalar o APK. No Windows, o SmartScreen pode indicar editor desconhecido: a assinatura do updater é independente de um certificado comercial de editor.
 
@@ -66,7 +67,7 @@ O uso de APIs de modelos, transcrição, Google, mapas e notificações envolve 
 
 A localização usa eventos geográficos e aquisições temporárias, não GPS permanentemente ativo. Permissões, precisão e restrições do Android podem afetar a detecção. Com o backend inacessível, regras previamente sincronizadas podem notificar localmente; os requisitos de localização do Android continuam valendo. Ações pendentes são reconciliadas ao recuperar conexão.
 
-Permanecem em investigação a captura de microfone em um computador Windows e a classificação de intenções temporárias na memória. Consulte as [limitações documentadas](docs/v0.7.1-release-notes.md#known-limitations).
+O comportamento de memória registrado na [issue #23](https://github.com/phcastello/Aegis/issues/23) permanece adiado. As verificações de voz e execução em segundo plano têm os limites descritos nas [notas da v0.7.2](docs/v0.7.2-release-notes.md#limitações-conhecidas).
 
 ## Desenvolvimento e documentação
 
@@ -75,6 +76,7 @@ O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.
 - [Cliente nativo: comandos de desenvolvimento e build](apps/aegis-node/README.md)
 - [Funcionalidades introduzidas na v0.7.0](docs/v0.7.0-release-notes.md)
 - [Correção da v0.7.1](docs/v0.7.1-release-notes.md)
+- [Novidades e atualização da v0.7.2](docs/v0.7.2-release-notes.md)
 - [Histórico técnico da implementação](docs/v0.7.0-completion.md)
 
-Esta branch contém manutenção ainda não distribuída; os downloads acima continuam sendo os instaladores originais da v0.7.1. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).
+O [registro técnico da v0.7.2](docs/v0.7.2-implementation.md) preserva as etapas de desenvolvimento e suas evidências. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).

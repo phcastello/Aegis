@@ -27,7 +27,7 @@ public sealed partial class CalendarTests
         // Real calendar defaults must not replace the Aegis create policy.
         f.Google.Calendars["primary"]["defaultReminders"] = JsonNode.Parse("""[{"method":"email","minutes":30}]""");
         var context = await f.Context();
-        var prepared = await f.Create.ExecuteAsync(Args(new { summary = "Teste", start = allDay ? "2026-10-10" : Start,
+        var prepared = await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Teste", start = allDay ? "2026-10-10" : Start,
             end = allDay ? "2026-10-10" : End, allDay }), context);
         Assert.True(prepared.Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
@@ -68,7 +68,7 @@ public sealed partial class CalendarTests
         var args = new Dictionary<string, object?> { ["summary"] = "Dentista", ["start"] = Start, ["end"] = End,
             ["allDay"] = false, ["reminderMode"] = mode };
         if (mode == "custom") args["reminders"] = new[] { new CalendarReminderData("popup", 60) };
-        Assert.True((await f.Create.ExecuteAsync(Args(args), await f.Context())).Success);
+        Assert.True((await f.LegacyCreate.ExecuteAsync(Args(args), await f.Context())).Success);
         var action = Assert.Single(f.Db.PendingCalendarActions);
         var payload = Payload(action);
         Assert.Equal(mode, payload.ReminderMode);
@@ -214,7 +214,7 @@ public sealed partial class CalendarTests
         using var f = new Fixture();
         var args = JsonSerializer.SerializeToElement(new { summary = "Teste", start = Start, end = End, allDay = false, reminderMode = mode,
             reminders = JsonSerializer.Deserialize<JsonElement>(reminders) });
-        var result = await f.Create.ExecuteAsync(args, await f.Context());
+        var result = await f.LegacyCreate.ExecuteAsync(args, await f.Context());
         Assert.False(result.Success);
         Assert.Contains("invalid_calendar_tool_arguments", result.Content);
         Assert.Empty(f.Db.PendingCalendarActions);
@@ -284,7 +284,7 @@ public sealed partial class CalendarTests
     public async Task NoneVerificationAcceptsGoogleOmittingEmptyOverridesAndRetryDoesNotDuplicate()
     {
         using var f = new Fixture();
-        Assert.True((await f.Create.ExecuteAsync(Args(new { summary = "Teste", start = Start, end = End, allDay = false, reminderMode = "none" }), await f.Context())).Success);
+        Assert.True((await f.LegacyCreate.ExecuteAsync(Args(new { summary = "Teste", start = Start, end = End, allDay = false, reminderMode = "none" }), await f.Context())).Success);
         f.Google.AdjustRemindersAfterMutation = item => item["reminders"]!.AsObject().Remove("overrides");
         f.Google.ThrowAfterMutation = true;
         var action = Assert.Single(f.Db.PendingCalendarActions);

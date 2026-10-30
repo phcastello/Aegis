@@ -98,6 +98,32 @@ public sealed class NodeFcmEncodingTests
     }
 
     [Fact]
+    public async Task ProactiveFcmRetryPreservesTheSameCommandAndMessageIdsAsTheLiveCommand()
+    {
+        await using var f = new Fixture(); await f.Initialize();
+        var command = new NodeNotificationCommand(Guid.NewGuid(), NotificationContract.ConversationCapability, 1, DateTimeOffset.UtcNow.AddMinutes(1),
+            new("Aegis", "Nova mensagem da Aegis", ConversationId: Guid.NewGuid(), MessageId: Guid.NewGuid()));
+        f.Handler.Status = HttpStatusCode.ServiceUnavailable;
+        Assert.Equal("failed", await f.Transport.SendAsync(f.NodeId, command, default));
+        f.Handler.Status = HttpStatusCode.OK;
+        Assert.Equal("accepted", await f.Transport.SendAsync(f.NodeId, command, default));
+        var live = JsonSerializer.SerializeToElement(command, Json);
+        Assert.Equal(2, f.Handler.Bodies.Count);
+        foreach (var body in f.Handler.Bodies) {
+            using var json = JsonDocument.Parse(body);
+            var message = json.RootElement.GetProperty("message");
+            var data = message.GetProperty("data");
+            Assert.Equal("HIGH", message.GetProperty("android").GetProperty("priority").GetString());
+            Assert.Equal(live.GetProperty("commandId").GetString(), data.GetProperty("commandId").GetString());
+            Assert.Equal(NotificationContract.ConversationCapability, data.GetProperty("type").GetString());
+            using var input = JsonDocument.Parse(data.GetProperty("input").GetString()!);
+            Assert.Equal(live.GetProperty("input").GetProperty("messageId").GetString(), input.RootElement.GetProperty("messageId").GetString());
+            Assert.Equal(live.GetProperty("input").GetProperty("conversationId").GetString(), input.RootElement.GetProperty("conversationId").GetString());
+            Assert.Equal(4, input.RootElement.EnumerateObject().Count());
+        }
+    }
+
+    [Fact]
     public async Task WithdrawalProvider503IsNotReportedAsAccepted()
     {
         await using var f = new Fixture(); await f.Initialize(); f.Handler.Status = HttpStatusCode.ServiceUnavailable;

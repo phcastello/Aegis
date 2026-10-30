@@ -21,7 +21,10 @@ public sealed record GeographicRuleView(Guid Id, string Text, IReadOnlyList<Guid
 public sealed record GeographicSyncItem(Guid Id, int Revision, string Status, string? ErrorCode = null);
 public sealed record GeographicSyncWrite(string ManifestRevision, IReadOnlyList<GeographicSyncItem> Rules, bool? InstallationComplete = null);
 public sealed record GeographicEventWrite(Guid EventId, Guid OccurrenceId, Guid RuleId, int RuleRevision, string Transition, DateTimeOffset OccurredAt, long Sequence, DateTimeOffset? PostedAt = null);
-public sealed record PlaceResolution(string Status, IReadOnlyList<PlaceView> Candidates, Guid? PlaceId, string Reason, double? LocationAgeSeconds);
+public sealed record PlaceResolution(string Status, IReadOnlyList<PlaceView> Candidates, Guid? PlaceId, string Reason, double? LocationAgeSeconds,
+    string? ObservationReason = null, string? RefreshStatus = null);
+public sealed record LocationRefreshView(string Status, LocationObservationView? Latest, string? Reason = null);
+public sealed record PlaceContextResolution(Guid? PlaceId, string Reason);
 public sealed record MapSearchResult(string Name, double Latitude, double Longitude);
 public sealed record MapSearchView(bool Configured, IReadOnlyList<MapSearchResult> Results);
 
@@ -49,11 +52,18 @@ public interface IPlaceService
 public sealed class LocationContextOptions
 {
     public int MaximumAgeSeconds { get; set; } = 900;
+    // MaximumAgeSeconds separates recent from historical context, not a blanket expiry.
+    public int MaximumHistoricalAgeSeconds { get; set; } = 21600;
+    public double ConservativeTravelSpeedKmh { get; set; } = 1200;
+    public double TravelUncertaintyMeters { get; set; } = 5000;
     public double MaximumCityAccuracyMeters { get; set; } = 2000;
     public double LocalResidenceMeters { get; set; } = 50000;
     public double CandidateMarginMeters { get; set; } = 100000;
     public double CandidateDistanceRatio { get; set; } = 3;
     public int RefreshTimeoutSeconds { get; set; } = 15;
-    public bool IsValid() => MaximumAgeSeconds is >= 30 and <= 3600 && MaximumCityAccuracyMeters is >= 100 and <= 10000 &&
-        LocalResidenceMeters is >= 1000 and <= 100000 && CandidateMarginMeters >= LocalResidenceMeters && CandidateDistanceRatio >= 2 && RefreshTimeoutSeconds is >= 1 and <= 30;
+    public bool IsValid() => MaximumAgeSeconds is >= 30 and <= 3600 && MaximumHistoricalAgeSeconds >= MaximumAgeSeconds && MaximumHistoricalAgeSeconds <= 86400 &&
+        ConservativeTravelSpeedKmh is >= 1000 and <= 2000 && TravelUncertaintyMeters is >= 1000 and <= 50000 &&
+        MaximumCityAccuracyMeters is >= 100 and <= 10000 && LocalResidenceMeters is >= 1000 and <= 100000 &&
+        double.IsFinite(CandidateMarginMeters) && CandidateMarginMeters >= LocalResidenceMeters &&
+        double.IsFinite(CandidateDistanceRatio) && CandidateDistanceRatio >= 2 && RefreshTimeoutSeconds is >= 1 and <= 30;
 }

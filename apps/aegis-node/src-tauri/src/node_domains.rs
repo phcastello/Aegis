@@ -209,10 +209,39 @@ pub async fn node_consume_reminder_open(app: AppHandle) -> Result<Value, String>
             .map_err(|_| "Não foi possível abrir o lembrete.".into());
     }
     #[cfg(windows)]
-    return Ok(json!({"reminderId":crate::windows_notifications::consume_open()}));
+    return Ok(
+        json!({"reminderId":crate::windows_notifications::consume_open(),"conversationId":crate::windows_notifications::consume_conversation_open()}),
+    );
     #[cfg(not(any(windows, target_os = "android")))]
     {
         let _ = app;
         Ok(json!({"reminderId":null}))
     }
+}
+
+#[tauri::command]
+pub async fn node_read_visibility(app: AppHandle) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let value = crate::native_notifications::android_call(&app, "readVisibility", "{}".into())
+            .await
+            .map_err(|_| "Não foi possível confirmar a visibilidade.".to_string())?;
+        return serde_json::from_str(&value)
+            .map_err(|_| "Não foi possível confirmar a visibilidade.".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Consulta disponível somente no Android.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn node_hide_keyboard(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    crate::native_notifications::android_call(&app, "hideKeyboard", "{}".into())
+        .await
+        .map_err(|_| "Não foi possível fechar o teclado.".to_string())?;
+    let _ = app;
+    Ok(())
 }

@@ -58,6 +58,13 @@ test('health errors and malformed responses are unavailable', async () => {
   }
 });
 
+test('health request errors do not imply server unavailability', async () => {
+  for (const status of [400, 401, 403, 404, 429]) {
+    globalThis.fetch = async () => new Response('{}', { status });
+    assert.equal(await api.getHealth(), null);
+  }
+});
+
 test('PCM TTS keeps streamed chunks and validates exposed format headers', async () => {
   const headers = { 'X-Aegis-Audio-Format': 'pcm_s16le', 'X-Aegis-Sample-Rate': '24000', 'X-Aegis-Channels': '1' };
   globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3, 4]), { headers });

@@ -346,6 +346,12 @@ public static class DependencyInjection
         services.AddScoped<IReminderStore>(p => p.GetRequiredService<ReminderStore>());
         services.AddScoped<ReminderProcessor>();
         services.AddScoped<ILegacyReminderInteractionTokens, LegacyReminderInteractionTokens>();
+        services.AddScoped<Aegis.Application.Chat.IConversationProactivity, Aegis.Infrastructure.Proactivity.ConversationProactivity>();
+        services.AddScoped<Aegis.Infrastructure.Proactivity.ProactiveNotificationProcessor>();
+        services.AddHostedService<Aegis.Infrastructure.Proactivity.ProactiveNotificationWorker>();
+        services.AddScoped<Aegis.Infrastructure.Proactivity.ReminderInterventionStore>();
+        services.AddScoped<Aegis.Infrastructure.Proactivity.IProactiveMessageGenerator, Aegis.Infrastructure.Proactivity.ProactiveMessageGenerator>();
+        services.AddHostedService<Aegis.Infrastructure.Proactivity.ReminderInterventionWorker>();
         services.AddHostedService<ReminderWorker>();
 
         return services;

@@ -19,6 +19,66 @@ mod updates;
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_notifications;
 
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_updates;
+
+#[cfg(feature = "native-runtime")]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsDownloadProgress {
+    received: u64,
+    total: Option<u64>,
+}
+
+#[cfg(feature = "native-runtime")]
+#[tauri::command]
+async fn prepare_windows_update(
+    webview: tauri::Webview,
+    update_rid: u32,
+    on_progress: tauri::ipc::Channel<WindowsDownloadProgress>,
+) -> Result<u32, String> {
+    #[cfg(windows)]
+    {
+        windows_updates::prepare(webview, update_rid, on_progress).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (webview, update_rid, on_progress);
+        Err("update_installer_failed".into())
+    }
+}
+
+#[cfg(feature = "native-runtime")]
+#[tauri::command]
+fn install_windows_update(
+    webview: tauri::Webview,
+    update_rid: u32,
+    bytes_rid: u32,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_updates::install(webview, update_rid, bytes_rid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (webview, update_rid, bytes_rid);
+        Err("update_installer_failed".into())
+    }
+}
+
+fn process_session_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+#[cfg(test)]
+mod process_tests {
+    #[test]
+    fn activity_recreation_keeps_process_identity() {
+        assert_eq!(super::process_session_id(), super::process_session_id());
+        assert!(uuid::Uuid::parse_str(super::process_session_id()).is_ok());
+    }
+}
+
 #[cfg(feature = "native-runtime")]
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,14 +86,22 @@ struct RuntimeInfo {
     platform: platform::Platform,
     backend_url: Option<String>,
     version: String,
+    version_code: u32,
+    source_commit: Option<String>,
+    source_version: Option<String>,
+    process_session_id: String,
 }
 
 #[cfg(feature = "native-runtime")]
 #[tauri::command]
 fn runtime_info() -> RuntimeInfo {
     RuntimeInfo {
+        process_session_id: process_session_id().to_owned(),
         platform: platform::current(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        version_code: updates::installation_code(),
+        source_commit: option_env!("AEGIS_SOURCE_COMMIT").map(str::to_owned),
+        source_version: option_env!("AEGIS_SOURCE_VERSION").map(str::to_owned),
         backend_url: config::configured_endpoint()
             .ok()
             .map(|endpoint| endpoint.base_url()),
@@ -113,7 +181,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_updater::Builder::new()
                 .default_version_comparator(|current, release| {
-                    updates::stable_update_eligible(&current, &release.version)
+                    updates::recommended_update_eligible(&current, &release.version)
                 })
                 .build(),
         )
@@ -226,6 +294,8 @@ pub fn run() {
             runtime_info,
             check_backend,
             check_android_update,
+            prepare_windows_update,
+            install_windows_update,
             node_commands::node_status,
             node_commands::node_transport_status,
             node_commands::node_transport_reconnect,
@@ -249,6 +319,8 @@ pub fn run() {
             node_domains::node_location,
             node_domains::node_geofences,
             node_domains::node_settings_open,
+            node_domains::node_hide_keyboard,
+            node_domains::node_read_visibility,
             node_domains::node_consume_reminder_open,
             install_android_update
         ])

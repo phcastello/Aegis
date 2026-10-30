@@ -22,6 +22,8 @@
 # Fixed native JNI entrypoints; no broad keep for tests or generic reflection.
 -keepclassmembers class com.aegis.node.MainActivity {
   public java.lang.String settingsOpen(java.lang.String);
+  public java.lang.String hideKeyboard(java.lang.String);
+  public java.lang.String readVisibility(java.lang.String);
   public java.lang.String nodeActionState(java.lang.String);
   public java.lang.String consumeReminderOpen(java.lang.String);
 }

@@ -1,78 +1,44 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-
-const props = defineProps<{ conversationId: string }>();
-const root = ref<HTMLElement | null>(null);
-const trigger = ref<HTMLButtonElement | null>(null);
-const copyButton = ref<HTMLButtonElement | null>(null);
-const open = ref(false);
-const copyFeedback = ref('');
-
-function close(restoreFocus = false): void {
-  open.value = false;
-  copyFeedback.value = '';
-  if (restoreFocus) trigger.value?.focus({ preventScroll: true });
-}
-
-function toggle(): void {
-  if (open.value) { close(); return; }
-  open.value = true;
-  void nextTick(() => copyButton.value?.focus({ preventScroll: true }));
-}
-
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { navigationLayer } from '../services/navigation';
+const props = defineProps<{ conversationId: string; createdAt?: string | null }>();
+const emit = defineEmits<{ close: [] }>();
+const dialog = ref<HTMLDialogElement | null>(null);
+const feedback = ref('');
+const copyFailed = ref(false);
+const isCopying = ref(false);
+let release: (() => void) | undefined;
+let previousFocus: HTMLElement | null = null;
 async function copyId(): Promise<void> {
-  const id = props.conversationId;
+  if (isCopying.value) return;
+  isCopying.value = true;
+  feedback.value = '';
+  copyFailed.value = false;
   try {
-    await navigator.clipboard.writeText(id);
-    if (open.value && id === props.conversationId) copyFeedback.value = 'Copiado';
+    await navigator.clipboard.writeText(props.conversationId);
+    feedback.value = 'Copiado';
   } catch {
-    if (open.value && id === props.conversationId) copyFeedback.value = 'Não foi possível copiar';
+    copyFailed.value = true;
+    feedback.value = 'Não foi possível copiar. Selecione o ID e copie manualmente.';
+  } finally {
+    isCopying.value = false;
   }
 }
-
-function outside(event: PointerEvent): void {
-  if (open.value && event.target instanceof Node && !root.value?.contains(event.target)) close();
-}
-
-function keydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && open.value) {
-    event.preventDefault();
-    close(true);
-  }
-}
-
-function focusout(event: FocusEvent): void {
-  if (!(event.relatedTarget instanceof Node) || !root.value?.contains(event.relatedTarget)) close();
-}
-
-watch(() => props.conversationId, () => close());
-onMounted(() => {
-  document.addEventListener('pointerdown', outside);
-  document.addEventListener('keydown', keydown);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', outside);
-  document.removeEventListener('keydown', keydown);
-});
+onMounted(() => { previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; dialog.value?.showModal(); release = navigationLayer(() => emit('close')); });
+onBeforeUnmount(() => { release?.(); dialog.value?.close(); previousFocus?.focus({ preventScroll: true }); });
 </script>
-
 <template>
-  <div ref="root" class="conversation-info" @focusout="focusout">
-    <button
-      ref="trigger"
-      type="button"
-      class="conversation-info__trigger"
-      aria-label="Informações da conversa"
-      aria-controls="conversation-info-panel"
-      aria-haspopup="dialog"
-      :aria-expanded="open"
-      @click="toggle"
-    ><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></svg></button>
-    <div v-if="open" id="conversation-info-panel" class="conversation-info__panel" role="dialog" aria-labelledby="conversation-info-label">
-      <span id="conversation-info-label">ID da conversa</span>
-      <code>{{ conversationId }}</code>
-      <button ref="copyButton" type="button" class="conversation-info__copy" @click="copyId">Copiar ID</button>
-      <span class="conversation-info__feedback" role="status">{{ copyFeedback }}</span>
+  <dialog ref="dialog" class="conversation-dialog" aria-labelledby="conversation-info-label" @cancel.prevent="emit('close')">
+    <h2 id="conversation-info-label">Informações da conversa</h2>
+    <p id="conversation-id-label" class="conversation-info__label">ID da conversa</p>
+    <div class="conversation-info__id-box" role="group" aria-labelledby="conversation-id-label">
+      <code class="conversation-real-id" :title="conversationId">{{ conversationId }}</code>
+      <button type="button" class="conversation-info__copy" aria-label="Copiar ID" :disabled="isCopying" @click="copyId">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg>
+      </button>
     </div>
-  </div>
+    <p class="conversation-info__feedback" :class="{ 'conversation-info__feedback--error': copyFailed }" role="status" aria-live="polite" aria-atomic="true">{{ feedback }}</p>
+    <p v-if="createdAt" class="conversation-info__created">Criada em {{ new Date(createdAt).toLocaleString('pt-BR') }}</p>
+    <div class="confirm-dialog__actions"><button type="button" class="ghost-button" @click="emit('close')">Fechar</button></div>
+  </dialog>
 </template>

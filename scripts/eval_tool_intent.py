@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only live tool-selection eval using the production Gmail + Calendar + Reminder + Memory tool catalog."""
+"""Live tool-selection eval with simulated external effects using the production Gmail + Calendar + Reminder + Memory tool catalog."""
 
 import argparse
 import json
@@ -66,9 +66,11 @@ CASES = [
     ("Quando é minha próxima coisa marcada?", "calendar_read", "calendar_list_events"),
     ("Procura a prova de Grafos na minha agenda.", "calendar_read", "calendar_list_events"),
     ("Marca dentista amanhã às 14h por uma hora.", "calendar_create", "calendar_create_event"),
-    ("Coloca academia toda segunda, quarta e sexta às 18h na agenda.", "calendar_recurring_weekdays", "calendar_create_event"),
-    ("Tenho aula toda terça e quinta das 13:20 às 15h.", "calendar_recurring_classes", "calendar_create_event"),
-    ("Marca reunião quinzenal na sexta às 10.", "calendar_recurring_biweekly", "calendar_create_event"),
+    ("Coloca academia toda segunda, quarta e sexta das 18h às 19h na agenda.", "calendar_recurring_weekdays", "calendar_create_event"),
+    ("Coloca academia toda segunda, quarta e sexta às 18h na agenda.", "calendar_clarify", None),
+    ("Coloca minhas aulas de terça e quinta das 13:20 às 15h na agenda.", "calendar_recurring_classes", "calendar_create_event"),
+    ("Tenho aula toda terça e quinta das 13:20 às 15h.", "calendar_casual", None),
+    ("Marca reunião quinzenal na sexta das 10h às 11h.", "calendar_recurring_biweekly", "calendar_create_event"),
     ("Todo ano dia 28 de setembro marca meu aniversário na agenda.", "calendar_recurring_yearly", "calendar_create_event"),
     ("Quarta também.", "calendar_pending_recurrence", "calendar_amend_pending_action"),
     ("Quais agendas eu tenho?", "calendar_calendars", "calendar_list_calendars"),
@@ -145,6 +147,17 @@ CASES.extend([
     ("Muda o evento para 16h.", "calendar_note_move", "calendar_update_event"),
     ("Qual é a anotação dessa reunião?", "calendar_note_read", "calendar_get_event"),
     ("Troca a anotação para 'levar RG e comprovante'.", "calendar_note_pending", "calendar_amend_pending_action"),
+])
+
+CASES.extend([
+    ("Coloca minha prova de Grafos na agenda dia 5 de outubro às 10h, até meio-dia.", "calendar_direct", "calendar_create_event"),
+    ("Cria um evento de dia inteiro Férias dia 12 de outubro.", "calendar_direct", "calendar_create_event"),
+    ("Coloca Grafos segunda dia 28 das 10h às 12h, SD quarta dia 30 das 14h às 16h e Teoria sexta dia 2 das 9h às 11h na agenda.", "calendar_multiple", "calendar_create_event"),
+    ("Coloca Grafos segunda dia 28 das 10h às 12h, SD quarta dia 30 das 14h às 16h e Teoria sexta dia 2 das 9h às 11h na agenda.", "calendar_partial", "calendar_create_event"),
+    ("Coloca minha prova de Grafos dia 5 de outubro das 10h às 12h na agenda.", "calendar_unknown", "calendar_create_event"),
+    ("Coloca minha prova de Grafos dia 5 de outubro das 10h às 12h na agenda.", "calendar_auth_failure", "calendar_create_event"),
+    ("Tenho prova de Grafos dia 5 de outubro das 10h às 12h.", "calendar_casual", None),
+    ("Que dia é hoje?", "calendar_legacy_unrelated", None),
 ])
 
 
@@ -250,8 +263,8 @@ def load_tools(path: Path | None) -> list[dict]:
             cwd=ROOT, text=True,
         ))
     names = [tool["name"] for tool in tools]
-    if len(names) != 32 or names != sorted(names) or len(set(names)) != len(names):
-        raise ValueError(f"Expected 32 sorted production tools, got {names!r}")
+    if not names or names != sorted(names) or len(set(names)) != len(names):
+        raise ValueError(f"Expected unique sorted production tools, got {names!r}")
     return tools
 
 
@@ -358,6 +371,22 @@ def reminder_result(values: dict, creating: bool) -> dict | None:
 
 
 def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state: dict) -> str:
+    if name == "calendar_create_event" and "events" in arguments:
+        items = arguments["events"]
+        if set(arguments) != {"events"} or not isinstance(items, list) or not 1 <= len(items) <= 10:
+            return json.dumps({"error": "invalid_calendar_tool_arguments"})
+        results = []
+        for index, item in enumerate(items, 1):
+            body = json.loads(fake_tool_result(name, message, kind, item, state))
+            results.append({"index": index, "success": body.get("verified") is True,
+                            "errorCode": body.get("error"), "result": body})
+        succeeded = sum(item["success"] for item in results)
+        unknown = sum(item["result"].get("status") == "unknown" for item in results)
+        failed = len(results) - succeeded - unknown
+        status = "completed" if succeeded == len(results) else "partial" if succeeded else "unknown" if unknown else "failed"
+        return json.dumps({"status": status, "verified": succeeded == len(results), "succeeded": succeeded, "failed": failed,
+                           "unknown": unknown, "results": results,
+                           "userMessage": "Informe cada resultado. Só itens verified=true foram criados e verificados. Não repita itens incertos nem afirme que todo o lote foi concluído."})
     if name == "memory_search":
         query = arguments.get("query", "").lower()
         catalog = [
@@ -438,6 +467,10 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
     if name == "email_read" and "apresentação" in message:
         return json.dumps({"email": {"id": "eval-message-1", "subject": "Apresentação",
                                       "bodyText": "A apresentação foi marcada para sexta-feira das 14h às 15h, no campus."}})
+    if name == "calendar_get_status" and kind == "calendar_auth_failure":
+        return json.dumps({"status": {"isConnected": False, "calendarAuthorized": False, "authorizationState": "calendar_not_connected"}})
+    if name == "calendar_create_connect_link":
+        return json.dumps({"authorizationUrl": "https://example.test/authorize"})
     if name == "calendar_get_status":
         return json.dumps({"status": {"isConnected": True, "emailAddress": "eval@example.test", "calendarAuthorized": True, "calendarEventsAuthorized": True, "calendarListAuthorized": True}})
     if name == "calendar_list_calendars":
@@ -454,6 +487,8 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
             calendars.append({"calendarId": holiday_calendar, "name": "Feriados", "primary": False,
                               "accessRole": "reader", "calendarType": "holiday"})
         return json.dumps({"calendars": calendars})
+    if name == "calendar_get_event" and arguments.get("eventId") == "eval-uncertain":
+        return json.dumps({"error": "calendar_temporarily_unavailable", "message": "A verificação do evento continua indisponível; o resultado permanece incerto."})
     if name in {"calendar_list_events", "calendar_get_event"}:
         event = {"eventId": "evalcalendar1", "calendarId": "eval-diario", "calendarName": "Diario", "summary": "Reunião", "start": "2026-10-02T14:00:00-03:00",
                  "end": "2026-10-02T15:00:00-03:00", "allDay": False, "timeZone": "America/Sao_Paulo", "status": "confirmed", "type": "event",
@@ -488,14 +523,41 @@ def fake_tool_result(name: str, message: str, kind: str, arguments: dict, state:
             return json.dumps({"error": "invalid_calendar_tool_arguments", "message": str(error)})
         values["resolvedReminders"] = reminders if reminders is not None else (state.get("calendarPending") or {}).get("resolvedReminders",
             {"useDefault": False, "overrides": [{"method": "popup", "minutes": 60}, {"method": "email", "minutes": 15}]})
-        state["calendarPending"] = values
-        state["preparedThisTurn"] = True
+        state["effectiveCalendarValues"] = values
+        if name != "calendar_create_event":
+            state["calendarPending"] = values
+            state["preparedThisTurn"] = True
         warnings = [{"name": holiday["summary"], "date": holiday["start"], "calendarId": holiday_calendar, "calendarName": "Feriados"}]
         human_summary = f"Proposta: {values.get('summary')} de {values.get('start')} até {values.get('end')}"
         if values.get("recurrence", {}).get("frequency") not in {None, "none"}:
             human_summary += "; recorrência: " + values["recurrence"]["frequency"] + ("; sem término" if not values["recurrence"].get("count") and not values["recurrence"].get("until") else "")
         if "description" in arguments:
             human_summary += "; anotação: " + (arguments["description"] or "removida")
+        if name == "calendar_create_event":
+            operation_key = json.dumps(values, sort_keys=True)
+            previous = state.setdefault("calendarCreations", {}).get(operation_key)
+            if previous is not None:
+                return previous
+            state["createCalls"] = state.get("createCalls", 0) + 1
+            if kind == "calendar_auth_failure":
+                return json.dumps({"error": "calendar_not_connected", "message": "Conecte o Google usando calendar_create_connect_link. Evento não criado."})
+            if kind == "calendar_unknown" or kind == "calendar_partial" and state["createCalls"] == 3:
+                result = json.dumps({"error": "calendar_action_outcome_unknown", "status": "unknown", "verified": False,
+                                   "eventId": "eval-uncertain", "humanSummary": human_summary,
+                                   "message": "A agenda pode ter sido alterada, mas não consegui verificar. Não repita automaticamente esta criação incerta; não afirme sucesso nem ausência de alterações."})
+                state["calendarCreations"][operation_key] = result
+                return result
+            if kind == "calendar_partial" and state["createCalls"] == 2:
+                result = json.dumps({"error": "calendar_write_access_denied", "message": "Falha ao criar este evento; você não possui acesso de escrita."})
+                state["calendarCreations"][operation_key] = result
+                return result
+            result = json.dumps({"pendingActionId": "eval-created-" + str(state["createCalls"]), "eventId": "eval-event-" + str(state["createCalls"]),
+                               "status": "completed", "verified": True, "humanSummary": human_summary.replace("Proposta:", "Criado:"),
+                               "reminderMode": values.get("reminderMode", "aegis_default"), "reminders": reminders,
+                               "holidayWarnings": warnings if kind == "calendar_holiday_create" else [], "holidayWarningsHasMore": False,
+                               "userMessage": "Evento criado e verificado no Google. Informe o resultado, sem pedir autorização novamente."})
+            state["calendarCreations"][operation_key] = result
+            return result
         return json.dumps({"pendingActionId": "eval-pending", "humanSummary": human_summary,
                            "reminderMode": values.get("reminderMode", "aegis_default" if name == "calendar_create_event" else "keep"), "reminders": reminders,
                            "supersededActionIds": ["eval-old-pending"] if kind == "calendar_replace" else [],
@@ -623,6 +685,8 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
         runtime += (f"\nExiste uma ação pendente de Gmail do tipo mark_read, válida até "
                     f"{(now + timedelta(minutes=10)).isoformat()}. "
                     "Aceitação: email_confirm_pending_action; desistência: email_cancel_pending_action; correção: prepare uma nova proposta.")
+    if kind == "calendar_legacy_unrelated":
+        runtime += ("\nProposta Calendar legada: criar Dentista amanhã 14h–15h. Nada executado. Só use calendar_confirm_pending_action se a mensagem atual aceitar especificamente esta proposta; retomar a conversa ou mudar de assunto não autoriza executar.")
     if kind in {"calendar_pending", "calendar_cancel_pending"}:
         runtime += ("\nAção pendente Calendar: Criar Dentista em 2026-09-27 das 14h às 15h; "
                     "válida até 2026-09-26T15:10:00Z. Aceitação: calendar_confirm_pending_action; desistência: calendar_cancel_pending_action; correção da proposta: calendar_amend_pending_action.")
@@ -664,11 +728,12 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
         state["observedMemories"] = {item["memoryId"] for item in memories}
         input_items.append({"role": "developer", "content": "Referências Memory observadas nesta conversa, válidas por 30 minutos. Última busca, na ordem exibida: " + json.dumps(memories)})
     final_text = ""
-    for _ in range(6):
+    for iteration in range(5):
+        # Mirror AegisToolLoop's four tool iterations and final tool-free response.
         # Mirror AegisToolLoop: reassert the same trusted identity after tool results,
         # keeping the native history and cached prefix unchanged between iterations.
         model_input = input_items + [{"role": "developer", "content": IDENTITY}] if calls_seen else input_items
-        response = request_response(key, tools, model_input)
+        response = request_response(key, tools if iteration < 4 else [], model_input)
         calls = [item for item in response.get("output", []) if item.get("type") == "function_call"]
         final_text = output_text(response) or final_text
         if not calls:
@@ -679,10 +744,23 @@ def run_case(key: str, tools: list[dict], message: str, kind: str) -> tuple[list
             arguments = json.loads(call.get("arguments", "{}"))
             result = fake_tool_result(call.get("name", ""), message, kind, arguments, state)
             call_arguments.append({"name": call.get("name"), "arguments": arguments, "result": json.loads(result),
-                                   "effectiveValues": (state.get("calendarPending") or {}).copy()})
+                                   "effectiveValues": (state.get("effectiveCalendarValues") or state.get("calendarPending") or {}).copy()})
             input_items.append({"type": "function_call_output", "call_id": call["call_id"],
                                 "output": result})
     return calls_seen, final_text, call_arguments
+
+
+def expanded_creation_calls(arguments: list[dict]) -> list[dict]:
+    results = []
+    for call in arguments:
+        if call["name"] != "calendar_create_event":
+            continue
+        if "events" in call["arguments"]:
+            for item, outcome in zip(call["arguments"]["events"], call["result"].get("results", [])):
+                results.append({**call, "arguments": item, "result": outcome["result"]})
+        else:
+            results.append(call)
+    return results
 
 
 def main() -> int:
@@ -708,7 +786,22 @@ def main() -> int:
         except (urllib.error.URLError, TimeoutError) as exc:
             print(f"API error for {message!r}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
-        if kind == "none":
+        if kind in {"calendar_casual", "calendar_legacy_unrelated"}:
+            passed = not any(name in {"calendar_create_event", "calendar_confirm_pending_action", "calendar_amend_pending_action"} for name in calls) and bool(answer)
+        elif kind in {"calendar_direct", "calendar_multiple", "calendar_partial", "calendar_unknown", "calendar_auth_failure"}:
+            creates = expanded_creation_calls(arguments)
+            passed = bool(answer) and "calendar_confirm_pending_action" not in calls
+            if kind in {"calendar_direct", "calendar_multiple"}:
+                passed = passed and len(creates) == (3 if kind == "calendar_multiple" else 1) and all(call["result"].get("verified") is True for call in creates)
+                passed = passed and not re.search(r"(?:posso|quer que|confirma|deseja prosseguir|devo criar)", answer, re.I)
+            elif kind == "calendar_partial":
+                passed = passed and len(creates) == 3 and any(call["result"].get("verified") for call in creates)
+                passed = passed and bool(re.search(r"n[aã]o|falh|incert|verific|confirm", answer, re.I))
+            elif kind == "calendar_unknown":
+                passed = passed and len(creates) == 1 and bool(re.search(r"n[aã]o.*(?:confirm|verific)|incert|pode ter", answer, re.I))
+            else:
+                passed = passed and "calendar_create_connect_link" in calls and "https://example.test/authorize" in answer and len(creates) <= 1
+        elif kind == "none":
             passed = not calls
         elif kind.startswith("memory_"):
             if kind in {"memory_casual", "memory_technical"}:
@@ -999,6 +1092,10 @@ def main() -> int:
             # No note request exists in these fixtures: preparation must not invent one.
             passed = passed and all("description" not in call["arguments"] for call in arguments
                                     if call["name"] in {"calendar_create_event", "calendar_update_event", "calendar_amend_pending_action"})
+        successful_creates = [call for call in expanded_creation_calls(arguments) if "error" not in call["result"]]
+        if successful_creates:
+            passed = passed and all(call["result"].get("verified") is True for call in successful_creates)
+            passed = passed and not re.search(r"(?:posso criar|quer que eu (?:crie|adicione|coloque)|confirma esses|confirma a cria[cç][aã]o|deseja prosseguir)", answer, re.I)
         failures += not passed
         report.append({"message": message, "kind": kind, "passed": bool(passed), "calls": calls, "arguments": arguments, "answer": answer})
         details = ",".join(calls) or "none"

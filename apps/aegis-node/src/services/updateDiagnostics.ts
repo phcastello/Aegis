@@ -1,10 +1,10 @@
 export type UpdatePhase = 'discovery' | 'download' | 'verification' | 'install_permission' | 'installer_launch';
 
 const messages: Record<string, [UpdatePhase, string]> = {
-  update_feed_missing: ['discovery', 'O canal de atualizações não está disponível. Tente novamente mais tarde.'],
-  update_feed_unavailable: ['discovery', 'Não foi possível consultar o canal de atualizações. Confira a conexão e tente novamente.'],
+  update_feed_missing: ['discovery', 'O manifesto de atualizações não está disponível. Tente novamente mais tarde.'],
+  update_feed_unavailable: ['discovery', 'Não foi possível consultar as atualizações. Confira a conexão e tente novamente.'],
   update_timeout: ['discovery', 'A consulta de atualizações demorou demais. Tente novamente.'],
-  update_metadata_invalid: ['discovery', 'O canal retornou informações inválidas. Nenhum arquivo foi instalado.'],
+  update_metadata_invalid: ['discovery', 'O manifesto retornou informações inválidas. Nenhum arquivo foi instalado.'],
   update_asset_mismatch: ['discovery', 'Os dados do instalador não correspondem à versão anunciada.'],
   update_download_failed: ['download', 'Não foi possível baixar o instalador. Confira a conexão e tente novamente.'],
   update_archive_invalid: ['verification', 'O arquivo baixado não pôde ser validado. Tente baixar novamente.'],

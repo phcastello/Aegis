@@ -34,6 +34,24 @@ public sealed class PlaceActivationTests
         public ValueTask DisposeAsync() => Db.DisposeAsync();
     }
 
+    [Fact]
+    public async Task PendingDiagnosticUsesFiveMinuteCeilingAndConfirmedInstallationClearsIt()
+    {
+        await using var f = new Fixture(); await f.Initialize(); var place = await f.Place(); var rule = await f.Rule(place.Id);
+        var start = f.Clock.Now;
+        f.Clock.Now = start.AddSeconds(269); Assert.Equal("pending_sync", Assert.Single(await f.Service.RulesAsync()).SyncStatus);
+        f.Clock.Now = start.AddSeconds(270); var overdue = Assert.Single(await f.Service.RulesAsync());
+        Assert.Equal("recoverable_error", overdue.SyncStatus); Assert.Equal("activation_confirmation_overdue", overdue.ErrorCode);
+        var entity = await f.Db.Set<GeographicReminderRule>().SingleAsync(); entity.Confirm(rule.Revision, "waiting_initial", null, f.Clock.Now); await f.Db.SaveChangesAsync();
+        var installed = Assert.Single(await f.Service.RulesAsync()); Assert.Equal("waiting_initial", installed.SyncStatus); Assert.Null(installed.ErrorCode);
+    }
+    [Fact]
+    public async Task RuleWhoseValidityEndedIsNotDiagnosedAsActivationFailure()
+    {
+        await using var f = new Fixture(); await f.Initialize(); var place = await f.Place(); await f.Rule(place.Id, f.Clock.Now.AddSeconds(60));
+        f.Clock.Now = f.Clock.Now.AddMinutes(5);
+        var view = Assert.Single(await f.Service.RulesAsync()); Assert.NotEqual("activation_confirmation_overdue", view.ErrorCode); Assert.NotEqual("local_lease_expired", view.ErrorCode);
+    }
     [Theory]
     [InlineData("receive", "location_source_required")]
     [InlineData("disabled", "location_source_required")]

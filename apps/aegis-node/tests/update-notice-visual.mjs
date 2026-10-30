@@ -36,6 +36,7 @@ const normalVersion = installedVersion;
 const longVersion = '0.7.0-unstable.123456789012345678901234567890';
 const scenarios = [
   { name: 'available', state: 'available', kind: 'apk' },
+  { name: 'recovery-available', state: 'available', kind: 'apk', distributionKind: 'rollback', version: '0.7.2-unstable.5.rollback.1', restoresVersion: '0.7.2-unstable.4', rollbackOf: '0.7.2-unstable.5' },
   { name: 'installing-progress', state: 'installing', kind: 'installer', progress: 47 },
   { name: 'installing-unknown', state: 'installing', kind: 'apk', progress: null },
   { name: 'ready', state: 'ready', kind: 'installer', ready: true },
@@ -62,7 +63,7 @@ const updates = {
 const workActive = ref(false);
 window.__visualCalls = { install: 0, dismiss: 0 };
 window.__setUpdateNoticeFixture = async (fixture) => {
-  updates.update.value = { version: fixture.version, kind: fixture.kind };
+  updates.update.value = { version: fixture.version, kind: fixture.kind, distributionKind: fixture.distributionKind, restoresVersion: fixture.restoresVersion, rollbackOf: fixture.rollbackOf };
   updates.state.value = fixture.state;
   updates.visible.value = true;
   updates.progress.value = fixture.progress ?? null;
@@ -134,7 +135,8 @@ try {
     await page.evaluate(font => { document.documentElement.style.fontSize = `${font}%`; }, profile.font);
     for (const scenario of scenarios) {
       const name = `${profile.name}-${scenario.name}`;
-      await page.evaluate(fixture => window.__setUpdateNoticeFixture(fixture), { ...scenario, version: profile.version });
+      const version = scenario.version ?? profile.version;
+      await page.evaluate(fixture => window.__setUpdateNoticeFixture(fixture), { ...scenario, version });
       const card = page.getByRole('status', { name: 'Atualização da Aegis', exact: true });
       await card.waitFor();
       await page.evaluate(() => document.fonts.ready);
@@ -187,7 +189,7 @@ try {
         check(Boolean(measurement.content), 'real text block missing');
         check(measurement.mobileTitle?.visible === true, 'mobile title hidden');
         check(measurement.desktopTitle?.visible === false, 'desktop title visible on mobile');
-        check(measurement.version?.visible === true && measurement.version.text.includes(profile.version), 'full mobile version missing');
+        check(measurement.version?.visible === true && measurement.version.text.includes(version), 'full mobile version missing');
         if (measurement.buttons.length) {
           check(Boolean(measurement.actions), 'separate actions group missing');
           check(measurement.buttons.every(button => button.y >= measurement.content.bottom - 1), 'actions share a row with the text block');
@@ -204,7 +206,13 @@ try {
       if (options.phase === 'after' && profile.width > 620) {
         check(measurement.desktopTitle?.visible === true, 'desktop title hidden');
         check(measurement.mobileTitle?.visible === false, 'mobile title visible on desktop');
-        check(measurement.desktopTitle?.text === `Aegis ${profile.version} disponível`, 'desktop title changed');
+        check(measurement.desktopTitle?.text === (scenario.distributionKind === 'rollback' ? 'Atualização de recuperação disponível' : `Aegis ${profile.version} disponível`), 'desktop title changed');
+      }
+      if (scenario.distributionKind === 'rollback') {
+        const text = await card.innerText();
+        check(text.includes('Atualização de recuperação disponível'), 'recovery heading missing');
+        check(text.includes(version), 'published recovery version missing');
+        check(text.includes(scenario.restoresVersion) && text.includes(scenario.rollbackOf), 'recovery provenance missing');
       }
       if (scenario.progress !== undefined && scenario.progress !== null) check((await card.innerText()).includes(`${scenario.progress}%`), 'known download progress missing');
       await page.screenshot({ path: join(output, `${name}.png`), fullPage: true, animations: 'disabled' });
