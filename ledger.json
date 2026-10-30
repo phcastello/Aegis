@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 7002011,
+  "highWaterMark": 7002999,
   "reservations": [
     {
       "schema": 2,
@@ -283,6 +283,27 @@
       "controlSha": "78be124edfefd22692cb1a03209ec65af9e4c227",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 7002011
+    },
+    {
+      "schema": 2,
+      "sha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "branch": "main",
+      "number": 1,
+      "platform": "both",
+      "version": "0.7.2",
+      "kind": "normal",
+      "sourceCommit": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "sourceVersion": "0.7.2",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "publishedAt": "2026-10-30T06:17:31.090Z",
+      "repository": "phcastello/Aegis",
+      "runId": "41013202829",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Build/signing only; publication requires explicit promotion. No backend deployment or physical acceptance.",
+      "versionCode": 7002999
     }
   ],
   "recommended": {
