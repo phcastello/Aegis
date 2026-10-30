@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import spritesheet from '../assets/ruri-spritesheet.png';
-import wavingSpritesheet from '../assets/ruri-waving-pixellab.png';
+import playbackSpritesheet from '../assets/ruri-playback.png';
 
 // Keep the approved idle. The owner’s PixelLab wave has ten source poses;
 // repeat only its middle gesture, with one lift and one return.
@@ -18,20 +18,21 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let motion: MediaQueryList | undefined;
 let observer: IntersectionObserver | undefined;
 let visible = true;
-let ready = false;
+const ready = ref(false);
 let disposed = false;
 let idleCycles = 0;
 
 const spriteStyle = computed(() => ({
-  backgroundImage: `url(${state.value === 'waving' ? wavingSpritesheet : spritesheet})`,
-  backgroundSize: state.value === 'waving' ? '1440px 156px' : '1152px 1716px',
-  backgroundPosition: `${frame.value * -144}px 0px`
+  // Switch once after decode; idle/wave boundaries keep the same texture.
+  backgroundImage: `url(${ready.value ? playbackSpritesheet : spritesheet})`,
+  backgroundSize: ready.value ? '1440px 312px' : '1152px 1716px',
+  backgroundPosition: `${frame.value * -144}px ${state.value === 'waving' ? -156 : 0}px`
 }));
 
 function schedule(): void {
   clearTimeout(timer);
   timer = undefined;
-  if (disposed || !ready || !visible || document.hidden || motion?.matches) return;
+  if (disposed || !ready.value || !visible || document.hidden || motion?.matches) return;
   const durations = state.value === 'waving' ? wavingDurations : idleDurations;
   timer = setTimeout(() => {
     if (step.value + 1 < durations.length) step.value++;
@@ -58,16 +59,16 @@ onMounted(() => {
   motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   motion.addEventListener('change', motionChanged);
   document.addEventListener('visibilitychange', visibilityChanged);
-  // Start only after both atlases decode, including on a cold mobile fetch.
-  // A missing derivative leaves the canonical neutral pose static.
-  const atlases = [spritesheet, wavingSpritesheet].map(src => {
+  // Keep canonical idle0 visible until the complete playback texture decodes.
+  // A failed load leaves that fallback static; loops never swap image sources.
+  const atlases = [spritesheet, playbackSpritesheet].map(src => {
     const image = new Image();
     image.src = src;
     return image.decode();
   });
   void Promise.all(atlases).then(() => {
     if (disposed) return;
-    ready = true;
+    ready.value = true;
     state.value = motion?.matches ? 'idle' : 'waving';
     step.value = 0;
     schedule();

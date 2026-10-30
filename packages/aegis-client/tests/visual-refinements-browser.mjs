@@ -79,21 +79,21 @@ try {
    const url=getComputedStyle(el).backgroundImage.slice(5,-2), img=new Image();img.src=url;await img.decode();
    return {width:img.naturalWidth,height:img.naturalHeight,rendering:getComputedStyle(el).imageRendering};
   });
-  equal(atlas.width,1920,'PixelLab waving atlas contains ten original-width cells');
-  equal(atlas.height,208,'PixelLab waving atlas has one original-height row');
+  equal(atlas.width,1920,'playback atlas contains ten original-width cells per row');
+  equal(atlas.height,416,'playback atlas holds canonical idle and PixelLab wave in two rows');
   equal(atlas.rendering,'pixelated','pixel art uses crisp scaling');
-  ok(await ruri.evaluate(el=>getComputedStyle(el).backgroundImage.includes('ruri-waving-pixellab')),'waving renders the refined user-supplied PixelLab frames');
+  ok(await ruri.evaluate(el=>getComputedStyle(el).backgroundImage.includes('ruri-playback')),'waving renders the refined user-supplied PixelLab frames');
   const neutralDifference=await ruri.evaluate(async (el,sourceUrl)=>{
    const decode=async url=>{const img=new Image();img.src=url;await img.decode();return img;};
    const original=await decode(sourceUrl),derived=await decode(getComputedStyle(el).backgroundImage.slice(5,-2));
-   const pixels=img=>{const canvas=document.createElement('canvas');canvas.width=192;canvas.height=208;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,192,208,0,0,192,208);return ctx.getImageData(0,0,192,208).data;};
-   const a=pixels(original),b=pixels(derived);let differences=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])differences++;
+   const pixels=(img,y=0)=>{const canvas=document.createElement('canvas');canvas.width=192;canvas.height=208;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,y,192,208,0,0,192,208);return ctx.getImageData(0,0,192,208).data;};
+   const a=pixels(original),b=pixels(derived,208);let differences=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])differences++;
    return differences;
   },sourceNeutralUrl);
   equal(neutralDifference,0,'waving frame0 decodes identically to the untouched user-supplied PXO frame0');
   await page.waitForFunction(()=>document.querySelector('.ruri-mascot').dataset.state==='idle');
   const idleAtlas=await ruri.evaluate(async el=>{const img=new Image();img.src=getComputedStyle(el).backgroundImage.slice(5,-2);await img.decode();return {width:img.naturalWidth,height:img.naturalHeight};});
-  equal(idleAtlas.width,1536,'idle still uses the complete immutable canonical atlas');equal(idleAtlas.height,2288,'all canonical idle atlas rows are preserved');
+  equal(idleAtlas.width,1920,'idle keeps the same decoded playback image');equal(idleAtlas.height,416,'idle shares the fixed two-row playback atlas');
   await page.evaluate(()=>window.visual.state.counter++);
   equal(await ruri.getAttribute('data-state'),'idle','reactive rendering does not repeat greeting');
   await page.evaluate(()=>window.visual.title('a','Planejar as provas','generated'));
@@ -176,6 +176,48 @@ try {
   // timestamp before measuring exact hold boundaries.
   await page.waitForTimeout(100);
   const pose=async()=>ruri.evaluate(el=>({state:el.dataset.state,frame:Number(el.dataset.frame),position:getComputedStyle(el).backgroundPosition,image:getComputedStyle(el).backgroundImage,size:getComputedStyle(el).backgroundSize}));
+  const playbackImage=(await pose()).image;
+  // Inspect compositor screenshots, not a canvas redrawing of the source PNG.
+  // The background dominates the sprite rectangle; a blank/incorrect crop
+  // cannot satisfy its foreground coverage and bounds at a phase boundary.
+  const renderedPixels=async label=>{
+   const png=await ruri.screenshot({path:join(screenshots,`${width}-boundary-${label}.png`)});
+   return page.evaluate(async data=>{
+    const img=new Image();img.src=data;await img.decode();
+    const canvas=document.createElement('canvas');canvas.width=img.width;canvas.height=img.height;
+    const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);
+    const pixels=ctx.getImageData(0,0,img.width,img.height).data;
+    const background=[...pixels.slice(0,3)];let foreground=0,hash=2166136261;
+    let left=img.width,top=img.height,right=-1,bottom=-1;
+    for(let i=0;i<pixels.length;i++)hash=Math.imul(hash^pixels[i],16777619)>>>0;
+    for(let y=0;y<img.height;y++)for(let x=0;x<img.width;x++){
+     const p=(y*img.width+x)*4;
+     if(pixels[p+3] && Math.max(...background.map((color,c)=>Math.abs(pixels[p+c]-color)))>12){
+      foreground++;left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
+     }
+    }
+    return {foreground,bounds:[left,top,right,bottom],hash,width:img.width,height:img.height};
+   },'data:image/png;base64,'+png.toString('base64'));
+  };
+  const boundary=async(label,nextState)=>{
+   const before=await renderedPixels(label+'-before');
+   await page.clock.runFor(1);
+   equal((await pose()).state,nextState,label+' enters the next phase');
+   equal((await pose()).image,playbackImage,label+' does not replace the decoded image');
+   equal((await pose()).size,'1440px 312px',label+' does not resize the image');
+   const after=await renderedPixels(label+'-after');
+   await page.clock.runFor(16);
+   const held=await renderedPixels(label+'-16ms');
+   for(const [moment,sample]of [['before',before],['after',after],['16ms',held]]){
+    equal(sample.width,144,label+' '+moment+' preserves the sprite viewport width');
+    equal(sample.height,156,label+' '+moment+' preserves the sprite viewport height');
+    ok(sample.foreground>3500 && sample.foreground<6500,label+' '+moment+' paints the complete character');
+    ok(sample.bounds[0]>=35 && sample.bounds[0]<=42 && sample.bounds[1]>=36 && sample.bounds[1]<=43
+      && sample.bounds[2]>=100 && sample.bounds[2]<=108 && sample.bounds[3]>=149 && sample.bounds[3]<=154,
+      label+' '+moment+' keeps head and feet in the intended cell');
+   }
+   equal(held.hash,after.hash,label+' remains painted unchanged on the next display frame');
+  };
   await page.getByRole('textbox',{name:'Mensagem'}).fill('Continuo digitando enquanto a Ruri acena');
   // Raise and lower once; only the center of the approved gesture repeats.
   await page.clock.runFor(waveHold-1);
@@ -185,37 +227,37 @@ try {
    const current=await pose();
    equal(current.state,'waving','arm transition stays within one wave sequence');
    equal(current.frame,waveFrames[index],'PixelLab preparation, repeated center and return follow the reviewed sequence');
-   equal(current.position,`${waveFrames[index]*-144}px 0px`,'wave uses the intended cell on the PixelLab atlas row');
-   ok(current.image.includes('ruri-waving-pixellab'),'all waving steps use the refined PixelLab atlas');
-   equal(current.size,'1440px 156px','PixelLab cells keep the approved scale and framing');
+   equal(current.position,`${waveFrames[index]*-144}px -156px`,'wave uses the intended cell on playback row one');
+   ok(current.image.includes('ruri-playback'),'all waving steps use the refined PixelLab atlas');
+   equal(current.size,'1440px 312px','playback uses fixed scale and framing');
    if(index===6)await page.screenshot({path:join(screenshots,`${width}-wave-raised.png`)});
   }
   equal((await pose()).frame,0,'the completed hand return reaches source frame0 before switching to idle');
   await page.screenshot({path:join(screenshots,`${width}-wave-return.png`)});
   await page.clock.runFor(waveHold-1);
   equal((await pose()).state,'waving','the wave retains the complete final source-frame hold');
-  await page.clock.runFor(1);
+  await boundary('wave-idle','idle');
   for (let cycle=0;cycle<2;cycle++) {
    equal((await pose()).state,'idle','each wave is followed by two idle cycles');
    equal((await pose()).frame,0,'idle begins on the stable resting pose');
    for (const [index,hold] of [1800,500,500,500].entries()) {
-    await page.clock.runFor(hold);
+    await page.clock.runFor(index===0?hold-16:hold);
     const current=await pose();
     equal(current.frame,[1,3,4,5][index],'idle omits the abrupt closed-eye face');
     equal(current.position,`${current.frame*-144}px 0px`,'idle remains aligned on the canonical row');
-    ok(current.image.includes('ruri-spritesheet'),'each idle step uses the approved canonical idle sequence');
-    equal(current.size,'1152px 1716px','idle keeps the original atlas scale');
+    ok(current.image.includes('ruri-playback'),'each idle step uses the same playback image');
+    equal(current.size,'1440px 312px','idle keeps the fixed playback dimensions');
    }
    await page.clock.runFor(1699);
    equal((await pose()).state,'idle','a complete idle cycle lasts five seconds');
-   await page.clock.runFor(1);
+   await boundary(cycle===0?'idle-idle':'idle-wave',cycle===0?'idle':'waving');
   }
   equal((await pose()).state,'waving','the next wave repeats after exactly two idle cycles');
   // A second complete wave → idle → idle cycle catches recurrence errors that
   // checking only the first greeting and the next starting frame would miss.
-  for (const frame of waveFrames) {
+  for (const [index,frame] of waveFrames.entries()) {
    equal((await pose()).frame,frame,'the second greeting repeats every reviewed PixelLab pose');
-   await page.clock.runFor(waveHold);
+   await page.clock.runFor(index===0?waveHold-16:waveHold);
   }
   equal((await pose()).state,'idle','second greeting reaches idle');
   await page.clock.runFor(5000);
@@ -260,12 +302,12 @@ try {
   await page.clock.pauseAt(new Date(Date.now()+100));
   let release;
   const delayed=new Promise(resolve=>{release=resolve;});
-  await page.route('**/ruri-waving-pixellab.png*',async route=>{
+  await page.route('**/ruri-playback.png*',async route=>{
    if(route.request().resourceType()!=='image')return route.continue();
    if(unavailable)return route.abort('failed');
    await delayed;return route.continue();
   });
-  const requested=page.waitForRequest(request=>request.resourceType()==='image'&&new URL(request.url()).pathname.endsWith('/ruri-waving-pixellab.png'));
+  const requested=page.waitForRequest(request=>request.resourceType()==='image'&&new URL(request.url()).pathname.endsWith('/ruri-playback.png'));
   await page.goto(origin+'/__visual',{waitUntil:'domcontentloaded'});
   await requested;
   const ruri=page.locator('.ruri-mascot[data-state="idle"][data-frame="0"]');

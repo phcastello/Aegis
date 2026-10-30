@@ -64,3 +64,14 @@ test('only the middle of the wave repeats, with one ascent and one descent at th
   assert.ok(durations.every(ms=>Math.abs(ms-1000/source.fps)<0.5));
   assert.equal(durations.reduce((a,b)=>a+b,0),2171);
 });
+
+test('the shared playback texture preserves all idle and wave pixels without resampling', async () => {
+  const { packPlayback, playbackPath } = await import('../../../scripts/ruri/pack-playback.mjs');
+  const packedBytes = readFileSync(playbackPath), packed = decodePng(packedBytes);
+  const idle = decodePng(readFileSync(new URL('../src/assets/ruri-spritesheet.png', import.meta.url)));
+  assert.deepEqual([packed.width, packed.height], [1920, 416]);
+  assert.deepEqual(packedBytes, encodePng(packPlayback()));
+  assert.deepEqual(cropPng(packed, 0, 0, 1536, 208).data, cropPng(idle, 0, 0, 1536, 208).data);
+  assert.deepEqual(cropPng(packed, 0, 208, 1920, 208).data, atlas.data);
+  assert.ok(cropPng(packed, 1536, 0, 384, 208).data.every(byte => byte === 0), 'unused idle columns remain transparent');
+});

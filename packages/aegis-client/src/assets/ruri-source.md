@@ -10,7 +10,7 @@ exactly. The GIF stores 170 ms per frame; the project stores 1/6 second.
 
 ## Local corrections
 
-`ruri-waving-pixellab.png` is a transparent 1920 × 208 atlas with those ten frames.
+`ruri-waving-pixellab.png` is the reviewed transparent 1920 × 208 wave atlas with those ten frames.
 SHA-256: `9debf5085c2b7b994f1677725d847784f5a31c1f92907d2d4624a7bfef0860b6`.
 
 - Frames 0, 1 and 2 retain every source RGBA byte.
@@ -45,6 +45,17 @@ The existing `wave → idle → idle` scheduler is unchanged. Each idle lasts
 Typing continuity, offscreen/document pauses, reduced motion, image decoding and
 failure fallback are preserved. The component renders at 144 × 156 as before.
 
+The runtime texture is now `ruri-playback.png` (1920 × 416): the unchanged
+canonical idle row is on row 0; the unchanged reviewed wave is on row 1.
+[`pack-playback.mjs`](../../../../scripts/ruri/pack-playback.mjs) copies RGBA
+bytes without resampling or artwork edits. The component keeps its image URL
+and background dimensions constant across wave/idle/idle boundaries and changes
+only the crop. This removes the texture swap associated with the reported
+whole-character flash; no empty source frame or CSS fade was found locally.
+The original idle0 remains a static fallback until decoding finishes or if it
+fails. The initial switch is between the same neutral pose; subsequent loops
+never switch image sources.
+
 `ruri-spritesheet.png` remains the immutable canonical idle atlas (1536 × 2288),
 SHA-256 `05c42c26f59ea4a7fae2f8fcdb42d7a3a99087bb052de0407c38f944d6bc2da1`.
 The supplied wave frame 0 has identical alpha coverage to canonical idle0; only
@@ -66,6 +77,7 @@ physical devices. At app scale, gloves remain small and deliberately dark.
 
 ```bash
 node scripts/ruri/refine-pixellab.mjs /tmp/ruri-pixellab-final
+node scripts/ruri/pack-playback.mjs --check
 node scripts/ruri/review-pixellab.mjs /tmp/ruri-pixellab-review
 node --test packages/aegis-client/tests/ruri-*.test.mjs
 npm run test:visual-refinements --prefix packages/aegis-client
@@ -74,7 +86,9 @@ npm run build --prefix frontend/aegis-pwa
 ```
 
 Integrity tests verify immutable sources, exact reproduction, unchanged frames
-0–2, local edit bounds, mouth/body/feet preservation and the idle transition.
+0–2, local edit bounds, mouth/body/feet preservation, the idle transition and byte-exact playback packing.
 Browser tests cover two complete cycles, typing/focus, visibility, reduced motion,
-and cold/failing image loads at mobile and desktop widths. These are regression
+and cold/failing image loads at mobile and desktop widths. Compositor screenshots
+before, after and 16 ms after each wave/idle/idle boundary verify foreground
+coverage and stable rendering while the texture URL/dimensions remain fixed. These are regression
 checks, not automatic approval of artistic quality.
