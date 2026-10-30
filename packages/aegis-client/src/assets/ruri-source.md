@@ -1,108 +1,80 @@
-# Ruri
+# Ruri — current PixelLab wave
 
-## Immutable canonical reference
+The shipped wave is the owner's current `ruri-waving.png.gif` +
+`ruri-waving.png.pxo`, retained unchanged in
+[`docs/ruri-pixellab/source`](../../../../docs/ruri-pixellab/source).
+No earlier wave drawing, generated animation or reinterpretation supplies pixels.
+The PXO contains the ten full RGBA frames at 192 × 208 and 6 fps. It avoids the
+GIF's palette/transparency conversion in frames 0–1; GIF frames 2–9 match the PXO
+exactly. The GIF stores 170 ms per frame; the project stores 1/6 second.
 
-`ruri-spritesheet.png` is the owner's original
-`ruri/final/spritesheet-extended.png` from `ruri-projeto.zip`, without modification.
+## Local corrections
 
-- SHA-256: `05c42c26f59ea4a7fae2f8fcdb42d7a3a99087bb052de0407c38f944d6bc2da1`.
-- Transparent RGBA PNG, 1536 × 2288, 8 columns, 11 rows, 192 × 208 cells.
-- Appearance reference: row 0, column 0 (`idle0`). Approved idle playback remains
-  row 0, columns `0,1,3,4,5`; closed-eye column 2 remains omitted.
+`ruri-waving-pixellab.png` is a transparent 1920 × 208 atlas with those ten frames.
+SHA-256: `9debf5085c2b7b994f1677725d847784f5a31c1f92907d2d4624a7bfef0860b6`.
 
-The canonical wave row changes the face, eyes and body between poses, so the app
-uses the original atlas only for idle. The original remains an immutable reference.
+- Frames 0, 1 and 2 retain every source RGBA byte.
+- Eyes in frames 3–9 use the almond contours, blue irises and glints of source
+  frame 0. Each eye is placed at the corresponding face position, with small
+  nearest-neighbor size adjustments. The old eye area is restored from adjacent
+  skin pixels, including removal of residual edges in frames 6–7. Mouth and head
+  pose stay intact; frame 2 remains the unchanged transition reference.
+- The waving gloves in frames 3–8 receive selective slate highlights and dark
+  creases for the palm, thumb and finger tips. The existing sleeve/cuff and glove
+  attachment stay intact. Frame 8 loses one outer column (10 pixels) to narrow
+  the returning glove. The secondary hand is unchanged.
+- Every difference is confined to the eyes and waving glove. Body, feet, cape,
+  head movement and source poses are preserved. The new atlas does not reconstruct
+  those regions from an old idle drawing.
 
-## Individually drawn waving variant
+The deterministic pixel recipe is
+[`refine-pixellab.mjs`](../../../../scripts/ruri/refine-pixellab.mjs). It reads the
+provided PXO with Node's built-in ZIP/deflate support; no image model, external
+service or new runtime dependency is involved. Historical wave tooling/assets
+remain unused by the component and are not inputs to this recipe.
 
-`ruri-waving-consistent.png` replaces the previous rotated-arm derivative.
+## Playback and integration
 
-- SHA-256: `e87ac0d9e5cb2eafa6af6c39a52b2476bff04e18991c83115b5cba517a16017e`.
-- Transparent RGBA PNG, 1536 × 208, 8 columns, 40,199 bytes.
-- Cell 0 is canonical idle0. Cells 1–7 are seven new local arm drawings, replacing
-  the seven angle-generated poses; these are eight unique poses, not seventeen
-  distinct drawings.
-- Pose order: rest, preparation, bent-elbow lift, opening palm approaching the
-  greeting, upright palm, outward wrist/open palm, inward wrist/cupped palm,
-  relaxed descent.
+Wave frames: **0,1,2,3,4,5,6,7,6,7,8,9,0**. Only 6–7 repeat: one ascent,
+two small central movements, one descent, then rest. All holds are 167 ms,
+rounding the project's 6 fps by +0.333 ms/frame. Wave duration is 2171 ms.
+There is no extra easing, interpolation or change to the ascent/descent order.
 
-Each sleeve contour, fabric facet, elbow crease, cuff and mitten contour is
-individually authored at the native pixel resolution in
-[`wave-spec.json`](../../../../scripts/ruri/wave-spec.json). The development-only
-rasterizer fills these contours; it does not rotate, scale or resample a donor
-arm. The raised wrist gestures have different palm/thumb silhouettes and sleeve
-folds. The elbow remains bent during the small wrist gestures. The return uses
-its own relaxed pose rather than reversing the entire ascent.
+The existing `wave → idle → idle` scheduler is unchanged. Each idle lasts
+5000 ms (`0,1,3,4,5`, holds `1800,500,500,500,1700`); the full cycle is 12171 ms.
+Typing continuity, offscreen/document pauses, reduced motion, image decoding and
+failure fallback are preserved. The component renders at 144 × 156 as before.
 
-The same canonical idle body underlies each drawing. Eyes, face, hood, torso,
-clasp, lower cloak, legs and boots retain their appearance and proportions.
-Local shoulder/arm contours may cover the cape edge or outer right hood edge as
-appropriate. The resting right mitten is covered with nearby canonical cloak
-fabric before the moving arm is drawn, avoiding a duplicate hand. Palette colors
-are eyedropped from the canonical sleeve and mitten; the exact coordinates and
-RGBA values are recorded in the recipe. There is no model/API call at runtime.
+`ruri-spritesheet.png` remains the immutable canonical idle atlas (1536 × 2288),
+SHA-256 `05c42c26f59ea4a7fae2f8fcdb42d7a3a99087bb052de0407c38f944d6bc2da1`.
+The supplied wave frame 0 has identical alpha coverage to canonical idle0; only
+61 RGB pixels differ. It is deliberately preserved rather than replaced.
 
-### Drafts and visual corrections
+## Review and checks
 
-A built-in `image_gen` storyboard was requested as an anatomy draft, using
-canonical idle0 as its reference: eight poses from preparation through elbow
-bend, small wrist gestures and relaxed descent; only the viewer-right sleeve
-and dark mitten were to change, preserving Ruri's face, hood, costume and scale.
-It was rejected because it raised the wrong arm and duplicated the resting hand.
-No generated pixels are present in the shipped PNG. An earlier generation
-experiment and the previous rigid, angle-driven recipe were also discarded.
-
-The first hand-drawn draft was reviewed and rejected for an overlong arm, tubular
-sleeve highlights, an excessive palm arc and a fist-like approach pose. The final
-revision shortens the upper-arm reach, widens and facets the elbow fold, breaks
-the continuous highlight, opens the approach palm and reduces the wrist arc to
-roughly eight source pixels. Temporary drafts, contact sheets and recordings
-stay outside the repository; only the runtime PNG and its provenance/tooling
-are versioned.
-
-## Playback
-
-The approved repeating behavior remains `waving → idle → idle`, independent of
-typing. Idle timing and visibility/reduced-motion behavior are unchanged.
-
-- Wave cells: `0,1,2,3,4,5,4,6,4,5,4,6,4,3,7,1,0`.
-- Holds in ms: `350,140,160,160,180,200,120,200,120,200,120,200,160,160,200,140,500`.
-- Wave: 3,310 ms. Two small outward/inward wrist gestures follow the lift.
-- Each idle: `0,1,3,4,5`, holds `1800,500,500,500,1700` ms, totaling 5,000 ms.
-- Full cycle: 13,310 ms. The final neutral hold meets canonical idle0 without an
-  atlas jump.
-
-Both atlases decode before greeting. Failed derivative loads leave static idle0.
-Offscreen or hidden documents pause work; reduced motion selects static idle0.
-
-## Reproduction and review
+[Contact sheet](../../../../docs/ruri-pixellab/review/contact-sheet.png),
+[source/final details](../../../../docs/ruri-pixellab/review/details.png),
+[chronological sheet](../../../../docs/ruri-pixellab/review/chronological-sheet.png),
+[interactive preview](../../../../docs/ruri-pixellab/review/animation.html),
+[two real-time cycles](../../../../docs/ruri-pixellab/review/animation-two-cycles.webm)
+and [timing/hash report](../../../../docs/ruri-pixellab/review/report.json)
+were produced before client integration. The local visual review compared eyes,
+glove readability, repeated middle and return at native and enlarged sizes;
+residual old eye edges were corrected before producing the final artifacts.
+The recording and frame inspection do not substitute for owner acceptance on
+physical devices. At app scale, gloves remain small and deliberately dark.
 
 ```bash
-node scripts/ruri/derive-wave.mjs
-node scripts/ruri/derive-wave.mjs --check
+node scripts/ruri/refine-pixellab.mjs /tmp/ruri-pixellab-final
+node scripts/ruri/review-pixellab.mjs /tmp/ruri-pixellab-review
 node --test packages/aegis-client/tests/ruri-*.test.mjs
-node packages/aegis-client/tests/visual-refinements-browser.mjs
-node scripts/ruri/review.mjs --record --output /tmp/aegis-ruri-wave-review
+npm run test:visual-refinements --prefix packages/aegis-client
+npm run build --prefix apps/aegis-node
+npm run build --prefix frontend/aegis-pwa
 ```
 
-The review command displays the shipped PNG, generates contact and chronological
-sheets plus individual pose screenshots, and creates standalone `animation.html`
-with synchronized app-size (144 × 156) and enlarged playback, step/pose inspection
-and a completed-cycle counter. `--record` executes at least two full real-time
-cycles and writes `animation-two-cycles.webm`. Artifacts are not packaged.
-
-Before committing this revision, the eight final poses were visually inspected
-against canonical idle at app size and enlarged size. Timed browser screenshots
-of two full cycles were inspected for preparation, elbow bend, palm changes,
-return, silhouette continuity and duplicate/detached hands. No concrete visual
-blocker remained after the corrections above. The tooling records real-time
-playback; screenshot inspection does not claim continuous human video viewing
-or physical-device acceptance. The canonical dark glove has limited contrast
-at app size.
-
-Automated tests are secondary integrity checks: reference hash, reproducibility,
-facial/structural regions, alignment, transparency, palette and cell boundaries.
-There is no zero-difference-outside-a-mask approval gate or tiny editable-area
-budget. Diagnostics cannot approve animation quality. Browser checks cover two
-complete cycles, typing/focus, offscreen/document pause, reduced motion, and
-cold/failing asset loads at mobile and desktop widths.
+Integrity tests verify immutable sources, exact reproduction, unchanged frames
+0–2, local edit bounds, mouth/body/feet preservation and the idle transition.
+Browser tests cover two complete cycles, typing/focus, visibility, reduced motion,
+and cold/failing image loads at mobile and desktop widths. These are regression
+checks, not automatic approval of artistic quality.

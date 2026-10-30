@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import spritesheet from '../assets/ruri-spritesheet.png';
-import wavingSpritesheet from '../assets/ruri-waving-consistent.png';
+import wavingSpritesheet from '../assets/ruri-waving-pixellab.png';
 
-// Idle keeps the approved canonical sequence. Each waving cell redraws the
-// local arm, sleeve and palm; the raised wrist gestures have their own poses.
+// Keep the approved idle. The owner’s PixelLab wave has ten source poses;
+// repeat only its middle gesture, with one lift and one return.
 const idleFrames = [0, 1, 3, 4, 5];
 const idleDurations = [1800, 500, 500, 500, 1700];
-const wavingFrames = [0, 1, 2, 3, 4, 5, 4, 6, 4, 5, 4, 6, 4, 3, 7, 1, 0];
-const wavingDurations = [350, 140, 160, 160, 180, 200, 120, 200, 120, 200, 120, 200, 160, 160, 200, 140, 500];
+const wavingFrames = [0, 1, 2, 3, 4, 5, 6, 7, 6, 7, 8, 9, 0];
+// Pixelorama: 6 fps, rounded by less than 0.4 ms per frame.
+const wavingDurations = [167, 167, 167, 167, 167, 167, 167, 167, 167, 167, 167, 167, 167];
 const element = ref<HTMLElement | null>(null);
 const state = ref<'idle' | 'waving'>('idle');
 const step = ref(0);
@@ -23,7 +24,7 @@ let idleCycles = 0;
 
 const spriteStyle = computed(() => ({
   backgroundImage: `url(${state.value === 'waving' ? wavingSpritesheet : spritesheet})`,
-  backgroundSize: `1152px ${state.value === 'waving' ? 156 : 1716}px`,
+  backgroundSize: state.value === 'waving' ? '1440px 156px' : '1152px 1716px',
   backgroundPosition: `${frame.value * -144}px 0px`
 }));
 

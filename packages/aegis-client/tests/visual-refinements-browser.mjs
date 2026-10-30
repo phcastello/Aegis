@@ -1,4 +1,4 @@
-// Actual Chromium/Vue/CSS with canonical idle and derived waving pixels.
+// Actual Chromium/Vue/CSS with canonical idle and refined PixelLab waving pixels.
 // No backend or physical-device claim; image invariants are also checked by
 // the asset tests, independently of this browser renderer and sequencer.
 import assert from 'node:assert/strict';
@@ -7,11 +7,18 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright-core';
+import { readPxo } from '../../../scripts/ruri/refine-pixellab.mjs';
+import { encodePng } from '../../../scripts/ruri/png.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const nativeRequire = createRequire(join(root, 'apps/aegis-node/package.json'));
 const { createServer } = await import(nativeRequire.resolve('vite'));
 const file = path => '/@fs/' + join(root, path);
+const waveFrames = [0,1,2,3,4,5,6,7,6,7,8,9,0];
+// Each source hold at 6 fps rounds to 167 ms; the final wave lasts 2171 ms.
+const waveHold = 167;
+const source = readPxo(join(root, 'docs/ruri-pixellab/source/ruri-waving.png.pxo'));
+const sourceNeutralUrl = `data:image/png;base64,${encodePng(source.frames[0]).toString('base64')}`;
 const entry = `
 import { createApp, h, reactive } from 'vue';
 import Sidebar from '${file('packages/aegis-client/src/components/ConversationSidebar.vue')}';
@@ -72,18 +79,18 @@ try {
    const url=getComputedStyle(el).backgroundImage.slice(5,-2), img=new Image();img.src=url;await img.decode();
    return {width:img.naturalWidth,height:img.naturalHeight,rendering:getComputedStyle(el).imageRendering};
   });
-  equal(atlas.width,1536,'derived waving atlas contains eight canonical-width cells');
-  equal(atlas.height,208,'derived waving atlas has one canonical-height row');
+  equal(atlas.width,1920,'PixelLab waving atlas contains ten original-width cells');
+  equal(atlas.height,208,'PixelLab waving atlas has one original-height row');
   equal(atlas.rendering,'pixelated','pixel art uses crisp scaling');
-  ok(await ruri.evaluate(el=>getComputedStyle(el).backgroundImage.includes('ruri-waving-consistent')),'waving renders the documented derivative, not the inconsistent canonical wave row');
-  const neutralDifference=await ruri.evaluate(async (el,canonicalUrl)=>{
+  ok(await ruri.evaluate(el=>getComputedStyle(el).backgroundImage.includes('ruri-waving-pixellab')),'waving renders the refined user-supplied PixelLab frames');
+  const neutralDifference=await ruri.evaluate(async (el,sourceUrl)=>{
    const decode=async url=>{const img=new Image();img.src=url;await img.decode();return img;};
-   const original=await decode(canonicalUrl),derived=await decode(getComputedStyle(el).backgroundImage.slice(5,-2));
+   const original=await decode(sourceUrl),derived=await decode(getComputedStyle(el).backgroundImage.slice(5,-2));
    const pixels=img=>{const canvas=document.createElement('canvas');canvas.width=192;canvas.height=208;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,192,208,0,0,192,208);return ctx.getImageData(0,0,192,208).data;};
    const a=pixels(original),b=pixels(derived);let differences=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])differences++;
    return differences;
-  },file('packages/aegis-client/src/assets/ruri-spritesheet.png'));
-  equal(neutralDifference,0,'derived resting pose decodes identically to canonical idle0, including translucent edges');
+  },sourceNeutralUrl);
+  equal(neutralDifference,0,'waving frame0 decodes identically to the untouched user-supplied PXO frame0');
   await page.waitForFunction(()=>document.querySelector('.ruri-mascot').dataset.state==='idle');
   const idleAtlas=await ruri.evaluate(async el=>{const img=new Image();img.src=getComputedStyle(el).backgroundImage.slice(5,-2);await img.decode();return {width:img.naturalWidth,height:img.naturalHeight};});
   equal(idleAtlas.width,1536,'idle still uses the complete immutable canonical atlas');equal(idleAtlas.height,2288,'all canonical idle atlas rows are preserved');
@@ -155,7 +162,7 @@ try {
   equal(await page.locator('.history-item').last().locator('strong').textContent(),'Outra conversa','unmount cancels title timer across rows');
   await page.close();
  }
- // Browser clock exercises complete visible cycles without waiting 26 real seconds.
+ // Browser clock exercises complete visible cycles without waiting in real time.
  for (const width of [390,1280]) {
   const page=await browser.newPage({viewport:{width,height:850}});
   page.on('pageerror',error=>errors.push(error.message));
@@ -170,25 +177,23 @@ try {
   await page.waitForTimeout(100);
   const pose=async()=>ruri.evaluate(el=>({state:el.dataset.state,frame:Number(el.dataset.frame),position:getComputedStyle(el).backgroundPosition,image:getComputedStyle(el).backgroundImage,size:getComputedStyle(el).backgroundSize}));
   await page.getByRole('textbox',{name:'Mensagem'}).fill('Continuo digitando enquanto a Ruri acena');
-  // Drawn preparation, elbow bend and lifted palm precede two wrist gestures.
-  // Descent has its own relaxed pose instead of reversing a rigid arm layer.
-  await page.clock.runFor(349);
+  // Raise and lower once; only the center of the approved gesture repeats.
+  await page.clock.runFor(waveHold-1);
   equal((await pose()).frame,0,'greeting holds its resting pose before raising the hand');
-  const wave=[1,2,3,4,5,4,6,4,5,4,6,4,3,7,1,0];
-  for (const [index,hold] of [1,140,160,160,180,200,120,200,120,200,120,200,160,160,200,140].entries()) {
-   await page.clock.runFor(hold);
+  for (let index=1;index<waveFrames.length;index++) {
+   await page.clock.runFor(index===1?1:waveHold);
    const current=await pose();
    equal(current.state,'waving','arm transition stays within one wave sequence');
-   equal(current.frame,wave[index],'drawn preparation, hand gestures and relaxed return follow the reviewed sequence');
-   equal(current.position,`${wave[index]*-144}px 0px`,'wave uses the intended cell on the derived atlas row');
-   ok(current.image.includes('ruri-waving-consistent'),'all waving steps keep the stable-body derivative');
-   equal(current.size,'1152px 156px','derived cells keep the exact approved scale and framing');
-   if(index===4)await page.screenshot({path:join(screenshots,`${width}-wave-raised.png`)});
+   equal(current.frame,waveFrames[index],'PixelLab preparation, repeated center and return follow the reviewed sequence');
+   equal(current.position,`${waveFrames[index]*-144}px 0px`,'wave uses the intended cell on the PixelLab atlas row');
+   ok(current.image.includes('ruri-waving-pixellab'),'all waving steps use the refined PixelLab atlas');
+   equal(current.size,'1440px 156px','PixelLab cells keep the approved scale and framing');
+   if(index===6)await page.screenshot({path:join(screenshots,`${width}-wave-raised.png`)});
   }
-  equal((await pose()).frame,0,'the completed hand return reaches canonical idle0 before switching atlases');
+  equal((await pose()).frame,0,'the completed hand return reaches source frame0 before switching to idle');
   await page.screenshot({path:join(screenshots,`${width}-wave-return.png`)});
-  await page.clock.runFor(499);
-  equal((await pose()).state,'waving','the wave retains its final neutral hold until 3310ms');
+  await page.clock.runFor(waveHold-1);
+  equal((await pose()).state,'waving','the wave retains the complete final source-frame hold');
   await page.clock.runFor(1);
   for (let cycle=0;cycle<2;cycle++) {
    equal((await pose()).state,'idle','each wave is followed by two idle cycles');
@@ -208,9 +213,9 @@ try {
   equal((await pose()).state,'waving','the next wave repeats after exactly two idle cycles');
   // A second complete wave → idle → idle cycle catches recurrence errors that
   // checking only the first greeting and the next starting frame would miss.
-  for (const [index,hold] of [350,140,160,160,180,200,120,200,120,200,120,200,160,160,200,140,500].entries()) {
-   equal((await pose()).frame,[0,...wave][index],'the second greeting repeats every reviewed drawn pose');
-   await page.clock.runFor(hold);
+  for (const frame of waveFrames) {
+   equal((await pose()).frame,frame,'the second greeting repeats every reviewed PixelLab pose');
+   await page.clock.runFor(waveHold);
   }
   equal((await pose()).state,'idle','second greeting reaches idle');
   await page.clock.runFor(5000);
@@ -226,7 +231,7 @@ try {
   const hidden=await pose();await page.clock.runFor(30000);
   equal(JSON.stringify(await pose()),JSON.stringify(hidden),'hidden document freezes the entire sequence');
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));});
-  await page.clock.runFor(350);equal((await pose()).frame,1,'visibility resumes from the held pose without catching up');
+  await page.clock.runFor(waveHold);equal((await pose()).frame,1,'visibility resumes from the held pose without catching up');
   await ruri.evaluate(el=>el.style.transform='translateY(2000px)');
   // IntersectionObserver delivery belongs to the browser rendering lifecycle.
   await page.clock.runFor(100);
@@ -246,7 +251,7 @@ try {
   await page.screenshot({path:join(screenshots,`${width}-reduced-motion.png`)});
   await page.close();
  }
- // Cold and failed derivative loads must leave the intact neutral sprite on
+ // Cold and failed waving loads must leave the intact neutral sprite on
  // screen. The component must never start an invisible or partial wave.
  for (const unavailable of [false,true]) {
   const page=await browser.newPage({viewport:{width:390,height:850}});
@@ -255,24 +260,24 @@ try {
   await page.clock.pauseAt(new Date(Date.now()+100));
   let release;
   const delayed=new Promise(resolve=>{release=resolve;});
-  await page.route('**/ruri-waving-consistent.png*',async route=>{
+  await page.route('**/ruri-waving-pixellab.png*',async route=>{
    if(route.request().resourceType()!=='image')return route.continue();
    if(unavailable)return route.abort('failed');
    await delayed;return route.continue();
   });
-  const requested=page.waitForRequest(request=>request.resourceType()==='image'&&new URL(request.url()).pathname.endsWith('/ruri-waving-consistent.png'));
+  const requested=page.waitForRequest(request=>request.resourceType()==='image'&&new URL(request.url()).pathname.endsWith('/ruri-waving-pixellab.png'));
   await page.goto(origin+'/__visual',{waitUntil:'domcontentloaded'});
   await requested;
   const ruri=page.locator('.ruri-mascot[data-state="idle"][data-frame="0"]');
   await ruri.waitFor();
   const canonical=await ruri.evaluate(async el=>{const img=new Image();img.src=getComputedStyle(el).backgroundImage.slice(5,-2);await img.decode();return img.naturalWidth;});
-  equal(canonical,1536,'the canonical neutral sprite remains available independently of the waving derivative');
+  equal(canonical,1536,'the canonical neutral sprite remains available independently of the PixelLab atlas');
   await page.clock.runFor(30000);
-  equal(await ruri.count(),1,unavailable?'a failed derivative load remains on static canonical idle0':'a delayed derivative load does not consume the greeting offscreen');
+  equal(await ruri.count(),1,unavailable?'a failed waving load remains on static canonical idle0':'a delayed waving load does not consume the greeting offscreen');
   if(!unavailable){
    release();
    await page.locator('.ruri-mascot[data-state="waving"][data-frame="0"]').waitFor();
-   await page.clock.runFor(349);
+   await page.clock.runFor(waveHold-1);
    equal(await page.locator('.ruri-mascot').getAttribute('data-frame'),'0','cold decode starts with the full initial neutral hold');
   }
   await page.close();
