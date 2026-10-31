@@ -16,7 +16,7 @@ Os logs completos de desenvolvimento ficam em `/tmp/aegis-hands-free-*.log`;
 | `test:rust` | 85 aprovados, dois testes de backend real ignorados; zero falhas. |
 | `cargo check --target aarch64-linux-android --locked` | Aprovado com compilador NDK, após configurar os caminhos locais; não executa ARM64. |
 | `test:release` | 51 contratos de distribuição/versão aprovados. |
-| `:app:testArm64DebugUnitTest` | 106 testes em 16 suítes, zero falhas/erros/skips; inclui 14 de transporte, cinco de áudio e nove de métricas. JVM, sem microfone físico. |
+| `:app:testArm64DebugUnitTest` | 107 testes em 16 suítes, zero falhas/erros/skips; inclui 15 de transporte, cinco de áudio e nove de métricas. JVM, sem microfone físico. |
 | `tauri android build --debug --apk --target aarch64` | APK ARM64 compilado com frontend/TFLM/JNI. Build local usa assinatura de desenvolvimento; não substitui a distribuição oficial para atualização do proprietário. |
 | Conteúdo APK local | Bibliotecas Rust, microWakeWord e libc++ presentes; oito assets de licença; nenhum `.tflite`, `.h5`, `.wav` ou `.flac`. |
 | JNI/ELF/R8 | Quatro exports JNI verificados no `.so` ARM64, segmentos alinhados em 16 KiB; regras explícitas preservam classes e cinco entradas JNI da Activity. A execução minificada/dispositivo exige a evidência correspondente. |
@@ -57,6 +57,9 @@ alteração de pesos, merge na main ou release estável.
 - `a000f5e`: sincronização da fonte 0.8.0.
 - `856ac37`: runtime Android, assistente/captura/reprodução, modelo privado,
   métricas, testes e mecanismo de replay.
+- `4b8fa5c`: instruções de ativação, limitações e protocolo operacional.
+- `61bbccd`: invalidação imediata de cancelamento antes da limpeza de rede e
+  reset determinístico ao retornar à wake word sem comando.
 
 O resultado da publicação autorizada por `scripts/publish-dev.py` será registrado
 após push e verificação do workflow/feed. Solicitar a execução não equivale a
