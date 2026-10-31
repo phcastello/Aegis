@@ -32,8 +32,10 @@ continuam originadas pelo manifesto, sem edição manual.
 A chamada segue `HandsFreeSettings.vue` → `services/handsFree.ts` →
 `invoke("node_hands_free")` → ACL Tauri → `hands_free.rs` → bridge JNI/plugin →
 `MainActivity`/`NodeHandsFree` → JSON validado. O estado inicial sem modelo,
-permissão, assistente, habilitação ou backend retorna esses campos falsos;
-consultar não abre AudioRecord, pede permissão nem acessa rede/backend.
+permissão, assistente ou habilitação retorna esses quatro campos falsos. Backend
+ou rede ausentes não impedem a consulta; não há campo de disponibilidade do
+backend nesse retorno. Consultar não abre AudioRecord, pede permissão nem
+acessa rede/backend.
 
 ## Falha e recuperação da interface
 
@@ -129,8 +131,19 @@ Os testes de browser usam IPC simulado para os cenários de falha. O novo
 `NodeHandsFreeStateIpcTest` chama o comando real pela WebView do APK instalado,
 antes de conceder microfone, importar modelo, selecionar assistente ou estabelecer
 backend. O runner existente executa esse cenário no debug e no release minificado
-com container de instrumentação independente. Sua execução em emulador e a
-publicação serão registradas após os respectivos workflows. Nenhuma chave oficial
+com container de instrumentação independente. O [job Android API 35](https://github.com/phcastello/Aegis/actions/runs/41216496852/job/124582099696)
+passou em emulador **x86_64**, tanto debug quanto release minificado. O cenário
+`initialSetupStateIsReachableWithoutModelMicrophoneRoleOrBackend` concluiu
+`OK (1 test)` em 7,078 s e 6,076 s respectivamente, com checkpoint
+`hands_free_real_ipc_initial_state` confirmado nas duas variantes.
+
+A execução usou a fonte `99c0856adefdf0ff688623363e37591527b96743`; o único diff
+até `fec7c18` é a limpeza do perfil temporário do teste Windows. O código Android
+é idêntico. A instrumentação minificada usa container independente e chave
+isolada de teste; não é o APK oficial instalado no telefone. O workflow focado
+como um todo terminou `failure` pelo agregador, com a razão **“Focused validation
+is not complete integration acceptance.”** O job Android passou; não foi alegada
+aceitação da matriz completa e o gate não foi contornado. Nenhuma chave oficial
 foi usada nas verificações locais; o container release compilou com chave de
 teste descartável. Uma
 compilação local ou teste IPC simulado não equivale à publicação nem à execução
@@ -142,3 +155,56 @@ modelo privado se ainda ausente, permitir microfone, selecionar Aegis pelo selet
 oficial de assistente e habilitar escuta. Modelo já importado, pareamento e
 preferências são preservados. Para uso real, deixar **Diagnóstico** desmarcado.
 O botão de atualização permanece disponível se a primeira consulta falhar.
+
+
+## Resultado publicado e rastreabilidade
+
+**0.8.0-unstable.4**, código Android **8000004**, publicada em
+31/10/2026 às 16:28:25 UTC, fonte
+`fec7c18ea067e66ca6cf63d2e294e3d36191c44f`.
+[Workflow de publicação aprovado](https://github.com/phcastello/Aegis/actions/runs/41219028661)
+e [prerelease pública](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.4).
+O [feed recomendado](https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json)
+foi consultado novamente após a publicação e confirmou versão, código, fonte,
+URL e hash. Ponteiro `e94cfe831a9eb9d65a7b1e56f7a6856ade47f537`.
+
+O [APK ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.4/Aegis-Android-arm64.apk)
+foi baixado e verificado criptograficamente. Pacote `com.aegis.node`, versão/código
+corretos, sem flags debug/testOnly, tráfego claro ou instrumentação. SHA-256:
+`62ac3f14a20f37f1c327e046d829dd799f9693159be2a1d4b087cec35ed1e0bb`.
+Certificado SHA-256:
+`df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31`,
+igual ao certificado anterior. O detector e as quatro funções JNI do VAD estão
+presentes na biblioteca ARM64. As 14 licenças empacotadas conferem com a fonte;
+a busca pelo modelo privado e pelos hashes dos áudios de avaliação no APK não
+encontrou esses dados. Inspeção estática/assinatura não substitui replay ARM64.
+
+O instalador Windows também passou no runner real: upgrade NSIS `0.7.1` →
+`0.8.0-unstable.4`, identidade da WebView e armazenamento da aplicação preservados.
+A assinatura do updater e a versão foram verificadas no workflow confiável.
+Isso não é homologação da instalação pareada no computador do proprietário.
+
+A reserva `unstable.3`/`8000003` não foi publicada. O teste de identidade Windows
+passou, mas a limpeza posterior do perfil temporário retornou `EPERM`. A correção
+`fec7c18` ampliou a espera limitada do `rmSync` de aproximadamente três para
+16,5 segundos de retries; erro persistente continua falhando o gate. Não houve
+encerramento amplo de processos nem supressão da falha. A nova tentativa usou a
+reserva seguinte e passou pelo mesmo gate. O código dos aplicativos não mudou
+nessa correção do fixture. Pelo seletor existente de dependências, a alteração em
+`packages/aegis-client/tests` também recompilou/publicou a PWA privada, com saúde
+verificada e sem mudança no código da interface. Backend e bancos foram
+preservados, sem migrations pendentes.
+
+Commits enviados em `feat/v0.8.0-hands-free`:
+
+- `8c8b2cc`: autorização efetiva, recuperação da UI e teste real de IPC.
+- `8a9025d`: VAD/captura, sinal, streaming, cancelamento e métricas por identidade.
+- `99c0856`: documentação e protocolo de bateria.
+- `fec7c18`: espera limitada da limpeza do fixture Windows.
+
+Os [resultados estruturados](preview-corrections-results.json) vinculam os
+checks à fonte e à publicação. O registro documental posterior não altera os
+bytes publicados. Push concluído; não houve merge na main nem release estável.
+Instalar sobre o Node existente pelo fluxo de atualização. Modelo já válido,
+pareamento e preferências são preservados. A aprovação física, a estabilidade
+cotidiana, a reprodução acústica e o replay ARM64 continuam pendentes.

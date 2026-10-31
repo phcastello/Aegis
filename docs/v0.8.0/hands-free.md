@@ -5,11 +5,14 @@ Implementação na branch `feat/v0.8.0-hands-free`, derivada de `913e629`
 e suas alterações locais foram preservadas. Esta entrega prepara interação real
 e diagnóstico no Node existente; a homologação no telefone ainda é necessária.
 
-Primeira distribuição publicada (substituída pelas [correções da preview](preview-corrections.md)): **0.8.0-unstable.2**, código Android
-**8000002**, fonte `3ba0410`. Disponível em **Configurações → Atualizações** ou
-pelo [APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Android-arm64.apk).
-Os [resultados da publicação](validation-and-publication.md) registram assinatura,
-hashes e as limitações de verificação.
+Distribuição corrigida publicada: **0.8.0-unstable.4**, código Android
+**8000004**, fonte `fec7c18ea067e66ca6cf63d2e294e3d36191c44f`. Disponível em
+**Configurações → Atualizações** ou pelo
+[APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.4/Aegis-Android-arm64.apk).
+As [correções e evidências da preview](preview-corrections.md) registram a consulta
+real em debug/minificado, a publicação e os limites físicos. A
+[primeira distribuição](validation-and-publication.md) permanece documentada como
+histórico; o bloqueio de configuração da `unstable.2` foi corrigido.
 
 ## Instalação e ativação
 
@@ -24,7 +27,8 @@ hashes e as limitações de verificação.
    [export-private-model.py](../../scripts/hands-free/export-private-model.py)
    confere o cache canônico e prepara uma cópia privada; não treina nem troca pesos.
 3. Abrir **Configurações → Áudio e voz → Hands-free**. Com a escuta desligada,
-   **Importar modelo privado** pelo seletor de arquivos do Android.
+   **Importar modelo privado** pelo seletor de arquivos do Android, se ainda
+   ausente. Modelo já importado e válido é preservado na atualização.
 4. **Permitir microfone**, selecionar Aegis na interface oficial de assistente do
    Android e ligar **Escutar “Aegis”**. Manter as notificações/indicadores normais
    do sistema. O papel de assistente não concede DSP nem privilégios de sistema.

@@ -20,7 +20,8 @@ três dias posteriores não provam causalidade nem significância estatística.
    selecionar o JSON nem um ZIP. A cópia e seu hash estão nas
    [instruções do detector](../detector-parity.md). O Node verifica hash,
    dimensões/quantização e carregamento antes de gravar na área privada.
-   Modelo ausente ou rejeitado é indisponibilidade, não escuta ativa.
+   Modelo ausente ou rejeitado é indisponibilidade, não escuta ativa. Se já
+   estiver importado e válido, pular a importação; atualizar preserva o arquivo.
 4. Na mesma tela, habilitar **Escutar “Aegis”**, deixando **Diagnóstico**
    desmarcado para interação real. O diagnóstico pertence ao
    mesmo pipeline, mas não envia comandos e não substitui os três dias de uso.
@@ -91,8 +92,10 @@ relógio monotônico; `events[].at` e `checkpointAt` têm fuso explícito.
 - Durações agregadas de captura, STT, backend e TTS, e `sessionWakeLockMs`.
   `tts_first_audio{Ms,Count,MinMs,MaxMs}` mede a primeira aceitação de PCM pelo
   player desde o início da requisição TTS; não mede DAC acústico. `tts_total*`
-  inclui o drain real; `tts_fetch*` inclui a transferência com backpressure e
-  `tts_playback*` vai do primeiro PCM entregue até o drain. A identidade de um
+  inclui o drain real quando concluído; `tts_fetch*` inclui a transferência com
+  backpressure e `tts_playback*` vai do primeiro PCM entregue até o drain. Em
+  falha/cancelamento, os timings medem até a interrupção e precisam ser lidos
+  junto dos respectivos contadores. A identidade de um
   turno assíncrono permanece fixada na observação do seu início.
   Campos existem quando há observação; ausência não deve ser interpretada como
   atividade retroativamente confirmada.
@@ -114,7 +117,8 @@ Para cada dia, confrontar a configuração habilitada com captura/detecção
 intencionais. Após morte do processo não contar retroativamente a lacuna como
 escuta. Consumo baixo com serviço interrompido é falha de disponibilidade.
 Avaliar ativações percebidas/indevidas, comandos transcritos/vazios/falhos,
-latências agregadas de captura/STT/backend/TTS e continuação, sem guardar texto.
+latências agregadas de captura/STT/backend/TTS e contadores de continuação,
+sem guardar texto.
 Tela desligada não equivale a CPU suspensa.
 
 Calcular a média posterior `P` do uso diário acumulado e compará-la com
