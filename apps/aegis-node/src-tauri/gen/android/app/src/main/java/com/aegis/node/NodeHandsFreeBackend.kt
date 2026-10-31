@@ -186,9 +186,12 @@ class NodeHandsFreeBackend internal constructor(
     } finally { multipart.fill(0) }
   }
 
+  /** Immediate, nonblocking invalidation even while an older remote cleanup is queued. */
+  fun requestCancellation() { cancelled.set(true) }
+
   /** Called off the UI thread. No retries; the disconnect cancels STT as well as chat/audio downloads. */
   fun cancel() {
-    cancelled.set(true)
+    requestCancellation()
     active?.disconnect()
     cleanupRemote()
   }

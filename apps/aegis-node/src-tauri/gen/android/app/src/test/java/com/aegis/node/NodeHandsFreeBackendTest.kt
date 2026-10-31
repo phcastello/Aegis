@@ -24,6 +24,31 @@ class NodeHandsFreeBackendTest {
   private val message = UUID.randomUUID().toString()
   private fun wav() = handsFreeWav(ShortArray(1600) { 42 }, 1600)
 
+  @Test fun immediateCancellationBlocksChatBeforeDeferredNetworkCleanupRuns() {
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    Fixture(respond = { request, normal ->
+      if (request.path == "/api/voice/transcriptions") {
+        entered.countDown()
+        check(release.await(5, TimeUnit.SECONDS))
+      }
+      normal
+    }).use { fixture ->
+      val executor = Executors.newSingleThreadExecutor()
+      val backend = fixture.backend()
+      try {
+        val pending = executor.submit<HandsFreeTurn> { backend.execute(wav(), session, null) }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        // Intentionally do not run cancel()/DELETE/disconnect yet, as if cleanup is queued.
+        backend.requestCancellation()
+        release.countDown()
+        val failed = assertThrows(java.util.concurrent.ExecutionException::class.java) { pending.get(5, TimeUnit.SECONDS) }
+        assertTrue(failed.cause is java.util.concurrent.CancellationException)
+        assertEquals(listOf("/api/voice/transcriptions"), fixture.requests.map { it.path })
+      } finally { release.countDown(); backend.cancel(); executor.shutdownNow() }
+    }
+  }
+
   @Test fun multipartChatAndPcmKeepOneExplicitVoiceDestination() {
     Fixture().use { fixture ->
       val stages = mutableListOf<String>()

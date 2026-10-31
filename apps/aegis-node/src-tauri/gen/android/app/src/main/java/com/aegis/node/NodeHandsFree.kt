@@ -76,7 +76,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(duration>0)metrics.add("${stage}Ms",duration)
         if(stage in setOf("transcribed","empty","failed"))metrics.add("commands_${stage}")
     }
-    private fun cancelBackend(){val active=synchronized(lock){val value=backend;backend=null;value};if(active!=null)cleanup.execute{active.cancel()}}
+    private fun cancelBackend(){val active=synchronized(lock){val value=backend;backend=null;value};if(active!=null){active.requestCancellation();cleanup.execute{active.cancel()}}}
     private val playback=HandsFreePlayback(context)
     init {
         modelReady=try{HandsFreeModel.read(context)!=null}catch(_:Throwable){false}
@@ -215,9 +215,9 @@ internal class HandsFreeRuntime(private val context:Context) {
             while(current(generation)) {
                 val command=capture(generation,detector,continuation)?:break
                 if(!current(generation)){command.fill(0);break}
-                if(command.isEmpty()){val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);continue}
+                if(command.isEmpty()){val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val session=sessionId?:UUID.randomUUID().toString().also{sessionId=it}
-                if(sessionCancelled){command.fill(0);val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);continue}
+                if(sessionCancelled){command.fill(0);val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val wake=context.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Aegis:hands-free-session")
                 val heldAt=SystemClock.elapsedRealtime()
                 var replyAudio:ByteArray?=null
