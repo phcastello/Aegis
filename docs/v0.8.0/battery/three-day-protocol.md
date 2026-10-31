@@ -14,11 +14,15 @@ três dias posteriores não provam causalidade nem significância estatística.
    oficial de assistente padrão do Android, selecionar Aegis. A escolha é do
    proprietário. Não usar root, Accessibility, overlay genérico ou desligar
    globalmente as otimizações de bateria.
-3. Importar o pacote privado do modelo pelo mecanismo indicado nas instruções
-   do build. Modelo e configuração precisam passar integridade/compatibilidade
-   antes de habilitar. Modelo ausente ou rejeitado é indisponibilidade, não
-   escuta ativa.
-4. Habilitar hands-free em modo de interação real. O diagnóstico pertence ao
+3. Em **Configurações → Áudio e voz → Hands-free**, com a escuta desligada,
+   tocar **Importar modelo privado** e selecionar o arquivo bruto
+   `aegis.int8.tflite` de 39.552 bytes pelo seletor oficial do Android. Não
+   selecionar o JSON nem um ZIP. A cópia e seu hash estão nas
+   [instruções do detector](../detector-parity.md). O Node verifica hash,
+   dimensões/quantização e carregamento antes de gravar na área privada.
+   Modelo ausente ou rejeitado é indisponibilidade, não escuta ativa.
+4. Na mesma tela, habilitar **Escutar “Aegis”**, deixando **Diagnóstico**
+   desmarcado para interação real. O diagnóstico pertence ao
    mesmo pipeline, mas não envia comandos e não substitui os três dias de uso.
 5. Fazer uma verificação breve: falar “Aegis, o que tem de importante hoje?”
    sem pausa obrigatória após o nome, com outro app aberto e depois bloqueado;
@@ -50,8 +54,41 @@ sem evidência. Após cada dia concluído:
   sem hands-free e falhas percebidas. Não atribuir ícones do instante de captura
   ao dia inteiro nem presumir que os tempos somam 24 horas.
 - Exportar o resumo operacional agregado da Aegis ao fim da janela e guardar
-  junto das capturas privadas. A exportação não deve conter áudio nem texto de
-  comandos.
+  junto das capturas privadas. Usar **Configurações → Áudio e voz → Hands-free
+  → Exportar métricas**; o seletor oficial salva
+  `aegis-hands-free-metrics.json` no destino escolhido. Não há áudio nem texto
+  de comandos na exportação.
+
+## Formato da exportação
+
+O JSON tem `schema: 1`, versão/build do app, identificação/hash do modelo,
+configuração fixa, permissões e papel de assistente. `days` é um objeto por
+`AAAA-MM-DD` no fuso local do Android. Tempos são milissegundos derivados de
+relógio monotônico; `events[].at` e `checkpointAt` têm fuso explícito.
+
+- `requestedMs`: tempo solicitado com a configuração habilitada.
+- `captureAudioMs`: duração de PCM lido; `captureConfirmedMs` e
+  `detectionConfirmedMs`: disponibilidade efetivamente confirmada;
+  `captureLockedConfirmedMs` e `captureScreenOffConfirmedMs`: respectivos
+  intervalos com bloqueio/tela desligada.
+- `state_<estado>Ms`: duração em cada estado, incluindo indisponibilidade e
+  pausas. `captureUnknownGapMs` representa lacunas observadas sem confirmação.
+- Contadores: `activations`, `sessions_started`, `commands_transcribed`,
+  `commands_empty`, `commands_failed`, `commands_no_speech`, cancelamentos,
+  falhas e ausência de fala na continuação.
+- Durações agregadas de captura, STT, backend e TTS, e `sessionWakeLockMs`.
+  Campos existem quando há observação; ausência não deve ser interpretada como
+  atividade retroativamente confirmada.
+- `device` conserva a observação normal mais recente de bateria/carga,
+  bloqueio e tela, com instante. `events` retém até 128 eventos recentes;
+  agregados diários retêm 14 dias. Exportar ao fim da janela evita perder o
+  histórico anterior à retenção.
+
+Após reinício há evento `process_restart_unknown_interval` desde o último
+checkpoint, com disponibilidade desconhecida. Não inferir cobertura contínua
+pelo fato de `requestedMs` ser alto. A persistência ocorre por mudança de estado
+e a cada cerca de um minuto durante operação; não há gravação de áudio ambiente
+nem polling do WebView por frame.
 
 ## Como comparar
 

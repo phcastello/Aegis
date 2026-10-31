@@ -4,6 +4,12 @@ Aplicativo Tauri 2 para Android ARM64 e Windows x86_64, com a interface Vue de
 `packages/aegis-client`. Cada instalação pareada é um Node; notificações nativas
 usam Windows/FCM. O cliente web/PWA tem outro host.
 
+O primeiro hands-free Android da v0.8.0 usa o assistente nativo do sistema e o
+modelo privado importado pelo proprietário. Veja [ativação, arquitetura e
+limitações](../../docs/v0.8.0/hands-free.md), [paridade do
+detector](../../docs/v0.8.0/detector-parity.md) e o [protocolo de
+bateria](../../docs/v0.8.0/battery/three-day-protocol.md).
+
 ## Preparar o ambiente
 
 Use Node 22/24, npm, Rust estável e os pré-requisitos Tauri 2 da plataforma.
@@ -51,7 +57,8 @@ use HTTPS confiável ou teste no APK de depuração. Configurar uma URL não par
 ## Versão, testes e histórico
 
 Edite a versão de `package.json` e execute `npm run version:sync`; confirme com
-`npm run version:check`. Esta manutenção preserva a versão publicada 0.7.1.
+`npm run version:check`. A fonte desta entrega usa 0.8.0; a publicação de
+desenvolvimento reserva a distribuição `unstable.N` e código Android monotônico.
 
 Veja [testes e alcance das evidências](../../docs/testes.md). Os relatos de
 [fundação](../../docs/v0.7.0-stage01-tauri-foundation.md) e

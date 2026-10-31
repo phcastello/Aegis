@@ -130,7 +130,7 @@ limites, redirecionamento, integridade de IDs/WAV, ativação sem pedido,
 continuação, cancelamento concorrente e troca/revogação de identidade.
 
 Revisão do transporte em 31/10/2026: 14 testes de loopback aprovados em JVM,
-mais cinco testes de áudio e sete de métricas. O ensaio isolado compilou as fontes
+mais cinco testes de áudio e nove de métricas. O ensaio isolado compilou as fontes
 reais de transporte, WAV/VAD, sessão nativa, modelo e métricas com Kotlin 2.3.21,
 Android 37 e JUnit 4.13.2; somente as fronteiras de preferências Android e
 BuildConfig receberam adaptadores de teste. Não houve leitura de cofre real,
@@ -143,3 +143,13 @@ de carga. São observações de eventos do sistema, não consumo atribuível à 
 duração de carregamento ou quantidade de recargas. Mudança de fuso invalida o
 cache de agrupamento diário no próximo tick/evento; o export registra os fusos
 anterior/atual e a observação anterior, sem completar horas ausentes.
+
+
+A exportação `schema: 1` inclui `requestedEnabled` e `diagnostic` no nível raiz.
+`configuration_restored` marca a leitura das preferências após iniciar o processo,
+sem inventar ativação pelo proprietário. Mudanças efetivas ficam também no dia
+em `configurationTransitions`, com `at`, `enabled` e `diagnostic`; uma mudança
+somente de diagnóstico não gera evento de habilitação. Até 64 transições por dia
+são preservadas, com `configurationTransitionsDropped`, contador total e primeiro/
+último timestamp para tornar a retenção explícita. Esses dados não dependem da
+janela geral de 128 eventos, que pode girar durante os três dias de uso.
