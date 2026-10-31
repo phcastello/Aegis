@@ -132,7 +132,10 @@ internal class HandsFreeContinuationGate(classifier:HandsFreeSpeechClassifier) {
 /** Cached 40ms rising two-note cue: local PCM, no TTS/network and no microphone mute window. */
 internal object HandsFreeCueSignal {
     const val SAMPLE_RATE=16000
-    const val VERSION="aegis-dual-note-40ms-v1"
+    const val VERSION="aegis-dual-note-40ms-v1-gain1"
+    // Keep the approved PCM unchanged. The old player gain of .18 attenuated it
+    // by another 14.9dB; unity still leaves 16.3dB of digital peak headroom.
+    const val PLAYER_GAIN=1.0f
     val samples:ShortArray=ShortArray(640).also { pcm->
         fun note(start:Int,frequency:Double) {
             val size=256 //16ms, separated by8ms; totalactive audio32ms.

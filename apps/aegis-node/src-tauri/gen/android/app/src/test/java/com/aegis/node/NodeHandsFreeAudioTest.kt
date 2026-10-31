@@ -4,6 +4,9 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 class NodeHandsFreeAudioTest {
     private val neverSpeech=HandsFreeSpeechClassifier{false}
@@ -64,6 +67,38 @@ class NodeHandsFreeAudioTest {
             command.append(pcm,pcm.size);repeat(4){command.append(ShortArray(3200),3200)}
             assertFalse(command.hasUsefulAudio)
         }
+    }
+    @Test fun louderCuePreservesApprovedPcmAndHasDigitalHeadroom() {
+        val pcm=HandsFreeCueSignal.samples
+        val bytes=ByteBuffer.allocate(pcm.size*2).order(ByteOrder.LITTLE_ENDIAN)
+        for(sample in pcm)bytes.putShort(sample)
+        // Digest captured from the approved v1 waveform before changing player gain.
+        assertEquals("8249525e9eaf920fbcc1397dba075252b08b26dab5349188fa81f833c94ddbc6",
+            MessageDigest.getInstance("SHA-256").digest(bytes.array()).joinToString(""){"%02x".format(it)})
+        assertEquals(640,pcm.size);assertEquals(16000,HandsFreeCueSignal.SAMPLE_RATE)
+        assertEquals(1.0f,HandsFreeCueSignal.PLAYER_GAIN,0.0f)
+        assertEquals(4997,pcm.maxOf{abs(it.toInt())})
+        val rms=sqrt(pcm.sumOf{it.toDouble()*it}/pcm.size)
+        assertEquals(2231.3221164816164,rms,0.00001)
+        assertTrue(pcm.all{abs(it.toInt())<32767})
+        assertTrue(pcm.sliceArray(256 until 384).all{it.toInt()==0})
+    }
+    @Test fun cueOverUnpausedCommandDoesNotMuteOrDropTheCommandStart() {
+        val pcm=ShortArray(360000)
+        val before=speech(1280);before.copyInto(pcm,38720)
+        val capture=HandsFreeCommandCapture(pcm,40000,voice)
+        val mixed=speech(3200)
+        for(i in HandsFreeCueSignal.samples.indices) {
+            val sum=mixed[i].toInt()+HandsFreeCueSignal.samples[i]
+            assertTrue(sum in -32768..32767)
+            mixed[i]=sum.toShort()
+        }
+        assertFalse(capture.append(mixed,mixed.size))
+        repeat(4){capture.append(ShortArray(3200),3200)}
+        assertTrue(capture.hasSpeech);assertTrue(capture.hasUsefulAudio)
+        assertEquals(56000,capture.length)
+        assertArrayEquals(before,pcm.copyOfRange(38720,40000))
+        assertArrayEquals(mixed,pcm.copyOfRange(40000,43200))
     }
     @Test fun continuationStartInsideWindowCanBeConfirmedAfterDeadlineAndLastBeyondTwoSeconds() {
         val gate=HandsFreeContinuationGate(voice);val silence=ShortArray(3200)

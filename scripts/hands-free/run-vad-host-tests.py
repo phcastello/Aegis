@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--gradle-cache',type=Path,default=Path.home()/'.gradle/caches/modules-2/files-2.1')
     parser.add_argument('--kotlin-version',default='2.2.10')
     parser.add_argument('--java',default='java')
+    parser.add_argument('--continuous-wav',type=Path,help='Optional private 16kHz PCM16 synthetic continuous request for cue overlap regression')
     args=parser.parse_args();os.umask(0o077)
     library=args.library_dir/'libaegis_microwakeword.so'
     if not library.is_file():parser.error('Build the host JNI library first')
@@ -52,6 +53,9 @@ def main():
     execute_cmd=[args.java,'--enable-native-access=ALL-UNNAMED','-Djava.library.path='+str(args.library_dir.resolve()),
                  '-Daegis.vad.privateRoot='+str(args.private_root.resolve()),'-cp',str(classes)+os.pathsep+cp,
                  'org.junit.runner.JUnitCore','com.aegis.node.NodeHandsFreeAudioTest','com.aegis.node.NodeHandsFreeRealVadTest']
+    if args.continuous_wav:
+        if not args.continuous_wav.is_file():parser.error('Missing private continuous request WAV')
+        execute_cmd.insert(1,'-Daegis.vad.continuousWav='+str(args.continuous_wav.resolve()))
     with (args.output/'tests.log').open('w') as log:
         subprocess.run(compile_cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
         subprocess.run(execute_cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
@@ -59,7 +63,8 @@ def main():
             'platform':'host JVM/native, not Android execution or physical playback',
             'nativeLibrarySha256':hashlib.sha256(library.read_bytes()).hexdigest(),
             'kotlinVersion':version,'sourcesSha256':{str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
-            'passed':True,'modelUsed':False,'microphoneUsed':False,'audioOrTranscriptionsExported':False}
+            'passed':True,'modelUsed':False,'microphoneUsed':False,'audioOrTranscriptionsExported':False,
+            'continuousCueOverlapTestEnabled':bool(args.continuous_wav)}
     (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
     print('Host VAD tests passed; private report: '+str(args.output/'result.json'))
 

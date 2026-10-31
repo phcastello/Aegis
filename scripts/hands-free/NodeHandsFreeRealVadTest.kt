@@ -1,6 +1,7 @@
 package com.aegis.node
 
 import org.junit.Assert.*
+import org.junit.Assume.assumeNotNull
 import org.junit.Test
 import java.io.File
 import java.io.RandomAccessFile
@@ -33,7 +34,8 @@ class NodeHandsFreeRealVadTest {
     }
     @Test fun generatedCueAndTwentyMillisecondPulseDoNotBecomeSpeechThroughRealVadHangover() {
         val pulse=ShortArray(320){if(it%30<15)2000 else -2000}
-        for(offset in listOf(0,1,160,319))for(signal in listOf(HandsFreeCueSignal.samples,pulse))classifier().use { native->
+        val leakedCues=listOf(.05,.18,.5,1.0).map { gain->HandsFreeCueSignal.samples.map{(it*gain).toInt().toShort()}.toShortArray() }
+        for(offset in listOf(0,1,160,319))for(signal in leakedCues+listOf(pulse))classifier().use { native->
             val command=HandsFreeCommandCapture(ShortArray(360000),40000,native)
             val first=ShortArray(3200);signal.copyInto(first,offset)
             command.append(first,first.size)
@@ -82,6 +84,34 @@ class NodeHandsFreeRealVadTest {
             assertArrayEquals(before,buffer.copyOf(40000))
             assertArrayEquals(mixed,buffer.copyOfRange(40000,43200))
             assertTrue(capture.hasUsefulAudio)
+        }
+    }
+    @Test fun continuousSyntheticRequestAcrossCueKeepsEveryReceivedSampleWithRealVad() {
+        val filename=System.getProperty("aegis.vad.continuousWav")
+        assumeNotNull(filename) // Synthetic fixture stays private and outside the ordinary suite.
+        val source=wav(File(filename!!))
+        require(source.size in 3200..160000)
+        // Place the cue at three points inside the same unpaused request. This
+        // checks capture continuity, not acoustic intelligibility or wake accuracy.
+        for(split in listOf(source.size/4,source.size/2,source.size*3/4))classifier().use { native->
+            require(split<=40000)
+            val buffer=ShortArray(360000)
+            source.copyInto(buffer,40000-split,0,split)
+            val before=buffer.copyOf(40000)
+            val capture=HandsFreeCommandCapture(buffer,40000,native)
+            val tail=source.copyOfRange(split,source.size)
+            for(i in HandsFreeCueSignal.samples.indices)tail[i]=(tail[i].toInt()+HandsFreeCueSignal.samples[i]).coerceIn(-32768,32767).toShort()
+            var offset=0;var ended=false
+            while(offset<tail.size) {
+                val block=ShortArray(3200);val n=minOf(block.size,tail.size-offset)
+                tail.copyInto(block,0,offset,offset+n);offset+=n
+                ended=capture.append(block,block.size)
+                assertTrue("endpoint cannot truncate continuous request",!ended || offset==tail.size)
+            }
+            repeat(15){if(!ended)ended=capture.append(ShortArray(3200),3200)}
+            assertTrue(ended);assertTrue(capture.hasUsefulAudio)
+            assertArrayEquals(before,buffer.copyOf(40000))
+            assertArrayEquals(tail,buffer.copyOfRange(40000,40000+tail.size))
         }
     }
     @Test fun availableRealEnvironmentAndOriginalNegativeRecordingsHaveBoundedCaptureAndNoMutation() {
