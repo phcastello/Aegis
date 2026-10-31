@@ -6,13 +6,24 @@ using Aegis.Application.Observability;
 
 namespace Aegis.Infrastructure.Memory;
 
-public sealed class OpenAiMemoryEmbeddingClient(HttpClient http, MemorySemanticOptions options, AegisMetrics metrics) : IMemoryEmbeddingClient
+public sealed class OpenAiMemoryEmbeddingClient(HttpClient http, MemorySemanticOptions options, AegisMetrics metrics,
+    MemoryEmbeddingCache? cache = null) : IMemoryEmbeddingClient
 {
     public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
     {
-        metrics.MemoryEmbeddingRequests.Add(1);
         var setting = options;
+        ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(setting.EmbeddingApiKey)) throw new MemorySemanticException("embedding_not_configured", false);
+        var cacheKey = MemoryEmbeddingCache.CacheKey(setting, text);
+        var dimensions = setting.EmbeddingDimensions;
+        if (cache is not null && cache.TryGet(cacheKey, out var cached))
+        {
+            metrics.MemoryEmbeddingCacheHits.Add(1);
+            TurnLatencyProfile.Mark("memory.embedding_cache_hit", 1);
+            return cached;
+        }
+        TurnLatencyProfile.Mark("memory.embedding_cache_miss", 1);
+        metrics.MemoryEmbeddingRequests.Add(1);
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/embeddings")
         {
             Content = JsonContent.Create(new { model = setting.EmbeddingModel, input = text, dimensions = setting.EmbeddingDimensions })
@@ -34,7 +45,9 @@ public sealed class OpenAiMemoryEmbeddingClient(HttpClient http, MemorySemanticO
                 metrics.MemoryEmbeddingInputTokens.Add(tokens);
             var data = body.RootElement.GetProperty("data");
             var values = data[0].GetProperty("embedding").EnumerateArray().Select(x => x.GetSingle()).ToArray();
-            MemoryVectorValidation.Validate(values, setting.EmbeddingDimensions);
+            MemoryVectorValidation.Validate(values, dimensions);
+            ct.ThrowIfCancellationRequested();
+            cache?.Store(cacheKey, values);
             return values;
         }
         catch (MemorySemanticException) { metrics.MemoryEmbeddingFailures.Add(1); throw; }

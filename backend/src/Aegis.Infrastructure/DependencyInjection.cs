@@ -251,6 +251,7 @@ public static class DependencyInjection
             !System.Text.RegularExpressions.Regex.IsMatch(semantic.CollectionName, "^[A-Za-z0-9_-]{1,100}$"))
             throw new InvalidOperationException("Invalid MemorySemantic configuration.");
         services.AddSingleton(semantic);
+        services.AddSingleton<MemoryEmbeddingCache>();
         services.AddHttpClient<IMemoryEmbeddingClient, OpenAiMemoryEmbeddingClient>(client =>
         {
             client.BaseAddress = new Uri(semantic.EmbeddingBaseUrl.TrimEnd('/') + "/");
