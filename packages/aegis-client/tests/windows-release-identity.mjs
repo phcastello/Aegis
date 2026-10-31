@@ -58,7 +58,9 @@ export async function windowsReleaseIdentity(executable, output) {
   } finally {
     await browser?.close().catch(() => {});
     if (exited === undefined) spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' });
-    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // WebView2/Windows may release profile handles after the application exits.
+    // Allow a bounded 16.5s retry budget; persistent cleanup errors still fail the gate.
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 }
 
