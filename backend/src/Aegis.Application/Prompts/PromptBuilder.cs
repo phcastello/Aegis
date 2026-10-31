@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aegis.Application.Runtime;
+using Aegis.Application.Observability;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 
@@ -18,7 +19,7 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
         string? automaticMemoryContext = null)
     {
         var identity = (await IdentityPrompt.Value.WaitAsync(cancellationToken)).Trim();
-        var runtimeContext = await runtimeContextProvider.GetRuntimeContextAsync(cancellationToken);
+        var runtimeContext = await TurnLatencyProfile.MeasureAsync("context.runtime", () => runtimeContextProvider.GetRuntimeContextAsync(cancellationToken));
         var operationalContext = string.Join("\n", new[] { runtimeContext?.Trim(), pendingActionState?.Trim() }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
         var dynamicContext = string.Join("\n", new[] { operationalContext, automaticMemoryContext?.Trim() }

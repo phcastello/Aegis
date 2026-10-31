@@ -47,11 +47,13 @@ public sealed class AegisToolLoop(
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var response = await modelClient.RespondWithToolsAsync(
+            var response = await TurnLatencyProfile.MeasureAsync("model.round", () => modelClient.RespondWithToolsAsync(
                 new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
-                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken);
+                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken));
             responses.Add(response);
+            TurnLatencyProfile.Mark("model.round_completed", iteration);
+            TurnLatencyProfile.Mark("model.tool_calls", response.ToolCalls.Count);
 
             if (handsFree && HandsFreeReply.TryRead(response.ToolCalls, out var speech, out var continuation))
             {
@@ -160,6 +162,8 @@ public sealed class AegisToolLoop(
                 throw new InvalidOperationException("Tool streaming ended without a complete response.");
             }
             responses.Add(completed);
+            TurnLatencyProfile.Mark("model.round_completed", iteration);
+            TurnLatencyProfile.Mark("model.tool_calls", completed.ToolCalls.Count);
             if (handsFree && HandsFreeReply.TryRead(completed.ToolCalls, out var speech, out var continuation))
             {
                 stopwatch.Stop();
@@ -305,6 +309,7 @@ public sealed class AegisToolLoop(
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
+        using var timing = TurnLatencyProfile.Measure("tool." + tool.Name);
         try
         {
             return await tool.ExecuteAsync(toolCall.Arguments, context, cancellationToken);

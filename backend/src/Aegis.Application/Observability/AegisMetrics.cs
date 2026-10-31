@@ -69,6 +69,8 @@ public sealed class AegisMetrics : IDisposable
     public Histogram<double> ReminderTriggerDelay { get; }
 
 
+    public Histogram<double> ChatPreparationSeconds { get; }
+    public Histogram<double> ChatPersistenceSeconds { get; }
     public Counter<long> TurnsStarted { get; }
     public Counter<long> TurnsCompleted { get; }
     public Counter<long> TurnsCancelled { get; }
@@ -158,6 +160,8 @@ public sealed class AegisMetrics : IDisposable
         PushFailed = meter.CreateCounter<long>("aegis_push_failed_total");
         ReminderTriggerDelay = meter.CreateHistogram<double>("aegis_reminder_trigger_delay_ms", "ms");
         meter.CreateObservableGauge("aegis_turns_active", () => Volatile.Read(ref activeTurns));
+        ChatPreparationSeconds = meter.CreateHistogram<double>("aegis_chat_preparation_seconds", "s");
+        ChatPersistenceSeconds = meter.CreateHistogram<double>("aegis_chat_persistence_seconds", "s");
         TurnsStarted = meter.CreateCounter<long>("aegis_turns_started_total");
         TurnsCompleted = meter.CreateCounter<long>("aegis_turns_completed_total");
         TurnsCancelled = meter.CreateCounter<long>("aegis_turns_cancelled_total");

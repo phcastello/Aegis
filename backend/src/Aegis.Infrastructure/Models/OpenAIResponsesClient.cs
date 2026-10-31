@@ -47,6 +47,8 @@ public sealed class OpenAIResponsesClient(
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: false, request.Tools, request.PreviousResponseId,
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+        TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
+        TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -58,6 +60,7 @@ public sealed class OpenAIResponsesClient(
             using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             httpStatusCode = (int)response.StatusCode;
             responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            TurnLatencyProfile.Mark("model.response_complete");
 
             if (!response.IsSuccessStatusCode)
             {
@@ -129,6 +132,8 @@ public sealed class OpenAIResponsesClient(
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: true, request.Tools, request.PreviousResponseId,
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+        TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
+        TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
@@ -138,6 +143,8 @@ public sealed class OpenAIResponsesClient(
         HttpResponseMessage? response = null;
         JsonElement? completedResponse = null;
         string responseModel = model;
+        var firstText = false;
+        var firstArguments = false;
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -266,6 +273,14 @@ public sealed class OpenAIResponsesClient(
                             ? typeElement.GetString()
                             : null;
 
+                        if (!firstArguments && eventType == "response.function_call_arguments.delta" &&
+                            root.TryGetProperty("delta", out var argumentDelta) && !string.IsNullOrEmpty(argumentDelta.GetString()))
+                        {
+                            firstArguments = true;
+                            // Arguments are not speech. This mark only bounds the potential
+                            // overlap; the terminal call still requires full validation.
+                            TurnLatencyProfile.Mark("model.first_argument_delta");
+                        }
                         TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
 
                         if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
@@ -275,6 +290,11 @@ public sealed class OpenAIResponsesClient(
                             if (!string.IsNullOrEmpty(delta) &&
                                 IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
                             {
+                                if (!firstText)
+                                {
+                                    firstText = true;
+                                    TurnLatencyProfile.Mark("model.first_final_text_delta");
+                                }
                                 emittedContent.Append(delta);
                                 yield return new ModelToolStreamChunk(
                                     delta,
@@ -289,6 +309,7 @@ public sealed class OpenAIResponsesClient(
                         if (string.Equals(eventType, "response.completed", StringComparison.Ordinal) &&
                             root.TryGetProperty("response", out var responseElement))
                         {
+                            TurnLatencyProfile.Mark("model.response_complete");
                             completedResponse = responseElement.Clone();
                             responseModel = ExtractResponseModel(responseElement, model);
                             completedResponseBody.Append(responseElement.GetRawText());

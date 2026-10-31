@@ -35,17 +35,17 @@ public sealed class MemorySemanticSearch(IMemoryStore store, IMemoryEmbeddingCli
         {
             if (!options.Enabled) return await FallbackTracedAsync(query, limit, asOf, threshold,
                 includeHistorical, "semantic_disabled", ct);
-            var queryVector = await embeddings.EmbedAsync(query, ct);
+            var queryVector = await TurnLatencyProfile.MeasureAsync("memory.embedding", () => embeddings.EmbedAsync(query, ct));
             MemoryVectorValidation.Validate(queryVector, options.EmbeddingDimensions);
             var candidateLimit = Math.Min(100, Math.Max(20, limit * 4));
-            var candidates = (await vectors.SearchAsync(queryVector, candidateLimit, 0, ct))
+            var candidates = (await TurnLatencyProfile.MeasureAsync("memory.vector", () => vectors.SearchAsync(queryVector, candidateLimit, 0, ct)))
                 .DistinctBy(x => x.MemoryId).ToArray();
             var qualifiedCandidates = candidates.Where(x => x.Score >= threshold).ToArray();
             var qualified = qualifiedCandidates.Select(x => x.MemoryId).ToArray();
             metrics.MemorySemanticSearchCandidates.Record(qualified.Length);
             var current = includeHistorical
-                ? await store.LoadHistoricalByIdsAsync(candidates.Select(x => x.MemoryId).ToArray(), asOf, ct)
-                : await store.LoadActiveByIdsAsync(candidates.Select(x => x.MemoryId).ToArray(), asOf, ct);
+                ? await TurnLatencyProfile.MeasureAsync("memory.canonical", () => store.LoadHistoricalByIdsAsync(candidates.Select(x => x.MemoryId).ToArray(), asOf, ct))
+                : await TurnLatencyProfile.MeasureAsync("memory.canonical", () => store.LoadActiveByIdsAsync(candidates.Select(x => x.MemoryId).ToArray(), asOf, ct));
             var byId = current.ToDictionary(x => x.Id);
             var result = new List<RankedMemory>(limit);
             var semanticTrace = new List<CandidateTrace>();
@@ -66,8 +66,8 @@ public sealed class MemorySemanticSearch(IMemoryStore store, IMemoryEmbeddingCli
             if (result.Count < limit)
             {
                 var lexical = includeHistorical
-                    ? await store.SearchHistoricalAsync(query, limit, ct)
-                    : await store.SearchAsync(query, limit, asOf, ct);
+                    ? await TurnLatencyProfile.MeasureAsync("memory.lexical", () => store.SearchHistoricalAsync(query, limit, ct))
+                    : await TurnLatencyProfile.MeasureAsync("memory.lexical", () => store.SearchAsync(query, limit, asOf, ct));
                 foreach (var record in lexical)
                 {
                     var kept = result.Count < limit && result.All(x => x.Record.Id != record.Id);
@@ -92,8 +92,8 @@ public sealed class MemorySemanticSearch(IMemoryStore store, IMemoryEmbeddingCli
     {
         metrics.MemorySemanticSearchFallbacks.Add(1);
         var results = includeHistorical
-            ? await store.SearchHistoricalAsync(query, limit, ct)
-            : await store.SearchAsync(query, limit, asOf, ct);
+            ? await TurnLatencyProfile.MeasureAsync("memory.lexical", () => store.SearchHistoricalAsync(query, limit, ct))
+            : await TurnLatencyProfile.MeasureAsync("memory.lexical", () => store.SearchAsync(query, limit, asOf, ct));
         metrics.MemorySemanticSearchResults.Record(results.Count);
         return (results.Select(x => new RankedMemory(x, null)).ToArray(), "canonical_text_fallback");
     }

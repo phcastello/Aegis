@@ -12,6 +12,7 @@ using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace Aegis.Application.Chat;
 
@@ -28,7 +29,8 @@ public sealed class ChatService(
     TimeProvider? clock = null,
     AegisMetrics? metrics = null,
     MemoryHybridRetriever? hybrid = null,
-    IMemoryActivityStore? activity = null) : IChatService
+    IMemoryActivityStore? activity = null,
+    ILogger<ChatService>? logger = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
@@ -42,9 +44,11 @@ public sealed class ChatService(
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
 
+        var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
+        using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = await voiceService.RegisterTurnAsync(request.TurnId ?? Guid.NewGuid(), conversation.Id, cancellationToken);
+        var conversation = await TurnLatencyProfile.MeasureAsync("chat.conversation_load", () => GetOrCreateConversationAsync(request.ConversationId, cancellationToken));
+        var turn = await TurnLatencyProfile.MeasureAsync("chat.turn_register", () => voiceService.RegisterTurnAsync(effectiveTurnId, conversation.Id, cancellationToken));
         turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
@@ -57,7 +61,7 @@ public sealed class ChatService(
                 (clock ?? TimeProvider.System).GetUtcNow()));
         }
 
-        await dbContext.SaveChangesAsync(turnToken);
+        await TurnLatencyProfile.MeasureAsync("chat.user_persist", () => dbContext.SaveChangesAsync(turnToken));
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
 
         var promptResult = await BuildPromptForTurnAsync(
@@ -69,8 +73,9 @@ public sealed class ChatService(
         try
         {
             var modelRequest = CreateModelRequest(promptResult, userContent, request);
-            var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, turnToken);
+            var completion = await TurnLatencyProfile.MeasureAsync("chat.model_and_tools", () => RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, turnToken));
             EnsureCurrent(turn);
+            TurnLatencyProfile.Mark("chat.text_ready", completion.Content.Length);
             var finalContent = completion.Content;
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
@@ -93,7 +98,7 @@ public sealed class ChatService(
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
-                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+                await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
             }
 
             return new SendMessageResponse(
@@ -133,9 +138,11 @@ public sealed class ChatService(
             throw new ArgumentException("A valid turnId is required for streaming chat.", nameof(request));
         }
 
+        var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
+        using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = await voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken);
+        var conversation = await TurnLatencyProfile.MeasureAsync("chat.conversation_load", () => GetOrCreateConversationAsync(request.ConversationId, cancellationToken));
+        var turn = await TurnLatencyProfile.MeasureAsync("chat.turn_register", () => voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken));
         if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
         {
             throw new OperationCanceledException(turn.Cancellation.Token);
@@ -151,7 +158,7 @@ public sealed class ChatService(
             dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
                 (clock ?? TimeProvider.System).GetUtcNow()));
         }
-        await dbContext.SaveChangesAsync(turnToken);
+        await TurnLatencyProfile.MeasureAsync("chat.user_persist", () => dbContext.SaveChangesAsync(turnToken));
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
         yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
@@ -190,6 +197,7 @@ public sealed class ChatService(
             }
 
             EnsureCurrent(turn);
+            TurnLatencyProfile.Mark("chat.text_ready", content.Length);
             var finalContent = content.ToString();
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
@@ -205,7 +213,7 @@ public sealed class ChatService(
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
-                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+                await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
                     conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation);
             }
@@ -337,15 +345,16 @@ public sealed class ChatService(
         Guid conversationId,
         CancellationToken cancellationToken)
     {
+        using var timing = TurnLatencyProfile.Measure("chat.prepare", metrics?.ChatPreparationSeconds);
         var states = new List<string>();
-        var email = (await dbContext.GetUnresolvedPendingEmailActionsAsync(conversationId, cancellationToken))
+        var email = (await TurnLatencyProfile.MeasureAsync("context.pending_email", () => dbContext.GetUnresolvedPendingEmailActionsAsync(conversationId, cancellationToken)))
             .FirstOrDefault(action => action.IsOpen() || action.MayHaveAppliedChanges);
         if (email is not null)
             states.Add($"Ação pendente Gmail: {email.HumanSummary}; válida até {email.ExpiresAt:O}. " +
                 (email.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter aplicado alterações; retry é idempotente. " : "") +
                 (email.IsOpen() ? "Aceitação: email_confirm_pending_action; desistência: email_cancel_pending_action; correção: prepare uma nova proposta." :
                     "A proposta expirou, mas possíveis efeitos permanecem; consulte os emails. Cancelar a tentativa não reverte alterações."));
-        var calendarActions = await dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken);
+        var calendarActions = await TurnLatencyProfile.MeasureAsync("context.pending_calendar", () => dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken));
         foreach (var calendar in calendarActions.Where(action => action.IsOpen() || action.MayHaveAppliedChanges).Take(10))
         {
             var directCreation = System.Text.Json.JsonSerializer.Deserialize<Aegis.Application.Calendar.CalendarActionPayload>(calendar.PayloadJson,
@@ -360,16 +369,18 @@ public sealed class ChatService(
         }
         if (email is not null && calendarActions.Any(action => action.IsOpen() || action.MayHaveAppliedChanges))
             states.Add("Há ações pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
-        if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
+        if (reminders is not null && await TurnLatencyProfile.MeasureAsync("context.reminders", () => reminders.GetContextAsync(conversationId, cancellationToken)) is { } reminderContext)
             states.Add(reminderContext);
         var pendingState = string.Join("\n", states);
         var automaticContext = hybrid is null ? MemoryAutomaticContextResult.Empty :
-            await hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken);
+            await TurnLatencyProfile.MeasureAsync("context.automatic_memory", () => hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken));
         var observedContext = memory is null ? MemoryObservedContextResult.Empty :
-            await memory.GetContextResultAsync(conversationId, cancellationToken);
+            await TurnLatencyProfile.MeasureAsync("context.observed_memory", () => memory.GetContextResultAsync(conversationId, cancellationToken));
         var memoryContext = string.Join("\n", new[] { observedContext.Text, automaticContext.Text }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
-        var prompt = await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext);
+        var prompt = await TurnLatencyProfile.MeasureAsync("context.prompt", () => promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext));
+        TurnLatencyProfile.Mark("context.history_messages", history.Count);
+        TurnLatencyProfile.Mark("context.memory_characters", memoryContext.Length);
         return prompt with
         {
             UsedMemoryIds = automaticContext.MemoryIds.Distinct().ToArray(),
@@ -381,6 +392,7 @@ public sealed class ChatService(
     private async Task<MemoryActivitySnapshot?> CompleteMemoryActivityAsync(PromptBuildResult prompt,
         Guid conversationId, Guid userMessageId, Guid assistantMessageId, CancellationToken ct)
     {
+        using var timing = TurnLatencyProfile.Measure("chat.assistant_persist", metrics?.ChatPersistenceSeconds);
         if (activity is null)
         {
             await dbContext.SaveChangesAsync(ct);
