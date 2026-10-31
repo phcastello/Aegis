@@ -1,0 +1,482 @@
+candidate,config,id,original,device,label,group,form,duration_seconds,detected,activations,timestamps,scores,first_before_audio_end,first_finish_only,delay_from_estimated_word_end_seconds
+microwakeword,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+microwakeword,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.04,0.5546875,True,False,0.075
+microwakeword,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.28,0.59921875,True,False,0.125
+microwakeword,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.31,0.553125,True,False,0.125
+microwakeword,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.58,0.5328125,True,False,0.145
+microwakeword,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.37,0.578125,True,False,0.245
+microwakeword,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+microwakeword,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.22,0.59375,True,False,0.22
+microwakeword,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+microwakeword,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.4,0.64375,True,False,0.16
+microwakeword,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.16,0.50390625,True,False,0.2
+microwakeword,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.4,0.51171875,True,False,-0.01
+microwakeword,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,0.98,0.53203125,True,False,0.09
+microwakeword,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+microwakeword,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+microwakeword,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+microwakeword,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+microwakeword,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.89,0.63359375,True,False,0.305
+microwakeword,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.8,0.52890625,True,False,0.2
+microwakeword,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.86,0.5125,True,False,0.185
+microwakeword,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.77,0.59765625,True,False,0.205
+microwakeword,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.59,0.54375,True,False,0.2
+microwakeword,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.59,0.66796875,True,False,0.24
+microwakeword,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.83,0.640625,True,False,0.17
+microwakeword,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+microwakeword,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+microwakeword,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,0.98,0.55546875,True,False,0.1
+microwakeword,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.89,0.553125,True,False,0.16
+microwakeword,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+microwakeword,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.77,0.53984375,True,False,0.15
+microwakeword,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.92,0.60546875,True,False,0.03
+microwakeword,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.86,0.525,True,False,0.15
+microwakeword,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.25,0.51875,True,False,0.02
+microwakeword,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+microwakeword,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+microwakeword,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+microwakeword,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.95,0.69453125,True,False,
+microwakeword,strict,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+microwakeword,strict,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.07,0.75390625,True,False,0.105
+microwakeword,strict,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.31,0.79765625,True,False,0.155
+microwakeword,strict,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.34,0.75234375,True,False,0.155
+microwakeword,strict,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.64,0.92421875,True,False,0.205
+microwakeword,strict,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.4,0.7765625,True,False,0.275
+microwakeword,strict,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+microwakeword,strict,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.25,0.7921875,True,False,0.25
+microwakeword,strict,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+microwakeword,strict,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.43,0.83984375,True,False,0.19
+microwakeword,strict,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.22,0.89921875,True,False,0.26
+microwakeword,strict,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.46,0.9,True,False,0.05
+microwakeword,strict,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.04,0.925,True,False,0.15
+microwakeword,strict,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+microwakeword,strict,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+microwakeword,strict,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+microwakeword,strict,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+microwakeword,strict,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.92,0.8296875,True,False,0.335
+microwakeword,strict,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.86,0.91875,True,False,0.26
+microwakeword,strict,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.92,0.90625,True,False,0.245
+microwakeword,strict,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.8,0.7953125,True,False,0.235
+microwakeword,strict,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.65,0.93359375,True,False,0.26
+microwakeword,strict,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.62,0.86484375,True,False,0.27
+microwakeword,strict,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.86,0.834375,True,False,0.2
+microwakeword,strict,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+microwakeword,strict,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+microwakeword,strict,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.01,0.75390625,True,False,0.13
+microwakeword,strict,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.92,0.75234375,True,False,0.19
+microwakeword,strict,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+microwakeword,strict,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.83,0.91953125,True,False,0.21
+microwakeword,strict,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.95,0.80390625,True,False,0.06
+microwakeword,strict,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.92,0.91484375,True,False,0.21
+microwakeword,strict,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.31,0.90390625,True,False,0.08
+microwakeword,strict,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+microwakeword,strict,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+microwakeword,strict,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+microwakeword,strict,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.98,0.8828125,True,False,
+microwakeword-realneg,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+microwakeword-realneg,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.07,0.6984375,True,False,0.105
+microwakeword-realneg,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.25,0.51640625,True,False,0.095
+microwakeword-realneg,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.34,0.6796875,True,False,0.155
+microwakeword-realneg,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.58,0.59296875,True,False,0.145
+microwakeword-realneg,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.37,0.6703125,True,False,0.245
+microwakeword-realneg,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+microwakeword-realneg,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.22,0.57890625,True,False,0.22
+microwakeword-realneg,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+microwakeword-realneg,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.4,0.61484375,True,False,0.16
+microwakeword-realneg,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.16,0.6234375,True,False,0.2
+microwakeword-realneg,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.43,0.5890625,True,False,0.02
+microwakeword-realneg,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.01,0.65859375,True,False,0.12
+microwakeword-realneg,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+microwakeword-realneg,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+microwakeword-realneg,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+microwakeword-realneg,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+microwakeword-realneg,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.86,0.5984375,True,False,0.275
+microwakeword-realneg,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.83,0.6890625,True,False,0.23
+microwakeword-realneg,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.89,0.63515625,True,False,0.215
+microwakeword-realneg,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.74,0.559375,True,False,0.175
+microwakeword-realneg,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.62,0.61640625,True,False,0.23
+microwakeword-realneg,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.59,0.675,True,False,0.24
+microwakeword-realneg,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.8,0.5296875,True,False,0.14
+microwakeword-realneg,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+microwakeword-realneg,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+microwakeword-realneg,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.01,0.58046875,True,False,0.13
+microwakeword-realneg,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.92,0.55625,True,False,0.19
+microwakeword-realneg,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+microwakeword-realneg,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.8,0.65078125,True,False,0.18
+microwakeword-realneg,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.92,0.62421875,True,False,0.03
+microwakeword-realneg,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.86,0.621875,True,False,0.15
+microwakeword-realneg,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.25,0.55078125,True,False,0.02
+microwakeword-realneg,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+microwakeword-realneg,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+microwakeword-realneg,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+microwakeword-realneg,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.92,0.62421875,True,False,
+microwakeword-realneg,strict,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+microwakeword-realneg,strict,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.1,0.89375,True,False,0.135
+microwakeword-realneg,strict,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.31,0.9015625,True,False,0.155
+microwakeword-realneg,strict,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.37,0.87109375,True,False,0.185
+microwakeword-realneg,strict,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.61,0.79140625,True,False,0.175
+microwakeword-realneg,strict,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.4,0.8515625,True,False,0.275
+microwakeword-realneg,strict,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+microwakeword-realneg,strict,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.25,0.7765625,True,False,0.25
+microwakeword-realneg,strict,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+microwakeword-realneg,strict,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.43,0.81328125,True,False,0.19
+microwakeword-realneg,strict,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.19,0.81875,True,False,0.23
+microwakeword-realneg,strict,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.46,0.78125,True,False,0.05
+microwakeword-realneg,strict,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.04,0.85703125,True,False,0.15
+microwakeword-realneg,strict,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+microwakeword-realneg,strict,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+microwakeword-realneg,strict,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+microwakeword-realneg,strict,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+microwakeword-realneg,strict,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.89,0.7953125,True,False,0.305
+microwakeword-realneg,strict,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.86,0.87734375,True,False,0.26
+microwakeword-realneg,strict,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.92,0.83046875,True,False,0.245
+microwakeword-realneg,strict,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.77,0.75703125,True,False,0.205
+microwakeword-realneg,strict,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.65,0.81328125,True,False,0.26
+microwakeword-realneg,strict,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.62,0.86640625,True,False,0.27
+microwakeword-realneg,strict,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.86,0.89296875,True,False,0.2
+microwakeword-realneg,strict,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+microwakeword-realneg,strict,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+microwakeword-realneg,strict,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.04,0.77890625,True,False,0.16
+microwakeword-realneg,strict,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.95,0.7546875,True,False,0.22
+microwakeword-realneg,strict,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+microwakeword-realneg,strict,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.83,0.8390625,True,False,0.21
+microwakeword-realneg,strict,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.95,0.82109375,True,False,0.06
+microwakeword-realneg,strict,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.89,0.81875,True,False,0.18
+microwakeword-realneg,strict,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.31,0.89921875,True,False,0.08
+microwakeword-realneg,strict,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+microwakeword-realneg,strict,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+microwakeword-realneg,strict,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+microwakeword-realneg,strict,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.95,0.81015625,True,False,
+openwakeword,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+openwakeword,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,0.96,0.999992847442627,True,False,-0.005
+openwakeword,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.2,0.9996683597564697,True,False,0.045
+openwakeword,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.2,0.997298002243042,True,False,0.015
+openwakeword,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.52,0.9997032880783081,True,False,0.085
+openwakeword,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.28,0.9990696907043457,True,False,0.155
+openwakeword,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+openwakeword,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.12,0.9999901056289673,True,False,0.12
+openwakeword,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+openwakeword,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.28,0.999774694442749,True,False,0.04
+openwakeword,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.12,0.9998862743377686,True,False,0.16
+openwakeword,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.28,0.9845243692398071,True,False,-0.13
+openwakeword,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,0.88,0.9997601509094238,True,False,-0.01
+openwakeword,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+openwakeword,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+openwakeword,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+openwakeword,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,True,1,1.2,0.5806940793991089,True,False,
+openwakeword,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.72,0.9960085153579712,True,False,0.135
+openwakeword,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.72,0.9988605976104736,True,False,0.12
+openwakeword,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.72,0.9058375358581543,True,False,0.045
+openwakeword,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.64,0.964342474937439,True,False,0.075
+openwakeword,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.56,0.9999732971191406,True,False,0.17
+openwakeword,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.48,0.9491757750511169,True,False,0.13
+openwakeword,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.72,0.9999744892120361,True,False,0.06
+openwakeword,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+openwakeword,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+openwakeword,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,0.8,0.9609442949295044,True,False,-0.08
+openwakeword,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.72,0.6232336759567261,True,False,-0.01
+openwakeword,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+openwakeword,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.72,0.9988275766372681,True,False,0.1
+openwakeword,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.8,0.9994999170303345,True,False,-0.09
+openwakeword,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.72,0.9937270879745483,True,False,0.01
+openwakeword,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.12,0.9869159460067749,True,False,-0.11
+openwakeword,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+openwakeword,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+openwakeword,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+openwakeword,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.88,0.999840497970581,True,False,
+openwakeword,strict,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+openwakeword,strict,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,0.96,0.999992847442627,True,False,-0.005
+openwakeword,strict,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.2,0.9996683597564697,True,False,0.045
+openwakeword,strict,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.2,0.997298002243042,True,False,0.015
+openwakeword,strict,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.52,0.9997032880783081,True,False,0.085
+openwakeword,strict,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.28,0.9990696907043457,True,False,0.155
+openwakeword,strict,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+openwakeword,strict,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.12,0.9999901056289673,True,False,0.12
+openwakeword,strict,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+openwakeword,strict,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.28,0.999774694442749,True,False,0.04
+openwakeword,strict,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.12,0.9998862743377686,True,False,0.16
+openwakeword,strict,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.28,0.9845243692398071,True,False,-0.13
+openwakeword,strict,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,0.88,0.9997601509094238,True,False,-0.01
+openwakeword,strict,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+openwakeword,strict,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+openwakeword,strict,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+openwakeword,strict,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+openwakeword,strict,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,True,1,0.72,0.9960085153579712,True,False,0.135
+openwakeword,strict,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,0.72,0.9988605976104736,True,False,0.12
+openwakeword,strict,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,0.72,0.9058375358581543,True,False,0.045
+openwakeword,strict,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,0.64,0.964342474937439,True,False,0.075
+openwakeword,strict,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,True,1,0.56,0.9999732971191406,True,False,0.17
+openwakeword,strict,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.48,0.9491757750511169,True,False,0.13
+openwakeword,strict,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,0.72,0.9999744892120361,True,False,0.06
+openwakeword,strict,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+openwakeword,strict,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+openwakeword,strict,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,0.8,0.9609442949295044,True,False,-0.08
+openwakeword,strict,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,0.8,0.9999939203262329,True,False,0.07
+openwakeword,strict,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+openwakeword,strict,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,True,1,0.72,0.9988275766372681,True,False,0.1
+openwakeword,strict,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,0.8,0.9994999170303345,True,False,-0.09
+openwakeword,strict,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.72,0.9937270879745483,True,False,0.01
+openwakeword,strict,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.12,0.9869159460067749,True,False,-0.11
+openwakeword,strict,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+openwakeword,strict,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+openwakeword,strict,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+openwakeword,strict,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.88,0.999840497970581,True,False,
+pocketsphinx,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,complementary,isolated,1.6021875,True,1,1.3,0.8080031348444462,True,False,0.08
+pocketsphinx,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,False,0,,,,,
+pocketsphinx,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,False,0,,,,,
+pocketsphinx,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.3,0.814004234678063,True,False,0.115
+pocketsphinx,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,False,0,,,,,
+pocketsphinx,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,False,0,,,,,
+pocketsphinx,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,complementary,isolated,1.8808125,True,1,1.3,0.8133533242341916,True,False,0.46
+pocketsphinx,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,False,0,,,,,
+pocketsphinx,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,complementary,isolated,1.9505,True,1,1.8,0.8191483912327044,True,False,0.23
+pocketsphinx,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,False,0,,,,,
+pocketsphinx,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,False,0,,,,,
+pocketsphinx,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.7,0.8088923828278464,True,False,0.29
+pocketsphinx,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,False,0,,,,,
+pocketsphinx,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+pocketsphinx,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,True,1,2.1,0.8225958767565291,True,False,
+pocketsphinx,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+pocketsphinx,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+pocketsphinx,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+pocketsphinx,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,False,0,,,,,
+pocketsphinx,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,False,0,,,,,
+pocketsphinx,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,False,0,,,,,
+pocketsphinx,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+pocketsphinx,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,False,0,,,,,
+pocketsphinx,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+pocketsphinx,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,complementary,isolated,1.6,True,1,1.4,0.8198859197470534,True,False,0.39
+pocketsphinx,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,complementary,isolated,1.2266875,True,1,1.2,0.839128663744066,True,False,0.28
+pocketsphinx,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.3,0.8185752166515998,True,False,0.42
+pocketsphinx,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,1.1,0.8189026958560478,True,False,0.37
+pocketsphinx,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,complementary,isolated,1.557375,True,1,1.1,0.8393804275178882,True,False,0.26
+pocketsphinx,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+pocketsphinx,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,False,0,,,,,
+pocketsphinx,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,0.9,0.8102686005225336,True,False,0.19
+pocketsphinx,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.5,0.8362806131170449,True,False,0.27
+pocketsphinx,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,True,1,1.1,0.8263883441573734,True,False,
+pocketsphinx,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+pocketsphinx,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+pocketsphinx,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,True,1,0.9,0.8195580473513517,True,False,
+pocketsphinx,strict,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,complementary,isolated,1.6021875,False,0,,,,,
+pocketsphinx,strict,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,False,0,,,,,
+pocketsphinx,strict,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,False,0,,,,,
+pocketsphinx,strict,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,False,0,,,,,
+pocketsphinx,strict,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,False,0,,,,,
+pocketsphinx,strict,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,False,0,,,,,
+pocketsphinx,strict,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,complementary,isolated,1.8808125,False,0,,,,,
+pocketsphinx,strict,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,False,0,,,,,
+pocketsphinx,strict,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,complementary,isolated,1.9505,False,0,,,,,
+pocketsphinx,strict,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,False,0,,,,,
+pocketsphinx,strict,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,False,0,,,,,
+pocketsphinx,strict,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,False,0,,,,,
+pocketsphinx,strict,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,False,0,,,,,
+pocketsphinx,strict,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+pocketsphinx,strict,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+pocketsphinx,strict,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+pocketsphinx,strict,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+pocketsphinx,strict,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+pocketsphinx,strict,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,False,0,,,,,
+pocketsphinx,strict,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,False,0,,,,,
+pocketsphinx,strict,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,False,0,,,,,
+pocketsphinx,strict,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+pocketsphinx,strict,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,False,0,,,,,
+pocketsphinx,strict,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+pocketsphinx,strict,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,complementary,isolated,1.6,False,0,,,,,
+pocketsphinx,strict,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,complementary,isolated,1.2266875,True,1,1.2,0.839128663744066,True,False,0.28
+pocketsphinx,strict,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,False,0,,,,,
+pocketsphinx,strict,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,False,0,,,,,
+pocketsphinx,strict,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,complementary,isolated,1.557375,True,1,1.1,0.8393804275178882,True,False,0.26
+pocketsphinx,strict,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+pocketsphinx,strict,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,False,0,,,,,
+pocketsphinx,strict,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,False,0,,,,,
+pocketsphinx,strict,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.5,0.8362806131170449,True,False,0.27
+pocketsphinx,strict,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,True,1,1.1,0.8263883441573734,True,False,
+pocketsphinx,strict,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+pocketsphinx,strict,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+pocketsphinx,strict,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
+raven,consensus,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+raven,consensus,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.26,0.5116821529963479,True,False,0.295
+raven,consensus,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.26,0.5184369199350368,True,False,0.105
+raven,consensus,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.26,0.5175300450601257,True,False,0.075
+raven,consensus,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.89,0.5084818945906007,True,False,0.455
+raven,consensus,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.89,0.5187500833991042,True,False,0.765
+raven,consensus,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+raven,consensus,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.26,0.5019479906625153,True,False,0.26
+raven,consensus,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+raven,consensus,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.26,0.5083845098860691,True,False,0.02
+raven,consensus,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.26,0.5301529017506276,True,False,0.3
+raven,consensus,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.47,0.5565374804759824,True,False,0.06
+raven,consensus,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.29,0.5344345557586088,True,False,0.4
+raven,consensus,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+raven,consensus,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+raven,consensus,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+raven,consensus,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,True,1,1.26,0.5017090158499221,True,False,
+raven,consensus,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+raven,consensus,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,1.26,0.5273986738647123,True,False,0.66
+raven,consensus,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,1.26,0.5054997019033485,True,False,0.585
+raven,consensus,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,1.26,0.5296993688694975,True,False,0.695
+raven,consensus,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+raven,consensus,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.63,0.512808014415232,True,False,0.28
+raven,consensus,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+raven,consensus,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+raven,consensus,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+raven,consensus,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.26,0.504497090955621,True,False,0.38
+raven,consensus,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,False,0,,,,,
+raven,consensus,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+raven,consensus,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+raven,consensus,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,1.26,0.5165009361317116,True,False,0.37
+raven,consensus,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,False,0,,,,,
+raven,consensus,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.32,0.5552207588974515,True,False,0.09
+raven,consensus,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+raven,consensus,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+raven,consensus,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+raven,consensus,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
+raven,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+raven,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,True,1,1.26,0.5116821529963479,True,False,0.295
+raven,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.26,0.5184369199350368,True,False,0.105
+raven,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,True,1,1.26,0.5058883091037053,True,False,0.075
+raven,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,True,1,1.89,0.5084818945906007,True,False,0.455
+raven,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,True,1,1.89,0.5187500833991042,True,False,0.765
+raven,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+raven,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,True,1,1.26,0.5019479906625153,True,False,0.26
+raven,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+raven,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,True,1,1.26,0.5083845098860691,True,False,0.02
+raven,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,True,1,1.26,0.5301529017506276,True,False,0.3
+raven,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.47,0.5178414843988339,True,False,0.06
+raven,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.29,0.5344345557586088,True,False,0.4
+raven,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+raven,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+raven,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+raven,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,True,1,1.26,0.5017090158499221,True,False,
+raven,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+raven,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,True,1,1.26,0.5273986738647123,True,False,0.66
+raven,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,1.26,0.5054997019033485,True,False,0.585
+raven,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,True,1,1.26,0.5296993688694975,True,False,0.695
+raven,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+raven,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,True,1,0.63,0.512808014415232,True,False,0.28
+raven,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+raven,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+raven,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+raven,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.26,0.504497090955621,True,False,0.38
+raven,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,False,0,,,,,
+raven,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+raven,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+raven,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,1.26,0.5165009361317116,True,False,0.37
+raven,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,False,0,,,,,
+raven,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.32,0.5102763360168331,True,False,0.09
+raven,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+raven,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+raven,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+raven,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
+raven,strict,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,adaptation,isolated,1.6021875,,,,,,,
+raven,strict,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,False,0,,,,,
+raven,strict,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,False,0,,,,,
+raven,strict,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,False,0,,,,,
+raven,strict,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,False,0,,,,,
+raven,strict,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,False,0,,,,,
+raven,strict,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,adaptation,isolated,1.8808125,,,,,,,
+raven,strict,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,False,0,,,,,
+raven,strict,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,adaptation,isolated,1.9505,,,,,,,
+raven,strict,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,False,0,,,,,
+raven,strict,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,False,0,,,,,
+raven,strict,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,False,0,,,,,
+raven,strict,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,False,0,,,,,
+raven,strict,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+raven,strict,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+raven,strict,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+raven,strict,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+raven,strict,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+raven,strict,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,False,0,,,,,
+raven,strict,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,False,0,,,,,
+raven,strict,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,False,0,,,,,
+raven,strict,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+raven,strict,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,False,0,,,,,
+raven,strict,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+raven,strict,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,adaptation,isolated,1.6,,,,,,,
+raven,strict,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,adaptation,isolated,1.2266875,,,,,,,
+raven,strict,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,False,0,,,,,
+raven,strict,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,False,0,,,,,
+raven,strict,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,adaptation,isolated,1.557375,,,,,,,
+raven,strict,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+raven,strict,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,False,0,,,,,
+raven,strict,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,False,0,,,,,
+raven,strict,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,False,0,,,,,
+raven,strict,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+raven,strict,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+raven,strict,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+raven,strict,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
+whisper,default,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,complementary,isolated,1.6021875,False,0,,,,,
+whisper,default,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,False,0,,,,,
+whisper,default,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,False,0,,,,,
+whisper,default,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,False,0,,,,,
+whisper,default,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,False,0,,,,,
+whisper,default,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,False,0,,,,,
+whisper,default,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,complementary,isolated,1.8808125,False,0,,,,,
+whisper,default,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,False,0,,,,,
+whisper,default,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,complementary,isolated,1.9505,False,0,,,,,
+whisper,default,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,False,0,,,,,
+whisper,default,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,False,0,,,,,
+whisper,default,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,False,0,,,,,
+whisper,default,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,False,0,,,,,
+whisper,default,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+whisper,default,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+whisper,default,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+whisper,default,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+whisper,default,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+whisper,default,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,False,0,,,,,
+whisper,default,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,False,0,,,,,
+whisper,default,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,False,0,,,,,
+whisper,default,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+whisper,default,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,False,0,,,,,
+whisper,default,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,False,0,,,,,
+whisper,default,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,complementary,isolated,1.6,False,0,,,,,
+whisper,default,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,complementary,isolated,1.2266875,False,0,,,,,
+whisper,default,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,False,0,,,,,
+whisper,default,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,False,0,,,,,
+whisper,default,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,complementary,isolated,1.557375,False,0,,,,,
+whisper,default,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+whisper,default,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,False,0,,,,,
+whisper,default,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,False,0,,,,,
+whisper,default,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,False,0,,,,,
+whisper,default,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+whisper,default,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+whisper,default,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+whisper,default,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
+whisper,prompt,android-positive-01,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (1).mp4,android,positive,complementary,isolated,1.6021875,False,0,,,,,
+whisper,prompt,android-positive-02,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (2).mp4,android,positive,independent,continuous,3.947375,False,0,,,,,
+whisper,prompt,android-positive-03,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (3).mp4,android,positive,independent,continuous,2.3916875,True,1,1.536,,True,False,0.381
+whisper,prompt,android-positive-04,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56 (4).mp4,android,positive,independent,continuous,2.322,False,0,,,,,
+whisper,prompt,android-positive-05,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.56.mp4,android,positive,independent,continuous,3.4365625,False,0,,,,,
+whisper,prompt,android-positive-06,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (1).mp4,android,positive,independent,continuous,4.179625,False,0,,,,,
+whisper,prompt,android-positive-07,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (2).mp4,android,positive,complementary,isolated,1.8808125,True,1,1.184,,True,False,0.344
+whisper,prompt,android-positive-08,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (3).mp4,android,positive,independent,continuous,4.9923125,False,0,,,,,
+whisper,prompt,android-positive-09,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (4).mp4,android,positive,complementary,isolated,1.9505,True,1,1.824,,True,False,0.254
+whisper,prompt,android-positive-10,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57 (5).mp4,android,positive,independent,continuous,3.1579375,False,0,,,,,
+whisper,prompt,android-positive-11,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.57.mp4,android,positive,independent,continuous,2.438125,False,0,,,,,
+whisper,prompt,android-positive-12,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58 (1).mp4,android,positive,independent,isolated,1.9969375,True,1,1.664,,True,False,0.254
+whisper,prompt,android-positive-13,aegis-wakeword-poc/Chamadas_Android/Normais/WhatsApp Audio 2026-10-30 at 09.57.58.mp4,android,positive,independent,continuous,2.6703125,True,1,1.28,,True,False,0.39
+whisper,prompt,android-negative-01,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (1).mp4,android,negative,negative,negative,3.2275625,False,0,,,,,
+whisper,prompt,android-negative-02,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41 (2).mp4,android,negative,negative,negative,3.4365625,False,0,,,,,
+whisper,prompt,android-negative-03,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.41.mp4,android,negative,negative,negative,3.1115,False,0,,,,,
+whisper,prompt,android-negative-04,aegis-wakeword-poc/Chamadas_Android/Teste_falsos_positivos/WhatsApp Audio 2026-10-30 at 10.00.42.mp4,android,negative,negative,negative,3.7151875,False,0,,,,,
+whisper,prompt,windows-positive-01,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (10).m4a,windows,positive,independent,continuous,3.1466875,False,0,,,,,
+whisper,prompt,windows-positive-02,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (11).m4a,windows,positive,independent,continuous,2.5706875,False,0,,,,,
+whisper,prompt,windows-positive-03,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (12).m4a,windows,positive,independent,continuous,3.136,True,1,1.152,,True,False,0.477
+whisper,prompt,windows-positive-04,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (13).m4a,windows,positive,independent,continuous,4.1706875,False,0,,,,,
+whisper,prompt,windows-positive-05,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (14).m4a,windows,positive,independent,continuous,2.1546875,False,0,,,,,
+whisper,prompt,windows-positive-06,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (15).m4a,windows,positive,independent,continuous,3.5626875,False,0,,,,,
+whisper,prompt,windows-positive-07,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (16).m4a,windows,positive,independent,continuous,1.7706875,True,1,1.088,,True,False,0.428
+whisper,prompt,windows-positive-08,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (2).m4a,windows,positive,complementary,isolated,1.6,True,1,1.44,,True,False,0.43
+whisper,prompt,windows-positive-09,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (3).m4a,windows,positive,complementary,isolated,1.2266875,False,0,,,,,
+whisper,prompt,windows-positive-10,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (4).m4a,windows,positive,independent,isolated,2.112,True,1,1.216,,True,False,0.336
+whisper,prompt,windows-positive-11,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (5).m4a,windows,positive,independent,isolated,1.4506875,True,1,1.248,,True,False,0.518
+whisper,prompt,windows-positive-12,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (6).m4a,windows,positive,complementary,isolated,1.557375,True,1,1.184,,True,False,0.344
+whisper,prompt,windows-positive-13,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (7).m4a,windows,positive,independent,isolated,1.429375,False,0,,,,,
+whisper,prompt,windows-positive-14,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (8).m4a,windows,positive,independent,continuous,2.208,True,1,1.76,,True,False,0.87
+whisper,prompt,windows-positive-15,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording (9).m4a,windows,positive,independent,continuous,2.2186875,True,1,1.664,,True,False,0.954
+whisper,prompt,windows-positive-16,aegis-wakeword-poc/Chamadas_Computador/Normais/Recording.m4a,windows,positive,independent,isolated,1.9626875,True,1,1.536,,True,False,0.306
+whisper,prompt,windows-negative-01,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (2).m4a,windows,negative,negative,negative,2.6346875,False,0,,,,,
+whisper,prompt,windows-negative-02,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (3).m4a,windows,negative,negative,negative,3.0186875,False,0,,,,,
+whisper,prompt,windows-negative-03,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording (4).m4a,windows,negative,negative,negative,2.4426875,False,0,,,,,
+whisper,prompt,windows-negative-04,aegis-wakeword-poc/Chamadas_Computador/Teste_falsos_positivos/Recording.m4a,windows,negative,negative,negative,2.688,False,0,,,,,
