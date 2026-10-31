@@ -105,6 +105,27 @@ A investigação orienta a implementação; não demonstra funcionamento físico
    [Compartilhamento](https://developer.android.com/media/platform/sharing-audio-input),
    [guia HA](https://www.home-assistant.io/voice_control/android/).
 
+## Geometria do painel nativo
+
+A fonte oficial AOSP foi conferida no tag imutável `android-16.0.0_r4`.
+`VoiceInteractionSession.ensureWindowCreated()` força janela de largura/altura
+`MATCH_PARENT`; `setContentView()` também coloca a View retornada em layout
+`MATCH_PARENT` nos dois eixos. Portanto, apenas `Window.setGravity(BOTTOM)`
+não torna pequeno um painel opaco. O `doShow()` cria/adiciona a janela, chama
+`onShow()` e só depois `showWindow()`; este chama `VoiceInteractionWindow.show()`
+sem redefinir largura/altura.
+[VoiceInteractionSession.java](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/service/voice/VoiceInteractionSession.java),
+[VoiceInteractionWindow.java](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/service/voice/VoiceInteractionWindow.java).
+
+A Aegis ajusta explicitamente a **janela real**, em `onShow()` após `super`,
+para largura `MATCH_PARENT`, altura `WRAP_CONTENT` e gravidade inferior. Limpa
+`DIM_BEHIND` e `KEEP_SCREEN_ON`, conservando a apresentação sobre bloqueio.
+O frame de toque padrão passa a ter a altura do painel, em vez de toda a tela.
+A solução usa APIs públicas e não exige root transparente de tela inteira nem
+uma região de toque customizada. A ordem de callbacks foi verificada na fonte;
+medidas visuais no telefone, rotas de navegação e diferenças OEM ainda exigem
+homologação física.
+
 ## Relatos de perda e atraso: estado e correção proposta
 
 A issue [#6943](https://github.com/home-assistant/android/issues/6943) estava

@@ -64,6 +64,14 @@ evento, entra no comando. O sinal local de 55 ms é disparado sem bloquear a
 captura. A apresentação é independente dessa passagem; não usa overlay genérico
 nem consulta screenshots/conteúdo do aplicativo em primeiro plano.
 
+O painel ajusta a janela de `VoiceInteractionSession` explicitamente para
+altura `WRAP_CONTENT` e gravidade inferior em `onShow()`, depois da criação
+pelo framework. Não escurece a tela nem solicita mantê-la ligada. A gravidade
+isolada deixava a janela padrão de tela inteira; a
+[investigação AOSP](android-hands-free-research.md#geometria-do-painel-nativo)
+registra a ordem de callbacks e a decisão. Tamanho e navegação no telefone
+continuam pendentes de homologação física.
+
 O VAD local usa energia RMS em frames de 20 ms, piso 240 e limiar adaptativo
 `max(240, ruído × 3)`, endpoint após 800 ms sem fala e limite de 20 s após
 ativação, mais o pre-roll, limitado a 360.000 amostras. É uma regra conservadora
