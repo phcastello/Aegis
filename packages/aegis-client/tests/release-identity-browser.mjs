@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
+import { expectedReleaseIdentity, legacyReleaseIdentity, newerAvailableFixture } from './release-identity-expectations.mjs';
 
 // Run from any directory after npm ci in both hosts and @aegis/client:
 //   node packages/aegis-client/tests/release-identity-browser.mjs
@@ -22,8 +23,8 @@ const phase = process.argv.includes('--before') ? 'before' : 'after';
 const output = resolve(process.env.IDENTITY_SCREENSHOT_DIR ?? join(root, '.artifacts/release-identity', phase));
 mkdirSync(output, { recursive: true });
 const installed = JSON.parse(readFileSync(join(root, 'apps/aegis-node/package.json'), 'utf8')).version;
-const codename = "It's Not Stalking. It's a Feature.";
-const tagline = "You're terrible at hiding.";
+const { codename, tagline } = expectedReleaseIdentity(installed);
+const availableVersion = newerAvailableFixture(installed);
 const sourceFiles = [
   'apps/aegis-node/src/main.ts', 'apps/aegis-node/src/App.vue',
   'frontend/aegis-pwa/src/main.ts', 'frontend/aegis-pwa/src/App.vue',
@@ -71,9 +72,9 @@ async function api(route) {
 }
 
 async function nativeFixture(context, version, platform = 'android') {
-  await context.addInitScript(({ version, platform }) => {
+  await context.addInitScript(({ version, platform, availableVersion }) => {
     window.__identityNativeCalls = [];
-    window.__identityAvailableVersion = '0.8.0';
+    window.__identityAvailableVersion = availableVersion;
     window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       window.__identityNativeCalls.push(command);
       if (command === 'runtime_info') return { platform, backendUrl: location.origin, version };
@@ -93,7 +94,7 @@ async function nativeFixture(context, version, platform = 'android') {
       throw new Error(`Unavailable in isolated identity IPC fixture: ${command}`);
     } };
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
-  }, { version, platform });
+  }, { version, platform, availableVersion });
 }
 
 async function openSidebar(page) {
@@ -180,7 +181,7 @@ try {
         check(await identity.getByRole('heading', { name: 'Aegis', exact: true }).isVisible(), 'Aegis heading must be visible');
         check(await identity.getByText(`v${installed}`, { exact: true }).isVisible(), `installed version v${installed} missing or duplicated prefix`);
         check(await identity.getByText(codename, { exact: true }).isVisible().catch(() => false), 'full release codename missing from actual App sidebar chain');
-        check(!(await identity.innerText()).includes(tagline), 'sidebar must not include secondary tagline');
+        check(!(await identity.innerText()).includes(legacyReleaseIdentity.tagline), 'sidebar must not include secondary tagline');
         entry.open = await measure(page);
         check(!entry.open.horizontalOverflow, 'document horizontal overflow');
         check(!entry.open.identityOverflow, 'identity horizontal overflow');
@@ -226,11 +227,13 @@ try {
         const about = page.getByRole('dialog', { name: 'Configurações', exact: true });
         await about.getByRole('button', { name: 'Sobre', exact: true }).click();
         check(await about.getByText(codename, { exact: true }).isVisible().catch(() => false), 'full release codename missing in About');
-        check((await about.getByText(tagline, { exact: true }).count()) <= 1, 'About tagline duplicated');
-        if (phase === 'after') check(await about.getByText(tagline, { exact: true }).isVisible(), 'About secondary tagline missing');
+        if (tagline) {
+          check((await about.getByText(tagline, { exact: true }).count()) <= 1, 'About tagline duplicated');
+          if (phase === 'after') check(await about.getByText(tagline, { exact: true }).isVisible(), 'About secondary tagline missing');
+        } else check(await about.locator('.about-release-tagline').count() === 0, 'Unassigned release family inherited another tagline');
         check((await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).count()) === 0, 'About must not duplicate update check');
         check((await about.innerText()).includes(installed), 'About omits installed/build version');
-        check(!(await about.innerText()).includes('0.8.0'), 'available updater version substituted for installed identity');
+        check(!(await about.innerText()).includes(availableVersion), 'available updater version substituted for installed identity');
         entry.about = await about.evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
         check(entry.about.scrollWidth <= entry.about.clientWidth + 1, 'About horizontal overflow');
         await save('about');
@@ -262,7 +265,7 @@ try {
         const known = typeof runtimeVersion === 'string' && /^v?0\.7\./.test(runtimeVersion);
         const valid = known || runtimeVersion === '0.8.0';
         const expectedVersion = valid ? `v${runtimeVersion.replace(/^v/, '')}` : 'Versão indisponível';
-        const expectedCodename = known ? codename : 'Codinome indisponível';
+        const expectedCodename = known ? legacyReleaseIdentity.codename : 'Codinome indisponível';
         assert.equal(await identity.getByText(expectedVersion, { exact: true }).isVisible(), true, `version fallback/normalization for ${runtimeVersion}`);
         assert.equal(await identity.getByText(expectedCodename, { exact: true }).isVisible(), true, `family/fallback for ${runtimeVersion}`);
         assert.equal((await identity.innerText()).includes('vv'), false, 'duplicate version prefix');
@@ -271,7 +274,7 @@ try {
         await about.getByRole('button', { name: 'Sobre', exact: true }).click();
         assert.equal(await about.getByText(expectedVersion, { exact: true }).isVisible(), true);
         assert.equal(await about.getByText(expectedCodename, { exact: true }).isVisible(), true);
-        assert.equal(await about.getByText(tagline, { exact: true }).count(), known ? 1 : 0);
+        assert.equal(await about.getByText(legacyReleaseIdentity.tagline, { exact: true }).count(), known ? 1 : 0);
         if (!valid || !known) await page.screenshot({ path: join(output, `native-runtime-${runtimeVersion ?? 'missing'}-about.png`), fullPage: true });
       } catch (error) {
         versionCase.failures.push(error.message);
