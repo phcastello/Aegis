@@ -1,3 +1,7 @@
+#[cfg(feature = "native-runtime")]
+#[path = "hands_free_acl.rs"]
+mod hands_free_acl;
+
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     let config: serde_json::Value = serde_json::from_str(
@@ -92,4 +96,37 @@ fn main() {
         ]),
     ))
     .expect("failed to build Tauri application manifest");
+
+    #[cfg(feature = "native-runtime")]
+    {
+        let root = std::env::current_dir().expect("build root");
+        let target =
+            tauri_utils::platform::Target::from_triple(&std::env::var("TARGET").expect("target"));
+        let (mut config, _) =
+            tauri_utils::config::parse::read_from(target, &root).expect("effective Tauri config");
+        if let Ok(overlay) = std::env::var("TAURI_CONFIG") {
+            hands_free_acl::merge_config(
+                &mut config,
+                &serde_json::from_str(&overlay).expect("Tauri config overlay"),
+            );
+        }
+        let config = serde_json::from_value(config).expect("typed Tauri config");
+        let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("build output"));
+        let manifests = serde_json::from_str(
+            &std::fs::read_to_string(out.join("acl-manifests.json"))
+                .expect("generated ACL manifests"),
+        )
+        .expect("ACL manifest JSON");
+        let capabilities = serde_json::from_str(
+            &std::fs::read_to_string(out.join("capabilities.json"))
+                .expect("generated capabilities"),
+        )
+        .expect("capability JSON");
+        hands_free_acl::verify(&config, &manifests, capabilities, target)
+            .expect("hands-free effective ACL contract");
+        // These are resolved permissions, not merely the discovered capability files.
+        let evidence = serde_json::json!({"schema":1,"target":target,"command":"node_hands_free","window":"main","localOnly":true,"allowed":target==tauri_utils::platform::Target::Android,"resolver":"tauri_utils::acl::get_capabilities + Resolved::resolve"});
+        std::fs::write(out.join("hands-free-acl.json"), evidence.to_string())
+            .expect("ACL evidence");
+    }
 }

@@ -82,6 +82,8 @@ test('temporary synchronization updates all consumers without changing branch fi
     // legacy updater. This fixture represents the candidate opting into v2.
     const configPath = join(work, files[2]);
     const candidateConfig = JSON.parse(readFileSync(configPath));
+    const candidateCapabilities = candidateConfig.app.security.capabilities;
+    assert.ok(candidateCapabilities.includes('android-hands-free'), 'Android setup command must be explicitly selected before distribution.');
     candidateConfig.plugins.updater.endpoints = [recommendedFeed];
     writeFileSync(configPath, JSON.stringify(candidateConfig));
     const independentCode = plan.versionCode + 1;
@@ -90,7 +92,11 @@ test('temporary synchronization updates all consumers without changing branch fi
     assert.equal(JSON.parse(readFileSync(join(work, files[2]))).bundle.android.versionCode, independentCode);
     assert.equal(JSON.parse(readFileSync(join(work, 'packages/aegis-client/package.json'))).version, plan.version);
     assert.equal(readFileSync(join(root, files[0]), 'utf8'), original);
-    const checkSnapshot = () => execFileSync(process.execPath, ['--test', 'scripts/version.test.mjs'], { cwd: join(work, 'apps/aegis-node'), stdio: 'pipe' });
+    const checkSnapshot = () => {
+      assert.deepEqual(JSON.parse(readFileSync(configPath)).app.security.capabilities, candidateCapabilities,
+        'Distribution preparation must preserve the candidate capability selection.');
+      execFileSync(process.execPath, ['--test', 'scripts/version.test.mjs'], { cwd: join(work, 'apps/aegis-node'), stdio: 'pipe' });
+    };
     checkSnapshot();
     prepareCandidate(work, root, `${plan.version}.rollback.1`, independentCode + 1);
     checkSnapshot();

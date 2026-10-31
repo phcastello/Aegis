@@ -8,6 +8,7 @@
     "check": "npm run version:check && vue-tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
     "build": "npm run check && vite build",
     "test": "tsc -p tsconfig.test.json && node --test tests/*.test.mjs ../../packages/aegis-client/tests/*.test.mjs",
+    "test:hands-free-settings-browser": "node tests/hands-free-settings-browser.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:desktop": "tauri dev --target x86_64-pc-windows-msvc",

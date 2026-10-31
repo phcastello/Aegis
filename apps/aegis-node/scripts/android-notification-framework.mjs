@@ -119,6 +119,14 @@ try {
     enableLegacyLocation(run,originalLocationState);
     console.log(`AndroidLegacyLocation configured=${JSON.stringify(safeLegacyLocation(run))}`);
   }
+  // Exercise the actual bundled IPC and selected capability before backend reverse/bootstrap.
+  // No model, microphone permission or assistant role is necessary for initial setup state.
+  if(run(['reverse','--list']).split('\n').some(line=>/\btcp:18104\s+tcp:18104\b/.test(line)))
+    run(['reverse','--remove','tcp:18104']);
+  run(['shell','am','force-stop','com.aegis.node']);
+  run(['shell','pm','revoke','com.aegis.node','android.permission.RECORD_AUDIO'],15000);
+  instrumentation('NodeHandsFreeStateIpcTest', ['-e','waitForActivitiesToComplete','false']);
+  run(['shell','am','force-stop','com.aegis.node']);
   permission(true);
   instrumentation('NodeNotificationFrameworkTest');
   permission(false);
@@ -146,7 +154,7 @@ try {
     instrumentation('NodeHybridBootRecoveryFrameworkTest#prepareBeforeBoot', ['-e','bootPairingCode',readFileSync(bootstrap+'.boot','utf8').trim()]);
     // Reboot clears logcat. Preserve only closed checkpoint names, never raw logs.
     const beforeBoot=run(['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','*:S']);
-    for(const phase of ['geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases,...legacyLocationPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
+    for(const phase of ['hands_free_real_ipc_initial_state','geofence_receiver_native_transition_idempotent_saver_reconcile','hybrid_actual_permission_denial','hybrid_process_interruption_recovered',...advancedHybridPhases,...legacyLocationPhases])if(beforeBoot.split('\n').includes(`phase=${phase} errorType=Checkpoint`))preservedCheckpoints.add(phase);
     const previousBoot=Number(run(['shell','settings','get','global','boot_count']).trim());
     const userState=run(['shell','dumpsys','package','com.aegis.node']).match(/User 0:([^\r\n]*)/)?.[1];
     assert(userState && /\bstopped=false\b/.test(userState),'Prepared fixture must be eligible for the actual boot broadcast');
@@ -219,7 +227,7 @@ try {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
-  for(const phase of ['hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of ['hands_free_real_ipc_initial_state','hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
@@ -246,6 +254,7 @@ try {
   cleanup.attempt('restore_permission',()=>permission(true));
   cleanup.attempt('force_stop',()=>run(['shell','am','force-stop','com.aegis.node'],10000));
   cleanup.attempt('validate_checkpoints',()=>{
+  if(!primaryError)assert(phases.has('hands_free_real_ipc_initial_state'),'Real bundled WebView hands-free state must pass Tauri ACL and Android JNI before initial setup');
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
   if(receiverPassed)assert(phases.has('geofence_receiver_native_transition_idempotent_saver_reconcile'),'Native receiver, saver, persisted occurrence and authenticated reconciliation checkpoint required');

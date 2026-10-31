@@ -1,4 +1,7 @@
 mod config;
+#[cfg(test)]
+#[path = "../hands_free_acl.rs"]
+mod hands_free_acl_contract;
 #[cfg(feature = "native-runtime")]
 mod hands_free;
 mod health;
