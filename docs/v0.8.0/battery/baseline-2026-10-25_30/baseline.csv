@@ -1,0 +1,7 @@
+date,weekday,daily_battery_usage_percent,screen_on_hhmm,screen_on_minutes,screen_off_hhmm,screen_off_minutes,screen_on_off_sum_minutes,unaccounted_to_24h_minutes,weekly_average_displayed_percent,source_image,source_sha256
+2026-10-25,domingo,60,02:34,154,18:59,1139,1293,147,85,screenshots/2026-10-25.jpg,b303c5375dad348a5e472426092494b1edab0d92008778e52c5cbd7e7c912cc2
+2026-10-26,segunda-feira,90,05:01,301,18:20,1100,1401,39,85,screenshots/2026-10-26.jpg,9daa3b13a364df20e066d7f3eb634fd9b69d367d3acf7ed864b8aef28b79d1a7
+2026-10-27,terça-feira,82,05:51,351,15:45,945,1296,144,85,screenshots/2026-10-27.jpg,2089e9cc8cff8e7b513645e26b322007cb29851289671b4cbd54f1b79d61bcfc
+2026-10-28,quarta-feira,113,06:38,398,16:25,985,1383,57,85,screenshots/2026-10-28.jpg,ef1fc7ad1420371ff8ea1377803733e9335fae79ba5bb012a9d42eea27061d72
+2026-10-29,quinta-feira,87,04:11,251,14:34,874,1125,315,85,screenshots/2026-10-29.jpg,64908a0ef8eb66d832fb0193627176faef96ca4f4dcc3dfea820ff55726652c8
+2026-10-30,sexta-feira,97,03:26,206,18:25,1105,1311,129,85,screenshots/2026-10-30.jpg,2a6978359c245085dc0b7bcdb7845e5834e6d774b0d27af82fa28674aedec7a1

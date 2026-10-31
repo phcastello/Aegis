@@ -13,6 +13,10 @@ Desktop.ini
 # Owner voice dataset and acoustic wakeword references stay local.
 /aegis-wakeword-poc.zip
 /aegis-wakeword-poc/
+# Private owner battery baseline transport and original captures.
+/aegis-battery-baseline-2026-10-25_30.zip
+/aegis-battery-baseline-2026-10-25_30/
+/docs/v0.8.0/battery/baseline-2026-10-25_30/screenshots/
 *.rpw
 .env
 .env.*
