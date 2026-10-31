@@ -5,6 +5,12 @@ Implementação na branch `feat/v0.8.0-hands-free`, derivada de `913e629`
 e suas alterações locais foram preservadas. Esta entrega prepara interação real
 e diagnóstico no Node existente; a homologação no telefone ainda é necessária.
 
+Distribuição de desenvolvimento publicada: **0.8.0-unstable.2**, código Android
+**8000002**, fonte `3ba0410`. Disponível em **Configurações → Atualizações** ou
+pelo [APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Android-arm64.apk).
+Os [resultados da publicação](validation-and-publication.md) registram assinatura,
+hashes e as limitações de verificação.
+
 ## Instalação e ativação
 
 1. Instalar a distribuição de desenvolvimento assinada por cima do Node

@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "sourceCommit": "3ba041005111689f07547afaa8ce3f6de5424822",
+  "version": "0.8.0-unstable.2",
+  "versionCode": 8000002,
+  "apkSha256": "13e6c868394ea01b05d2654f451a49208497d45482fb9db9fffceb2e58c7cbd2",
+  "certificateSha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+  "matches_previous_v072_certificate": true,
+  "previous_v072_sha256": "98e0d8c7ebadf08402a909dae181432a09b2f1a34989547dcec868c64bb5cf29",
+  "package": "com.aegis.node",
+  "nativeDetectorPresent": true,
+  "licenseCount": 8,
+  "packagedLicenseBytesMatchSource": true,
+  "privateModelOrEvaluationAudioPresent": false,
+  "nativeGuardArchivePassed": true,
+  "manifestChecksPassed": true,
+  "manifestVerifier": "official AAPT2 package/release-flags/XMLtree checks; local APKAnalyzer not installed",
+  "apkCryptographicSignatureVerified": true,
+  "feedUrl": "https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json",
+  "artifactUrl": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Android-arm64.apk",
+  "kind": "normal",
+  "compatibility": {
+    "api": 1,
+    "nodeData": 1
+  },
+  "workflowUrl": "https://github.com/phcastello/Aegis/actions/runs/41209494408",
+  "workflowConclusion": "success",
+  "windowsSha256": "4c7a3cf7833ae649d00707d89282b5f8f54d04642d635a802c48137055388fde",
+  "windowsDownloadedBytes": 6389331,
+  "windowsDownloadedHashMatchesFeed": true,
+  "physicalAndroidValidation": "pending",
+  "arm64ExecutionParity": "pending",
+  "failedPreviousReservation": {
+    "version": "0.8.0-unstable.1",
+    "versionCode": 8000001,
+    "workflowUrl": "https://github.com/phcastello/Aegis/actions/runs/41208280622",
+    "reason": "Windows identity harness expected the 0.7 codename for an 0.8 build; corrected without changing product identity fallback."
+  }
+}
