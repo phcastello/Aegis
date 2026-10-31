@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "branch": "feat/v0.8.0-hands-free",
+  "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+  "version": "0.8.0-unstable.5",
+  "androidVersionCode": 8000005,
+  "workflowUrl": "https://github.com/phcastello/Aegis/actions/runs/41230732342",
+  "workflowConclusion": "success",
+  "deployment": {
+    "backend": {
+      "sha": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+    },
+    "backendVersionLabel": "0.7.2 (legacy metadata; source SHA authoritative)",
+    "pwa": {
+      "sha": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+      "image": "sha256:caa387d38b9985a0df7d0af961125c50378c4c1737ab3936677dd5a2aa9829af"
+    },
+    "pwaBaseVersion": "0.8.0",
+    "compatibility": {
+      "api": 1,
+      "nodeData": 1
+    },
+    "pendingMigrations": [],
+    "checks": {
+      "https": true,
+      "serviceWorker": true,
+      "apiV1": true,
+      "sameApiEnvironmentValues": true,
+      "sameApiMounts": true,
+      "latencyDetailedProfilingEnabled": false,
+      "ownerDataReset": false
+    }
+  },
+  "tests": {
+    "backend": {
+      "full": {
+        "passed": 763,
+        "skipped": 100,
+        "failed": 0
+      },
+      "focusedWithDisposablePostgres": {
+        "passed": 52,
+        "skipped": 0,
+        "failed": 0
+      }
+    },
+    "android": {
+      "jvmPassed": 63,
+      "realJniVadHostPassed": 20,
+      "capabilityIpcJsPassed": 2
+    },
+    "node": {
+      "testsPassed": 160,
+      "build": "passed"
+    },
+    "pwa": {
+      "testsPassed": 91,
+      "build": "passed"
+    },
+    "rust": {
+      "passed": 90,
+      "ignored": 2,
+      "failed": 0,
+      "compiler": "1.94.0",
+      "initialCompilerMismatch": "1.92.0 refused MSRV, corrected"
+    },
+    "ttsCandidate": {
+      "passed": 42,
+      "gpuOptInSkipped": 1,
+      "profileIntegrity": "passed",
+      "lexicon": "passed",
+      "pronunciationCorpus": "passed",
+      "humanAudition": false,
+      "rawQwenAB": false
+    },
+    "serverIsolation": {
+      "temporaryStacksRemoved": true,
+      "benchmarkCredentialComposeFilesRemoved": true,
+      "ownerConversationMemoryBenchmarkWrites": false,
+      "syntheticVoiceFixturesRemoved": true
+    },
+    "deviceAcceptance": "Samsung and physical Windows operation still owner validation; build checks are separate"
+  },
+  "tts": {
+    "deployedChange": false,
+    "operationalRollbackNeeded": false,
+    "deployedSourceImageHardwareVerified": false,
+    "reason": "configured SSH access rejected; HTTP synthesis works",
+    "candidateBranch": "perf/v0.8.0-first-audio-latency",
+    "candidateCommit": "d3b4c076e1b7cb4e832febb7f24b6c9e55063539",
+    "acousticVariantEnabled": false
+  },
+  "performanceGoal": {
+    "physical4sAchieved": false,
+    "serverFullAfterMs": [
+      5372.3168259020895,
+      4899.167270166799
+    ],
+    "includesAndroidEndpointing": false,
+    "includesPhysicalSpeaker": false
+  },
+  "rollback": {
+    "backendSource": "f9167035572e58d771b87672a13db828f90107d3",
+    "backendImage": "sha256:cf05e0f53b1112cc6ffc93734efb927f37c33efe64279cabe0b3af7f8156ddd3",
+    "configuration": "private publish-dev operation 20261031T184053Z-c8dc04ca previous.compose.private.json",
+    "nativeRestoresVersion": "0.8.0-unstable.4",
+    "nativeRestoresSource": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+    "nativeRequiresNewMonotonicCode": true,
+    "executed": false
+  },
+  "ownerPhoneValidation": "pending: audibility/comfort/acoustic leakage, lock screen and physical end-of-speech-to-speaker measurement",
+  "nativeArtifactVerification": {
+    "schema": 1,
+    "version": "0.8.0-unstable.5",
+    "versionCode": 8000005,
+    "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+    "workflowUrl": "https://github.com/phcastello/Aegis/actions/runs/41230732342",
+    "workflowConclusion": "success",
+    "previousVersion": "0.8.0-unstable.4",
+    "previousVersionCode": 8000004,
+    "apkSha256": "b9706fe3def0281d43f2da327d621fa0dcebb83f12a61709b0de8fcb77af059a",
+    "apkBytes": 27745390,
+    "certificateSha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "certificateMatchesPrevious": true,
+    "apkCryptographicSignatureVerified": true,
+    "package": "com.aegis.node",
+    "androidReleaseFlagsPassed": true,
+    "nativeArchiveGuardPassed": true,
+    "windowsSha256": "9d76f4eb8b2e57038017212723f88918cf68ac88195e819ce7bb0e5ec2024a66",
+    "windowsBytes": 6390286,
+    "windowsUpdaterSignatureVerified": true,
+    "updaterKeyAndProductIdentityUnchanged": true,
+    "bothInstallerBytesMatchFeed": true,
+    "allPublishedChecksumsPassed": true,
+    "releaseManifestBytesMatchRecommendedFeed": true,
+    "existingMetadataValidatorPassed": true,
+    "ledgerAndSourceReservationPassed": true,
+    "compatibility": {
+      "api": 1,
+      "nodeData": 1
+    },
+    "deployment": {
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "backend": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "pwa": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      }
+    },
+    "physicalClientInstallationOrDetection": "not performed",
+    "verifiedAt": "2026-10-31T18:55:35.948578+00:00",
+    "releaseUrl": "https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.5",
+    "newCueAndLatencyMarkersPresentInPublishedDex": true
+  }
+}

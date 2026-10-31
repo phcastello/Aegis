@@ -73,8 +73,8 @@ modelo, ferramentas, persistência e contrato de voz reais. Não há respostas
 fixas nem endpoint de texto arbitrário para contornar mensagens persistidas.
 
 Foram usados PostgreSQL/Qdrant/Neo4j descartáveis e API temporária, com os
-provedores e configurações da instalação. Nenhum token Google, FCM, identidade
-ou dado pessoal foi copiado para os testes. Recursos de memória permaneceram
+provedores e configurações da instalação. Não foram copiadas conversas,
+memórias, contas Google/FCM ou identidades nativas do proprietário. Recursos de memória permaneceram
 habilitados. Baseline e otimizado começaram em bancos vazios separados; os
 testes de memória sintética ocorreram depois da matriz de latência. Isso testa
 o caminho real com contexto sintético, sem reproduzir tamanho ou conteúdo das
@@ -198,7 +198,8 @@ binding multipart; não representa o instante de chegada do primeiro byte HTTP.
 Os marcos Android separam escrita de upload e espera sem misturar relógios.
 
 O pipeline abaixo executou WAV → ElevenLabs → chat real → TTS real, medindo
-do início da chamada de STT no servidor até a chegada do primeiro sinal PCM:
+do início da preparação/envio de STT no servidor até a chegada do primeiro sinal
+PCM, incluindo leitura local do WAV e montagem do multipart:
 
 | Configuração | Repetição | STT | Chat | Pipeline até sinal PCM |
 | --- | ---: | ---: | ---: | ---: |
@@ -244,8 +245,8 @@ foram persistidas temporariamente e removidas por IDs exclusivos, com verificaç
 de remoção. Não geraram extração de memória nem usaram mensagem pessoal.
 
 O TTS emite PCM incremental antes de EOF. No código disponível, a primeira
-janela DSP exige aproximadamente 1,75 s de áudio (target 1,25 + lookahead 0,20
-+ busca 0,30), sem equivaler a 1,75 s de relógio. A finalização libera material
+janela DSP exige aproximadamente 1,75 s de áudio (target 1,25, lookahead 0,20
+e busca 0,30), sem equivaler a 1,75 s de relógio. A finalização libera material
 curto. Sem acesso ao processo não se atribui quanto dos 1,62 s observados
 pertence ao raw do modelo, fila ou WORLD: a instrumentação antiga do caminho
 nativo não contabilizava essas etapas corretamente.
@@ -344,7 +345,58 @@ Dados sanitizados completos: [JSON](hands-free-latency-results.json),
 [marcos por turno](hands-free-latency-stages.csv). Áudio, raw Qwen/referência,
 logs completos, credenciais e identificadores privados permanecem fora do Git.
 
-A publicação usa `publish-dev`, sem merge na main ou release estável. Não há
-migration nesta alteração. O estado efetivo da publicação, seus SHAs, versão,
-checks de identidade e rollback será registrado após o fluxo existente terminar.
-O TTS não é implantado por esse fluxo e permanece explicitamente separado.
+A publicação foi solicitada uma vez por `publish-dev`, sem merge na main ou
+release estável, no SHA `a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b`.
+Operação privada `20261031T184053Z-c8dc04ca`. A API iniciou na imagem
+`sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c`;
+PWA permaneceu em `fec7c18`. HTTPS, service worker e API v1 passaram; env e mounts
+da API foram comparados antes/depois e permaneceram iguais. Profiling detalhado
+está desligado. Nenhuma migration, backup/restauração ou migrador foi necessário.
+O label legado da imagem API continua `0.7.2`; sua fonte efetiva é identificada
+pelo SHA completo acima. A PWA tem versão base `0.8.0`, fonte `fec7c18`.
+
+O workflow de aplicativos
+[41230732342](https://github.com/phcastello/Aegis/actions/runs/41230732342)
+terminou com **success**. A
+[preview 0.8.0-unstable.5](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.5)
+está publicada e recomendada, Android **8000005**. Feed público raw/API,
+manifest, ledger, source/deployment, checksums e bytes dos dois instaladores
+foram conferidos após a publicação. Os novos marcadores de ganho/latência
+estão presentes no DEX publicado, sem reaproveitar o APK anterior.
+
+| Artefato verificado | SHA-256 |
+| --- | --- |
+| APK ARM64, 27.745.390 bytes | `b9706fe3def0281d43f2da327d621fa0dcebb83f12a61709b0de8fcb77af059a` |
+| Windows, 6.390.286 bytes | `9d76f4eb8b2e57038017212723f88918cf68ac88195e819ce7bb0e5ec2024a66` |
+
+Pacote Android `com.aegis.node` e certificado
+`df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31`
+preservados em relação a `unstable.4`; assinatura criptográfica, flags release
+e guard nativo passaram. A assinatura minisign do updater Windows foi validada
+com a chave existente e versão no comentário assinado, preservando identidade
+do produto. Isso não é uma afirmação de Authenticode ou ausência de SmartScreen.
+
+A atualização está no fluxo normal **Configurações → Atualizações**. Não foi
+instalada nem detectada fisicamente no aparelho do proprietário. Dados completos
+da publicação, testes, configuração e recuperação estão em
+[hands-free-latency-publication.json](hands-free-latency-publication.json).
+Todos os commits foram enviados à branch de desenvolvimento, sem merge na main
+ou release estável. O TTS não é implantado por esse fluxo e continua inalterado.
+
+Rollback da API, se necessário, usa a configuração anterior congelada pelo
+orquestrador e a imagem `cf05e0f53b11`/SHA `f916703`. Sem mudança de esquema,
+ela continua compatível. O procedimento abaixo está documentado, **não executado**:
+
+```sh
+docker compose -p aegis \
+  -f /home/phc/.local/state/aegis/publish-dev/20261031T184053Z-c8dc04ca/previous.compose.private.json \
+  up -d --no-deps --no-build aegis-api
+docker exec aegis-pwa nginx -s reload
+```
+
+Não remover volumes nem trocar configuração/credenciais. Para os aplicativos,
+recuperação exige reconstruir a fonte funcional de `unstable.4` (`fec7c18`) pelo
+[fluxo de rollback](../distribuicao-e-ci.md), com nova versão/código Android
+monotônico e os mesmos certificados. Não instalar diretamente código Android
+menor, desinstalar, limpar dados ou mover o feed para bytes antigos. TTS não
+precisa rollback operacional, pois não recebeu alteração.
