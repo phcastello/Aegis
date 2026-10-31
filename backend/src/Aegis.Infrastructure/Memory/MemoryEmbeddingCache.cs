@@ -4,7 +4,7 @@ using Aegis.Application.Memory;
 
 namespace Aegis.Infrastructure.Memory;
 
-// Only the deterministic query vector is cached. Every retrieval still validates
+// Only deterministic input vectors (queries and projections) are cached. Retrieval validates
 // current Qdrant/PostgreSQL/graph state. Vectors can encode personal query data;
 // they stay only in bounded process RAM, with hashed keys and no raw query text.
 // Retrieval results and operational state are never cached here.
