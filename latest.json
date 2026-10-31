@@ -1,27 +1,27 @@
 {
-  "version": "0.8.0-unstable.2",
-  "notes": "Aegis 0.8.0-unstable.2",
-  "pub_date": "2026-10-31T14:18:24.373Z",
+  "version": "0.8.0-unstable.4",
+  "notes": "Aegis 0.8.0-unstable.4",
+  "pub_date": "2026-10-31T16:18:30.158Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Windows-x86_64-Setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcXhKN0w5MXNpVHFoTFJDMnBQNUR2a2pKWHNqM3hBRUE1dlRYUS9XMzdKM2VCQmxlR0tPT1BVZTZ3S2dNM3oyS0t2NHl2b3dCVzFyYXdlaDB6SzRaakFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNDU2ODY4CWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC44LjAtdW5zdGFibGUuMgpMa3Z1aGRFRCtNVG02L3ZWS1FCbEIrdHpydy9rL3J5WWlKSnhsTG1KaUR3T1RqeFRyNG9ENy85RmlIUnRuczB1ODRoVnUxdVJoVHBWeHFocDZpUzJCQT09Cg==",
-      "sha256": "4c7a3cf7833ae649d00707d89282b5f8f54d04642d635a802c48137055388fde"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.4/Aegis-Windows-x86_64-Setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcTlrdU1QOUdQVkVwY3d2cjdYRXF0aFoyVXlIZ1dpanZJcmkrWDAxdDV2aXlRNnF5TW1VU0tYak9pTnNMRzA2MnlxWEJKYS9wVUE3UFRyS3BNdlA3T1E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNDY0MDkyCWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC44LjAtdW5zdGFibGUuNApqczd3U3B4VzU1NXNSRmtEVlZKb3lTTDMwMWNSNERmQzZ4eXNtd24xZ3ZIKzd4QUNPODJ1YnU1MkhsWG5GdmhYWXY1dU9DU2lLbGlrU1A2TmhzeUxDQT09Cg==",
+      "sha256": "2c272a57d555b6e43fc250dac55ff2bda1a888f55d1c3474f6ca63daf1d3d572"
     }
   },
   "android": {
     "aarch64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Android-arm64.apk",
-      "versionCode": 8000002,
-      "sha256": "13e6c868394ea01b05d2654f451a49208497d45482fb9db9fffceb2e58c7cbd2"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.4/Aegis-Android-arm64.apk",
+      "versionCode": 8000004,
+      "sha256": "62ac3f14a20f37f1c327e046d829dd799f9693159be2a1d4b087cec35ed1e0bb"
     }
   },
   "schema": 2,
-  "versionCode": 8000002,
+  "versionCode": 8000004,
   "kind": "normal",
-  "sourceCommit": "3ba041005111689f07547afaa8ce3f6de5424822",
+  "sourceCommit": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
   "sourceVersion": "0.8.0",
-  "publishedAt": "2026-10-31T14:18:24.373Z",
+  "publishedAt": "2026-10-31T16:18:30.158Z",
   "compatibility": {
     "api": 1,
     "nodeData": 1
