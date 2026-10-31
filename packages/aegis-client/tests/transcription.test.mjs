@@ -62,6 +62,7 @@ function fixture(options = {}) {
     require(name) {
       if (name === 'vue') return { ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }), onBeforeUnmount: callback => { unmount = callback; } };
       if (name === '../services/voiceInput') return voiceInput;
+      if (name === '../services/audioOwnership') return { acquireAudio: options.acquireAudio ?? (async () => async () => {}) };
       if (name === '../services/aegisApi') return {
         getTranscriptionStatus: async () => options.status ?? { enabled: true, configured: true, maxRecordingSeconds: 90 },
         transcribeAudio: async (...args) => {
@@ -89,6 +90,26 @@ test('historical controls: normal stop uploads once; discard while recording upl
     assert.equal(f.uploads.length, cancel ? 0 : 1); assert.equal(f.inserted.length, cancel ? 0 : 1); f.api.dispose(); f.assertReleased();
   }
 });
+
+test('Android manual capture waits for native ownership and releases late acquisition after discard', async () => {
+  const gate = deferred(); let released = 0;
+  const f = await fixture({ acquireAudio: () => gate.promise }).ready();
+  const starting = f.api.start(); await settle();
+  assert.equal(f.requests.length, 0, 'no competing getUserMedia while native capture is active');
+  f.api.discard(); gate.resolve(async () => { released++; }); await starting;
+  assert.equal(f.requests.length, 0); assert.equal(released, 1); f.assertReleased();
+});
+
+test('manual capture rejection never requests the microphone; release follows track stop', async () => {
+  const denied = await fixture({ acquireAudio: async () => { throw Error('busy'); } }).ready();
+  await denied.start(); assert.equal(denied.requests.length, 0); assert.equal(denied.api.state.value, 'error');
+  let releaseCount = 0;
+  const f = await fixture({ acquireAudio: async () => async () => {
+    assert.ok(f.streams.every(input => input.track.stopped), 'release only after microphone tracks stop'); releaseCount++;
+  } }).ready();
+  await f.start(); f.api.stopRecording(); await f.flushStops(); f.api.dispose(); await settle();
+  assert.equal(releaseCount, 1); f.assertReleased();
+});
 test('discard between stop and onstop invalidates queued callbacks before any upload', async () => {
   const f = await fixture().ready(); await f.start(); f.api.stopRecording(); assert.equal(f.streams[0].track.stopped, true, 'stop immediately releases the microphone'); f.api.discard(); await f.flushStops();
   assert.equal(f.uploads.length, 0); assert.equal(f.inserted.length, 0); f.assertReleased();
@@ -97,7 +118,7 @@ test('old permission resolution cannot clear new timer or lose its track, in eit
   for (const newFirst of [false, true]) {
     const a = deferred(), b = deferred(), old = stream(), fresh = stream();
     const f = await fixture({ getUserMedia: (_c, call) => call === 1 ? a.promise : b.promise }).ready();
-    const first = f.api.start(); f.api.discard(); const second = f.api.start();
+    const first = f.api.start(); await settle(); f.api.discard(); const second = f.api.start(); await settle();
     if (newFirst) { b.resolve(fresh); await second; } a.resolve(old); await first;
     if (!newFirst) { b.resolve(fresh); await second; }
     assert.equal(old.track.stopped, true); assert.equal(fresh.track.stopped, false); assert.equal(f.api.state.value, 'recording');
@@ -109,7 +130,7 @@ test('old permission rejection cannot fail or stop a newer session, in either or
   for (const newFirst of [false, true]) {
     const a = deferred(), b = deferred(), fresh = stream();
     const f = await fixture({ getUserMedia: (_c, call) => call === 1 ? a.promise : b.promise }).ready();
-    const first = f.api.start(); f.api.discard(); const second = f.api.start();
+    const first = f.api.start(); await settle(); f.api.discard(); const second = f.api.start(); await settle();
     if (newFirst) { b.resolve(fresh); await second; } a.reject(new DOMException('Synthetic denial', 'NotAllowedError')); await first;
     if (!newFirst) { assert.equal(f.api.state.value, 'requesting_permission'); b.resolve(fresh); await second; }
     assert.equal(f.api.state.value, 'recording'); assert.equal(fresh.track.stopped, false); f.api.dispose(); assert.equal(fresh.track.stopped, true); f.assertReleased();
@@ -141,7 +162,7 @@ test('visibility and unmount cancel pending permission, recording, queued stop a
   for (const stage of ['permission', 'recording', 'stopping', 'uploading']) for (const action of ['hide', 'unmount']) {
     const permission = deferred(), upload = deferred(), input = stream();
     const f = await fixture({ upload, getUserMedia: () => stage === 'permission' ? permission.promise : Promise.resolve(input) }).ready();
-    const start = f.api.start(); if (stage !== 'permission') await start;
+    const start = f.api.start(); await settle(); if (stage !== 'permission') await start;
     if (stage === 'stopping' || stage === 'uploading') f.api.stopRecording(); if (stage === 'uploading') await f.flushStops();
     f[action](); if (stage === 'permission') { permission.resolve(input); await start; }
     await f.flushStops(); upload.resolve({ text: 'late' }); await settle();
@@ -169,7 +190,7 @@ test('exact selected input and fallback on removed/changed saved device; prefere
 test('missing old selection falls back without erasing a preference saved during permission', async () => {
   for (const name of ['NotFoundError', 'OverconstrainedError']) {
     const permission = deferred(), f = await fixture({ preferred: 'synthetic-old', getUserMedia: (_c, call) => call === 1 ? permission.promise : Promise.resolve(stream()) }).ready();
-    const pending = f.api.start();
+    const pending = f.api.start(); await settle();
     f.voiceInput.setPreferredVoiceInput('synthetic-next');
     permission.reject(new DOMException('missing previous input', name)); await pending;
     assert.equal(f.requests[1].audio, true, 'current attempt falls back to default');

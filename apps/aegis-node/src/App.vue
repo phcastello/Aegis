@@ -15,6 +15,7 @@ import { actionDiagnosticsUnavailable, mergeActionSettings, pendingActionLabel }
 import { nodeServices, notificationServices, transportServices, type IdentityStatus, type NotificationSettings } from './services/nodes';
 import NodesPanel from './components/NodesPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
+import HandsFreeSettings from './components/HandsFreeSettings.vue';
 import { useUpdates } from './composables/useUpdates';
 import { checkUpdate } from './services/updates';
 import type { RuntimeInfo } from './services/runtime';
@@ -92,6 +93,7 @@ onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNav
     <template #notice><div v-if="pendingActions || actionStatusUnavailable" class="native-node-notice" role="status"><template v-if="actionStatusUnavailable">Consulta das ações locais temporariamente indisponível. Não foi possível confirmar as pendências.<template v-if="pendingActions"> Última leitura: {{ pendingActionLabel(pendingActions) }}.</template></template><template v-else>{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.</template><button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>{{ updates.update.value?.distributionKind === 'rollback' ? 'Atualização de recuperação da Aegis' : 'Atualização da Aegis' }}{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>
   <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
+    <template #native-audio><HandsFreeSettings v-if="runtime.platform === 'android' && section === 'audio'" /></template>
     <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />
     <RemindersPanel v-else-if="section === 'reminders'" ref="remindersPanel" :key="remindersNavigation" :platform="runtime.platform" :focused-reminder-id="focusedReminderId" @dirty="dirty = $event" />
     <PlacesPanel v-else-if="section === 'places'" ref="placesPanel" :platform="runtime.platform" @dirty="dirty = $event" />

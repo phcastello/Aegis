@@ -5,6 +5,8 @@ export interface ClientEnvironment {
   // Native hosts can distinguish Activity/window visibility from WebView input
   // focus, which Android deliberately clears when dismissing the keyboard.
   isForeground?: () => Promise<boolean>;
+  // Android arbitrates WebView recording/playback with the native assistant.
+  acquireAudio?: (kind: 'capture' | 'playback') => Promise<() => Promise<void>>;
   externalLinks: 'browser' | 'system';
   openExternalUrl?: (url: string) => Promise<void>;
 }

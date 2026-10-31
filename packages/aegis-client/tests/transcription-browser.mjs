@@ -68,6 +68,7 @@ try {
       await context.addInitScript(({ version, platform }) => {
         localStorage.setItem('aegis.voice.autoSpeak', 'false');
         window.syntheticAudio = { silence: false, captures: [], constraints: [], decodes: [] };
+        window.syntheticHandsFree = { enabled: false, diagnostic: false, assistantSelected: false, permissionGranted: false, modelReady: false, status: 'disabled', message: 'Escuta desligada.', calls: [], lease: null };
         const originalDecode = AudioContext.prototype.decodeAudioData;
         AudioContext.prototype.decodeAudioData = async function(...args) {
           try {
@@ -84,6 +85,7 @@ try {
         ];
         Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', { value: async () => devices });
         Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async constraints => {
+          if (platform === 'android' && !window.syntheticHandsFree.lease) throw Error('Native audio lease required before recording');
           window.syntheticAudio.constraints.push(constraints);
           const context = new AudioContext(); await context.resume();
           const oscillator = context.createOscillator(), gain = context.createGain(), destination = context.createMediaStreamDestination();
@@ -94,7 +96,25 @@ try {
           window.syntheticAudio.captures.push({ context, stream: destination.stream });
           return destination.stream;
         } });
-        if (platform !== 'browser') window.__TAURI_INTERNALS__ = { invoke: async command => {
+        if (platform !== 'browser') window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+          if (command === 'node_hands_free') {
+            const hf = window.syntheticHandsFree; hf.calls.push({ ...args });
+            if (args.operation === 'manualAcquire') { if (hf.lease) return { acquired: false }; hf.lease = args.leaseId; return { acquired: true }; }
+            if (args.operation === 'manualRelease') {
+              if (hf.lease === args.leaseId) {
+                if (window.syntheticAudio.captures.some(input => input.stream.getTracks().some(track => track.readyState === 'live'))) throw Error('Tracks still active at lease release');
+                hf.lease = null;
+              }
+              return {};
+            }
+            if (args.operation === 'configure') { hf.enabled = args.enabled; hf.diagnostic = args.diagnostic; }
+            if (args.operation === 'permission') hf.permissionGranted = true;
+            if (args.operation === 'assistant') hf.assistantSelected = true;
+            if (args.operation === 'import') hf.modelReady = true;
+            hf.status = hf.enabled ? hf.permissionGranted && hf.assistantSelected && hf.modelReady ? 'listening' : 'unavailable' : 'disabled';
+            hf.message = hf.status === 'listening' ? 'Escutando “Aegis”.' : hf.status === 'disabled' ? 'Escuta desligada.' : 'Confira as permissões, o assistente e o modelo.';
+            return JSON.parse(JSON.stringify(hf));
+          }
           if (command === 'runtime_info') return { platform, backendUrl: location.origin, version };
           if (command === 'check_backend') return { status: 'connected', message: null };
           if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
@@ -155,6 +175,20 @@ try {
         await page.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();
         const settings = page.getByRole('dialog', { name: 'Configurações', exact: true });
         await settings.getByRole('button', { name: 'Áudio e voz', exact: true }).click();
+        if (platform === 'android') {
+          await settings.getByRole('heading', { name: 'Hands-free', exact: true }).waitFor();
+          await settings.getByRole('button', { name: 'Permitir microfone', exact: true }).click();
+          await settings.getByRole('button', { name: 'Selecionar assistente no Android', exact: true }).click();
+          await settings.getByRole('button', { name: 'Importar modelo privado', exact: true }).click();
+          await settings.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).check();
+          await settings.getByText('Escutando “Aegis”.', { exact: true }).waitFor();
+          await settings.getByRole('checkbox', { name: 'Diagnóstico: detectar chamadas sem enviar comandos', exact: true }).check();
+          await settings.getByRole('button', { name: 'Exportar métricas', exact: true }).click();
+          await settings.getByRole('button', { name: 'Cancelar interação', exact: true }).click();
+          assert.equal(await page.evaluate(() => window.syntheticHandsFree.diagnostic), true);
+          assert.equal(uploads, 1, 'hands-free configuration never uploads audio');
+          assert.equal(prompts.length, 0, 'hands-free configuration never sends typed drafts');
+        } else assert.equal(await settings.getByRole('heading', { name: 'Hands-free', exact: true }).count(), 0);
         await settings.getByText('Microfone', { exact: true }).click();
         await settings.getByLabel('Entrada de áudio', { exact: true }).selectOption('synthetic-b');
         await settings.getByRole('button', { name: 'Fechar configurações', exact: true }).click();
@@ -234,6 +268,11 @@ try {
         assert.equal(await page.locator('.composer textarea').inputValue(), '');
         assert.equal(await page.getByRole('button', { name: 'Voz sintética', exact: true }).count(), 0, 'deleted conversation is not resurrected');
         await page.waitForFunction(() => window.syntheticAudio.captures.every(input => input.context.state === 'closed'));
+        if (platform === 'android') {
+          await page.waitForFunction(() => window.syntheticHandsFree.lease === null);
+          const calls = await page.evaluate(() => window.syntheticHandsFree.calls);
+          assert.equal(calls.filter(call => call.operation === 'manualAcquire').length, calls.filter(call => call.operation === 'manualRelease').length);
+        }
         console.log(`${host}/${platform}: real MediaRecorder/WebAudio with synthetic signal, waveform, review, direct send, failures, drafts, silence, input preference and cleanup PASS`);
       } finally { await context.close(); }
     }

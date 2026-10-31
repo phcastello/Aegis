@@ -1,4 +1,6 @@
 mod config;
+#[cfg(feature = "native-runtime")]
+mod hands_free;
 mod health;
 #[cfg(feature = "native-runtime")]
 mod native_notifications;
@@ -292,6 +294,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_info,
+            hands_free::node_hands_free,
             check_backend,
             check_android_update,
             prepare_windows_update,

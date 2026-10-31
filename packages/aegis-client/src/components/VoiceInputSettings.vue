@@ -33,7 +33,7 @@ onBeforeUnmount(() => { disposed = true; navigator.mediaDevices?.removeEventList
 <template>
   <details class="voice-input-settings">
     <summary>Microfone</summary>
-    <p>A entrada é usada somente quando você inicia uma gravação. Esta seleção fica nesta instalação.</p>
+    <p>Esta seleção vale para gravações pelo chat e fica nesta instalação. O hands-free Android usa a entrada nativa do sistema.</p>
     <template v-if="supported">
       <label for="voice-input-device">Entrada de áudio</label>
       <select id="voice-input-device" :value="selected" @change="select">

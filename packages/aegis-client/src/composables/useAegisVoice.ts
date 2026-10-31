@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { cancelSpeech, getVoiceStatus, streamSpeech } from '../services/aegisApi';
 import { VoicePlaybackService, type VoicePlaybackState } from '../services/voicePlaybackService';
+import { acquireAudio } from '../services/audioOwnership';
 
 import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 
@@ -13,6 +14,7 @@ export function useAegisVoice() {
   let activeSpeechRequestId: string | null = null;
   let controller: AbortController | null = null;
   let playbackRequest = 0;
+  let releaseAudio: (() => Promise<void>) | null = null;
   player.onState((state) => { playbackState.value = state; });
 
   const isBusy = computed(() => playbackState.value === 'buffering' || playbackState.value === 'playing' || playbackState.value === 'initializing');
@@ -39,6 +41,11 @@ export function useAegisVoice() {
     await stopping;
     if (request !== playbackRequest || !(await prepare()) || request !== playbackRequest) return;
     if (!manual && !autoSpeak.value) return;
+    let lease: () => Promise<void>;
+    try { lease = await acquireAudio('playback'); }
+    catch { if (request === playbackRequest) voiceMessage.value = 'O áudio está em uso pela sessão hands-free. Aguarde ou cancele a sessão.'; return; }
+    if (request !== playbackRequest) { await lease().catch(() => undefined); return; }
+    releaseAudio = lease;
     const speechRequestId = crypto.randomUUID();
     const generation = player.begin();
     activeTurnId = turnId;
@@ -66,6 +73,9 @@ export function useAegisVoice() {
         voiceMessage.value = error instanceof TypeError ? 'Serviço de voz indisponível.'
           : error instanceof Error ? error.message : 'Não consegui reproduzir a voz.';
       }
+    } finally {
+      if (releaseAudio === lease) releaseAudio = null;
+      await lease().catch(() => undefined);
     }
   }
 
@@ -78,6 +88,9 @@ export function useAegisVoice() {
     controller?.abort();
     controller = null;
     voiceMessage.value = null;
+    const release = releaseAudio;
+    releaseAudio = null;
+    if (release) await release().catch(() => undefined);
     if (speechRequestId) {
       try { await cancelSpeech(speechRequestId); } catch { /* local stop is already complete */ }
     }

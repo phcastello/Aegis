@@ -57,6 +57,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "runtime_info",
+            "node_hands_free",
             "check_backend",
             "check_android_update",
             "prepare_windows_update",

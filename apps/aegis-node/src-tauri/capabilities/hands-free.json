@@ -1,0 +1,7 @@
+{
+  "identifier": "android-hands-free",
+  "description": "Android assistant configuration, local model picker and aggregate metrics export.",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": ["allow-node-hands-free"]
+}

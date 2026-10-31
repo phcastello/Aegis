@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-hands-free"
+description = "Enables the node_hands_free command without any pre-configured scope."
+commands.allow = ["node_hands_free"]
+
+[[permission]]
+identifier = "deny-node-hands-free"
+description = "Denies the node_hands_free command without any pre-configured scope."
+commands.deny = ["node_hands_free"]

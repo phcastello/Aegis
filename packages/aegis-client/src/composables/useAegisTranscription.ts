@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { getTranscriptionStatus, transcribeAudio } from '../services/aegisApi';
 import { DIGITAL_ZERO_FLOOR, classifyPcmSignal, getPreferredVoiceInput, setPreferredVoiceInput } from '../services/voiceInput';
+import { acquireAudio } from '../services/audioOwnership';
 
 export type TranscriptionState = 'idle' | 'requesting_permission' | 'recording' | 'transcribing' | 'unavailable' | 'error';
 export type TranscriptionIntent = 'review' | 'send';
@@ -27,6 +28,7 @@ type CaptureSession = {
   finishing: boolean;
   sawSignal: boolean;
   intent: TranscriptionIntent;
+  releaseAudio: (() => Promise<void>) | null;
 };
 
 export function useAegisTranscription(onTranscript: (text: string, intent: TranscriptionIntent) => void) {
@@ -81,6 +83,9 @@ export function useAegisTranscription(onTranscript: (text: string, intent: Trans
     if (context) void context.close().catch(() => undefined);
     session.stream?.getTracks().forEach(track => track.stop());
     session.stream = null;
+    const release = session.releaseAudio;
+    session.releaseAudio = null;
+    if (release) void release().catch(() => undefined);
     if (current === session) { inputLevel.value = 0; inputLevels.value = Array(WAVEFORM_SAMPLES).fill(0); inputStatus.value = ''; }
   }
 
@@ -160,7 +165,7 @@ export function useAegisTranscription(onTranscript: (text: string, intent: Trans
     const session: CaptureSession = {
       valid: true, stream: null, recorder: null, chunks: [], startedAt: 0,
       durationTimer: null, meterTimer: null, stopTimer: null, controller: null,
-      context: null, source: null, analyser: null, removeTrackListeners: [], finishing: false, sawSignal: false, intent: 'review'
+      context: null, source: null, analyser: null, removeTrackListeners: [], finishing: false, sawSignal: false, intent: 'review', releaseAudio: null
     };
     current = session;
     state.value = 'requesting_permission';
@@ -168,6 +173,8 @@ export function useAegisTranscription(onTranscript: (text: string, intent: Trans
     notice.value = null;
     diagnostic.value = null;
     try {
+      session.releaseAudio = await acquireAudio('capture');
+      if (!owns(session)) { invalidate(session); return; }
       const preferred = getPreferredVoiceInput();
       let stream: MediaStream;
       try {

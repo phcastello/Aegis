@@ -10,7 +10,7 @@ const code = ts.transpileModule(readFileSync(new URL('../src/composables/useAegi
 }).outputText;
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-function fixture() {
+function fixture(options = {}) {
   const preparations = [], streams = [], cancelled = [], played = [], failures = [];
   let unmount;
   class Player {
@@ -25,6 +25,7 @@ function fixture() {
   const sandbox = { exports: {}, AbortController, crypto: { randomUUID }, require(name) {
     if (name === 'vue') return { ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }), watch() {}, onBeforeUnmount: fn => { unmount = fn; } };
     if (name.endsWith('/voicePlaybackService')) return { VoicePlaybackService: Player };
+    if (name.endsWith('/audioOwnership')) return { acquireAudio: options.acquireAudio ?? (async () => async () => {}) };
     if (name.endsWith('/voicePreference')) return { autoSpeak: { value: true }, setAutoSpeakPreference() {} };
     if (name.endsWith('/aegisApi')) return {
       getVoiceStatus: async () => ({ available: true }),
@@ -42,6 +43,19 @@ test('navigation stop during audio preparation cannot start late speech', async 
   assert.equal(f.preparations.length, 1);
   await f.api.stop(); f.preparations[0].resolve(); await pending;
   assert.equal(f.streams.length, 0);
+});
+
+test('Android playback lease spans real player completion and stale acquisition cannot start speech', async () => {
+  let released = 0;
+  const f = fixture({ acquireAudio: async () => async () => { released++; } });
+  const playing = f.api.speak('turn', 'message', true); await flush(); f.preparations[0].resolve(); await flush();
+  assert.equal(f.streams.length, 1); assert.equal(released, 0);
+  f.streams[0].gate.resolve(); await playing; assert.equal(released, 1);
+  const lease = deferred();
+  const g = fixture({ acquireAudio: () => lease.promise });
+  const pending = g.api.speak('late', 'late-message', true); await flush(); g.preparations[0].resolve(); await flush();
+  await g.api.stop(); lease.resolve(async () => { released++; }); await pending;
+  assert.equal(g.streams.length, 0); assert.equal(released, 2);
 });
 
 test('two pending preparations permit only the latest manual or automatic playback', async () => {
