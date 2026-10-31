@@ -19,7 +19,8 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
     private val active = AtomicReference<HandsFreePcmSink?>()
     fun cancel() { generation.incrementAndGet(); active.getAndSet(null)?.abort() }
 
-    fun openStream(stillCurrent: () -> Boolean): HandsFreePcmSink {
+    fun openStream(stillCurrent: () -> Boolean): HandsFreePcmSink = openStream(stillCurrent,{})
+    fun openStream(stillCurrent: () -> Boolean,onPlaybackEvent:(String)->Unit): HandsFreePcmSink {
         val token = generation.incrementAndGet()
         lateinit var stream: HandsFreeStreamingPcmSink
         stream = HandsFreeStreamingPcmSink(
@@ -32,7 +33,8 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
                 }
             } },
             stillCurrent = { generation.get() == token && stillCurrent() },
-            onClosed = { active.compareAndSet(stream, null) }
+            onClosed = { active.compareAndSet(stream, null) },
+            onPlaybackEvent=onPlaybackEvent
         )
         active.getAndSet(stream)?.abort()
         if (generation.get() != token) { stream.abort(); active.compareAndSet(stream, null) }

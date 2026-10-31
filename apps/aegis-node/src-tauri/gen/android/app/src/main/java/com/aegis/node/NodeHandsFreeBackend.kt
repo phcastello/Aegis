@@ -36,6 +36,8 @@ class NodeHandsFreeBackend internal constructor(
   @Volatile private var turnId: String? = null
   @Volatile private var speechId: String? = null
   @Volatile private var scope: NodeNativeSession.Session? = null
+  @Volatile private var latencyTrace:HandsFreeTurnLatency?=null
+  @Volatile private var correlationId:String?=null
   private var pinnedSessionId: String? = null
   private var pinnedConversationId: String? = null
 
@@ -52,15 +54,26 @@ class NodeHandsFreeBackend internal constructor(
     val pinned = scope ?: throw NodeNativeSession.IdentityUnavailable()
     require(path.startsWith("/api/") && !path.contains("..") && !path.contains("?"))
     if (!cleanup) checkCurrent()
+    val trace=if(cleanup)null else latencyTrace
+    val requestStage=when(path){"/api/voice/transcriptions"->"stt";"/api/chat/messages"->"chat";"/api/voice/speech"->"tts";else->null}
     val client = transport.newBuilder()
       .callTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
       .connectTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS)
       .readTimeout((if (cleanup) 3 else minOf(timeoutSeconds,120)).toLong(), TimeUnit.SECONDS)
-      .writeTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS).build()
+      .writeTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS)
+      .apply {
+        if(trace!=null && requestStage!=null)eventListener(object:okhttp3.EventListener() {
+          override fun requestHeadersStart(call:Call){trace.mark("${requestStage}_headers_started")}
+          override fun requestBodyStart(call:Call){trace.mark("${requestStage}_upload_started")}
+          override fun requestBodyEnd(call:Call,byteCount:Long){trace.mark("${requestStage}_upload_completed")}
+          override fun responseHeadersEnd(call:Call,response:okhttp3.Response){trace.mark("${requestStage}_response_headers")}
+        })
+      }.build()
     val builder = Request.Builder().url(pinned.origin + path)
       .header("Authorization", "AegisNode ${pinned.credential}")
       .header("Accept", if (pcm != null) "application/octet-stream" else "application/json")
       .header("Cache-Control", "no-store")
+    correlationId?.let{builder.header("X-Aegis-Turn-Id",it)}
     if (method == "DELETE") builder.delete() else builder.method(method,body.toRequestBody(contentType.toMediaType()))
     val call = client.newCall(builder.build())
     if (!cleanup) active = call
@@ -75,7 +88,10 @@ class NodeHandsFreeBackend internal constructor(
         val advertised = payload.contentLength()
         require(advertised <= limit)
         val output = if (pcm == null) ByteArrayOutputStream() else null
-        val framer = pcm?.let { HandsFreePcm16Framer(it) }
+        val framer = pcm?.let { HandsFreePcm16Framer(it,
+          onFirstPcmAvailable={trace?.mark("tts_first_pcm_available")},
+          onFirstUsefulPcmAvailable={frame->trace?.usefulFrame(frame);trace?.mark("tts_first_useful_pcm_available")},
+          onFirstUsefulPcmDelivered={trace?.mark("tts_first_useful_pcm_delivered")}) }
         val block = ByteArray(8192)
         var total = 0L
         var firstDelivered = false
@@ -87,6 +103,7 @@ class NodeHandsFreeBackend internal constructor(
               val count = stream.read(block)
               if (count < 0) break
               check(count > 0) { "empty_stream_read" }
+              if(pcm!=null && total==0L)trace?.mark("tts_first_byte")
               if (!cleanup && cancelled.get()) throw CancellationException()
               // Check authority after a possibly slow read, before delivering its audio. This is
               // time-bounded rather than decrypting the vault for every network/audio block.
@@ -122,8 +139,12 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   /** Blocking: called only by the controller's bounded background executor. */
-  fun execute(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink): HandsFreeTurn {
+  fun execute(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink): HandsFreeTurn =
+    execute(wav,sessionId,conversationId,pcm,null)
+
+  internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
+    latencyTrace=trace
     activePcm = pcm
     try {
       return executeTurn(wav, sessionId, conversationId, pcm)
@@ -134,7 +155,7 @@ class NodeHandsFreeBackend internal constructor(
     }
     finally {
       if (activePcm === pcm) activePcm = null
-      try { pcm.close() } finally { executing.set(false) }
+      try { pcm.close() } finally { latencyTrace=null;correlationId=null;executing.set(false) }
     }
   }
 
@@ -150,7 +171,12 @@ class NodeHandsFreeBackend internal constructor(
     }
     if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
     checkCurrent()
+    val trace=latencyTrace
+    trace?.mark("turn_execution_started")
+    val id=trace?.turnId?:UUID.randomUUID().toString()
+    correlationId=id
     val transcriptionId = UUID.randomUUID().toString()
+    trace?.transcription(transcriptionId);trace?.mark("stt_multipart_started")
     val boundary = "aegis-${UUID.randomUUID()}"
     val prefix = ("--$boundary\r\nContent-Disposition: form-data; name=\"transcriptionRequestId\"\r\n\r\n$transcriptionId\r\n" +
       "--$boundary\r\nContent-Disposition: form-data; name=\"clientDurationMilliseconds\"\r\n\r\n${(wav.size - 44) * 1000L / 32000}\r\n" +
@@ -160,10 +186,12 @@ class NodeHandsFreeBackend internal constructor(
     prefix.copyInto(multipart); wav.copyInto(multipart, prefix.size); suffix.copyInto(multipart, prefix.size + wav.size)
     try {
       val transcript = timed("stt") {
+        trace?.mark("stt_request_started")
         val response = request("/api/voice/transcriptions", multipart, "multipart/form-data; boundary=$boundary", 65536, 90)
         try {
           val result = JSONObject(String(response, Charsets.UTF_8))
           require(result.getString("transcriptionRequestId") == transcriptionId)
+          trace?.mark("stt_response_received")
           result.getString("text").trim()
         } finally { response.fill(0) }
       }
@@ -175,12 +203,13 @@ class NodeHandsFreeBackend internal constructor(
       }
       onStage("transcribed", 0)
       checkCurrent()
-      val id = UUID.randomUUID().toString()
       turnId = id
       val result = timed("chat") {
+        trace?.mark("chat_request_started")
         json("/api/chat/messages", JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
           .put("content", command).put("origin", "hands_free").put("voiceSessionId", sessionId))
       }
+      trace?.mark("chat_response_received")
       val destination = result.getString("conversationId")
       require(UUID.fromString(destination).toString() == destination)
       require(conversationId == null || destination == conversationId)
@@ -191,6 +220,7 @@ class NodeHandsFreeBackend internal constructor(
       require(UUID.fromString(messageId).toString() == messageId)
       checkCurrent()
       val speechRequest = UUID.randomUUID().toString()
+      trace?.speech(speechRequest)
       speechId = speechRequest
       val ttsStart = System.nanoTime()
       var firstAudioAt = 0L
@@ -205,7 +235,7 @@ class NodeHandsFreeBackend internal constructor(
           val body = JSONObject().put("turnId", id).put("speechRequestId", speechRequest)
             .put("assistantMessageId", messageId).toString().toByteArray(Charsets.UTF_8)
           // 120s idle network budget, plus at most 180s AudioTrack backpressure/drain.
-          try { request("/api/voice/speech", body, "application/json", 24000 * 2 * 180, 300, pcm = pcm,
+          try { trace?.mark("tts_request_started");request("/api/voice/speech", body, "application/json", 24000 * 2 * 180, 300, pcm = pcm,
             onFirstPcm = {
               firstAudioAt = System.nanoTime()
               onStage("tts_first_audio", (firstAudioAt - ttsStart) / 1_000_000L)
@@ -214,6 +244,7 @@ class NodeHandsFreeBackend internal constructor(
         }
         checkCurrent()
         pcm.finish()
+        trace?.mark("playback_finished")
         checkCurrent()
       } finally {
         val completedBeforeDeadline = deadlineArmed.getAndSet(false)

@@ -43,6 +43,8 @@ internal class HandsFreeVad(
     var hasSpeech=false;private set
     val hasVoiceStart:Boolean get()=hasSpeech
     var confirmedStartSample:Int?=null;private set
+    // Observation only: the end of the latest frame meeting the existing active rule.
+    var lastActiveEndSample:Int?=null;private set
     val pendingStartSample:Int? get()=if(voicedRun>0)total-voicedRun else null
     var signalSamples=0;private set
     fun process(samples:ShortArray,count:Int):Boolean {
@@ -62,6 +64,7 @@ internal class HandsFreeVad(
             val classified=classifier.isSpeech(frame)
             val active=classified && rms>=maxOf(8.0,noise*1.4)
             if(active) {
+                lastActiveEndSample=total
                 voicedRun+=FRAME_SAMPLES;quiet=0
                 if(voicedRun>=ONSET_SAMPLES && !hasSpeech) {
                     hasSpeech=true;confirmedStartSample=total-voicedRun
@@ -93,6 +96,7 @@ internal class HandsFreeCommandCapture(
     private val uncertainPreRoll:Boolean
     var length=preRollCount;private set
     val hasSpeech:Boolean get()=vad.hasSpeech
+    val lastActiveEndSample:Int? get()=vad.lastActiveEndSample
     // Energy cannot distinguish an isolated invocation from every short request. Preserve
     // uncertain real pre-roll; STT still rejects empty/name-only text before creating chat.
     val hasUsefulAudio:Boolean get()=vad.hasSpeech || uncertainPreRoll

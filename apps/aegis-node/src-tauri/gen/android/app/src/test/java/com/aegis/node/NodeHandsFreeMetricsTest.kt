@@ -8,6 +8,55 @@ import java.time.ZonedDateTime
 
 class NodeHandsFreeMetricsTest {
     private val zone=ZoneId.of("America/Sao_Paulo")
+    @Test fun turnLatencyIncludesEndpointingAndKeepsClockAndAcousticLimitsExplicit() {
+        var mono=1000L
+        val trace=HandsFreeTurnLatency(clock={mono})
+        trace.markAt("last_vad_active_frame_estimated",200)
+        trace.mark("endpoint_completed");trace.mark("wav_prepare_started")
+        mono=1003;trace.mark("wav_ready")
+        mono=3500;trace.mark("tts_request_started")
+        mono=3600;trace.mark("tts_first_byte");trace.mark("tts_first_pcm_available")
+        mono=3700;trace.mark("tts_first_useful_pcm_available");trace.usefulFrame(2400)
+        mono=3708;trace.mark("tts_first_useful_pcm_delivered")
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone},detailedTurnLatency=true)
+        metrics.identity("test","1",true,true,true);val identity=metrics.identityToken()
+        metrics.configure(true,true)
+        metrics.turnLatency(trace,"played",identity)
+        val report=JSONObject(metrics.export())
+        val day=report.getJSONObject("days").getJSONObject("2026-11-01")
+        assertEquals(3508,day.getLong("vad_frame_to_first_useful_pcm_delivered_estimateMs"))
+        assertEquals(800,day.getLong("vad_endpoint_estimateMs"));assertEquals(3,day.getLong("wav_prepareMs"))
+        assertEquals(1,day.getLong("vad_frame_to_first_useful_pcm_delivered_estimateCount"))
+        assertEquals(3508,day.getJSONObject("byIdentity").getJSONObject(identity!!).getLong("vad_frame_to_first_useful_pcm_delivered_estimateMs"))
+        val events=report.getJSONArray("events")
+        val details=(0 until events.length()).map{events.getJSONObject(it)}.single{it.getString("name")=="turn_latency"}.getJSONObject("details")
+        assertEquals(-800,details.getJSONObject("milestonesFromEndpointMs").getLong("last_vad_active_frame_estimated"))
+        assertFalse(details.getBoolean("speakerAcousticsMeasured"));assertEquals(64,details.getInt("firstUsefulPcmThreshold"))
+        assertEquals(2400,details.getLong("firstUsefulPcmFrame"))
+    }
+    @Test fun silenceOrFailedDeliveryCannotProduceTheUsefulLatencyMetric() {
+        val trace=HandsFreeTurnLatency(clock={1000L})
+        trace.markAt("last_vad_active_frame_estimated",200);trace.mark("endpoint_completed")
+        trace.mark("tts_first_byte");trace.mark("tts_first_pcm_available")
+        assertFalse(trace.durations().containsKey("vad_frame_to_first_useful_pcm_delivered_estimate"))
+        trace.mark("tts_first_useful_pcm_available")
+        assertFalse(trace.durations().containsKey("vad_frame_to_first_useful_pcm_delivered_estimate"))
+        assertTrue(trace.report("cancelled").isNull("firstUsefulPcmFrame"))
+    }
+    @Test fun detailedTurnProfilingIsDisabledByDefaultButUsefulDurationRemains() {
+        val trace=HandsFreeTurnLatency(clock={1000L})
+        trace.markAt("last_vad_active_frame_estimated",200);trace.mark("endpoint_completed")
+        trace.markAt("tts_first_useful_pcm_delivered",1500)
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone})
+        metrics.turnLatency(trace,"played",null)
+        val report=JSONObject(metrics.export());val events=report.getJSONArray("events")
+        val details=(0 until events.length()).map{events.getJSONObject(it)}.single{it.getString("name")=="turn_latency"}.getJSONObject("details")
+        assertFalse(details.getBoolean("detailProfiling"));assertFalse(details.has("milestonesFromEndpointMs"))
+        assertEquals(trace.turnId,details.getString("turnId"))
+        assertEquals(1300,details.getJSONObject("durationsMs").getLong("vad_frame_to_first_useful_pcm_delivered_estimate"))
+    }
     @Test fun restartDoesNotBackfillConfirmedOrRequestedAvailability() {
         var elapsed=0L;var wall=ZonedDateTime.parse("2026-10-31T12:00:00-03:00").toInstant().toEpochMilli();var saved=""
         val first=HandsFreeMetrics(null,{saved=it},{elapsed},{wall},{zone})

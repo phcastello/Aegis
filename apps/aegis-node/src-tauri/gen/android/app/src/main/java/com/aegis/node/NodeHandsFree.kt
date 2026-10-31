@@ -72,6 +72,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     private var conversationId:String?=null
     @Volatile private var sessionId:String?=null
     @Volatile private var backend:NodeHandsFreeBackend?=null
+    private var capturedTurnLatency:HandsFreeTurnLatency?=null
     private fun newBackend(generation:Int,session:String):NodeHandsFreeBackend {
         val identity=metrics.identityToken()
         return NodeHandsFreeBackend(context){stage,duration->
@@ -228,6 +229,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(sessionCancelled){command.fill(0);val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val wake=context.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Aegis:hands-free-session")
                 val turnIdentity=metrics.identityToken()
+                val trace=capturedTurnLatency
+                var turnOutcome="failed"
                 val heldAt=SystemClock.elapsedRealtime()
                 try {
                     wake.acquire(600000)
@@ -236,17 +239,19 @@ internal class HandsFreeRuntime(private val context:Context) {
                         setState("processing","Processando pedido…")
                         backend?:newBackend(generation,session).also{backend=it}
                     }
-                    val sink=playback.openStream{current(generation) && !sessionCancelled && sessionId==session}
-                    val turn=active.execute(command,session,conversationId,sink)
+                    val sink=playback.openStream({current(generation) && !sessionCancelled && sessionId==session},{event->trace?.mark(event)})
+                    val turn=active.execute(command,session,conversationId,sink,trace)
                     command.fill(0)
                     if(!current(generation) || sessionCancelled)throw java.util.concurrent.CancellationException()
                     conversationId=turn.conversationId
                     // execute returns only after the sink has drained the actual playback head.
                     continuation=turn.continueListening && !sessionCancelled && turn.playedAudio
                     continuationDeadline=SystemClock.elapsedRealtime()+2000
+                    turnOutcome=if(turn.playedAudio)"played" else "empty"
                     if(!continuation){conversationId=null;sessionId=null;backend=null;closePanel(session)}
                 }catch(error:Exception){
                     val cancelled=!current(generation) || sessionCancelled || error is java.util.concurrent.CancellationException
+                    turnOutcome=if(cancelled)"cancelled" else "failed"
                     metrics.addForIdentity(if(cancelled)"turns_cancelled" else "sessions_failed",1,turnIdentity);continuation=false;conversationId=null;sessionId=null;cancelBackend()
                     if(current(generation) && !cancelled)setState("session_failed","Não foi possível concluir o pedido. Diga Aegis para tentar novamente.")
                     closePanel(session)
@@ -254,6 +259,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                     command.fill(0)
                     if(wake.isHeld)wake.release()
                     metrics.addForIdentity("sessionWakeLockMs",minOf(600000,SystemClock.elapsedRealtime()-heldAt),turnIdentity)
+                    trace?.let{it.mark("turn_ended");metrics.turnLatency(it,turnOutcome,turnIdentity)}
+                    capturedTurnLatency=null
                 }
                 if(!MicroWakeWordNative.reset(detector))error("detector_reset")
             }
@@ -279,6 +286,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
 
     private fun capture(generation:Int,detector:Long,continuation:Boolean):ByteArray? {
+        capturedTurnLatency=null
         val audio=openRecorder();recorder=audio
         val buffer=ShortArray(3200) // 200ms blocking capture, not 10ms Kotlin timers.
         val ring=HandsFreeRing()
@@ -286,6 +294,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         var commandStarted=0L;var captured=false
         var classifier:NativeHandsFreeSpeechClassifier?=null
         var commandCapture:HandsFreeCommandCapture?=null
+        var lastVadSample:Int?=null
+        var lastVadFrameAtMs:Long?=null
         var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
         var recordingCallback:AudioManager.AudioRecordingCallback?=null
         val silenced=java.util.concurrent.atomic.AtomicBoolean(false)
@@ -308,6 +318,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             }
             while(current(generation)) {
                 val count=audio.read(buffer,0,buffer.size,AudioRecord.READ_BLOCKING)
+                val readReturnedAtMs=HandsFreeTurnLatency.now()
                 if(!current(generation))return null
                 val now=SystemClock.elapsedRealtime()
                 if(count<=0)throw MicrophoneUnavailable()
@@ -325,10 +336,22 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(sessionCancelled && (captured || continuation))return ByteArray(0)
                 if(captured) {
                     val commandState=checkNotNull(commandCapture)
-                    if(commandState.append(buffer,count)) {
+                    val ended=commandState.append(buffer,count)
+                    val last=commandState.lastActiveEndSample
+                    if(last!=null && last!=lastVadSample) {
+                        lastVadSample=last
+                        lastVadFrameAtMs=readReturnedAtMs-(commandState.length-last)*1000L/16000
+                    }
+                    if(ended) {
+                        val endpointAt=HandsFreeTurnLatency.now()
                         metrics.add("commandCaptureMs",now-commandStarted)
                         if(!commandState.hasUsefulAudio){metrics.add("commands_no_speech");return ByteArray(0)}
-                        return handsFreeWav(command,commandState.length)
+                        val trace=HandsFreeTurnLatency()
+                        lastVadFrameAtMs?.let{trace.markAt("last_vad_active_frame_estimated",it)}
+                        trace.markAt("endpoint_completed",endpointAt);trace.mark("wav_prepare_started")
+                        val wav=handsFreeWav(command,commandState.length)
+                        trace.mark("wav_ready");capturedTurnLatency=trace
+                        return wav
                     }
                     continue
                 }
@@ -358,6 +381,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                         // Keep the full pre-roll including audio received after the keyword. STT strips
                         // only the initial wake word; no capture release/reopen and no popup dependency.
                         speechClassifier.reset();commandCapture=HandsFreeCommandCapture(command,length,speechClassifier)
+                        commandCapture?.lastActiveEndSample?.let{last->
+                            lastVadSample=last;lastVadFrameAtMs=readReturnedAtMs-(length-last)*1000L/16000
+                        }
                         metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession();if(!continuation)beep()
                     }
                 }

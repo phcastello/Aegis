@@ -136,6 +136,16 @@ class NodeHandsFreeAudioTest {
             val n=minOf(size,pcm.size-offset);b.process(pcm.copyOfRange(offset,offset+n),n);offset+=n
         }
         assertEquals(a.total,b.total);assertEquals(a.hasSpeech,b.hasSpeech);assertEquals(a.confirmedStartSample,b.confirmedStartSample)
+        assertEquals(a.lastActiveEndSample,b.lastActiveEndSample)
+    }
+    @Test fun lastActiveFrameObservationDoesNotExtendTheApprovedEndpoint() {
+        val vad=HandsFreeVad(voice)
+        assertNull(vad.lastActiveEndSample)
+        assertFalse(vad.process(speech(3200),3200))
+        assertEquals(3200,vad.lastActiveEndSample)
+        repeat(3){assertFalse(vad.process(ShortArray(3200),3200))}
+        assertTrue(vad.process(ShortArray(3200),3200))
+        assertEquals(16000,vad.total);assertEquals(3200,vad.lastActiveEndSample)
     }
     @Test fun wavContainsExactLittleEndianPcmAndRealLength() {
         val samples=shortArrayOf(-32768,-1,0,1,32767)

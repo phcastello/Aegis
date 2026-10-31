@@ -86,6 +86,7 @@ class NodeHandsFreeBackendTest {
       assertTrue(body.contains("name=\"audio\"; filename=\"command.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF"))
       assertTrue(body.endsWith("--\r\n"))
       val chat = JSONObject(fixture.requests[1].text())
+      assertTrue(fixture.requests.all{it.turnCorrelation==chat.getString("turnId")})
       assertEquals("hands_free", chat.getString("origin"))
       assertEquals(session, chat.getString("voiceSessionId"))
       assertEquals(conversation, chat.getString("conversationId"))
@@ -322,6 +323,45 @@ class NodeHandsFreeBackendTest {
     }
   }
 
+  @Test fun turnTraceCorrelatesSttBeforeChatAndDistinguishesBytesSilenceAndUsefulDelivery() {
+    val silentPrefix=CountDownLatch(1);val releaseUseful=CountDownLatch(1)
+    val trace=HandsFreeTurnLatency()
+    val pcm=byteArrayOf(0,0,1,0,-63,-1,63,0,-64,-1)
+    Fixture(respond={request,normal->
+      if(request.method=="POST" && request.path=="/api/voice/speech")normal.copy(bytes=pcm,stream={output->
+        output.write(pcm,0,9);output.flush();silentPrefix.countDown()
+        check(releaseUseful.await(5,TimeUnit.SECONDS))
+        output.write(pcm,9,1);output.flush()
+      })else normal
+    }).use { fixture->
+      val backend=fixture.backend()
+      val recorded=RecordingSink()
+      val delivered=CountDownLatch(1)
+      val sink=object:HandsFreePcmSink by recorded {
+        override fun write(bytes:ByteArray,offset:Int,count:Int){recorded.write(bytes,offset,count);delivered.countDown()}
+      }
+      val executor=Executors.newSingleThreadExecutor()
+      try {
+        val result=executor.submit<HandsFreeTurn>{backend.execute(wav(),session,null,sink,trace)}
+        assertTrue(silentPrefix.await(5,TimeUnit.SECONDS));assertTrue(delivered.await(5,TimeUnit.SECONDS))
+        var points=trace.report("running").getJSONObject("milestonesFromEndpointMs")
+        assertTrue(points.has("tts_first_byte"));assertTrue(points.has("tts_first_pcm_available"))
+        assertFalse(points.has("tts_first_useful_pcm_available"));assertFalse(points.has("tts_first_useful_pcm_delivered"))
+        releaseUseful.countDown();assertTrue(result.get(5,TimeUnit.SECONDS).playedAudio)
+        val report=trace.report("played");points=report.getJSONObject("milestonesFromEndpointMs")
+        assertTrue(points.has("tts_first_useful_pcm_available"));assertTrue(points.has("tts_first_useful_pcm_delivered"))
+        assertEquals(4,report.getLong("firstUsefulPcmFrame"))
+        assertTrue(points.getLong("tts_first_byte")<=points.getLong("tts_first_useful_pcm_delivered"))
+        assertTrue(points.has("stt_upload_started"));assertTrue(points.has("stt_upload_completed"));assertTrue(points.has("stt_response_received"))
+        assertTrue(fixture.requests.all{it.turnCorrelation==trace.turnId})
+        assertEquals(trace.turnId,JSONObject(fixture.requests[1].text()).getString("turnId"))
+        assertTrue(fixture.requests[0].text().contains(report.getString("transcriptionRequestId")))
+        assertEquals(JSONObject(fixture.requests[2].text()).getString("speechRequestId"),report.getString("speechRequestId"))
+        assertArrayEquals(pcm,recorded.bytes.toByteArray())
+      }finally{releaseUseful.countDown();backend.cancel();executor.shutdownNow()}
+    }
+  }
+
   @Test fun downloadedVoiceCannotReturnContinuationUntilTheSimulatedPlaybackHeadFinishes() {
     val device=NodeHandsFreePcmStreamTest.Device(autoPlay=false)
     Fixture().use {fixture->
@@ -432,7 +472,7 @@ class NodeHandsFreeBackendTest {
     }
   }
 
-  private data class Request(val method: String, val path: String, val bytes: ByteArray, val contentType: String, val authorization: String) {
+  private data class Request(val method: String, val path: String, val bytes: ByteArray, val contentType: String, val authorization: String,val turnCorrelation:String) {
     fun text() = String(bytes, Charsets.UTF_8)
   }
   private data class Reply(val status: Int = 200, val bytes: ByteArray = byteArrayOf(), val headers: Map<String, String> = emptyMap(),
@@ -485,7 +525,7 @@ class NodeHandsFreeBackendTest {
           val body = ByteArray(length)
           var offset = 0
           while (offset < length) { val count = input.read(body, offset, length - offset); check(count > 0); offset += count }
-          val request = Request(start[0], start[1], body, headers["content-type"] ?: "", headers["authorization"] ?: "")
+          val request = Request(start[0], start[1], body, headers["content-type"] ?: "", headers["authorization"] ?: "",headers["x-aegis-turn-id"]?:"")
           requests.add(request)
           val reply = respond(request, normal(request))
           val responseHeaders = buildString {

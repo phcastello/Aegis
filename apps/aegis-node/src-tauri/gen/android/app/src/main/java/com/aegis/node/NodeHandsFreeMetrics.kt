@@ -16,11 +16,13 @@ internal class HandsFreeMetrics internal constructor(
     private val save:(String)->Unit,
     private val elapsedClock:()->Long={SystemClock.elapsedRealtime()},
     private val wallClock:()->Long={System.currentTimeMillis()},
-    private val zone:()->ZoneId={ZoneId.systemDefault()}
+    private val zone:()->ZoneId={ZoneId.systemDefault()},
+    private val detailedTurnLatency:Boolean=false
 ) {
     constructor(context:Context):this(
         context.getSharedPreferences("aegis-hands-free-metrics-v1",Context.MODE_PRIVATE).getString("aggregate",null),
-        {value->context.getSharedPreferences("aegis-hands-free-metrics-v1",Context.MODE_PRIVATE).edit().putString("aggregate",value).apply()}
+        {value->context.getSharedPreferences("aegis-hands-free-metrics-v1",Context.MODE_PRIVATE).edit().putString("aggregate",value).apply()},
+        detailedTurnLatency=BuildConfig.DEBUG
     )
     private val root=try{JSONObject(saved?:"{}")}catch(_:Exception){JSONObject()}
     private val days=root.optJSONObject("days")?:JSONObject().also{root.put("days",it)}
@@ -99,6 +101,11 @@ internal class HandsFreeMetrics internal constructor(
                 .put("${stage}MaxMs",maxOf(d.optLong("${stage}MaxMs",duration),duration))
         }
     }
+    @Synchronized fun turnLatency(trace:HandsFreeTurnLatency,outcome:String,identity:String?) {
+        for((stage,duration) in trace.durations())timing(stage,duration,identity)
+        event("turn_latency",trace.report(outcome,detailedTurnLatency).put("identityId",identity?:JSONObject.NULL))
+        persist()
+    }
     @Synchronized fun tick() {
         val elapsed=elapsedClock();val wall=wallClock();val delta=(elapsed-lastElapsed).coerceAtLeast(0)
         val observedZone=zone()
@@ -176,10 +183,11 @@ internal class HandsFreeMetrics internal constructor(
         detectorConfig:JSONObject=detectorConfiguration()) {
         tick()
         if(root.has("assistantSelected") && (root.optBoolean("assistantSelected")!=role || root.optBoolean("permissionGranted")!=permission))event("prerequisites_changed",JSONObject().put("assistantSelected",role).put("permissionGranted",permission))
+        val config=JSONObject(detectorConfig.toString()).put("turnLatencyDetails",detailedTurnLatency)
         observedIdentity=JSONObject().put("appVersion",version).put("build",build).put("modelVersion",modelVersion)
-            .put("modelSha256",modelSha256).put("config",JSONObject(detectorConfig.toString()))
+            .put("modelSha256",modelSha256).put("config",JSONObject(config.toString()))
         root.put("appVersion",version).put("build",build).put("modelVersion",modelVersion).put("modelSha256",modelSha256)
-          .put("config",JSONObject(detectorConfig.toString()))
+          .put("config",JSONObject(config.toString()))
           .put("modelReady",modelReady).put("assistantSelected",role).put("permissionGranted",permission)
         selectIdentity()
     }
@@ -213,6 +221,7 @@ internal class HandsFreeMetrics internal constructor(
             .put("endpointing",JSONObject().put("version",HandsFreeVad.VERSION).put("frameSamples",HandsFreeVad.FRAME_SAMPLES)
                 .put("onsetSamples",HandsFreeVad.ONSET_SAMPLES).put("noSpeechSamples",HandsFreeVad.NO_SPEECH_SAMPLES))
             .put("tts","pcm24k_streaming")
+            .put("turnLatency","vad-frame-to-useful-pcm-delivered-estimate-v1")
             .put("activationCue",HandsFreeCueSignal.VERSION)
     }
     @Synchronized fun persist() {
@@ -220,4 +229,56 @@ internal class HandsFreeMetrics internal constructor(
         save(root.toString());persistedAt=elapsedClock()
     }
     @Synchronized fun export():String{tick();persist();return root.toString(2)}
+}
+
+/** One bounded record per active turn; all points use this process's nanoTime clock.
+ * No text/audio is retained. VAD-frame time is estimated from sample position at
+ * a blocking read's return; neither that nor AudioTrack.play() is speaker acoustics.
+ */
+internal class HandsFreeTurnLatency(
+    val turnId:String=UUID.randomUUID().toString(),
+    private val clock:()->Long={now()}
+) {
+    private val points=linkedMapOf<String,Long>()
+    private var transcriptionId:String?=null
+    private var speechId:String?=null
+    private var firstUsefulFrame:Long?=null
+    @Synchronized fun mark(name:String){markAt(name,clock())}
+    @Synchronized fun markAt(name:String,at:Long){if(!points.containsKey(name) && points.size<32)points[name]=at}
+    @Synchronized fun transcription(id:String){transcriptionId=id}
+    @Synchronized fun speech(id:String){speechId=id}
+    @Synchronized fun usefulFrame(index:Long){if(firstUsefulFrame==null)firstUsefulFrame=index}
+    @Synchronized fun durations():Map<String,Long> {
+        val result=linkedMapOf<String,Long>()
+        fun span(name:String,start:String,end:String) {
+            val a=points[start]?:return;val b=points[end]?:return
+            if(b>=a)result[name]=b-a
+        }
+        span("vad_endpoint_estimate","last_vad_active_frame_estimated","endpoint_completed")
+        span("wav_prepare","wav_prepare_started","wav_ready")
+        span("stt_multipart_prepare","stt_multipart_started","stt_request_started")
+        span("stt_upload","stt_upload_started","stt_upload_completed")
+        span("stt_wait_response","stt_upload_completed","stt_response_received")
+        span("chat_client","chat_request_started","chat_response_received")
+        for(point in listOf("first_byte","first_pcm_available","first_useful_pcm_available","first_useful_pcm_delivered"))
+            span("tts_$point","tts_request_started","tts_$point")
+        span("vad_frame_to_first_useful_pcm_delivered_estimate","last_vad_active_frame_estimated","tts_first_useful_pcm_delivered")
+        span("endpoint_to_first_useful_pcm_delivered","endpoint_completed","tts_first_useful_pcm_delivered")
+        span("player_play_to_drained","player_play_called","player_drained")
+        return result
+    }
+    @Synchronized fun report(outcome:String,includeMilestones:Boolean=true):JSONObject {
+        val origin=points["endpoint_completed"]?:points.values.firstOrNull()?:clock()
+        val relative=JSONObject();for((name,at) in points)relative.put(name,at-origin)
+        val result=JSONObject().put("turnId",turnId).put("transcriptionRequestId",transcriptionId?:JSONObject.NULL)
+            .put("speechRequestId",speechId?:JSONObject.NULL).put("outcome",outcome)
+            .put("clock","process-local System.nanoTime; milliseconds relative to endpoint")
+            .put("vadFrameEstimate","last active frame sample position mapped to blocking capture read return; capture buffering/scheduling uncertainty remains")
+            .put("speakerAcousticsMeasured",false).put("firstUsefulPcmThreshold",64)
+            .put("firstUsefulPcmFrame",firstUsefulFrame?:JSONObject.NULL)
+            .put("detailProfiling",includeMilestones).put("durationsMs",JSONObject(durations()))
+        if(includeMilestones)result.put("milestonesFromEndpointMs",relative)
+        return result
+    }
+    companion object {fun now()=System.nanoTime()/1_000_000L}
 }

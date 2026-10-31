@@ -34,8 +34,8 @@ Não foram adicionados timers periódicos, profiling ou mute do microfone.
 
 ## Regressão da captura
 
-Suíte host de Kotlin com o JNI/libfvad real: **19 testes passaram**, sendo
-13 puros e seis de integração. A onda aprovada é protegida pelo hash anterior,
+Suíte host de Kotlin com o JNI/libfvad real: **20 testes passaram**, sendo
+14 puros e seis de integração. A onda aprovada é protegida pelo hash anterior,
 pico/RMS, intervalo e duração. O classificador recebe o sinal em quatro
 alinhamentos (0, 1, 160 e 319 samples), com ganhos de vazamento simulados
 0,05, 0,18, 0,5 e 1,0; sinal isolado não confirma fala/áudio útil.
@@ -54,12 +54,14 @@ Reprodução privada:
 python3 scripts/hands-free/run-vad-host-tests.py \
   --library-dir "$HOME/.cache/aegis-hands-free/native-host" \
   --continuous-wav "$HOME/.local/state/aegis/latency-v080/continuous.wav" \
-  --output "$HOME/.cache/aegis-hands-free/cue-gain-continuous-vad-20261031"
+  --output "$HOME/.cache/aegis-hands-free/cue-gain-trace-vad-20261031"
 ```
 
 O relatório e o log ficam no diretório privado de saída. O WAV não entra no
 Git ou APK. O argumento `--continuous-wav` é opcional; sem ele esse teste
 adicional é ignorado, explicitamente, e as demais regressões continuam.
+O Kotlin de produção também compilou no Gradle; os **63 testes JVM Android
+`NodeHandsFree*Test` passaram**, incluindo os contratos de PCM/HTTP/métricas.
 
 Esses testes executam amostras sintéticas e gravações existentes no host.
 Não comprovam reverberação, resposta do alto-falante/microfone, classificação

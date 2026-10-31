@@ -11,6 +11,36 @@ import java.util.concurrent.TimeUnit
 
 /** Simulated device tests validate ownership/drain/backpressure; they do not play physical audio. */
 class NodeHandsFreePcmStreamTest {
+    @Test fun usefulPcmIgnoresLeadingSilenceAndWaitsForSplitSignedSampleDelivery() {
+        val device=Device(autoPlay=true)
+        val events=mutableListOf<String>()
+        val framer=HandsFreePcm16Framer(HandsFreeStreamingPcmSink({device}),
+            onFirstPcmAvailable={events.add("available")},
+            onFirstUsefulPcmAvailable={frame->events.add("useful:$frame")},
+            onFirstUsefulPcmDelivered={events.add("delivered")})
+        val pcm=byteArrayOf(0,0,1,0,-63,-1,63,0,-64,-1,-1,127)
+        framer.accept(pcm.copyOfRange(0,9),9)
+        assertEquals(listOf("available"),events)
+        assertEquals(4,framer.samples)
+        framer.accept(pcm.copyOfRange(9,10),1)
+        assertEquals(listOf("available","useful:4","delivered"),events)
+        framer.accept(pcm.copyOfRange(10,12),2);framer.finish()
+        assertEquals(listOf("available","useful:4","delivered"),events)
+        assertArrayEquals(pcm,device.recorded.toByteArray())
+    }
+    @Test fun failedUsefulPcmWriteNeverReportsDelivery() {
+        val events=mutableListOf<String>()
+        val sink=object:HandsFreePcmSink {
+            override fun write(bytes:ByteArray,offset:Int,count:Int){throw CancellationException()}
+            override fun finish(){}
+            override fun abort(){}
+            override fun close(){}
+        }
+        val framer=HandsFreePcm16Framer(sink,onFirstUsefulPcmAvailable={events.add("available")},onFirstUsefulPcmDelivered={events.add("delivered")})
+        assertThrows(CancellationException::class.java){framer.accept(byteArrayOf(0,-128),2)}
+        assertEquals(listOf("available"),events)
+        assertEquals(0,framer.samples)
+    }
     @Test fun oddHttpFragmentsReconstructEveryLittleEndianSample() {
         val device=Device(autoPlay=true)
         val sink=HandsFreeStreamingPcmSink({device})
@@ -42,17 +72,21 @@ class NodeHandsFreePcmStreamTest {
 
     @Test fun eofAndSuccessfulWritesDoNotMeanTheSamplesHavePlayed() {
         val device=Device(autoPlay=false)
-        val sink=HandsFreeStreamingPcmSink({device})
+        val events=java.util.concurrent.CopyOnWriteArrayList<String>()
+        val sink=HandsFreeStreamingPcmSink({device},onPlaybackEvent={events.add(it)})
         sink.write(byteArrayOf(1,2,3,4),0,4)
+        assertEquals(listOf("player_play_called"),events)
         val executor=Executors.newSingleThreadExecutor()
         try {
             val drained=executor.submit{sink.finish()}
             assertTrue(device.markerArmed.await(5,TimeUnit.SECONDS))
             assertFalse(drained.isDone)
             assertEquals(0,device.playedFrames())
+            assertEquals(listOf("player_play_called"),events)
             device.advance(1);assertFalse(drained.isDone)
             device.advance(1);drained.get(5,TimeUnit.SECONDS)
             assertEquals(2,device.playedFrames())
+            assertEquals(listOf("player_play_called","player_drained"),events)
         }finally{sink.abort();sink.close();executor.shutdownNow()}
     }
 
