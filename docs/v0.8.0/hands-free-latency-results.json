@@ -1,0 +1,2066 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "measurementBoundary": "server client monotonic wall time until arriving PCM containing abs(sample)>=64; excludes Android endpointing and physical speaker",
+  "sha": {
+    "aegisInitial": "3c04ea255ec9cfbb05124c5e830f9305fd0e3340",
+    "backendBefore": "4b71ef8ab4e643209930ad989a12723c97b61b35",
+    "backendBeforeProfileFix": "b8d403a02673b5758339bafd61a1a67c5158ab25",
+    "backendAfter": "e727e711afebbea283a7f7b357587a59118d9367",
+    "androidCandidate": "c055b2c3beb101694b69ddaaab7a6e7d45662cf3",
+    "deployedApiBefore": "f9167035572e58d771b87672a13db828f90107d3",
+    "deployedPwaBefore": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+    "ttsCandidate": "d3b4c076e1b7cb4e832febb7f24b6c9e55063539",
+    "ttsCandidateBase": "2564fc7",
+    "ttsDeployed": "unverified"
+  },
+  "historicalPhone": {
+    "version": "0.8.0-unstable.4",
+    "versionCode": 8000004,
+    "rawFileFound": false,
+    "stt": {
+      "sumMs": 9846,
+      "count": 7,
+      "minMs": 956,
+      "maxMs": 1946
+    },
+    "chat": {
+      "sumMs": 26459,
+      "count": 6,
+      "minMs": 3061,
+      "maxMs": 6927
+    },
+    "ttsFirstAudio": {
+      "sumMs": 11622,
+      "count": 6,
+      "minMs": 1840,
+      "maxMs": 2111
+    },
+    "processingToSpeakingMs": [
+      10131,
+      7904,
+      6087,
+      7217,
+      6944,
+      8411
+    ],
+    "warning": "different sample counts; not paired stages; processing markers exclude endpointing"
+  },
+  "before": {
+    "schema": 1,
+    "label": "baseline",
+    "conditions": {
+      "isolated": true,
+      "memoryCount": 0,
+      "extractionJobCount": 0
+    },
+    "repetitions": 2,
+    "sourceCommit": "4b71ef8ab4e643209930ad989a12723c97b61b35",
+    "samples": [
+      {
+        "case": "time",
+        "rep": 0,
+        "chatMs": 5234.881591051817,
+        "characters": 34,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1760.7762580737472,
+          "firstPcmMs": 1760.7762580737472,
+          "firstSignalMs": 1761.2083570566028,
+          "totalMs": 2795.118066947907,
+          "bytes": 179520,
+          "chunks": 46,
+          "peakPcm16": 12741,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 6996.08994810842,
+        "sample": "baseline-001",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "math",
+        "rep": 0,
+        "chatMs": 2702.192991040647,
+        "characters": 47,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1670.5099758692086,
+          "firstPcmMs": 1670.5099758692086,
+          "firstSignalMs": 1671.7085728887469,
+          "totalMs": 2462.039469042793,
+          "bytes": 156480,
+          "chunks": 43,
+          "peakPcm16": 21832,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4373.901563929394,
+        "sample": "baseline-002",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "fact",
+        "rep": 0,
+        "chatMs": 2468.4506540652364,
+        "characters": 28,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1973.4022470656782,
+          "firstPcmMs": 1973.4022470656782,
+          "firstSignalMs": 1974.2924440652132,
+          "totalMs": 1984.9420189857483,
+          "bytes": 115200,
+          "chunks": 29,
+          "peakPcm16": 14813,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4442.74309813045,
+        "sample": "baseline-003",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "long",
+        "rep": 0,
+        "chatMs": 3287.852481007576,
+        "characters": 235,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1707.4497870635241,
+          "firstPcmMs": 1707.4497870635241,
+          "firstSignalMs": 1707.8278858680278,
+          "totalMs": 11227.905553998426,
+          "bytes": 809280,
+          "chunks": 226,
+          "peakPcm16": 23551,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4995.680366875604,
+        "sample": "baseline-004",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "continuation",
+        "rep": 0,
+        "chatMs": 2541.6005779989064,
+        "characters": 67,
+        "continuation": "continue",
+        "tts": {
+          "firstByteMs": 1639.4356510136276,
+          "firstPcmMs": 1639.4356510136276,
+          "firstSignalMs": 1641.0711470525712,
+          "totalMs": 3328.4432829823345,
+          "bytes": 237120,
+          "chunks": 68,
+          "peakPcm16": 29205,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4182.671725051478,
+        "sample": "baseline-005",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "read_tool",
+        "rep": 0,
+        "chatMs": 3594.855241011828,
+        "characters": 38,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1658.9366039261222,
+          "firstPcmMs": 1658.9366039261222,
+          "firstSignalMs": 1660.1814010646194,
+          "totalMs": 2280.8473058976233,
+          "bytes": 145440,
+          "chunks": 44,
+          "peakPcm16": 13207,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 5255.036642076448,
+        "sample": "baseline-006",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "time",
+        "rep": 1,
+        "chatMs": 2661.9855880271643,
+        "characters": 34,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1685.437039937824,
+          "firstPcmMs": 1685.437039937824,
+          "firstSignalMs": 1686.36613804847,
+          "totalMs": 3008.4835530724376,
+          "bytes": 210720,
+          "chunks": 59,
+          "peakPcm16": 19012,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4348.351726075634,
+        "sample": "baseline-007",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "math",
+        "rep": 1,
+        "chatMs": 2285.691794939339,
+        "characters": 47,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1633.000865811482,
+          "firstPcmMs": 1633.000865811482,
+          "firstSignalMs": 1636.713356943801,
+          "totalMs": 2407.8920998144895,
+          "bytes": 156480,
+          "chunks": 48,
+          "peakPcm16": 21832,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3922.40515188314,
+        "sample": "baseline-008",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "fact",
+        "rep": 1,
+        "chatMs": 1678.2780571375042,
+        "characters": 28,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1917.82258101739,
+          "firstPcmMs": 1917.82258101739,
+          "firstSignalMs": 1919.3692770786583,
+          "totalMs": 1932.5892450287938,
+          "bytes": 115200,
+          "chunks": 34,
+          "peakPcm16": 14813,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3597.6473342161626,
+        "sample": "baseline-009",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "long",
+        "rep": 1,
+        "chatMs": 2934.4163318164647,
+        "characters": 288,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1689.3531300593168,
+          "firstPcmMs": 1689.3531300593168,
+          "firstSignalMs": 1690.3242280241102,
+          "totalMs": 12035.322808893397,
+          "bytes": 915840,
+          "chunks": 260,
+          "peakPcm16": 19452,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4624.740559840575,
+        "sample": "baseline-010",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "continuation",
+        "rep": 1,
+        "chatMs": 2302.9714529402554,
+        "characters": 89,
+        "continuation": "continue",
+        "tts": {
+          "firstByteMs": 1607.3987279087305,
+          "firstPcmMs": 1607.3987279087305,
+          "firstSignalMs": 1609.1766238678247,
+          "totalMs": 4237.764792051166,
+          "bytes": 321120,
+          "chunks": 94,
+          "peakPcm16": 18923,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3912.14807680808,
+        "sample": "baseline-011",
+        "cacheCondition": "not_implemented"
+      },
+      {
+        "case": "read_tool",
+        "rep": 1,
+        "chatMs": 3326.6972869168967,
+        "characters": 42,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1670.1724771410227,
+          "firstPcmMs": 1670.1724771410227,
+          "firstSignalMs": 1671.6468730010092,
+          "totalMs": 2363.8156061060727,
+          "bytes": 153120,
+          "chunks": 44,
+          "peakPcm16": 12554,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4998.344159917906,
+        "sample": "baseline-012",
+        "cacheCondition": "not_implemented"
+      }
+    ],
+    "stt": [
+      {
+        "rep": 0,
+        "totalMs": 706.3018979970366,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 1,
+        "totalMs": 467.4324740190059,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 2,
+        "totalMs": 394.11014993675053,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      }
+    ],
+    "baselineBehaviorCommit": "f9167035572e58d771b87672a13db828f90107d3",
+    "measuredSourceCommit": "4b71ef8ab4e643209930ad989a12723c97b61b35",
+    "buildCondition": "instrumented baseline"
+  },
+  "after": {
+    "schema": 1,
+    "label": "after",
+    "conditions": {
+      "isolated": true,
+      "memoryCount": 0,
+      "extractionJobCount": 0
+    },
+    "repetitions": 2,
+    "sourceCommit": "e727e711afebbea283a7f7b357587a59118d9367",
+    "image": "sha256:fee2a4e696d8e508c342a3f655155c930ecb3485692b5ee3d82dfdb961b4e6c9",
+    "samples": [
+      {
+        "case": "time",
+        "rep": 0,
+        "chatMs": 5559.272774960846,
+        "characters": 34,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1745.7824838347733,
+          "firstPcmMs": 1745.7824838347733,
+          "firstSignalMs": 1746.6118820011616,
+          "totalMs": 3233.232691884041,
+          "bytes": 210240,
+          "chunks": 57,
+          "peakPcm16": 17160,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 7305.884656962007,
+        "sample": "after-001",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "math",
+        "rep": 0,
+        "chatMs": 2449.819383909926,
+        "characters": 47,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1652.0117109175771,
+          "firstPcmMs": 1652.0117109175771,
+          "firstSignalMs": 1656.480300007388,
+          "totalMs": 2429.6301330905408,
+          "bytes": 156480,
+          "chunks": 44,
+          "peakPcm16": 21832,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4106.299683917314,
+        "sample": "after-002",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "fact",
+        "rep": 0,
+        "chatMs": 2247.1446730196476,
+        "characters": 28,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1905.2198000717908,
+          "firstPcmMs": 1905.2198000717908,
+          "firstSignalMs": 1906.7526960279793,
+          "totalMs": 1913.2450800389051,
+          "bytes": 115200,
+          "chunks": 30,
+          "peakPcm16": 14813,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4153.897369047627,
+        "sample": "after-003",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "long",
+        "rep": 0,
+        "chatMs": 2924.853437114507,
+        "characters": 229,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1663.2146839983761,
+          "firstPcmMs": 1663.2146839983761,
+          "firstSignalMs": 1664.2072810791433,
+          "totalMs": 9997.190458932891,
+          "bytes": 762240,
+          "chunks": 215,
+          "peakPcm16": 16427,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4589.06071819365,
+        "sample": "after-004",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "continuation",
+        "rep": 0,
+        "chatMs": 3012.097726110369,
+        "characters": 91,
+        "continuation": "continue",
+        "tts": {
+          "firstByteMs": 1663.446183083579,
+          "firstPcmMs": 1663.446183083579,
+          "firstSignalMs": 1665.08877906017,
+          "totalMs": 4111.617871094495,
+          "bytes": 298080,
+          "chunks": 87,
+          "peakPcm16": 18515,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4677.186505170539,
+        "sample": "after-005",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "read_tool",
+        "rep": 0,
+        "chatMs": 3904.2101718951017,
+        "characters": 38,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1974.5377311483026,
+          "firstPcmMs": 1974.5377311483026,
+          "firstSignalMs": 1975.2403302118182,
+          "totalMs": 1984.2902082018554,
+          "bytes": 122880,
+          "chunks": 33,
+          "peakPcm16": 15332,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 5879.45050210692,
+        "sample": "after-006",
+        "cacheCondition": "first_query_miss"
+      },
+      {
+        "case": "time",
+        "rep": 1,
+        "chatMs": 2256.2416510190815,
+        "characters": 34,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1637.4536459334195,
+          "firstPcmMs": 1637.4536459334195,
+          "firstSignalMs": 1638.529443880543,
+          "totalMs": 2870.773767819628,
+          "bytes": 191040,
+          "chunks": 53,
+          "peakPcm16": 20028,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3894.7710948996246,
+        "sample": "after-007",
+        "cacheCondition": "exact_input_hit"
+      },
+      {
+        "case": "math",
+        "rep": 1,
+        "chatMs": 1881.6726559307426,
+        "characters": 47,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1614.6664009429514,
+          "firstPcmMs": 1614.6664009429514,
+          "firstSignalMs": 1617.1441948972642,
+          "totalMs": 2394.783216994256,
+          "bytes": 156480,
+          "chunks": 46,
+          "peakPcm16": 21832,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3498.816850828007,
+        "sample": "after-008",
+        "cacheCondition": "exact_input_hit"
+      },
+      {
+        "case": "fact",
+        "rep": 1,
+        "chatMs": 1655.6797018274665,
+        "characters": 28,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1899.677312001586,
+          "firstPcmMs": 1899.677312001586,
+          "firstSignalMs": 1901.4901081100106,
+          "totalMs": 1910.787485074252,
+          "bytes": 115200,
+          "chunks": 34,
+          "peakPcm16": 14813,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3557.169809937477,
+        "sample": "after-009",
+        "cacheCondition": "exact_input_hit"
+      },
+      {
+        "case": "long",
+        "rep": 1,
+        "chatMs": 3150.386592838913,
+        "characters": 354,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1651.9338109064847,
+          "firstPcmMs": 1651.9338109064847,
+          "firstSignalMs": 1652.6107089594007,
+          "totalMs": 14063.249038998038,
+          "bytes": 1107840,
+          "chunks": 322,
+          "peakPcm16": 20198,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4802.997301798314,
+        "sample": "after-010",
+        "cacheCondition": "exact_input_hit"
+      },
+      {
+        "case": "continuation",
+        "rep": 1,
+        "chatMs": 2923.115641111508,
+        "characters": 76,
+        "continuation": "continue",
+        "tts": {
+          "firstByteMs": 1656.1795009765774,
+          "firstPcmMs": 1656.1795009765774,
+          "firstSignalMs": 1657.746396958828,
+          "totalMs": 4177.607211982831,
+          "bytes": 299040,
+          "chunks": 86,
+          "peakPcm16": 16627,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4580.862038070336,
+        "sample": "after-011",
+        "cacheCondition": "exact_input_hit"
+      },
+      {
+        "case": "read_tool",
+        "rep": 1,
+        "chatMs": 3482.3668911121786,
+        "characters": 38,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1925.4854500759393,
+          "firstPcmMs": 1925.4854500759393,
+          "firstSignalMs": 1926.1078489944339,
+          "totalMs": 1934.056828962639,
+          "bytes": 122880,
+          "chunks": 33,
+          "peakPcm16": 15332,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 5408.474740106612,
+        "sample": "after-012",
+        "cacheCondition": "exact_input_hit"
+      }
+    ],
+    "stt": [
+      {
+        "rep": 0,
+        "totalMs": 834.4373849686235,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 1,
+        "totalMs": 1647.2478220239282,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 2,
+        "totalMs": 531.2385179568082,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      }
+    ],
+    "baselineBehaviorCommit": "f9167035572e58d771b87672a13db828f90107d3",
+    "measuredSourceCommit": "e727e711afebbea283a7f7b357587a59118d9367",
+    "buildCondition": "optimized"
+  },
+  "firstUninstrumentedBaseline": {
+    "schema": 1,
+    "label": "baseline-uninstrumented",
+    "conditions": {
+      "isolated": true,
+      "memoryCount": 0,
+      "extractionJobCount": 0
+    },
+    "repetitions": 1,
+    "sourceCommit": "f9167035572e58d771b87672a13db828f90107d3",
+    "samples": [
+      {
+        "case": "time",
+        "rep": 0,
+        "chatMs": 5210.560948122293,
+        "characters": 31,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1829.2333940044045,
+          "firstPcmMs": 1829.2333940044045,
+          "firstSignalMs": 1831.2654888723046,
+          "totalMs": 3356.6555147990584,
+          "bytes": 222240,
+          "chunks": 59,
+          "peakPcm16": 27850,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 7041.826436994597
+      },
+      {
+        "case": "math",
+        "rep": 0,
+        "chatMs": 3152.8195049613714,
+        "characters": 47,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1649.3093268945813,
+          "firstPcmMs": 1649.3093268945813,
+          "firstSignalMs": 1650.5526239052415,
+          "totalMs": 2771.222824929282,
+          "bytes": 183840,
+          "chunks": 52,
+          "peakPcm16": 14292,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4803.372128866613
+      },
+      {
+        "case": "fact",
+        "rep": 0,
+        "chatMs": 2660.1351918652654,
+        "characters": 28,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1722.307451069355,
+          "firstPcmMs": 1722.307451069355,
+          "firstSignalMs": 1724.0305470768362,
+          "totalMs": 2084.418779006228,
+          "bytes": 134400,
+          "chunks": 38,
+          "peakPcm16": 15080,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4384.165738942102
+      },
+      {
+        "case": "long",
+        "rep": 0,
+        "chatMs": 3009.562649996951,
+        "characters": 305,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1660.9466997906566,
+          "firstPcmMs": 1660.9466997906566,
+          "firstSignalMs": 1662.389995995909,
+          "totalMs": 13021.841633832082,
+          "bytes": 969120,
+          "chunks": 261,
+          "peakPcm16": 19545,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 4671.95264599286
+      },
+      {
+        "case": "continuation",
+        "rep": 0,
+        "chatMs": 2292.3376781400293,
+        "characters": 94,
+        "continuation": "continue",
+        "tts": {
+          "firstByteMs": 1667.727183084935,
+          "firstPcmMs": 1667.727183084935,
+          "firstSignalMs": 1671.3461740873754,
+          "totalMs": 4428.378832992166,
+          "bytes": 321120,
+          "chunks": 90,
+          "peakPcm16": 21354,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 3963.6838522274047
+      },
+      {
+        "case": "read_tool",
+        "rep": 0,
+        "chatMs": 3527.6205020491034,
+        "characters": 42,
+        "continuation": "close",
+        "tts": {
+          "firstByteMs": 1697.711710818112,
+          "firstPcmMs": 1697.711710818112,
+          "firstSignalMs": 1700.273104943335,
+          "totalMs": 2521.1018279660493,
+          "bytes": 164640,
+          "chunks": 50,
+          "peakPcm16": 14672,
+          "partialSampleAtEof": false
+        },
+        "chatToFirstSignalMs": 5227.893606992438
+      }
+    ],
+    "stt": [
+      {
+        "rep": 0,
+        "totalMs": 811.756944982335,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 1,
+        "totalMs": 590.1205788832158,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      },
+      {
+        "rep": 2,
+        "totalMs": 771.0717429872602,
+        "audioMs": 1779,
+        "bytes": 56960,
+        "transcriptCharacters": 21
+      }
+    ]
+  },
+  "serverFull": {
+    "before": [
+      {
+        "rep": 0,
+        "sttMs": 494.3723101168871,
+        "chatMs": 1893.3743389789015,
+        "postEndpointToFirstSignalMs": 4100.361423101276,
+        "audio": {
+          "firstByteMs": 4099.704425083473,
+          "firstPcmMs": 4099.704425083473,
+          "firstSignalMs": 4100.361423101276,
+          "totalMs": 5544.599645072594,
+          "bytes": 230400,
+          "chunks": 64,
+          "peakPcm16": 15804,
+          "partialSampleAtEof": false
+        }
+      },
+      {
+        "rep": 1,
+        "sttMs": 596.4918630197644,
+        "chatMs": 4207.851164974272,
+        "postEndpointToFirstSignalMs": 6354.6573931816965,
+        "audio": {
+          "firstByteMs": 6354.336294112727,
+          "firstPcmMs": 6354.336294112727,
+          "firstSignalMs": 6354.6573931816965,
+          "totalMs": 9098.753983154893,
+          "bytes": 279360,
+          "chunks": 81,
+          "peakPcm16": 16930,
+          "partialSampleAtEof": false
+        },
+        "qualityException": "STT misrecognized fixed synthetic input (stored user text: Qodhas sao); retained in all statistics"
+      }
+    ],
+    "after": [
+      {
+        "rep": 0,
+        "sttMs": 772.7805329486728,
+        "chatMs": 2914.399762870744,
+        "postEndpointToFirstSignalMs": 5372.3168259020895,
+        "audio": {
+          "firstByteMs": 5371.353828813881,
+          "firstPcmMs": 5371.353828813881,
+          "firstSignalMs": 5372.3168259020895,
+          "totalMs": 6731.502543902025,
+          "bytes": 206880,
+          "chunks": 56,
+          "peakPcm16": 13540,
+          "partialSampleAtEof": false
+        }
+      },
+      {
+        "rep": 1,
+        "sttMs": 697.6518160663545,
+        "chatMs": 2489.5686879754066,
+        "postEndpointToFirstSignalMs": 4899.167270166799,
+        "audio": {
+          "firstByteMs": 4898.218072019517,
+          "firstPcmMs": 4898.218072019517,
+          "firstSignalMs": 4899.167270166799,
+          "totalMs": 6287.165718153119,
+          "bytes": 206880,
+          "chunks": 56,
+          "peakPcm16": 20575,
+          "partialSampleAtEof": false
+        }
+      }
+    ]
+  },
+  "streamProbe": {
+    "initialBeforeProfilerFix": [
+      {
+        "case": "time",
+        "firstFinalTextMs": 2944.9053059797734,
+        "doneMs": 2991.86719302088,
+        "events": 3
+      },
+      {
+        "case": "long",
+        "firstFinalTextMs": 2482.7257201541215,
+        "doneMs": 2525.54001705721,
+        "events": 3
+      }
+    ],
+    "withProfilerFix": [
+      {
+        "case": "time",
+        "firstFinalTextMs": 4066.685179946944,
+        "doneMs": 4291.392737068236,
+        "events": 3
+      },
+      {
+        "case": "long",
+        "firstFinalTextMs": 2318.9499001018703,
+        "doneMs": 2373.746467055753,
+        "events": 3
+      }
+    ],
+    "potentialRawArgumentToCompleteMs": {
+      "time": 277.897,
+      "long": 815.68
+    },
+    "warning": "first argument delta is not speakable/validated; raw upper bound, not implemented overlap"
+  },
+  "fixedTextTts": {
+    "direct": [
+      {
+        "condition": "baseline",
+        "case": "time",
+        "repetition": 0,
+        "label": "first_observed_after_unknown_idle",
+        "timestamp": "2026-10-31T18:17:19.483231+00:00",
+        "text_characters": 32,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 17.74185709655285,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1657.503206981346,
+        "first_nonsilent_ms": 1658.8628040626645,
+        "total_ms": 2566.0321190953255,
+        "audio_seconds": 3.59,
+        "bytes": 172320,
+        "chunks": 9,
+        "odd_residual": 0
+      },
+      {
+        "condition": "baseline",
+        "case": "math",
+        "repetition": 0,
+        "label": "warm",
+        "timestamp": "2026-10-31T18:17:22.087327+00:00",
+        "text_characters": 49,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 17.614656826481223,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1608.0352258868515,
+        "first_nonsilent_ms": 1609.233922790736,
+        "total_ms": 2447.2191049717367,
+        "audio_seconds": 3.34,
+        "bytes": 160320,
+        "chunks": 10,
+        "odd_residual": 0
+      },
+      {
+        "condition": "baseline",
+        "case": "long",
+        "repetition": 0,
+        "label": "warm",
+        "timestamp": "2026-10-31T18:17:24.539738+00:00",
+        "text_characters": 141,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 17.923956969752908,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1605.8274318929762,
+        "first_nonsilent_ms": 1607.2681278456002,
+        "total_ms": 6432.135405950248,
+        "audio_seconds": 9.66,
+        "bytes": 463680,
+        "chunks": 25,
+        "odd_residual": 0
+      },
+      {
+        "condition": "baseline",
+        "case": "time",
+        "repetition": 1,
+        "label": "warm",
+        "timestamp": "2026-10-31T18:17:30.977702+00:00",
+        "text_characters": 32,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 17.80495815910399,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1613.0042150616646,
+        "first_nonsilent_ms": 1614.3385120667517,
+        "total_ms": 2094.1405561752617,
+        "audio_seconds": 2.95,
+        "bytes": 141600,
+        "chunks": 7,
+        "odd_residual": 0
+      },
+      {
+        "condition": "baseline",
+        "case": "math",
+        "repetition": 1,
+        "label": "warm",
+        "timestamp": "2026-10-31T18:17:33.076893+00:00",
+        "text_characters": 49,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 17.586157890036702,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1612.8310149069875,
+        "first_nonsilent_ms": 1614.6902109030634,
+        "total_ms": 2490.4177009593695,
+        "audio_seconds": 3.34,
+        "bytes": 160320,
+        "chunks": 9,
+        "odd_residual": 0
+      },
+      {
+        "condition": "baseline",
+        "case": "long",
+        "repetition": 1,
+        "label": "warm",
+        "timestamp": "2026-10-31T18:17:35.572674+00:00",
+        "text_characters": 141,
+        "queue_empty_before": true,
+        "http_status": 200,
+        "headers_ms": 19.236254040151834,
+        "voice_profile": "AegisVoicev1.0-Q00-W04-P07-M02",
+        "first_pcm_ms": 1626.4710819814354,
+        "first_nonsilent_ms": 1627.9069790616632,
+        "total_ms": 6626.966136973351,
+        "audio_seconds": 9.82,
+        "bytes": 471360,
+        "chunks": 28,
+        "odd_residual": 0
+      }
+    ],
+    "routes": [
+      {
+        "rep": 0,
+        "route": "api",
+        "case": "time",
+        "firstByteMs": 1624.9136861879379,
+        "firstPcmMs": 1624.9136861879379,
+        "firstSignalMs": 1626.205783104524,
+        "totalMs": 2095.957551151514,
+        "bytes": 141600,
+        "chunks": 39,
+        "peakPcm16": 15514,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 0,
+        "route": "api",
+        "case": "math",
+        "firstByteMs": 1629.886673996225,
+        "firstPcmMs": 1629.886673996225,
+        "firstSignalMs": 1630.8761711698025,
+        "totalMs": 2493.189294124022,
+        "bytes": 160320,
+        "chunks": 46,
+        "peakPcm16": 13165,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 0,
+        "route": "api",
+        "case": "long",
+        "firstByteMs": 1683.0151460599154,
+        "firstPcmMs": 1683.0151460599154,
+        "firstSignalMs": 1683.4003450348973,
+        "totalMs": 6671.082630055025,
+        "bytes": 471360,
+        "chunks": 133,
+        "peakPcm16": 16682,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 0,
+        "route": "proxy",
+        "case": "time",
+        "firstByteMs": 1690.4594278894365,
+        "firstPcmMs": 1690.4594278894365,
+        "firstSignalMs": 1692.0565241016448,
+        "totalMs": 2181.1727460008115,
+        "bytes": 141600,
+        "chunks": 39,
+        "peakPcm16": 15514,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 0,
+        "route": "proxy",
+        "case": "math",
+        "firstByteMs": 1653.114918153733,
+        "firstPcmMs": 1653.114918153733,
+        "firstSignalMs": 1655.4476129822433,
+        "totalMs": 2489.2668039537966,
+        "bytes": 160320,
+        "chunks": 50,
+        "peakPcm16": 13165,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 0,
+        "route": "proxy",
+        "case": "long",
+        "firstByteMs": 1692.2268238849938,
+        "firstPcmMs": 1692.2268238849938,
+        "firstSignalMs": 1693.1307218037546,
+        "totalMs": 6713.843227829784,
+        "bytes": 471360,
+        "chunks": 130,
+        "peakPcm16": 16682,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "api",
+        "case": "time",
+        "firstByteMs": 1645.5622361972928,
+        "firstPcmMs": 1645.5622361972928,
+        "firstSignalMs": 1647.1522320061922,
+        "totalMs": 2127.8359750285745,
+        "bytes": 141600,
+        "chunks": 42,
+        "peakPcm16": 15514,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "api",
+        "case": "math",
+        "firstByteMs": 1621.8814929015934,
+        "firstPcmMs": 1621.8814929015934,
+        "firstSignalMs": 1623.3962888363749,
+        "totalMs": 2452.4095919914544,
+        "bytes": 160320,
+        "chunks": 47,
+        "peakPcm16": 13165,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "api",
+        "case": "long",
+        "firstByteMs": 1657.4555069673806,
+        "firstPcmMs": 1657.4555069673806,
+        "firstSignalMs": 1658.1226049456745,
+        "totalMs": 6623.703443910927,
+        "bytes": 471360,
+        "chunks": 136,
+        "peakPcm16": 16682,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "proxy",
+        "case": "time",
+        "firstByteMs": 1670.63687578775,
+        "firstPcmMs": 1670.63687578775,
+        "firstSignalMs": 1672.3018719349056,
+        "totalMs": 2151.713116792962,
+        "bytes": 141600,
+        "chunks": 38,
+        "peakPcm16": 15514,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "proxy",
+        "case": "math",
+        "firstByteMs": 1753.5738761071116,
+        "firstPcmMs": 1753.5738761071116,
+        "firstSignalMs": 1755.159371998161,
+        "totalMs": 2582.3002790566534,
+        "bytes": 160320,
+        "chunks": 44,
+        "peakPcm16": 13165,
+        "partialSampleAtEof": false
+      },
+      {
+        "rep": 1,
+        "route": "proxy",
+        "case": "long",
+        "firstByteMs": 1820.0989160686731,
+        "firstPcmMs": 1820.0989160686731,
+        "firstSignalMs": 1877.6918770745397,
+        "totalMs": 6893.79079407081,
+        "bytes": 471360,
+        "chunks": 141,
+        "peakPcm16": 16682,
+        "partialSampleAtEof": false
+      }
+    ],
+    "directSignalThreshold": 100,
+    "apiProxySignalThreshold": 64,
+    "warning": "same fixed complete texts, but stochastic raw TTS can differ; no DSP or production TTS change"
+  },
+  "quality": {
+    "before": [
+      {
+        "continuedSameConversation": true,
+        "initialContinuation": "continue",
+        "recallContainsBlue": true,
+        "responseCharacters": [
+          82,
+          120,
+          44,
+          49
+        ]
+      }
+    ],
+    "after": [
+      {
+        "continuedSameConversation": true,
+        "initialContinuation": "continue",
+        "recallContainsBlue": true,
+        "responseCharacters": [
+          85,
+          124,
+          49,
+          40
+        ]
+      }
+    ]
+  },
+  "knownCalls": {
+    "chatModelHttp": 53,
+    "titleModelHttp": 44,
+    "batchStt": 13,
+    "ttsRequests": 52,
+    "memoryExtractionJobs": 46,
+    "note": "extraction/projection provider usage not fully exported; 6 repeated corpus turns avoid embedding HTTP; no periodic traffic"
+  },
+  "limit": "target4s not achieved; no acoustic Android measurement; no deployed TTS changes",
+  "tokenUsageAvailable": {
+    "measurements": {
+      "before": {
+        "auditedTurns": 22,
+        "responseUsageObservations": 18,
+        "partialTotals": {
+          "inputTokens": 223871,
+          "outputTokens": 1250,
+          "cachedInputTokens": 219002
+        },
+        "rows": [
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2289,
+            "sample": "audit-001",
+            "availableUsage": [
+              {
+                "input_tokens": 12430,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 34,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12464
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1983,
+            "sample": "audit-002",
+            "availableUsage": [
+              {
+                "input_tokens": 12438,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12168
+                },
+                "output_tokens": 36,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12474
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1831,
+            "sample": "audit-003",
+            "availableUsage": [
+              {
+                "input_tokens": 12431,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12165
+                },
+                "output_tokens": 33,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12464
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2605,
+            "sample": "audit-004",
+            "availableUsage": [
+              {
+                "input_tokens": 12438,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 116,
+                "output_tokens_details": {
+                  "reasoning_tokens": 34
+                },
+                "total_tokens": 12554
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1987,
+            "sample": "audit-005",
+            "availableUsage": [
+              {
+                "input_tokens": 12442,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 38,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12480
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3071,
+            "sample": "audit-006",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2034,
+            "sample": "audit-007",
+            "availableUsage": [
+              {
+                "input_tokens": 12429,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 58,
+                "output_tokens_details": {
+                  "reasoning_tokens": 22
+                },
+                "total_tokens": 12487
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1739,
+            "sample": "audit-008",
+            "availableUsage": [
+              {
+                "input_tokens": 12440,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12168
+                },
+                "output_tokens": 36,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12476
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1182,
+            "sample": "audit-009",
+            "availableUsage": [
+              {
+                "input_tokens": 12430,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12165
+                },
+                "output_tokens": 33,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12463
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2437,
+            "sample": "audit-010",
+            "availableUsage": [
+              {
+                "input_tokens": 12439,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 90,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12529
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1829,
+            "sample": "audit-011",
+            "availableUsage": [
+              {
+                "input_tokens": 12445,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 43,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12488
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2853,
+            "sample": "audit-012",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2178,
+            "sample": "audit-013",
+            "availableUsage": [
+              {
+                "input_tokens": 12426,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 63,
+                "output_tokens_details": {
+                  "reasoning_tokens": 27
+                },
+                "total_tokens": 12489
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2166,
+            "sample": "audit-014",
+            "availableUsage": [
+              {
+                "input_tokens": 12438,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 108,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12546
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1345,
+            "sample": "audit-015",
+            "availableUsage": [
+              {
+                "input_tokens": 12428,
+                "input_tokens_details": {
+                  "cache_write_tokens": 8,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 8
+                  },
+                  "cached_tokens": 12154
+                },
+                "output_tokens": 34,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12462
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3632,
+            "sample": "audit-016",
+            "availableUsage": [
+              {
+                "input_tokens": 12432,
+                "input_tokens_details": {
+                  "cache_write_tokens": 8,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 8
+                  },
+                  "cached_tokens": 12154
+                },
+                "output_tokens": 229,
+                "output_tokens_details": {
+                  "reasoning_tokens": 185
+                },
+                "total_tokens": 12661
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2149,
+            "sample": "audit-017",
+            "availableUsage": [
+              {
+                "input_tokens": 12441,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 41,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12482
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2777,
+            "sample": "audit-018",
+            "availableUsage": [
+              {
+                "input_tokens": 12477,
+                "input_tokens_details": {
+                  "cache_write_tokens": 34,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 34
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 139,
+                "output_tokens_details": {
+                  "reasoning_tokens": 83
+                },
+                "total_tokens": 12616
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3461,
+            "sample": "audit-019",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1609,
+            "sample": "audit-020",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1926,
+            "sample": "audit-021",
+            "availableUsage": [
+              {
+                "input_tokens": 12429,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 34,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12463
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1863,
+            "sample": "audit-022",
+            "availableUsage": [
+              {
+                "input_tokens": 12438,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 85,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12523
+              }
+            ]
+          }
+        ]
+      },
+      "after": {
+        "auditedTurns": 18,
+        "responseUsageObservations": 14,
+        "partialTotals": {
+          "inputTokens": 174134,
+          "outputTokens": 916,
+          "cachedInputTokens": 170354
+        },
+        "rows": [
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2883,
+            "sample": "audit-001",
+            "availableUsage": [
+              {
+                "input_tokens": 12429,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 67,
+                "output_tokens_details": {
+                  "reasoning_tokens": 31
+                },
+                "total_tokens": 12496
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1786,
+            "sample": "audit-002",
+            "availableUsage": [
+              {
+                "input_tokens": 12436,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12168
+                },
+                "output_tokens": 36,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12472
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1570,
+            "sample": "audit-003",
+            "availableUsage": [
+              {
+                "input_tokens": 12435,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12165
+                },
+                "output_tokens": 33,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12468
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2399,
+            "sample": "audit-004",
+            "availableUsage": [
+              {
+                "input_tokens": 12439,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 107,
+                "output_tokens_details": {
+                  "reasoning_tokens": 26
+                },
+                "total_tokens": 12546
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2508,
+            "sample": "audit-005",
+            "availableUsage": [
+              {
+                "input_tokens": 12442,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 90,
+                "output_tokens_details": {
+                  "reasoning_tokens": 44
+                },
+                "total_tokens": 12532
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3508,
+            "sample": "audit-006",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2173,
+            "sample": "audit-007",
+            "availableUsage": [
+              {
+                "input_tokens": 12427,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 34,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12461
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1803,
+            "sample": "audit-008",
+            "availableUsage": [
+              {
+                "input_tokens": 12436,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12168
+                },
+                "output_tokens": 36,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12472
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1581,
+            "sample": "audit-009",
+            "availableUsage": [
+              {
+                "input_tokens": 12433,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12165
+                },
+                "output_tokens": 52,
+                "output_tokens_details": {
+                  "reasoning_tokens": 17
+                },
+                "total_tokens": 12485
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3075,
+            "sample": "audit-010",
+            "availableUsage": [
+              {
+                "input_tokens": 12439,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12170
+                },
+                "output_tokens": 104,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12543
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2834,
+            "sample": "audit-011",
+            "availableUsage": [
+              {
+                "input_tokens": 12444,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 89,
+                "output_tokens_details": {
+                  "reasoning_tokens": 48
+                },
+                "total_tokens": 12533
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3407,
+            "sample": "audit-012",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2204,
+            "sample": "audit-013",
+            "availableUsage": [
+              {
+                "input_tokens": 12429,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 34,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12463
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 2368,
+            "sample": "audit-014",
+            "availableUsage": [
+              {
+                "input_tokens": 12426,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12162
+                },
+                "output_tokens": 54,
+                "output_tokens_details": {
+                  "reasoning_tokens": 18
+                },
+                "total_tokens": 12480
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1887,
+            "sample": "audit-015",
+            "availableUsage": [
+              {
+                "input_tokens": 12442,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 0
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 42,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 12484
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 3810,
+            "sample": "audit-016",
+            "availableUsage": [
+              {
+                "input_tokens": 12477,
+                "input_tokens_details": {
+                  "cache_write_tokens": 35,
+                  "cache_write_tokens_details": {
+                    "ttl_12h_tokens": 0,
+                    "ttl_30m_tokens": 35
+                  },
+                  "cached_tokens": 12175
+                },
+                "output_tokens": 138,
+                "output_tokens_details": {
+                  "reasoning_tokens": 82
+                },
+                "total_tokens": 12615
+              }
+            ]
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 4069,
+            "sample": "audit-017",
+            "availableUsage": []
+          },
+          {
+            "Provider": "openai",
+            "Model": "gpt-6-luna",
+            "Success": true,
+            "DurationMilliseconds": 1992,
+            "sample": "audit-018",
+            "availableUsage": []
+          }
+        ]
+      }
+    },
+    "money": "not reported by responses; no currency amount inferred",
+    "scope": "partial chat response usage only; excludes missing/redacted usage, original uninstrumented6, embeddings, extraction and title generation"
+  }
+}
