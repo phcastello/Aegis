@@ -5,7 +5,7 @@ Implementação na branch `feat/v0.8.0-hands-free`, derivada de `913e629`
 e suas alterações locais foram preservadas. Esta entrega prepara interação real
 e diagnóstico no Node existente; a homologação no telefone ainda é necessária.
 
-Distribuição de desenvolvimento publicada: **0.8.0-unstable.2**, código Android
+Primeira distribuição publicada (substituída pelas [correções da preview](preview-corrections.md)): **0.8.0-unstable.2**, código Android
 **8000002**, fonte `3ba0410`. Disponível em **Configurações → Atualizações** ou
 pelo [APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.2/Aegis-Android-arm64.apk).
 Os [resultados da publicação](validation-and-publication.md) registram assinatura,
@@ -66,8 +66,8 @@ foi introduzido resampling sem validação.
 
 O ring guarda até 40.000 amostras (2,5 s). Na ativação, captura e detector não
 fecham/reabrem o microfone: o bloco inteiro já recebido, incluindo áudio após o
-evento, entra no comando. O sinal local de 55 ms é disparado sem bloquear a
-captura. A apresentação é independente dessa passagem; não usa overlay genérico
+evento, entra no comando. O sinal próprio local de 40 ms (duas notas com envelope)
+é disparado em player separado, sem bloquear nem silenciar a captura. A apresentação é independente dessa passagem; não usa overlay genérico
 nem consulta screenshots/conteúdo do aplicativo em primeiro plano.
 
 O painel ajusta a janela de `VoiceInteractionSession` explicitamente para
@@ -78,12 +78,21 @@ isolada deixava a janela padrão de tela inteira; a
 registra a ordem de callbacks e a decisão. Tamanho e navegação no telefone
 continuam pendentes de homologação física.
 
-O VAD local usa energia RMS em frames de 20 ms, piso 240 e limiar adaptativo
-`max(240, ruído × 3)`, endpoint após 800 ms sem fala e limite de 20 s após
-ativação, mais o pre-roll, limitado a 360.000 amostras. É uma regra conservadora
-para este incremento: ruído contínuo, distância, voz baixa e rotas Bluetooth
-precisam de avaliação física. O pre-roll pode conter fala anterior à invocação;
-esta entrega não estima alinhamento fonético exato da palavra no áudio.
+O endpointing usa libfvad/WebRTC local fixado, em frames de 20 ms, somente na
+captura do pedido e na continuação. O início exige 80 ms de evidência; o piso de
+ruído continua sendo atualizado sem depender de uma fala previamente assumida.
+A ativação não força `hasSpeech`: o pre-roll é analisado integralmente. Áudio
+variável curto e incerto é conservado para STT, evitando eliminar pedidos curtos
+já presentes quando chega a detecção. Silêncio comprovado é descartado localmente.
+Uma invocação verdadeira já contém fala e pode precisar do STT para ser distinguida
+de um pedido. Endpoint: 800 ms sem fala, timeout de 3 s sem início após ativação,
+limite de 20 s após ativação mais pre-roll. Ver [evidência e limites](preview-corrections-vad.md).
+
+O TTS existente chega como PCM s16le mono a 24 kHz e é entregue incrementalmente
+ao AudioTrack, com backpressure, buffer limitado e recomposição de amostras entre
+chunks ímpares. O download não acumula a resposta inteira. EOF HTTP não conclui o
+turno: o player espera as amostras realmente reproduzidas, e falha/cancelamento
+aborta o fluxo. Ver [streaming e testes](preview-corrections-streaming.md).
 
 STT vazio ou somente a invocação não cria conversa nem chama o modelo. O
 [contrato conversacional](hands-free-backend.md) acrescenta origem `hands_free`
@@ -138,8 +147,11 @@ numéricas entre kernels são registradas mesmo quando os eventos concordam.
 ## Métricas e bateria
 
 Em **Áudio e voz → Hands-free → Exportar métricas**, escolher um destino privado
-para JSON. O formato `schema: 1` inclui versão/build, modelo/configuração,
-agregados por data local, estado/dispositivo e eventos de transição limitados.
+para JSON. O formato `schema: 2` inclui catálogo de versão/build/modelo/configuração,
+fronteiras observadas e agregados por identidade em cada data local. Os totais
+anteriores são preservados e sua atribuição histórica fica explicitamente
+desconhecida. A versão geral representa apenas a observação atual. Eventos e
+catálogos são limitados; o overflow fica identificado sem inventar versões.
 Não inclui comandos, transcrições, áudio, screenshots ou dados de outros apps.
 
 Durações usam relógio monotônico, timestamps carregam fuso e mudanças de relógio

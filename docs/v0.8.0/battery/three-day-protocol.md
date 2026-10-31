@@ -29,6 +29,11 @@ três dias posteriores não provam causalidade nem significância estatística.
    ouvir resposta completa e testar continuação. Confirmar que a gravação manual
    continua coordenada e que desabilitar interrompe a captura.
 
+A primeira tentativa da `0.8.0-unstable.2` ficou bloqueada antes da configuração
+e **não constitui dia válido de hands-free operante**. A coleta só começa após
+ativação funcional da preview corrigida. Registrar mudanças de build e excluir
+os respectivos dias parciais; atualizar não reclassifica os dados anteriores.
+
 A homologação física permanece necessária. Se a verificação falhar, registrar
 build, estado e erro; não classificar o período como uso funcional da feature.
 Para interromper uma falha persistente, desabilitar hands-free ou selecionar
@@ -61,8 +66,15 @@ sem evidência. Após cada dia concluído:
 
 ## Formato da exportação
 
-O JSON tem `schema: 1`, versão/build do app, identificação/hash do modelo,
-configuração fixa, permissões e papel de assistente. `days` é um objeto por
+O JSON tem `schema: 2`. Versão/build/modelo/configuração no nível geral descrevem
+somente a observação atual (`identityScope`). O catálogo `identities` e
+`identityBoundaries` identificam as fronteiras observadas; cada dia contém
+`byIdentity` com seus agregados atribuídos. Habilitação e diagnóstico integram
+a configuração identificada. Mudanças preservam os totais existentes. Dados
+anteriores à migração ficam copiados em `unattributedBeforeSchema2`, sem versão
+inventada; `unknown` e `unknown_overflow` representam atribuição desconhecida.
+O catálogo retém até 64 identidades e 128 fronteiras, com contadores de descarte.
+Permissões e papel de assistente continuam como observações operacionais. `days` é um objeto por
 `AAAA-MM-DD` no fuso local do Android. Tempos são milissegundos derivados de
 relógio monotônico; `events[].at` e `checkpointAt` têm fuso explícito.
 
@@ -77,6 +89,11 @@ relógio monotônico; `events[].at` e `checkpointAt` têm fuso explícito.
   `commands_empty`, `commands_failed`, `commands_no_speech`, cancelamentos,
   falhas e ausência de fala na continuação.
 - Durações agregadas de captura, STT, backend e TTS, e `sessionWakeLockMs`.
+  `tts_first_audio{Ms,Count,MinMs,MaxMs}` mede a primeira aceitação de PCM pelo
+  player desde o início da requisição TTS; não mede DAC acústico. `tts_total*`
+  inclui o drain real; `tts_fetch*` inclui a transferência com backpressure e
+  `tts_playback*` vai do primeiro PCM entregue até o drain. A identidade de um
+  turno assíncrono permanece fixada na observação do seu início.
   Campos existem quando há observação; ausência não deve ser interpretada como
   atividade retroativamente confirmada.
 - `device` conserva a observação normal mais recente de bateria/carga,
