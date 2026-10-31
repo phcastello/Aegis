@@ -3,8 +3,10 @@ using Aegis.Application.Email;
 using Aegis.Application.Google;
 using Aegis.Application.Llm;
 using Aegis.Application.Observability;
+using Aegis.Application.Voice;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -33,6 +35,8 @@ public sealed class AegisToolLoop(
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
+        var handsFree = context.Origin == HandsFreeReply.Origin;
+        if (handsFree) tools.Add(HandsFreeReply.Definition);
         List<JsonElement>? inputItems = null;
         List<JsonElement>? auditInputItems = null;
         var responses = new List<ModelToolResponse>();
@@ -44,10 +48,23 @@ public sealed class AegisToolLoop(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = await modelClient.RespondWithToolsAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
                     AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken);
             responses.Add(response);
+
+            if (handsFree && HandsFreeReply.TryRead(response.ToolCalls, out var speech, out var continuation))
+            {
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                return response with
+                {
+                    Content = speech,
+                    ToolCalls = [],
+                    VoiceContinuation = continuation,
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
+                };
+            }
 
             if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
             {
@@ -58,7 +75,8 @@ public sealed class AegisToolLoop(
                     Content = response.ToolCalls.Count == 0 && !string.IsNullOrWhiteSpace(response.Content)
                         ? response.Content.Trim()
                         : "Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.",
-                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation = handsFree ? HandsFreeReply.Close : null
                 };
             }
 
@@ -106,6 +124,8 @@ public sealed class AegisToolLoop(
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
+        var handsFree = context.Origin == HandsFreeReply.Origin;
+        if (handsFree) tools.Add(HandsFreeReply.Definition);
         var inputItems = request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
         var auditInputItems = request.AuditInputItems?.ToList() ?? request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
         var responses = new List<ModelToolStreamChunk>();
@@ -117,8 +137,9 @@ public sealed class AegisToolLoop(
         {
             cancellationToken.ThrowIfCancellationRequested();
             ModelToolStreamChunk? completed = null;
+            var bufferedVoice = handsFree ? new StringBuilder() : null;
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
                     AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken))
             {
@@ -129,7 +150,8 @@ public sealed class AegisToolLoop(
                 }
                 if (!string.IsNullOrEmpty(chunk.Content))
                 {
-                    yield return new ModelStreamChunk(chunk.Content, IsDone: false);
+                    if (handsFree) bufferedVoice!.Append(chunk.Content);
+                    else yield return new ModelStreamChunk(chunk.Content, IsDone: false);
                 }
             }
 
@@ -138,6 +160,17 @@ public sealed class AegisToolLoop(
                 throw new InvalidOperationException("Tool streaming ended without a complete response.");
             }
             responses.Add(completed);
+            if (handsFree && HandsFreeReply.TryRead(completed.ToolCalls, out var speech, out var continuation))
+            {
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                yield return new ModelStreamChunk(speech, false);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
+                    completed.Purpose, completed.MetadataJson,
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: continuation);
+                yield break;
+            }
             inputItems.AddRange(completed.OutputItems);
             auditInputItems.AddRange(completed.OutputItems.Select(RedactMemoryCall));
 
@@ -145,9 +178,12 @@ public sealed class AegisToolLoop(
             {
                 stopwatch.Stop();
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                if (handsFree && bufferedVoice!.Length > 0)
+                    yield return new ModelStreamChunk(bufferedVoice.ToString(), false);
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, completed.MetadataJson,
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
 
@@ -158,7 +194,8 @@ public sealed class AegisToolLoop(
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, completed.MetadataJson,
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
 

@@ -42,7 +42,7 @@ public sealed class ChatService(
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
 
-        var userContent = request.Content.Trim();
+        var userContent = HandsFreeReply.UserContent(request);
         var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
         var turn = await voiceService.RegisterTurnAsync(request.TurnId ?? Guid.NewGuid(), conversation.Id, cancellationToken);
         turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
@@ -64,11 +64,12 @@ public sealed class ChatService(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
+        promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
 
         try
         {
-            var modelRequest = CreateModelRequest(promptResult, userContent);
-            var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
+            var modelRequest = CreateModelRequest(promptResult, userContent, request);
+            var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, turnToken);
             EnsureCurrent(turn);
             var finalContent = completion.Content;
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
@@ -99,7 +100,7 @@ public sealed class ChatService(
                 conversation.Id,
                 conversation.Title,
                 conversation.TitleSource,
-                MapMessage(assistantMessage, memoryActivity));
+                MapMessage(assistantMessage, memoryActivity), completion.VoiceContinuation);
         }
         catch (OperationCanceledException) when (turnToken.IsCancellationRequested)
         {
@@ -132,7 +133,7 @@ public sealed class ChatService(
             throw new ArgumentException("A valid turnId is required for streaming chat.", nameof(request));
         }
 
-        var userContent = request.Content.Trim();
+        var userContent = HandsFreeReply.UserContent(request);
         var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
         var turn = await voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken);
         if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
@@ -158,9 +159,11 @@ public sealed class ChatService(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
             userContent, conversation.Id, turnToken);
-        var modelRequest = CreateModelRequest(promptResult, userContent);
+        promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
+        var modelRequest = CreateModelRequest(promptResult, userContent, request);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
-            modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
+            modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
+                request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId), turnToken);
 
         var content = new StringBuilder();
         await foreach (var chunk in chunks.WithCancellation(turnToken))
@@ -204,7 +207,7 @@ public sealed class ChatService(
             {
                 await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
-                    conversation.Title, conversation.TitleSource, memoryActivity);
+                    conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation);
             }
             yield break;
         }
@@ -416,11 +419,13 @@ public sealed class ChatService(
         Guid conversationId,
         Guid userMessageId,
         string userContent,
+        SendMessageRequest clientRequest,
         CancellationToken cancellationToken)
     {
         var response = await toolLoop.RunAsync(
             request,
-            new ToolExecutionContext(conversationId, userMessageId, userContent),
+            new ToolExecutionContext(conversationId, userMessageId, userContent,
+                clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId),
             cancellationToken);
 
         return new ModelCompletionResponse(
@@ -429,7 +434,8 @@ public sealed class ChatService(
             response.Model,
             response.Purpose,
             response.MetadataJson,
-            response.AuditData);
+            response.AuditData,
+            response.VoiceContinuation);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(
@@ -521,17 +527,24 @@ public sealed class ChatService(
 
     private static ModelRequest CreateModelRequest(
         PromptBuildResult promptResult,
-        string userContent)
+        string userContent,
+        SendMessageRequest request)
     {
+        var metadata = new Dictionary<string, string>
+        {
+            ["aegis_version"] = "0.6.1",
+            ["purpose"] = "Chat"
+        };
+        if (request.IsHandsFree)
+        {
+            metadata["origin"] = HandsFreeReply.Origin;
+            metadata["voice_session_id"] = request.VoiceSessionId!.Value.ToString("D");
+        }
         return new ModelRequest(
             promptResult.Prompt,
             userContent,
             ModelPurpose.Chat,
-            new Dictionary<string, string>
-            {
-                ["aegis_version"] = "0.6.1",
-                ["purpose"] = "Chat"
-            },
+            metadata,
             promptResult.InputItems,
             promptResult.AuditInputItems);
     }

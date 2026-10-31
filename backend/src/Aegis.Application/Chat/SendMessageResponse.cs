@@ -4,4 +4,5 @@ public sealed record SendMessageResponse(
     Guid ConversationId,
     string? ConversationTitle,
     string? TitleSource,
-    ChatMessageResponse Message);
+    ChatMessageResponse Message,
+    string? VoiceContinuation = null);

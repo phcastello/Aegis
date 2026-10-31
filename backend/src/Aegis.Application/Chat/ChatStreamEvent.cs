@@ -14,7 +14,8 @@ public sealed record ChatStreamEvent(
     string? Category = null,
     string? State = null,
     string? Message = null,
-    MemoryActivitySnapshot? MemoryActivity = null)
+    MemoryActivitySnapshot? MemoryActivity = null,
+    string? VoiceContinuation = null)
 {
     public static ChatStreamEvent Conversation(Guid turnId, Guid conversationId) =>
         new("conversation", turnId, ConversationId: conversationId);
@@ -31,7 +32,8 @@ public sealed record ChatStreamEvent(
         Guid messageId,
         string? conversationTitle,
         string? titleSource,
-        MemoryActivitySnapshot? memoryActivity = null) =>
+        MemoryActivitySnapshot? memoryActivity = null,
+        string? voiceContinuation = null) =>
         new(
             "done",
             turnId,
@@ -40,5 +42,6 @@ public sealed record ChatStreamEvent(
             AssistantMessageId: messageId,
             ConversationTitle: conversationTitle,
             TitleSource: titleSource,
-            MemoryActivity: memoryActivity);
+            MemoryActivity: memoryActivity,
+            VoiceContinuation: voiceContinuation);
 }

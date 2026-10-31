@@ -35,6 +35,10 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             var response = await chatService.SendMessageAsync(request, cancellationToken);
             return Ok(response);
         }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
         catch (ConversationNotFoundException exception)
         {
             return NotFound(new { error = exception.Message });
@@ -66,6 +70,17 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             await Response.WriteAsJsonAsync(
                 new { error = "Message content and a valid turnId are required." },
                 cancellationToken);
+            return;
+        }
+
+        try
+        {
+            HandsFreeReply.UserContent(request);
+        }
+        catch (ArgumentException exception)
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(new { error = exception.Message }, cancellationToken);
             return;
         }
 
