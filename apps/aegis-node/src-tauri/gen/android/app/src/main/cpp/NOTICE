@@ -22,3 +22,8 @@ Sources remain version/hash pinned in CMakeLists.txt.
 License texts and this notice are packaged in APK assets/licenses/hands-free/.
 The frozen dependency commits and archive hashes are in CMakeLists.txt.
 KissFFT copyright (c) 2003-2010 Mark Borgerding; BSD-3-Clause.
+
+Local command endpointing additionally links libfvad/WebRTC VAD, commit
+532ab666c20d3cfda38bca63abbb0f152706c369, BSD-3-Clause with patent grant.
+The packaged assets/licenses/hands-free include its LICENSE, PATENTS and AUTHORS.
+This classifier is independent from microWakeWord and has no model weights.

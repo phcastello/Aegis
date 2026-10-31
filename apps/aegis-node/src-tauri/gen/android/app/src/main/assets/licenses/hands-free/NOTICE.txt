@@ -22,3 +22,16 @@ Sources remain version/hash pinned in CMakeLists.txt.
 License texts and this notice are packaged in APK assets/licenses/hands-free/.
 The frozen dependency commits and archive hashes are in CMakeLists.txt.
 KissFFT copyright (c) 2003-2010 Mark Borgerding; BSD-3-Clause.
+
+Command endpointing uses libfvad/WebRTC VAD (BSD-3-Clause), commit
+532ab666c20d3cfda38bca63abbb0f152706c369. It is a separate local speech
+classifier and does not change the private wake-word model or detection rules.
+Copyright (c) 2011 The WebRTC project authors; Copyright (c) 2016 Daniel Pirch.
+See libfvad-WebRTC-BSD-3-Clause.txt, libfvad-WebRTC-PATENTS.txt and AUTHORS.
+
+Native hands-free HTTP streaming uses OkHttp 4.12.0 and Okio 3.6.0.
+Copyright Square, Inc. Apache License 2.0; see OkHttp-Okio-Apache-2.0.txt.
+OkHttp includes the Public Suffix List under MPL 2.0; its original notice and
+license are preserved in OkHttp-PublicSuffix-NOTICE.txt and Mozilla-Public-License-2.0.txt.
+Artifacts: https://repo.maven.apache.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/
+https://repo.maven.apache.org/maven2/com/squareup/okio/okio-jvm/3.6.0/

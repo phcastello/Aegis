@@ -72,12 +72,20 @@ internal class HandsFreeRuntime(private val context:Context) {
     private var conversationId:String?=null
     @Volatile private var sessionId:String?=null
     @Volatile private var backend:NodeHandsFreeBackend?=null
-    private fun newBackend()=NodeHandsFreeBackend(context){stage,duration->
-        if(duration>0)metrics.add("${stage}Ms",duration)
-        if(stage in setOf("transcribed","empty","failed"))metrics.add("commands_${stage}")
+    private fun newBackend(generation:Int,session:String):NodeHandsFreeBackend {
+        val identity=metrics.identityToken()
+        return NodeHandsFreeBackend(context){stage,duration->
+            if(stage in setOf("stt","chat","tts_fetch","tts_first_audio","tts_total","tts_playback"))metrics.timing(stage,duration,identity)
+            if(stage in setOf("transcribed","empty","failed"))metrics.addForIdentity("commands_${stage}",1,identity)
+            if(stage=="tts_first_audio")synchronized(lock) {
+                if(current(generation) && !sessionCancelled && sessionId==session)
+                    setState("speaking","Aegis respondendo…")
+            }
+        }
     }
     private fun cancelBackend(){val active=synchronized(lock){val value=backend;backend=null;value};if(active!=null){active.requestCancellation();cleanup.execute{active.cancel()}}}
     private val playback=HandsFreePlayback(context)
+    private val activationCue=HandsFreeActivationCue{metrics.add("beep_failures")}
     init {
         modelReady=try{HandsFreeModel.read(context)!=null}catch(_:Throwable){false}
         metrics.restoreRequested(enabled,diagnostic)
@@ -133,11 +141,13 @@ internal class HandsFreeRuntime(private val context:Context) {
         main.post{if(epoch==generation && status==value && message==text){NodeVoiceInteractionSession.current?.refresh(value,text);service?.updateNotification(text)}}
     }
     private fun stop(value:String,text:String) {
-        epochCounter.incrementAndGet();captureConfirmed=false;pendingActivation=false;sessionCancelled=true;playback.cancel()
-        try{recorder?.stop()}catch(_:Exception){}
-        cancelBackend()
-        conversationId=null;sessionId=null;setState(value,text)
-        val stoppedEpoch=epoch
+        val stoppedEpoch=synchronized(lock) {
+            epochCounter.incrementAndGet();captureConfirmed=false;pendingActivation=false;sessionCancelled=true;playback.cancel();activationCue.cancel()
+            try{recorder?.stop()}catch(_:Exception){}
+            cancelBackend()
+            conversationId=null;sessionId=null;setState(value,text)
+            epoch
+        }
         main.post{if(epoch==stoppedEpoch){service?.stopHandsFreeForeground();NodeVoiceInteractionSession.current?.finishQuietly()}}
     }
     fun manualAcquire(lease:String,kind:String):Boolean {
@@ -164,10 +174,12 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
     internal fun releaseActivityAudio(){manualLease?.let{manualRelease(it)}}
     fun cancelSession(expectedSession:String?=null) {
-        if(expectedSession!=null && expectedSession!=sessionId)return
-        pendingActivation=false;sessionCancelled=true;playback.cancel();cancelBackend();metrics.add("sessions_cancelled")
+        synchronized(lock) {
+            if(expectedSession!=null && expectedSession!=sessionId)return
+            pendingActivation=false;sessionCancelled=true;playback.cancel();activationCue.cancel();cancelBackend();metrics.add("sessions_cancelled")
+        }
     }
-    internal fun activateFromAssistant():String? {
+    internal fun activateFromAssistant():String? = synchronized(lock) {
         if(status=="listening") {
             val token=UUID.randomUUID().toString();sessionId=token;sessionCancelled=false;pendingActivation=true;return token
         }
@@ -180,11 +192,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         main.post{if(epoch==generation && manualLease==null && sessionId==token && !sessionCancelled)try{service?.showHandsFreeSession(token)}catch(_:Exception){metrics.add("presentation_failures")}}
     }
     private fun closePanel(token:String?){if(token!=null)main.post{NodeVoiceInteractionSession.current?.finishIfSession(token)}}
-    private fun beep() {main.post{try{
-        val tone=android.media.ToneGenerator(AudioManager.STREAM_MUSIC,35)
-        tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP,55)
-        main.postDelayed({tone.release()},100)
-    }catch(_:Exception){metrics.add("beep_failures")}}}
+    private fun beep(){activationCue.play()}
 
     private class MicrophoneUnavailable:Exception()
     private fun microphoneBlocked():Boolean {
@@ -219,35 +227,33 @@ internal class HandsFreeRuntime(private val context:Context) {
                 val session=sessionId?:UUID.randomUUID().toString().also{sessionId=it}
                 if(sessionCancelled){command.fill(0);val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val wake=context.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Aegis:hands-free-session")
+                val turnIdentity=metrics.identityToken()
                 val heldAt=SystemClock.elapsedRealtime()
-                var replyAudio:ByteArray?=null
                 try {
                     wake.acquire(600000)
-                    setState("processing","Processando pedido…")
-                    val active=synchronized(lock){check(current(generation) && !sessionCancelled);backend?:newBackend().also{backend=it}}
-                    val turn=active.execute(command,session,conversationId)
-                    replyAudio=turn.audio
+                    val active=synchronized(lock){
+                        check(current(generation) && !sessionCancelled)
+                        setState("processing","Processando pedido…")
+                        backend?:newBackend(generation,session).also{backend=it}
+                    }
+                    val sink=playback.openStream{current(generation) && !sessionCancelled && sessionId==session}
+                    val turn=active.execute(command,session,conversationId,sink)
                     command.fill(0)
                     if(!current(generation) || sessionCancelled)throw java.util.concurrent.CancellationException()
                     conversationId=turn.conversationId
-                    val audio=turn.audio
-                    if(audio!=null && audio.isNotEmpty()) {
-                        setState("speaking","Aegis respondendo…")
-                        val started=SystemClock.elapsedRealtime()
-                        try{playback.play(audio){current(generation) && !sessionCancelled}}finally{metrics.add("ttsPlaybackMs",SystemClock.elapsedRealtime()-started);audio.fill(0)}
-                    }
-                    continuation=turn.continueListening && !sessionCancelled && audio!=null
+                    // execute returns only after the sink has drained the actual playback head.
+                    continuation=turn.continueListening && !sessionCancelled && turn.playedAudio
                     continuationDeadline=SystemClock.elapsedRealtime()+2000
                     if(!continuation){conversationId=null;sessionId=null;backend=null;closePanel(session)}
                 }catch(error:Exception){
                     val cancelled=!current(generation) || sessionCancelled || error is java.util.concurrent.CancellationException
-                    metrics.add(if(cancelled)"turns_cancelled" else "sessions_failed");continuation=false;conversationId=null;sessionId=null;cancelBackend()
+                    metrics.addForIdentity(if(cancelled)"turns_cancelled" else "sessions_failed",1,turnIdentity);continuation=false;conversationId=null;sessionId=null;cancelBackend()
                     if(current(generation) && !cancelled)setState("session_failed","Não foi possível concluir o pedido. Diga Aegis para tentar novamente.")
                     closePanel(session)
                 }finally {
-                    command.fill(0);replyAudio?.fill(0)
+                    command.fill(0)
                     if(wake.isHeld)wake.release()
-                    metrics.add("sessionWakeLockMs",minOf(600000,SystemClock.elapsedRealtime()-heldAt))
+                    metrics.addForIdentity("sessionWakeLockMs",minOf(600000,SystemClock.elapsedRealtime()-heldAt),turnIdentity)
                 }
                 if(!MicroWakeWordNative.reset(detector))error("detector_reset")
             }
@@ -277,22 +283,32 @@ internal class HandsFreeRuntime(private val context:Context) {
         val buffer=ShortArray(3200) // 200ms blocking capture, not 10ms Kotlin timers.
         val ring=HandsFreeRing()
         val command=ShortArray(360000) // 20s command plus 2.5s pre-roll, bounded.
-        var length=0;var commandStarted=0L;var captured=false;var vad=HandsFreeVad()
-        var receivedAt=SystemClock.elapsedRealtime();var startedAt=receivedAt;var checkedAt=receivedAt
+        var commandStarted=0L;var captured=false
+        var classifier:NativeHandsFreeSpeechClassifier?=null
+        var commandCapture:HandsFreeCommandCapture?=null
+        var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
         var recordingCallback:AudioManager.AudioRecordingCallback?=null
         val silenced=java.util.concurrent.atomic.AtomicBoolean(false)
-        if(Build.VERSION.SDK_INT>=29) {
-            recordingCallback=object:AudioManager.AudioRecordingCallback(){override fun onRecordingConfigChanged(configs:MutableList<AudioRecordingConfiguration>){silenced.set(configs.any{it.isClientSilenced});if(silenced.get())metrics.event("microphone_silenced")}}
-            audio.registerAudioRecordingCallback(context.mainExecutor,recordingCallback)
-        }
+        var recordingCallbackRegistered=false
         try {
-            check(NodeHandsFree.permission(context) && NodeHandsFree.selected(context))
-            if(microphoneBlocked())throw MicrophoneUnavailable()
-            audio.startRecording();check(audio.recordingState==AudioRecord.RECORDSTATE_RECORDING)
-            setState(if(continuation)"continuation" else "listening",if(continuation)"Pode continuar…" else if(diagnostic)"Diagnóstico: detecção local sem comandos." else "Aguardando Aegis.")
-            if(continuation){sessionCancelled=false;showSession()}
+            val speechClassifier=NativeHandsFreeSpeechClassifier();classifier=speechClassifier
+            val continuationGate=HandsFreeContinuationGate(speechClassifier)
+            if(Build.VERSION.SDK_INT>=29) {
+                recordingCallback=object:AudioManager.AudioRecordingCallback(){override fun onRecordingConfigChanged(configs:MutableList<AudioRecordingConfiguration>){silenced.set(configs.any{it.isClientSilenced});if(silenced.get())metrics.event("microphone_silenced")}}
+                audio.registerAudioRecordingCallback(context.mainExecutor,recordingCallback);recordingCallbackRegistered=true
+            }
+            synchronized(lock) {
+                if(!current(generation))return null
+                if(continuation && sessionCancelled)return ByteArray(0)
+                check(NodeHandsFree.permission(context) && NodeHandsFree.selected(context))
+                if(microphoneBlocked())throw MicrophoneUnavailable()
+                audio.startRecording();check(audio.recordingState==AudioRecord.RECORDSTATE_RECORDING)
+                setState(if(continuation)"continuation" else "listening",if(continuation)"Pode continuar…" else if(diagnostic)"Diagnóstico: detecção local sem comandos." else "Aguardando Aegis.")
+                if(continuation)showSession()
+            }
             while(current(generation)) {
                 val count=audio.read(buffer,0,buffer.size,AudioRecord.READ_BLOCKING)
+                if(!current(generation))return null
                 val now=SystemClock.elapsedRealtime()
                 if(count<=0)throw MicrophoneUnavailable()
                 if(silenced.get())throw MicrophoneUnavailable()
@@ -308,40 +324,50 @@ internal class HandsFreeRuntime(private val context:Context) {
                 metrics.maybeTick()
                 if(sessionCancelled && (captured || continuation))return ByteArray(0)
                 if(captured) {
-                    val accepted=minOf(count,command.size-length);buffer.copyInto(command,length,0,accepted);length+=accepted
-                    if(vad.process(buffer,accepted) || length==command.size) {
+                    val commandState=checkNotNull(commandCapture)
+                    if(commandState.append(buffer,count)) {
                         metrics.add("commandCaptureMs",now-commandStarted)
-                        if(!vad.hasSpeech){metrics.add("commands_no_speech");return ByteArray(0)}
-                        return handsFreeWav(command,length)
+                        if(!commandState.hasUsefulAudio){metrics.add("commands_no_speech");return ByteArray(0)}
+                        return handsFreeWav(command,commandState.length)
                     }
                     continue
                 }
                 ring.append(buffer,count)
                 val event=if(continuation) {
-                    // Examine only PCM arriving before the 2s deadline, anchored to the real
-                    // AudioTrack marker. A beginning accepted inside it may continue for 20s.
+                    // The 2s deadline constrains onset, not the PCM block. Qualification may
+                    // finish just afterward; an accepted beginning may continue for 20s.
                     val beforeDeadline=(count-((now-continuationDeadline).coerceAtLeast(0)*16)).coerceIn(0,count.toLong()).toInt()
-                    if(beforeDeadline>0)vad.process(buffer,beforeDeadline)
-                    if(vad.hasVoiceStart)1L else if(now>=continuationDeadline){metrics.add("continuation_no_speech");return ByteArray(0)} else -1L
+                    when(continuationGate.process(buffer,count,beforeDeadline,now>=continuationDeadline)) {
+                        HandsFreeContinuationGate.Decision.STARTED->1L
+                        HandsFreeContinuationGate.Decision.WAIT->-1L
+                        HandsFreeContinuationGate.Decision.TIMED_OUT->{metrics.add("continuation_no_speech");return ByteArray(0)}
+                    }
                 } else MicroWakeWordNative.process(detector,buffer,count)
                 if(event == -2L)error("detector_inference")
                 if(event>=0 || pendingActivation) {
-                    val assistantActivation=pendingActivation;pendingActivation=false
-                    if(!continuation)metrics.add("activations")
-                    if(diagnostic){beep();metrics.event("diagnostic_activation");continue}
-                    length=ring.copyTo(command);captured=true;sessionCancelled=false;commandStarted=now
-                    if(!continuation && !assistantActivation)sessionId=UUID.randomUUID().toString()
-                    // Keep the full pre-roll including audio received after the keyword. STT strips
-                    // only the initial wake word; no capture release/reopen and no popup dependency.
-                    vad=HandsFreeVad().also{it.seedSpeech()}
-                    metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession();if(!continuation)beep()
+                    synchronized(lock) {
+                        // A blocking read/inference may finish after stop or a manual lease.
+                        // Commit activation atomically with those transitions.
+                        if(!current(generation))return null
+                        if(continuation && sessionCancelled)return ByteArray(0)
+                        val assistantActivation=pendingActivation;pendingActivation=false
+                        if(!continuation)metrics.add("activations")
+                        if(diagnostic){beep();metrics.event("diagnostic_activation");continue}
+                        val length=ring.copyTo(command);captured=true;if(!continuation)sessionCancelled=false;commandStarted=now
+                        if(!continuation && !assistantActivation)sessionId=UUID.randomUUID().toString()
+                        // Keep the full pre-roll including audio received after the keyword. STT strips
+                        // only the initial wake word; no capture release/reopen and no popup dependency.
+                        speechClassifier.reset();commandCapture=HandsFreeCommandCapture(command,length,speechClassifier)
+                        metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession();if(!continuation)beep()
+                    }
                 }
             }
             return null
         }finally {
             captureConfirmed=false;recorder=null
-            if(Build.VERSION.SDK_INT>=29 && recordingCallback!=null)audio.unregisterAudioRecordingCallback(recordingCallback)
+            if(Build.VERSION.SDK_INT>=29 && recordingCallbackRegistered && recordingCallback!=null)try{audio.unregisterAudioRecordingCallback(recordingCallback)}catch(_:Exception){}
             try{audio.stop()}catch(_:Exception){};audio.release()
+            classifier?.close()
             buffer.fill(0);command.fill(0);ring.clear()
         }
     }

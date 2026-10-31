@@ -113,4 +113,80 @@ class NodeHandsFreeMetricsTest {
         assertEquals(70,d.getInt("configurationChanges"));assertEquals(64,d.getJSONArray("configurationTransitions").length())
         assertEquals(6,d.getInt("configurationTransitionsDropped"));assertTrue(d.has("configurationFirstChangedAt"));assertTrue(d.has("configurationLastChangedAt"))
     }
+    @Test fun legacyDaysSurviveUpgradeWithoutBeingRelabelledAsTheNewBuild() {
+        var elapsed=0L;var wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli();var saved=""
+        val legacy=JSONObject().put("schema",1).put("appVersion","0.8.0-unstable.2").put("build","8000002")
+            .put("days",JSONObject().put("2026-10-31",JSONObject().put("requestedMs",9000).put("captureConfirmedMs",0))
+                .put("2026-11-01",JSONObject().put("captureConfirmedMs",100)))
+        val metrics=HandsFreeMetrics(legacy.toString(),{saved=it},{elapsed},{wall},{zone})
+        metrics.restoreRequested(true,false);metrics.identity("0.8.0-unstable.3","8000003",false,false,false)
+        metrics.capture(200,200,true,false,true);elapsed+=1000;wall+=1000
+        val summary=JSONObject(metrics.export());val days=summary.getJSONObject("days")
+        assertEquals(2,summary.getInt("schema"))
+        assertEquals(9000,days.getJSONObject("2026-10-31").getLong("requestedMs"))
+        assertEquals(0,days.getJSONObject("2026-10-31").getJSONObject("unattributedBeforeSchema2").getLong("captureConfirmedMs"))
+        val today=days.getJSONObject("2026-11-01")
+        assertEquals(300,today.getLong("captureConfirmedMs"))
+        assertEquals(100,today.getJSONObject("unattributedBeforeSchema2").getLong("captureConfirmedMs"))
+        val id=summary.getString("currentIdentityId")
+        assertEquals(200,today.getJSONObject("byIdentity").getJSONObject(id).getLong("captureConfirmedMs"))
+        assertEquals("8000003",summary.getJSONObject("identities").getJSONObject(id).getString("build"))
+        val restarted=HandsFreeMetrics(saved,{},{0L},{wall+3600000},{zone})
+        restarted.restoreRequested(true,false)
+        assertFalse(JSONObject(restarted.export()).has("currentIdentityId"))
+    }
+    @Test fun sameDayBuildModelAndModeChangesSplitCountersAndElapsedPeriods() {
+        var elapsed=0L;var wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{elapsed},{wall},{zone});metrics.restoreRequested(true,false)
+        metrics.identity("0.8.0-unstable.3","8000003",true,true,true)
+        metrics.capture(200,200,true,true,false);elapsed+=1000;wall+=1000
+        metrics.identity("0.8.0-unstable.4","8000004",true,true,true)
+        metrics.capture(300,300,true,true,false);elapsed+=2000;wall+=2000
+        metrics.configure(true,true)
+        metrics.capture(400,400,true,false,true);elapsed+=3000;wall+=3000
+        metrics.identity("0.8.0-unstable.4","8000004",true,true,true,modelVersion="future-model",modelSha256="test-model-hash")
+        metrics.add("activations");elapsed+=4000;wall+=4000
+        val summary=JSONObject(metrics.export());val today=summary.getJSONObject("days").getJSONObject("2026-11-01")
+        val by=today.getJSONObject("byIdentity");val ids=summary.getJSONObject("identities")
+        assertEquals(900,today.getLong("captureConfirmedMs"));assertEquals(10000,today.getLong("requestedMs"))
+        val periods=by.keys().asSequence().associate{it to by.getJSONObject(it)}
+        assertEquals(4,ids.length())
+        fun identity(build:String,diagnostic:Boolean,model:String="aegis-mww-fleurs-dev-2026-10-31") =
+            ids.keys().asSequence().single{val item=ids.getJSONObject(it);item.getString("build")==build&&item.getBoolean("diagnostic")==diagnostic&&item.getString("modelVersion")==model}
+        assertEquals(200,periods.getValue(identity("8000003",false)).getLong("captureConfirmedMs"))
+        assertEquals(1000,periods.getValue(identity("8000003",false)).getLong("requestedMs"))
+        assertEquals(300,periods.getValue(identity("8000004",false)).getLong("captureConfirmedMs"))
+        assertEquals(2000,periods.getValue(identity("8000004",false)).getLong("requestedMs"))
+        assertEquals(400,periods.getValue(identity("8000004",true)).getLong("captureConfirmedMs"))
+        assertEquals(3000,periods.getValue(identity("8000004",true)).getLong("requestedMs"))
+        assertEquals(4000,periods.getValue(identity("8000004",true,"future-model")).getLong("requestedMs"))
+        assertEquals(4,summary.getJSONArray("identityBoundaries").length())
+        metrics.identity("0.8.0-unstable.4","8000004",true,true,true,modelVersion="future-model",modelSha256="test-model-hash")
+        assertEquals(4,JSONObject(metrics.export()).getJSONArray("identityBoundaries").length())
+    }
+    @Test fun excessiveDistinctBuildsAreBoundedAndOverflowStaysExplicitlyUnknown() {
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone})
+        repeat(70){metrics.identity("test.$it","$it",false,false,false);metrics.add("activations")}
+        val summary=JSONObject(metrics.export())
+        assertEquals(64,summary.getJSONObject("identities").length())
+        assertEquals("unknown_overflow",summary.getString("currentIdentityId"))
+        val day=summary.getJSONObject("days").getJSONObject("2026-11-01")
+        assertEquals(70,day.getLong("activations"))
+        assertEquals(6,day.getJSONObject("byIdentity").getJSONObject("unknown_overflow").getLong("activations"))
+    }
+    @Test fun lateTimingRetainsItsStartingConfigurationAndFirstAudioIsSeparateFromTotal() {
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone});metrics.restoreRequested(true,false)
+        metrics.identity("0.8.0-unstable.3","8000003",true,true,true)
+        val initial=metrics.identityToken()
+        metrics.configure(true,true)
+        metrics.timing("tts_first_audio",120,initial);metrics.timing("tts_total",2400,initial)
+        metrics.addForIdentity("commands_transcribed",1,initial)
+        val summary=JSONObject(metrics.export());val day=summary.getJSONObject("days").getJSONObject("2026-11-01")
+        val by=day.getJSONObject("byIdentity");val before=by.getJSONObject(initial!!)
+        assertEquals(120,before.getLong("tts_first_audioMs"));assertEquals(1,before.getLong("tts_first_audioCount"))
+        assertEquals(2400,before.getLong("tts_totalMs"));assertEquals(1,before.getLong("commands_transcribed"))
+        assertFalse(by.optJSONObject(summary.getString("currentIdentityId"))?.has("tts_totalMs")==true)
+    }
 }

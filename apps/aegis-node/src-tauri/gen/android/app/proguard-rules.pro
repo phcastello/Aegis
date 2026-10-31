@@ -53,6 +53,7 @@
   public java.lang.String handsFreeCancel(java.lang.String);
 }
 -keep class com.aegis.node.MicroWakeWordNative { *; }
+-keep class com.aegis.node.HandsFreeSpeechVadNative { *; }
 -keepnames class com.aegis.node.NodeVoiceInteractionService
 -keepnames class com.aegis.node.NodeVoiceInteractionSessionService
 -keepnames class com.aegis.node.NodeRecognitionService

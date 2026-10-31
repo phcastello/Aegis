@@ -7,50 +7,93 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
-/** Existing server PCM/voice, bounded in memory. Completion means every sample played. */
-internal class HandsFreePlayback(private val context:Context) {
-    @Volatile private var track:AudioTrack?=null
-    @Volatile private var completion:CountDownLatch?=null
-    private val generation=java.util.concurrent.atomic.AtomicInteger(0)
-    fun cancel(){generation.incrementAndGet();completion?.countDown();try{track?.pause();track?.flush();track?.stop()}catch(_:Exception){}}
-    fun play(pcm:ByteArray,stillCurrent:()->Boolean={true}) {
-        require(pcm.isNotEmpty() && pcm.size%2==0 && pcm.size<=24000*2*180)
-        val token=generation.get()
-        fun current()=generation.get()==token && stillCurrent()
-        check(current())
-        val manager=context.getSystemService(AudioManager::class.java)
-        val attributes=AudioAttributes.Builder().setUsage(if(Build.VERSION.SDK_INT>=26)AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        val focusListener=AudioManager.OnAudioFocusChangeListener{if(it<0)cancel()}
-        val request=if(Build.VERSION.SDK_INT>=26)AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes).setOnAudioFocusChangeListener(focusListener,android.os.Handler(android.os.Looper.getMainLooper())).build() else null
-        var player:AudioTrack?=null
-        var granted=false
-        try {
-            val focus=if(request!=null)manager.requestAudioFocus(request) else @Suppress("DEPRECATION") manager.requestAudioFocus(focusListener,AudioManager.STREAM_MUSIC,AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-            check(focus==AudioManager.AUDIOFOCUS_REQUEST_GRANTED){"audio_focus_unavailable"};granted=true
-            val min=AudioTrack.getMinBufferSize(24000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT)
-            val output=AudioTrack.Builder().setAudioAttributes(attributes).setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()).setBufferSizeInBytes(maxOf(min,24000)).setTransferMode(AudioTrack.MODE_STREAM).build()
-            player=output;check(output.state==AudioTrack.STATE_INITIALIZED)
-            val done=CountDownLatch(1);completion=done;track=output
-            check(current())
-            output.setPlaybackPositionUpdateListener(object:AudioTrack.OnPlaybackPositionUpdateListener {
-                override fun onMarkerReached(track:AudioTrack){done.countDown()}
-                override fun onPeriodicNotification(track:AudioTrack){}
-            },android.os.Handler(android.os.Looper.getMainLooper()))
-            output.notificationMarkerPosition=pcm.size/2;output.play()
-            var offset=0
-            while(offset<pcm.size && current()) {
-                val count=output.write(pcm,offset,minOf(8192,pcm.size-offset),AudioTrack.WRITE_BLOCKING)
-                check(count>0){"audio_playback_failed"};offset+=count
-            }
-            // Marker is driven by the playback head, not final network byte or AudioTrack.write.
-            val timeout=(pcm.size/48L+5000).coerceAtMost(185000)
-            check(current() && done.await(timeout,TimeUnit.MILLISECONDS) && current()) {"audio_playback_incomplete"}
-        } finally {
-            completion=null;track=null;try{player?.stop()}catch(_:Exception){};player?.release()
-            if(granted){if(request!=null)manager.abandonAudioFocusRequest(request) else @Suppress("DEPRECATION") manager.abandonAudioFocus(focusListener)}
+/** A fresh, lazily opened stream per turn. AudioTrack's fixed buffer supplies backpressure. */
+internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> HandsFreePcmDevice) {
+    constructor(context: Context) : this({ onFocusLoss -> openDevice(context, onFocusLoss) })
+    private val generation = AtomicInteger()
+    private val active = AtomicReference<HandsFreePcmSink?>()
+    fun cancel() { generation.incrementAndGet(); active.getAndSet(null)?.abort() }
+
+    fun openStream(stillCurrent: () -> Boolean): HandsFreePcmSink {
+        val token = generation.incrementAndGet()
+        lateinit var stream: HandsFreeStreamingPcmSink
+        stream = HandsFreeStreamingPcmSink(
+            createDevice = { createDevice {
+                // Audio focus events may arrive after an old track has been replaced. The
+                // callback only owns this stream; it must never invalidate the next turn.
+                if (active.get() === stream && generation.compareAndSet(token, token + 1)) {
+                    active.compareAndSet(stream, null)
+                    stream.abort()
+                }
+            } },
+            stillCurrent = { generation.get() == token && stillCurrent() },
+            onClosed = { active.compareAndSet(stream, null) }
+        )
+        active.getAndSet(stream)?.abort()
+        if (generation.get() != token) { stream.abort(); active.compareAndSet(stream, null) }
+        return stream
+    }
+
+    companion object {
+    private fun openDevice(context: Context, onFocusLoss: () -> Unit): HandsFreePcmDevice {
+        val manager = context.getSystemService(AudioManager::class.java)
+        val attributes = AudioAttributes.Builder()
+            .setUsage(if (Build.VERSION.SDK_INT >= 26) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+        val handler = Handler(Looper.getMainLooper())
+        val listener = AudioManager.OnAudioFocusChangeListener { if (it < 0) onFocusLoss() }
+        val request = if (Build.VERSION.SDK_INT >= 26) AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(attributes).setOnAudioFocusChangeListener(listener, handler).build() else null
+        var granted = false
+        var output: AudioTrack? = null
+        fun abandon() {
+            if (!granted) return
+            granted = false
+            if (request != null) manager.abandonAudioFocusRequest(request)
+            else @Suppress("DEPRECATION") manager.abandonAudioFocus(listener)
         }
+        try {
+            val focus = if (request != null) manager.requestAudioFocus(request)
+                else @Suppress("DEPRECATION") manager.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            check(focus == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio_focus_unavailable" }; granted = true
+            val minimum = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            check(minimum > 0)
+            val track = AudioTrack.Builder().setAudioAttributes(attributes)
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(24000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setBufferSizeInBytes(maxOf(minimum, 24000)).setTransferMode(AudioTrack.MODE_STREAM).build()
+            output = track; check(track.state == AudioTrack.STATE_INITIALIZED)
+            // Default streaming threshold is the entire capacity. Modern Android can start even
+            // a short reply immediately; older releases use the smallest accepted native buffer.
+            if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)
+            else track.setBufferSizeInFrames(1)
+            return object : HandsFreePcmDevice {
+                private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+                override fun write(bytes: ByteArray, offset: Int, count: Int) = track.write(bytes, offset, count, AudioTrack.WRITE_BLOCKING)
+                override fun playedFrames() = track.playbackHeadPosition.toLong() and 0xffffffffL
+                override fun endMarker(frame: Int, reached: () -> Unit) {
+                    track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                        override fun onMarkerReached(track: AudioTrack) { reached() }
+                        override fun onPeriodicNotification(track: AudioTrack) { }
+                    }, handler)
+                    check(track.setNotificationMarkerPosition(frame) == AudioTrack.SUCCESS) { "audio_marker_failed" }
+                }
+                override fun play() { track.play() }
+                override fun stop() { try { track.pause(); track.flush(); track.stop() } catch (_: Exception) { } }
+                override fun close() {
+                    if (!closed.compareAndSet(false, true)) return
+                    try { stop(); track.release() } finally { abandon() }
+                }
+            }
+        } catch (error: Exception) {
+            try { output?.release() } finally { abandon() }
+            throw error
+        }
+    }
     }
 }

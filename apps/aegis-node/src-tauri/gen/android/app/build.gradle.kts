@@ -99,6 +99,8 @@ rust {
 }
 
 dependencies {
+    // Cancellable native PCM streaming; other Node HTTP paths retain their current transport.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")

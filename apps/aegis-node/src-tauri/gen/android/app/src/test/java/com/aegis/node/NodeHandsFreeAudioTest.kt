@@ -6,6 +6,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class NodeHandsFreeAudioTest {
+    private val neverSpeech=HandsFreeSpeechClassifier{false}
+    private val voice=HandsFreeSpeechClassifier{frame->frame.any{it.toInt()>30 || it.toInt() < -30}}
+    private fun speech(count:Int,level:Int=1500)=ShortArray(count){if(it%30<15)level.toShort() else (-level).toShort()}
+
     @Test fun activationPreservesKeywordAndUnpausedCommandAcrossRingWrap() {
         val ring=HandsFreeRing(40000)
         val stream=ShortArray(64000){(it%30000).toShort()}
@@ -15,23 +19,88 @@ class NodeHandsFreeAudioTest {
         assertArrayEquals(stream.copyOfRange(24000,64000),command.copyOf(size))
         ring.clear();assertEquals(0,ring.copyTo(command))
     }
-    @Test fun silenceTimesOutWithoutInventingSpeech() {
-        val vad=HandsFreeVad();val silence=ShortArray(3200)
-        repeat(14){assertFalse(vad.process(silence,silence.size))}
-        assertTrue(vad.process(silence,silence.size));assertFalse(vad.hasSpeech)
+    @Test fun actualActivationPathDoesNotSeedSpeechForEightHundredMillisecondsOfSilence() {
+        // Exact controller helper/initialization, including its full pre-roll. A keyword event is not evidence.
+        val command=HandsFreeCommandCapture(ShortArray(360000),40000,neverSpeech)
+        var ended=false
+        repeat(4){ended=command.append(ShortArray(3200),3200) || ended}
+        assertFalse(ended);assertFalse(command.hasSpeech);assertFalse(command.hasUsefulAudio)
+        repeat(11){ended=command.append(ShortArray(3200),3200) || ended}
+        assertTrue(ended)
     }
-    @Test fun startInsideContinuationCanLastBeyondTwoSecondsThenEndpoint() {
-        val vad=HandsFreeVad();val speech=ShortArray(3200){if(it%30<15)2500 else -2500}
-        vad.process(speech,3200);assertTrue(vad.hasVoiceStart);assertTrue(vad.hasSpeech)
-        repeat(40){assertFalse(vad.process(speech,3200))} // More than8s, not restricted to2s.
-        val silence=ShortArray(3200)
+    @Test fun longQuietPreRollDoesNotSpendThePostActivationNoSpeechBudget() {
+        val command=HandsFreeCommandCapture(ShortArray(360000),40000,voice)
+        repeat(5){assertFalse(command.append(ShortArray(3200),3200))}
+        assertFalse(command.append(speech(3200,120),3200))
+        assertTrue(command.hasSpeech);assertTrue(command.hasUsefulAudio)
+    }
+    @Test fun shortQuietRequestEntirelyInPreRollIsPreservedEvenWhenClassifierIsUncertain() {
+        val pcm=ShortArray(360000)
+        speech(1600,12).copyInto(pcm,38000)
+        val before=pcm.copyOf(40000)
+        val command=HandsFreeCommandCapture(pcm,40000,neverSpeech)
+        assertFalse(command.hasSpeech);assertTrue(command.hasUsefulAudio)
+        repeat(5){command.append(ShortArray(3200),3200)}
+        assertArrayEquals(before,pcm.copyOf(40000))
+    }
+    @Test fun commandAcrossActivationBlockBoundaryIsKeptAndEndpointedWithoutClipping() {
+        val pcm=ShortArray(360000);speech(1280).copyInto(pcm,38720)
+        val command=HandsFreeCommandCapture(pcm,40000,voice)
+        val tail=ShortArray(3200);speech(1920).copyInto(tail)
+        assertFalse(command.append(tail,tail.size))
+        var ended=false
+        repeat(4){ended=command.append(ShortArray(3200),3200) || ended}
+        assertTrue(ended);assertTrue(command.hasSpeech);assertTrue(command.hasUsefulAudio)
+        assertArrayEquals(speech(1280),pcm.copyOfRange(38720,40000))
+        assertArrayEquals(tail,pcm.copyOfRange(40000,43200))
+    }
+    @Test fun singleTwentyMillisecondPulseAndCueDoNotConfirmAnOnsetThroughClassifierHangover() {
+        val alwaysSpeech=HandsFreeSpeechClassifier{true} // Stronger adverse case than real VAD hangover.
+        for(pcm in listOf(speech(320),HandsFreeCueSignal.samples)) {
+            val vad=HandsFreeVad(alwaysSpeech)
+            vad.process(pcm,pcm.size);vad.process(ShortArray(3200),3200)
+            assertFalse(vad.hasVoiceStart);assertFalse(vad.hasSpeech)
+            val command=HandsFreeCommandCapture(ShortArray(360000),40000,alwaysSpeech)
+            command.append(pcm,pcm.size);repeat(4){command.append(ShortArray(3200),3200)}
+            assertFalse(command.hasUsefulAudio)
+        }
+    }
+    @Test fun continuationStartInsideWindowCanBeConfirmedAfterDeadlineAndLastBeyondTwoSeconds() {
+        val gate=HandsFreeContinuationGate(voice);val silence=ShortArray(3200)
+        repeat(9){assertEquals(HandsFreeContinuationGate.Decision.WAIT,gate.process(silence,3200,3200,false))}
+        val boundary=ShortArray(3200);speech(320).copyInto(boundary,2880) // Start1.98s.
+        assertEquals(HandsFreeContinuationGate.Decision.WAIT,gate.process(boundary,3200,3200,true))
+        assertEquals(HandsFreeContinuationGate.Decision.STARTED,gate.process(speech(3200),3200,0,true))
+        val vad=HandsFreeVad(voice);repeat(40){assertFalse(vad.process(speech(3200),3200))}
         repeat(3){assertFalse(vad.process(silence,3200))}
         assertTrue(vad.process(silence,3200))
     }
-    @Test fun sustainedVoiceStopsAtHardLimit() {
-        val vad=HandsFreeVad();val speech=ShortArray(3200){1500}
-        repeat(99){assertFalse(vad.process(speech,3200))}
-        assertTrue(vad.process(speech,3200));assertEquals(320000,vad.total)
+    @Test fun noContinuationOrIsolatedClickNearDeadlineTimesOutAndDoesNotExtendWindow() {
+        for(click in listOf(false,true)) {
+            val gate=HandsFreeContinuationGate(voice)
+            repeat(9){gate.process(ShortArray(3200),3200,3200,false)}
+            val boundary=ShortArray(3200);if(click)speech(320).copyInto(boundary,2880)
+            val first=gate.process(boundary,3200,3200,true)
+            if(click){assertEquals(HandsFreeContinuationGate.Decision.WAIT,first);assertEquals(HandsFreeContinuationGate.Decision.TIMED_OUT,gate.process(ShortArray(3200),3200,0,true))}
+            else assertEquals(HandsFreeContinuationGate.Decision.TIMED_OUT,first)
+        }
+        val late=HandsFreeContinuationGate(voice)
+        assertEquals(HandsFreeContinuationGate.Decision.TIMED_OUT,late.process(speech(3200),3200,0,true))
+    }
+    @Test fun sustainedActualVoiceStopsAtHardLimitAndDoesNotFreezeNoiseUpdates() {
+        val vad=HandsFreeVad(voice);val pcm=speech(3200)
+        repeat(99){assertFalse(vad.process(pcm,3200))}
+        assertTrue(vad.process(pcm,3200));assertEquals(320000,vad.total)
+    }
+    @Test fun partialPcmBlocksRetainTheirEvidenceAndExactSamples() {
+        val pcm=speech(40000,120)
+        val a=HandsFreeVad(voice);a.process(pcm,pcm.size)
+        val b=HandsFreeVad(voice);var offset=0
+        for(size in generateSequence(17){when(it){17->257;257->89;89->480;else->17}}) {
+            if(offset==pcm.size)break
+            val n=minOf(size,pcm.size-offset);b.process(pcm.copyOfRange(offset,offset+n),n);offset+=n
+        }
+        assertEquals(a.total,b.total);assertEquals(a.hasSpeech,b.hasSpeech);assertEquals(a.confirmedStartSample,b.confirmedStartSample)
     }
     @Test fun wavContainsExactLittleEndianPcmAndRealLength() {
         val samples=shortArrayOf(-32768,-1,0,1,32767)

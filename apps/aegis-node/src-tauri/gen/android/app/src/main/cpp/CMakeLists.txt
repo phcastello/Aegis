@@ -11,6 +11,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(FetchContent)
 
+# Local endpointing only; the selected microWakeWord model/frontend/event rules do not change.
+FetchContent_Declare(
+    aegis_libfvad
+    URL https://github.com/dpirch/libfvad/archive/532ab666c20d3cfda38bca63abbb0f152706c369.tar.gz
+    URL_HASH SHA256=bf639e4a5bc37b1c90e047c42524e80a1d0cecadeb6e0a61a33580fca22a00ab
+)
+
 # Exact frontend + fixed-point KissFFT used by accepted pymicro-features 2.0.2.
 # HA's newer KissFFT/C build had sparse raw-feature differences in direct replay.
 FetchContent_Declare(
@@ -55,7 +62,8 @@ FetchContent_Declare(
     URL_HASH SHA256=91993e7eb2aa56e62e9f4abc1158b2b46333574aa81f1a7431b06df80a42b7fa
 )
 
-FetchContent_MakeAvailable(aegis_frontend_source tflite_micro flatbuffers gemmlowp ruy)
+FetchContent_MakeAvailable(aegis_frontend_source tflite_micro flatbuffers gemmlowp ruy aegis_libfvad)
+target_compile_options(fvad PRIVATE -fwrapv -fno-strict-aliasing)
 
 # Only native DSP sources are used; no Python bridge/interpreter is included.
 set(TFLITE_FRONTEND "${aegis_frontend_source_SOURCE_DIR}/tensorflow/lite/experimental/microfrontend/lib")
@@ -251,11 +259,20 @@ target_compile_options(tflite_micro_interpreter PRIVATE
 
 # Aegis wrapper is also built on Linux for parity replay. No model is compiled in.
 if(ANDROID)
-  add_library(aegis_microwakeword SHARED AegisMicroWakeWord.cpp AegisMicroWakeWord_jni.cpp MicroFrontendWrapper.cpp)
-  target_link_libraries(aegis_microwakeword tflite_micro_frontend tflite_micro_interpreter android log)
+  add_library(aegis_microwakeword SHARED AegisMicroWakeWord.cpp AegisMicroWakeWord_jni.cpp MicroFrontendWrapper.cpp AegisSpeechVad.cpp AegisSpeechVad_jni.cpp)
+  target_link_libraries(aegis_microwakeword tflite_micro_frontend tflite_micro_interpreter fvad android log)
 else()
-  add_library(aegis_microwakeword SHARED AegisMicroWakeWord.cpp MicroFrontendWrapper.cpp)
-  target_link_libraries(aegis_microwakeword tflite_micro_frontend tflite_micro_interpreter)
+  add_library(aegis_microwakeword SHARED AegisMicroWakeWord.cpp MicroFrontendWrapper.cpp AegisSpeechVad.cpp)
+  target_link_libraries(aegis_microwakeword tflite_micro_frontend tflite_micro_interpreter fvad)
+endif()
+
+# Optional JVM/native endpointing verification on a host, never packaged in an APK.
+option(AEGIS_BUILD_VAD_HOST_JNI "Expose VAD JNI in the host test library" OFF)
+if(AEGIS_BUILD_VAD_HOST_JNI AND NOT ANDROID)
+  find_path(AEGIS_JNI_INCLUDE jni.h HINTS "$ENV{JAVA_HOME}/include" REQUIRED)
+  find_path(AEGIS_JNI_PLATFORM_INCLUDE jni_md.h HINTS "$ENV{JAVA_HOME}/include/linux" "$ENV{JAVA_HOME}/include/darwin" "$ENV{JAVA_HOME}/include/win32" REQUIRED)
+  target_sources(aegis_microwakeword PRIVATE AegisSpeechVad_jni.cpp)
+  target_include_directories(aegis_microwakeword PRIVATE "${AEGIS_JNI_INCLUDE}" "${AEGIS_JNI_PLATFORM_INCLUDE}")
 endif()
 
 # Explicit diagnostic build only; the normal APK contains neither harness nor data.
