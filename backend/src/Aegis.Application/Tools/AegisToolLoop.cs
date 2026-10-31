@@ -262,6 +262,8 @@ public sealed class AegisToolLoop(
 
     private void RecordTurn(Guid conversationId, int modelCalls, int toolCalls, long elapsedMilliseconds)
     {
+        TurnLatencyProfile.Mark("chat.model_calls", modelCalls);
+        TurnLatencyProfile.Mark("chat.executed_tools", toolCalls);
         metrics.LlmToolCalls.Add(toolCalls);
         metrics.LlmToolIterations.Record(Math.Max(0, modelCalls - 1));
         metrics.LlmTurnModelCalls.Record(modelCalls);

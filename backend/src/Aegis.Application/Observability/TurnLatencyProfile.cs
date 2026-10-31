@@ -8,7 +8,7 @@ namespace Aegis.Application.Observability;
 // personal context are logged, and turn IDs are never metric labels.
 public static class TurnLatencyProfile
 {
-    private sealed record Context(Guid TurnId, ILogger Logger, long Started);
+    private sealed record Context(Guid TurnId, ILogger Logger, long Started, string Component);
     private static readonly AsyncLocal<Context?> Current = new();
     private sealed class Noop : IDisposable
     {
@@ -16,14 +16,18 @@ public static class TurnLatencyProfile
         public void Dispose() { }
     }
 
-    public static IDisposable Begin(Guid turnId, ILogger? logger)
+    public static IDisposable Begin(Guid turnId, ILogger? logger, string component = "chat")
     {
         if (logger is null || Environment.GetEnvironmentVariable("AEGIS_LATENCY_PROFILE") != "1")
             return Noop.Instance;
+        // An outer HTTP/consumer scope survives async-iterator MoveNext boundaries.
+        // Reuse it so every mark in that stream shares the same monotonic origin.
+        if (Current.Value is { } active && active.TurnId == turnId && active.Component == component)
+            return Noop.Instance;
         var previous = Current.Value;
-        var context = new Context(turnId, logger, Stopwatch.GetTimestamp());
+        var context = new Context(turnId, logger, Stopwatch.GetTimestamp(), component);
         Current.Value = context;
-        Mark("chat.enter");
+        Mark(component + ".enter");
         return new Scope(previous, context);
     }
 
@@ -72,7 +76,7 @@ public static class TurnLatencyProfile
     {
         public void Dispose()
         {
-            Write(context, "chat.exit", Stopwatch.GetElapsedTime(context.Started).TotalMilliseconds);
+            Write(context, context.Component + ".exit", Stopwatch.GetElapsedTime(context.Started).TotalMilliseconds);
             Current.Value = previous;
         }
     }

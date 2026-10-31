@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Aegis.Application.Observability;
 
 namespace Aegis.Application.Voice.Transcription;
 
@@ -112,6 +113,7 @@ public sealed class SpeechTranscriptionService(
         TranscriptionProviderException? fallbackCause,
         CancellationToken cancellationToken)
     {
+        using var timing = TurnLatencyProfile.Measure("stt.provider." + provider.ProviderName);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {

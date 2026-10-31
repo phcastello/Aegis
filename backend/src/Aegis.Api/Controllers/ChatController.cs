@@ -1,6 +1,7 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Memory;
+using Aegis.Application.Observability;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Microsoft.AspNetCore.Mvc;
@@ -84,6 +85,9 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             return;
         }
 
+        // Establish profiling in the consumer, outside the async iterator. Its
+        // execution context then flows into every MoveNext, including after yield.
+        using var profile = TurnLatencyProfile.Begin(turnId, logger);
         Response.ContentType = "application/x-ndjson";
         Response.Headers.CacheControl = "no-cache";
         Response.Headers.Append("X-Accel-Buffering", "no");

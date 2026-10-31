@@ -274,7 +274,7 @@ public sealed class OpenAIResponsesClient(
                             : null;
 
                         if (!firstArguments && eventType == "response.function_call_arguments.delta" &&
-                            root.TryGetProperty("delta", out var argumentDelta) && !string.IsNullOrEmpty(argumentDelta.GetString()))
+                            root.TryGetProperty("delta", out var argumentDelta) && !string.IsNullOrWhiteSpace(argumentDelta.GetString()))
                         {
                             firstArguments = true;
                             // Arguments are not speech. This mark only bounds the potential
@@ -290,7 +290,7 @@ public sealed class OpenAIResponsesClient(
                             if (!string.IsNullOrEmpty(delta) &&
                                 IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
                             {
-                                if (!firstText)
+                                if (!firstText && !string.IsNullOrWhiteSpace(delta))
                                 {
                                     firstText = true;
                                     TurnLatencyProfile.Mark("model.first_final_text_delta");
