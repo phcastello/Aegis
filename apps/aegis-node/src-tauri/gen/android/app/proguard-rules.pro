@@ -43,3 +43,19 @@
  @app.tauri.annotation.Command <methods>;
  @app.tauri.annotation.PermissionCallback <methods>;
 }
+
+# Closed hands-free JNI bridge and system assistant metadata retain exact class/method names.
+-keepclassmembers class com.aegis.node.MainActivity {
+  public java.lang.String handsFreeState(java.lang.String);
+  public java.lang.String handsFreeConfigure(java.lang.String);
+  public java.lang.String handsFreeManualAcquire(java.lang.String);
+  public java.lang.String handsFreeManualRelease(java.lang.String);
+  public java.lang.String handsFreeCancel(java.lang.String);
+}
+-keep class com.aegis.node.MicroWakeWordNative { *; }
+-keepnames class com.aegis.node.NodeVoiceInteractionService
+-keepnames class com.aegis.node.NodeVoiceInteractionSessionService
+-keepnames class com.aegis.node.NodeRecognitionService
+-keepclassmembers class com.aegis.node.NodeNotificationsPlugin {
+ @app.tauri.annotation.ActivityCallback <methods>;
+}

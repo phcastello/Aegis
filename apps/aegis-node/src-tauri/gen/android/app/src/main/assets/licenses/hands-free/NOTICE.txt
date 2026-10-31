@@ -1,0 +1,24 @@
+Aegis Android microWakeWord native subset
+
+MicroFrontendWrapper.{h,cpp}, Logging.h and CMake dependency/source list adapted from
+Home Assistant Android, commit 4c02fda3645e9a19bc0c52f8c6c994dd3fb1a267.
+Copyright Home Assistant contributors. Apache License 2.0; see LICENSE-Home-Assistant.txt.
+https://github.com/home-assistant/android/tree/4c02fda3645e9a19bc0c52f8c6c994dd3fb1a267/microwakeword
+
+AegisMicroWakeWord uses the same small interpreter/resource-variable setup but
+implements the frozen Aegis PoC event, quantization and reset contract. It processes
+all blocks, including those after an activation. No upstream event reset, 100-slice
+warmup, early event discard or threshold conversion to 255 is used.
+
+Fetched TensorFlow Lite Micro, FlatBuffers, gemmlowp and ruy: Apache-2.0.
+The native frontend and vendored fixed-point KissFFT are taken from
+pymicro-features 2.0.2 commit 96bd69cfad79aa67697e176570d3dd87052c3def,
+https://github.com/rhasspy/pymicro-features/tree/96bd69cfad79aa67697e176570d3dd87052c3def
+Frontend copyright The TensorFlow Authors, Apache-2.0.
+Vendored KissFFT copyright Mark Borgerding, BSD-3-Clause.
+No Python bridge or Python runtime is linked into the Android application.
+This preserves the accepted PoC frontend instead of HA's newer KissFFT version.
+Sources remain version/hash pinned in CMakeLists.txt.
+License texts and this notice are packaged in APK assets/licenses/hands-free/.
+The frozen dependency commits and archive hashes are in CMakeLists.txt.
+KissFFT copyright (c) 2003-2010 Mark Borgerding; BSD-3-Clause.

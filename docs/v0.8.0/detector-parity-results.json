@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "architecture": "x86_64 Linux host",
+  "model_sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+  "modelVersion": "aegis-mww-fleurs-dev-2026-10-31",
+  "native_library_sha256": "6c14a23a8ce4264c3bc2b2dfba43fed4224dd5a4fb34f2f07a28911506602943",
+  "frontend_source_commit": "96bd69cfad79aa67697e176570d3dd87052c3def",
+  "frontend_source_archive_sha256": "92ea30a9351418a94f084e2af491140607dd8443dfc91b540c7ba0f48d94340d",
+  "dataset": {
+    "original_wavs": 37,
+    "adaptation_reference_wavs": 6,
+    "reserved_positives": 23,
+    "original_negatives": 8,
+    "continuous_trials": 31,
+    "public_negative_seconds": 2100
+  },
+  "accepted_poc": {
+    "runtime": "LiteRT with default delegates (XNNPACK)",
+    "full_public_replay": true,
+    "cases": 73,
+    "tight_score_tolerance_passed": false,
+    "max_score_delta": 0.07421875,
+    "max_event_delta_samples": 480,
+    "events_within_tolerance": true,
+    "independent_positive_detected": 23,
+    "independent_positive_count": 23,
+    "original_negative_activated": 1,
+    "original_negative_count": 8,
+    "public_activations_35min": 4,
+    "continuous_positive_detected": 23,
+    "continuous_positive_count": 23
+  },
+  "reference_kernel_diagnostic": {
+    "runtime": "LiteRT BUILTIN_REF vs pinned TFLite Micro reference kernels",
+    "full_public_replay": true,
+    "cases": 73,
+    "passed": true,
+    "max_score_delta": 0.00390625,
+    "max_event_delta_samples": 0,
+    "all_private_and_continuous_scores_bit_exact": true,
+    "public_score_samples_different": 12
+  },
+  "direct_frontend": {
+    "passed": false,
+    "tolerance": 0,
+    "cases": 38,
+    "total_frames": 221545,
+    "total_feature_values": 8861800,
+    "different_feature_values": 290,
+    "max_feature_delta": 5.1953125,
+    "shape_or_consumption_errors": 0,
+    "probe_library_sha256": "89ab15499d8736a86d8632bf2c525916d66c1e5fe39cfa1a35e20666755268ec",
+    "cause": "not established; identical source provenance does not prove numerical equivalence across builds"
+  },
+  "reset": {
+    "case": "dirty-reset-vs-fresh",
+    "max_score_delta": 0.0,
+    "passed": true
+  },
+  "memory": {
+    "case": "native-200-resets-bounded-memory",
+    "rss_before_kib": 59716,
+    "rss_after_kib": 59716,
+    "passed": true
+  },
+  "tolerances": {
+    "max_score_delta": 0.00390625,
+    "max_event_delta_samples": 480,
+    "activated_file_difference": 0,
+    "reset_and_partial_events": "exact"
+  },
+  "python_versions": {
+    "numpy": "2.0.2",
+    "pymicro-features": "2.0.2",
+    "ai-edge-litert": "2.3.0"
+  },
+  "private_reports": {
+    "accepted_sha256": "1fb61db52bac581d9b37a08b53a27be9ae4f5269e5aaed32f0651714c706b3c1",
+    "reference_sha256": "91540fe53df1b8070056979d8fb3d2f9491f080d1cf2c88281606fee9abf4578",
+    "frontend_sha256": "ec6b2fa196ac192993ac1680d864294c92bc94f068dabc2f6edf813985b2760c"
+  },
+  "arm64": "pending; neither host execution nor APK compilation proves device parity",
+  "weights_thresholds_training": "unchanged",
+  "cli_harness_host_checks": {
+    "positive": {
+      "samples": 71200,
+      "max_score_delta": 0.0,
+      "max_event_delta_samples": 0,
+      "passed": true
+    },
+    "continuous": {
+      "samples": 3381760,
+      "max_score_delta": 0.0,
+      "max_event_delta_samples": 0,
+      "passed": true
+    }
+  }
+}

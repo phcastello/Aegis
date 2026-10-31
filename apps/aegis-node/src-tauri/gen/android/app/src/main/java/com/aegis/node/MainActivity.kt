@@ -82,6 +82,7 @@ class MainActivity : TauriActivity() {
       try{getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(callback);connectivityCallback=callback}catch(_:Exception){}
     }
     NodeBackgroundWork.foregroundActions(this)
+    NodeHandsFree.runtime(this).recoverFromSystem()
   }
   override fun onPause() {
     readResumed=false
@@ -150,4 +151,11 @@ class MainActivity : TauriActivity() {
     }
     ViewCompat.requestApplyInsets(content)
   }
+  fun handsFreeState(payload:String):String=NodeHandsFree.state(this)
+  fun handsFreeConfigure(payload:String):String=NodeHandsFree.configure(this,payload)
+  fun handsFreeManualAcquire(payload:String):String=NodeHandsFree.manualAcquire(this,payload)
+  fun handsFreeManualRelease(payload:String):String=NodeHandsFree.manualRelease(this,payload)
+  fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)
+  override fun onDestroy(){super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
+
 }

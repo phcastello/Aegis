@@ -9,8 +9,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Push-to-talk only; Wry asks Android for runtime RECORD_AUDIO permission. -->
+    <!-- Explicit assistant permission and visible microphone foreground service. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -38,6 +40,15 @@
             </intent-filter>
         </activity>
 
+        <service android:name=".NodeVoiceInteractionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" android:foregroundServiceType="microphone">
+          <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
+          <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction_service" />
+        </service>
+        <service android:name=".NodeVoiceInteractionSessionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service android:name=".NodeRecognitionService" android:exported="true" android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE">
+          <intent-filter><action android:name="android.speech.RecognitionService" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+          <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
+        </service>
         <receiver android:name=".NodeReminderActionReceiver" android:exported="false" />
         <receiver android:name=".NodeGeofenceReceiver" android:exported="false" />
         <service android:name=".NodeMonitoringService" android:exported="false" android:foregroundServiceType="location" android:stopWithTask="false" />
