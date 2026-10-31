@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Data.Common;
 using Aegis.Application.Chat;
 using Aegis.Application.Memory;
 using Aegis.Application.Observability;
@@ -7,6 +8,7 @@ using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Memory;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 
 namespace Aegis.Application.Tests;
@@ -43,9 +45,26 @@ public sealed class MemoryActivityTests
             Task.FromResult<IReadOnlyList<MemoryVectorCandidate>>([]);
     }
 
-    private static AegisDbContext Db(string schema) => new(new DbContextOptionsBuilder<AegisDbContext>()
-        .UseNpgsql(Environment.GetEnvironmentVariable("AEGIS_MEMORY_TEST_DATABASE") + ";Search Path=" + schema,
-            x => x.MigrationsHistoryTable("__EFMigrationsHistory", schema)).Options);
+    private sealed class QueryObserver : DbCommandInterceptor
+    {
+        public readonly List<string> Commands = [];
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private static AegisDbContext Db(string schema, QueryObserver? observer = null)
+    {
+        var builder = new DbContextOptionsBuilder<AegisDbContext>()
+            .UseNpgsql(Environment.GetEnvironmentVariable("AEGIS_MEMORY_TEST_DATABASE") + ";Search Path=" + schema,
+                x => x.MigrationsHistoryTable("__EFMigrationsHistory", schema));
+        if (observer is not null) builder.AddInterceptors(observer);
+        return new(builder.Options);
+    }
 
     private static async Task<(AegisDbContext Db, string Schema)> NewDbAsync()
     {
@@ -315,4 +334,33 @@ public sealed class MemoryActivityTests
         }
         finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
     }
+    [PostgresFact]
+    public async Task EmptyActivityPreservesPendingAndAbsentKeysWithoutUnrelatedQueries()
+    {
+        var (db, schema) = await NewDbAsync();
+        try
+        {
+            var conversation = new Conversation();
+            db.Conversations.Add(conversation);
+            var (pendingUser, pendingAssistant) = await TurnAsync(db, conversation, "Pergunta sintética.");
+            var (_, quietAssistant) = await TurnAsync(db, conversation, "Outra pergunta sintética.");
+            db.MemoryExtractionJobs.Add(new MemoryExtractionJob(conversation.Id, pendingUser, DateTimeOffset.UtcNow));
+            await new MemoryActivityStore(db).SaveResponseWithUsedAsync([], default);
+
+            var observer = new QueryObserver();
+            await using var verify = Db(schema, observer);
+            var snapshots = await new MemoryActivityStore(verify)
+                .LoadForAssistantMessagesAsync([pendingAssistant, quietAssistant], default);
+            var snapshot = Assert.Single(snapshots);
+            Assert.Equal(pendingAssistant, snapshot.Key);
+            Assert.True(snapshot.Value.Pending);
+            Assert.Empty(snapshot.Value.Sections);
+            Assert.False(snapshots.ContainsKey(quietAssistant));
+            Assert.Equal(3, observer.Commands.Count); // audits, events, pending jobs
+            Assert.DoesNotContain(observer.Commands, sql => sql.Contains("FROM memory_records"));
+            Assert.DoesNotContain(observer.Commands, sql => sql.Contains("FROM memory_relations"));
+        }
+        finally { await db.Database.ExecuteSqlRawAsync("DROP SCHEMA \"" + schema + "\" CASCADE"); await db.DisposeAsync(); }
+    }
+
 }

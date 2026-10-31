@@ -13,6 +13,13 @@ public sealed class MemoryActivityStore(AegisDbContext db) : IMemoryActivityStor
 
     public async Task SaveResponseWithUsedAsync(IReadOnlyList<MemoryActivityEvent> used, CancellationToken ct)
     {
+        if (used.Count == 0)
+        {
+            // SaveChanges already commits the response/audit atomically. There are
+            // no activity inserts to include in a second, explicit transaction.
+            await db.SaveChangesAsync(ct);
+            return;
+        }
         await using var transaction = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
         await db.SaveChangesAsync(ct);
         foreach (var item in used) await RecordAsync(item, ct);
@@ -61,28 +68,40 @@ public sealed class MemoryActivityStore(AegisDbContext db) : IMemoryActivityStor
                 (x.Status == MemoryExtractionStatus.Pending || x.Status == MemoryExtractionStatus.Processing))
             .Select(x => x.UserMessageId!.Value).ToListAsync(ct);
         var pending = pendingIds.ToHashSet();
+        if (events.Count == 0)
+        {
+            var empty = new Dictionary<Guid, MemoryActivitySnapshot>();
+            foreach (var turn in turns.Where(x => pending.Contains(x.UserMessageId)))
+                empty[turn.AssistantId] = new MemoryActivitySnapshot(true, []);
+            return empty;
+        }
         var recordIds = events.Where(x => x.TargetType == MemoryActivityTargetType.MemoryRecord)
             .Select(x => x.TargetId).Distinct().ToArray();
         var relationIds = events.Where(x => x.TargetType == MemoryActivityTargetType.MemoryRelation)
             .Select(x => x.TargetId).Distinct().ToArray();
-        var records = await db.MemoryRecords.AsNoTracking().Where(x => recordIds.Contains(x.Id))
-            .Select(x => new { x.Id, x.Content }).ToDictionaryAsync(x => x.Id, x => x.Content, ct);
-        var supporting = await db.MemoryRelationEvidences.AsNoTracking()
-            .Where(x => relationIds.Contains(x.RelationId))
-            .Join(db.MemoryRecords.AsNoTracking(), x => x.MemoryId, x => x.Id,
-                (evidence, record) => new { evidence.RelationId, record.Content })
-            .ToListAsync(ct);
-        var support = supporting.GroupBy(x => x.RelationId)
-            .ToDictionary(x => x.Key, x => x.Select(y => y.Content).FirstOrDefault(y => !string.IsNullOrWhiteSpace(y)));
-        var relations = await db.MemoryRelations.AsNoTracking().Where(x => relationIds.Contains(x.Id))
-            .Select(x => new { x.Id, x.SubjectEntityId, x.ObjectEntityId, x.Predicate }).ToListAsync(ct);
-        var entityIds = relations.SelectMany(x => new[] { x.SubjectEntityId, x.ObjectEntityId }).Distinct().ToArray();
-        var names = await db.MemoryEntities.AsNoTracking().Where(x => entityIds.Contains(x.Id))
-            .ToDictionaryAsync(x => x.Id, x => x.CanonicalName, ct);
-        var relationText = relations.ToDictionary(x => x.Id, x =>
-            support.GetValueOrDefault(x.Id) ??
-            (names.TryGetValue(x.SubjectEntityId, out var subject) && names.TryGetValue(x.ObjectEntityId, out var obj)
-                ? $"{subject} — {x.Predicate} → {obj}" : null));
+        var records = recordIds.Length == 0 ? new Dictionary<Guid, string>() :
+            await db.MemoryRecords.AsNoTracking().Where(x => recordIds.Contains(x.Id))
+                .Select(x => new { x.Id, x.Content }).ToDictionaryAsync(x => x.Id, x => x.Content, ct);
+        var relationText = new Dictionary<Guid, string?>();
+        if (relationIds.Length > 0)
+        {
+            var supporting = await db.MemoryRelationEvidences.AsNoTracking()
+                .Where(x => relationIds.Contains(x.RelationId))
+                .Join(db.MemoryRecords.AsNoTracking(), x => x.MemoryId, x => x.Id,
+                    (evidence, record) => new { evidence.RelationId, record.Content })
+                .ToListAsync(ct);
+            var support = supporting.GroupBy(x => x.RelationId)
+                .ToDictionary(x => x.Key, x => x.Select(y => y.Content).FirstOrDefault(y => !string.IsNullOrWhiteSpace(y)));
+            var relations = await db.MemoryRelations.AsNoTracking().Where(x => relationIds.Contains(x.Id))
+                .Select(x => new { x.Id, x.SubjectEntityId, x.ObjectEntityId, x.Predicate }).ToListAsync(ct);
+            var entityIds = relations.SelectMany(x => new[] { x.SubjectEntityId, x.ObjectEntityId }).Distinct().ToArray();
+            var names = await db.MemoryEntities.AsNoTracking().Where(x => entityIds.Contains(x.Id))
+                .ToDictionaryAsync(x => x.Id, x => x.CanonicalName, ct);
+            relationText = relations.ToDictionary(x => x.Id, x =>
+                support.GetValueOrDefault(x.Id) ??
+                (names.TryGetValue(x.SubjectEntityId, out var subject) && names.TryGetValue(x.ObjectEntityId, out var obj)
+                    ? $"{subject} — {x.Predicate} → {obj}" : null));
+        }
         var byUser = events.GroupBy(x => x.UserMessageId!.Value).ToDictionary(x => x.Key, x => x.ToArray());
         var result = new Dictionary<Guid, MemoryActivitySnapshot>();
         foreach (var turn in turns)
