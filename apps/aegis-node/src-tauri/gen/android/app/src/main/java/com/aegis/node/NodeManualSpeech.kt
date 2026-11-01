@@ -11,18 +11,22 @@ internal object NodeManualSpeech {
     private val cancelledIds=linkedSetOf<String>()
     fun speak(context:Context,turnId:String,messageId:String,speechRequestId:String) {
         val runtime=NodeHandsFree.runtime(context)
-        check(runtime.manualPlaybackActive()){ "manual_playback_lease_required" }
+        val lease=runtime.currentManualPlaybackLease()?:error("manual_playback_lease_required")
         val backend=NodeHandsFreeBackend(context)
         val player=HandsFreePlayback(context.applicationContext)
         val attempt=Active(speechRequestId,backend,player)
         synchronized(gate) {
             check(speechRequestId !in cancelledIds){"manual_speech_cancelled"}
+            check(lease.isCurrent()){ "manual_playback_lease_required" }
             check(active.compareAndSet(null,attempt)){"manual_speech_busy"}
         }
         try {
-            val sink=player.openStream{active.get()===attempt && runtime.manualPlaybackActive()}
+            val sink=player.openStream{active.get()===attempt && lease.isCurrent()}
             backend.speakExisting(turnId,messageId,speechRequestId,sink)
-        } finally { active.compareAndSet(attempt,null);player.cancel() }
+        } finally {
+            active.compareAndSet(attempt,null)
+            try{player.cancel()}finally{lease.close()}
+        }
     }
     fun cancel(id:String?=null) {
         val attempt=synchronized(gate) {

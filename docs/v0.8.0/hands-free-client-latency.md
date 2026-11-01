@@ -62,7 +62,9 @@ A reprodução manual de respostas no Android passou a usar a mesma implementaç
 nativa do hands-free: PCM24 kHz, `USAGE_MEDIA`, `CONTENT_TYPE_SPEECH`, foco transitório
 e ganho unitário explícito. O volume físico pertence a `STREAM_MUSIC`; nenhum
 volume global é alterado. O lease existente protege a reprodução manual até a
-drenagem, inclusive cancelamento antes de o worker iniciar. Os demais hosts
+drenagem, inclusive cancelamento antes de o worker iniciar. A conclusão nativa libera o
+token exato da lease mesmo quando a WebView não executa callbacks; uma liberação
+JS atrasada não libera a lease de uma reprodução posterior. Os demais hosts
 mantêm o player Web Audio. O ganho/PCM do aviso de ativação e os canais de
 notificação não foram alterados.
 
@@ -73,9 +75,8 @@ fallback; IDs de callbacks antigos não o substituem. O ID de fala principal per
 o da primeira unidade, e o mapa detalhado inclui os demais IDs (teto de 128). O catálogo inclui a política
 realtime/segmentos/player para distinguir resultados de previews anteriores.
 
-Verificação local: **74 testes JVM aprovados**, com compilação do Kotlin de
-produção: 28 de transporte, cinco de WebSocket, 14 de áudio/VAD, 17 de métricas e
-dez de PCM. O teste de prefetch bloqueia o device simulado em duas frames,
+Verificação local: **78 testes JVM aprovados**, com compilação do Kotlin de
+produção: 28 de transporte, cinco de WebSocket, 14 de áudio/VAD, 17 de métricas, dez de PCM e quatro de lease manual. O teste de prefetch bloqueia o device simulado em duas frames,
 confirma duas sínteses e impede a terceira, depois cancela ambos os produtores.
 O mesmo fixture PCM salvo passa pelos caminhos manual e hands-free e chega
 idêntico à mesma implementação nativa. Isso comprova o contrato de bytes e ganho

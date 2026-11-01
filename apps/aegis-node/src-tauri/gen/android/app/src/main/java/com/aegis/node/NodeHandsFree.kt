@@ -52,7 +52,12 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val epoch:Int get()=epochCounter.get()
     @Volatile private var manualLease:String?=null
     @Volatile private var manualAudioKind:String?=null
-    internal fun manualPlaybackActive():Boolean=synchronized(lock){manualLease!=null && manualAudioKind=="playback"}
+    internal fun currentManualPlaybackLease():ManualPlaybackLease?=synchronized(lock) {
+        val id=manualLease
+        if(id==null || manualAudioKind!="playback")null else ManualPlaybackLease(id,
+            {token->synchronized(lock){manualLease==token && manualAudioKind=="playback"}},
+            {token->manualRelease(token)})
+    }
     private var leaseTimeout:Runnable?=null
     @Volatile private var status="disabled"
     @Volatile private var message="Hands-free desligado."
