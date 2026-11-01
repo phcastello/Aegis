@@ -472,6 +472,122 @@ class NodeHandsFreeBackendTest {
     }
   }
 
+  @Test fun realtimeFailureFallsBackOnceUsingCapturedWavBeforeExactlyOneChatTurn() {
+    Fixture().use {fixture->
+      val backend=fixture.backend();val trace=HandsFreeTurnLatency()
+      val realtime=backend.beginCapture(trace)
+      realtime.append(ShortArray(40000),40000);realtime.commit()
+      val recorded=RecordingSink()
+      val result=backend.execute(wav(),session,null,recorded,trace)
+      assertTrue(result.playedAudio)
+      assertEquals(1,fixture.requests.count{it.path=="/api/voice/transcriptions"})
+      assertEquals(1,fixture.requests.count{it.path=="/api/chat/messages"})
+      assertEquals(1,fixture.requests.count{it.path=="/api/voice/speech"})
+      assertTrue(trace.report("played").getJSONObject("milestonesFromEndpointMs").has("stt_batch_fallback"))
+    }
+  }
+
+  @Test fun finalizedSegmentsPlayBeforeTextEndsInOneContinuousNativeStream() {
+    val firstPlayed=CountDownLatch(1);var textEnded=false
+    val device=NodeHandsFreePcmStreamTest.Device(autoPlay=true)
+    var devices=0
+    val player=HandsFreePlayback { _ -> devices++;device }
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        val turn=JSONObject(request.text()).getString("turnId")
+        fun segment(sequence:Int)=JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
+          .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",sequence).put("content","Frase $sequence.").toString()+"\n"
+        val first=segment(0);val remaining=segment(1)+JSONObject().put("type","done").put("turnId",turn).put("conversationId",conversation)
+          .put("assistantMessageId",message).put("voiceContinuation","continue").toString()+"\n"
+        Reply(bytes=(first+remaining).toByteArray(),stream={out->
+          out.write(first.toByteArray());out.flush();check(firstPlayed.await(5,TimeUnit.SECONDS));textEnded=true
+          out.write(remaining.toByteArray());out.flush()
+        })
+      } else if(request.path=="/api/voice/speech/segments") Reply(bytes=byteArrayOf(1,2,3,4),headers=mapOf(
+        "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
+      else normal
+    }).use {fixture->
+      val backend=fixture.backend()
+      val native=player.openStream{true}
+      val sink=object:HandsFreePcmSink by native {
+        override fun write(bytes:ByteArray,offset:Int,count:Int) {
+          if(firstPlayed.count>0)assertFalse(textEnded)
+          native.write(bytes,offset,count);firstPlayed.countDown()
+        }
+      }
+      val result=backend.execute(wav(),session,null,sink,HandsFreeTurnLatency(),incremental=true)
+      assertTrue(result.continueListening);assertTrue(textEnded);assertEquals(1,devices)
+      assertArrayEquals(byteArrayOf(1,2,3,4,1,2,3,4),device.recorded.toByteArray())
+      val requests=fixture.requests.filter{it.path=="/api/voice/speech/segments"}.map{JSONObject(it.text())}
+      assertEquals(listOf(0,1),requests.map{it.getInt("sequence")})
+      assertEquals(2,requests.map{it.getString("speechRequestId")}.distinct().size)
+      assertTrue(requests.all{!it.has("text") && !it.has("content")})
+    }
+  }
+
+  @Test fun duplicateOrOutOfOrderSegmentsAbortTheRemainingAudioAndCannotContinue() {
+    for(bad in listOf(0,2)) Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        val turn=JSONObject(request.text()).getString("turnId")
+        val events=listOf(0,bad).map{sequence->JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
+          .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",sequence).put("content","Frase.").toString()}
+        Reply(bytes=(events.joinToString("\n")+"\n").toByteArray())
+      } else if(request.path=="/api/voice/speech/segments") Reply(bytes=byteArrayOf(1,2),headers=mapOf(
+        "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
+      else normal
+    }).use{fixture->
+      val sink=RecordingSink()
+      assertThrows(Exception::class.java){fixture.backend().execute(wav(),session,null,sink,null,incremental=true)}
+      assertTrue(sink.aborted);assertFalse(sink.finished)
+      assertTrue(fixture.requests.count{it.path=="/api/voice/speech/segments"}<=1)
+      assertTrue(fixture.requests.any{it.method=="DELETE" && it.path.startsWith("/api/chat/turns/")})
+    }
+  }
+
+  @Test fun oneAheadSynthesisStartsDuringCurrentPlaybackButThirdWaitsAndCancellationAbortsBoth() {
+    val secondStarted=CountDownLatch(1)
+    val device=NodeHandsFreePcmStreamTest.Device(autoPlay=false,capacityFrames=2)
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        val turn=JSONObject(request.text()).getString("turnId")
+        val segments=(0..2).joinToString("\n"){seq->JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
+          .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",seq).put("content","Frase $seq.").toString()}
+        val done=JSONObject().put("type","done").put("turnId",turn).put("conversationId",conversation).put("assistantMessageId",message).put("voiceContinuation","continue")
+        Reply(bytes=(segments+"\n"+done.toString()+"\n").toByteArray())
+      } else if(request.path=="/api/voice/speech/segments") {
+        val seq=JSONObject(request.text()).getInt("sequence");if(seq==1)secondStarted.countDown()
+        Reply(bytes=ByteArray(if(seq==0)100000 else 4){1},headers=mapOf(
+          "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
+      }else normal
+    }).use{fixture->
+      val backend=fixture.backend();val executor=Executors.newSingleThreadExecutor()
+      try {
+        val running=executor.submit<HandsFreeTurn>{backend.execute(wav(),session,null,HandsFreeStreamingPcmSink({device}),null,incremental=true)}
+        assertTrue(device.backpressured.await(5,TimeUnit.SECONDS));assertTrue(secondStarted.await(5,TimeUnit.SECONDS))
+        assertFalse(running.isDone);assertEquals(0,device.playedFrames())
+        assertEquals(2,fixture.requests.count{it.path=="/api/voice/speech/segments"})
+        backend.requestCancellation()
+        assertThrows(ExecutionException::class.java){running.get(5,TimeUnit.SECONDS)}
+        assertEquals(0,device.queuedFrames);assertTrue(device.closed)
+        assertEquals(2,fixture.requests.count{it.path=="/api/voice/speech/segments"})
+      } finally {backend.cancel();executor.shutdownNow()}
+    }
+  }
+
+  @Test fun manualAndHandsFreeResponsesDeliverTheIdenticalSavedPcmThroughTheSameNativePlayer() {
+    Fixture().use{fixture->
+      val devices=mutableListOf<NodeHandsFreePcmStreamTest.Device>()
+      val player=HandsFreePlayback{_->NodeHandsFreePcmStreamTest.Device(autoPlay=true).also{devices.add(it)}}
+      fixture.backend().execute(wav(),session,null,player.openStream{true})
+      fixture.backend().speakExisting(UUID.randomUUID().toString(),message,UUID.randomUUID().toString(),player.openStream{true})
+      assertEquals(2,devices.size)
+      assertArrayEquals(devices[0].recorded.toByteArray(),devices[1].recorded.toByteArray())
+      assertArrayEquals(byteArrayOf(1,2,3,4),devices[0].recorded.toByteArray())
+      assertTrue(devices.all{it.closed})
+      assertEquals(1,fixture.requests.count{it.path=="/api/chat/messages"})
+    }
+  }
+
   private data class Request(val method: String, val path: String, val bytes: ByteArray, val contentType: String, val authorization: String,val turnCorrelation:String) {
     fun text() = String(bytes, Charsets.UTF_8)
   }

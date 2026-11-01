@@ -65,3 +65,14 @@ export async function acquireNativeAudio(kind: 'capture' | 'playback'): Promise<
     await invokeControl({ operation: 'manualRelease', leaseId });
   };
 }
+
+/** Server-authorized message IDs only; native code owns credentials, PCM and output policy. */
+export const nativeSpeech = {
+  async speak(turnId: string, assistantMessageId: string, speechRequestId: string): Promise<void> {
+    const result = await invokeControl({ operation: 'playSpeech', turnId, assistantMessageId, speechRequestId });
+    if (!result || typeof result !== 'object' || !('played' in result) || result.played !== true) throw new HandsFreeError('invalid_response');
+  },
+  async stop(speechRequestId: string): Promise<void> {
+    await invokeControl({ operation: 'stopSpeech', speechRequestId });
+  }
+};

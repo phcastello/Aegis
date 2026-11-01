@@ -22,6 +22,67 @@ endpoint; não subtrai relógios de servidores. O relógio `elapsedRealtime` usa
 anteriormente para disponibilidade e a hora civil dos eventos continuam com
 suas funções anteriores e não entram na subtração desses pontos.
 
+## Pipeline conversacional incremental
+
+O Android agora abre um WebSocket autenticado somente ao aceitar a ativação ou
+uma continuação com fala. Envia o pre-roll e os novos blocos PCM16/16 kHz ao relay
+`/api/voice/transcriptions/realtime`, com a identidade nativa existente. Cada
+mensagem binária tem no máximo 6.400 bytes; a fila antes de o relay estar pronto
+é limitada a 160.000 bytes, e o áudio total conserva o teto local de 720.000 bytes.
+A captura não fecha/reabre o microfone durante o comando. Nenhum algoritmo,
+parâmetro ou duração do VAD foi alterado.
+
+O commit ocorre exclusivamente no endpoint local. Resultados parciais não são
+retidos nem entregues ao chat. O resultado final confirmado só é consumido depois
+do commit; callbacks de uma tentativa encerrada não podem finalizar outra.
+Conexão inválida, erro técnico ou prazo final de 12 s selecionam uma única tentativa
+batch com o WAV já capturado, antes de qualquer conversa. Não há batch em paralelo
+na rotina, espera mínima para pedidos curtos ou preenchimento artificial de áudio.
+A identidade é conferida nas fronteiras da sessão/commit/resultado; o bloco de
+captura usa apenas invalidação local barata, sem abrir o cofre a cada 200 ms.
+
+Clientes novos usam `voiceSegments=true` na rota NDJSON. Apenas eventos
+`final_segment` com turno, conversa, mensagem, segmento e sequência válidos dão
+origem a TTS. O corpo de `/api/voice/speech/segments` leva esses IDs e um UUID
+exclusivo de síntese, sem texto arbitrário do cliente. A fila textual comporta
+dois eventos. Dois slots de síntese cobrem a unidade atual e uma unidade seguinte;
+cada um possui um pipe PCM de 24.000 bytes (0,5 s). A segunda síntese pode iniciar
+assim que a primeira foi aceita e produziu seu primeiro byte, enquanto suas
+amostras ainda são reproduzidas. Uma terceira unidade aguarda a liberação do slot.
+Há um único writer/AudioTrack e um único foco para todo o turno. Falha cancela os
+requests e pipes e interrompe áudio pendente. O teto de 180 s vale para o conjunto.
+
+A continuação depende do `done`, da validação do fim do transporte textual, de
+todas as unidades processadas e do playback head final. Só então abre a janela
+original de dois segundos. O reconhecimento de fim enviado ao backend é limitado
+e assíncrono para não atrasar essa janela. Clientes anteriores continuam com as
+rotas síncronas e a mensagem inteira.
+
+A reprodução manual de respostas no Android passou a usar a mesma implementação
+nativa do hands-free: PCM24 kHz, `USAGE_MEDIA`, `CONTENT_TYPE_SPEECH`, foco transitório
+e ganho unitário explícito. O volume físico pertence a `STREAM_MUSIC`; nenhum
+volume global é alterado. O lease existente protege a reprodução manual até a
+drenagem, inclusive cancelamento antes de o worker iniciar. Os demais hosts
+mantêm o player Web Audio. O ganho/PCM do aviso de ativação e os canais de
+notificação não foram alterados.
+
+As métricas distinguem `stt_commit_residual` e `first_final_segment`. PCM que está
+somente nos pipes de prefetch nunca conta como entregue ao player. O identificador
+de transcrição é o da tentativa realtime bem-sucedida ou o da tentativa batch de
+fallback; IDs de callbacks antigos não o substituem. O ID de fala principal permanece
+o da primeira unidade, e o mapa detalhado inclui os demais IDs (teto de 128). O catálogo inclui a política
+realtime/segmentos/player para distinguir resultados de previews anteriores.
+
+Verificação local: **74 testes JVM aprovados**, com compilação do Kotlin de
+produção: 28 de transporte, cinco de WebSocket, 14 de áudio/VAD, 17 de métricas e
+dez de PCM. O teste de prefetch bloqueia o device simulado em duas frames,
+confirma duas sínteses e impede a terceira, depois cancela ambos os produtores.
+O mesmo fixture PCM salvo passa pelos caminhos manual e hands-free e chega
+idêntico à mesma implementação nativa. Isso comprova o contrato de bytes e ganho
+no software; não compara pressão sonora, rota ou botões em um telefone real.
+Não havia aparelho físico conectado. Tela bloqueada, retorno do aplicativo,
+troca de rota, acústica e consumo ativo continuam exigindo homologação no aparelho.
+
 ## Entrada e endpointing
 
 O VAD apenas expõe a posição final da última frame que satisfez sua regra
@@ -91,7 +152,7 @@ JAVA_HOME=/usr/lib/jvm/java-25-amazon-corretto \
   --tests 'com.aegis.node.NodeHandsFree*Test' --console=plain
 ```
 
-**63 testes passaram** (14 de áudio, 23 de backend, 16 de métricas, dez de PCM),
+**63 testes passaram no incremento anterior** (14 de áudio, 23 de backend, 16 de métricas, dez de PCM),
 com compilação do Kotlin de produção. Exercitam HTTP real em loopback com fragmentação/atraso controlados,
 correlação STT/chat/TTS, silêncio inicial, amostra negativa dividida, escrita
 cancelada, métricas com relógio injetado, identidade inicial preservada e

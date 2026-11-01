@@ -19,6 +19,9 @@ pub async fn node_hands_free(
     diagnostic: Option<bool>,
     lease_id: Option<String>,
     audio_kind: Option<String>,
+    turn_id: Option<String>,
+    assistant_message_id: Option<String>,
+    speech_request_id: Option<String>,
 ) -> Result<Value, HandsFreeError> {
     let (method, payload) = match operation.as_str() {
         "state" => ("handsFreeState", json!({})),
@@ -46,6 +49,29 @@ pub async fn node_hands_free(
                 },
                 json!({"leaseId":id.to_string(),"kind":kind}),
             )
+        }
+        "playSpeech" | "stopSpeech" => {
+            let checked_id = |value: Option<String>| -> Result<String, HandsFreeError> {
+                let id = uuid::Uuid::parse_str(&value.ok_or_else(|| HandsFreeError::new("invalid_request"))?)
+                    .map_err(|_| HandsFreeError::new("invalid_request"))?;
+                if id.is_nil() { return Err(HandsFreeError::new("invalid_request")); }
+                Ok(id.to_string())
+            };
+            let speech = checked_id(speech_request_id)?;
+            let payload = if operation == "playSpeech" {
+                json!({"turnId":checked_id(turn_id)?,"assistantMessageId":checked_id(assistant_message_id)?,"speechRequestId":speech})
+            } else { json!({"speechRequestId":speech}) };
+            #[cfg(target_os = "android")]
+            {
+                use tauri::Manager;
+                let bridge = app.try_state::<crate::native_notifications::AndroidBridge>()
+                    .ok_or_else(|| HandsFreeError::new("bridge_unavailable"))?;
+                let method = if operation == "playSpeech" { "playNativeSpeech" } else { "stopNativeSpeech" };
+                let result: Result<Value, _> = bridge.0.run_mobile_plugin_async(method, payload).await;
+                return result.map_err(|_| HandsFreeError::new("native_failure"));
+            }
+            #[cfg(not(target_os = "android"))]
+            { let _ = payload; return Err(HandsFreeError::new("unsupported")); }
         }
         "permission" | "assistant" | "import" | "export" => {
             #[cfg(target_os = "android")]

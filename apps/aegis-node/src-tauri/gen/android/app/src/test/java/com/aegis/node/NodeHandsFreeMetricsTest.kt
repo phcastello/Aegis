@@ -7,6 +7,16 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 
 class NodeHandsFreeMetricsTest {
+    @Test fun prefetchCannotReplaceTheFirstSpeechCorrelationAndDetailedIdsRemainBounded() {
+        val trace=HandsFreeTurnLatency()
+        trace.speech("first");trace.speech("second")
+        assertEquals("first",trace.report("played").getString("speechRequestId"))
+        assertEquals(2,trace.report("played").getInt("speechRequestCount"))
+        repeat(200){trace.speech("segment-$it")}
+        assertEquals(128,trace.report("played").getJSONArray("speechRequestIds").length())
+        assertFalse(trace.report("played",includeMilestones=false).has("speechRequestIds"))
+    }
+
     private val zone=ZoneId.of("America/Sao_Paulo")
     @Test fun turnLatencyIncludesEndpointingAndKeepsClockAndAcousticLimitsExplicit() {
         var mono=1000L

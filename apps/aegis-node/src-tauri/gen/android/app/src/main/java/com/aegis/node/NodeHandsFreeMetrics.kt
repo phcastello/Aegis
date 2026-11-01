@@ -220,7 +220,9 @@ internal class HandsFreeMetrics internal constructor(
             .put("threshold",.5).put("scoreWindow",5).put("hysteresisFraction",.6).put("refractoryMs",1000)
             .put("endpointing",JSONObject().put("version",HandsFreeVad.VERSION).put("frameSamples",HandsFreeVad.FRAME_SAMPLES)
                 .put("onsetSamples",HandsFreeVad.ONSET_SAMPLES).put("noSpeechSamples",HandsFreeVad.NO_SPEECH_SAMPLES))
-            .put("tts","pcm24k_streaming")
+            .put("stt","realtime_manual_commit_batch_fallback")
+            .put("tts","pcm24k_final_segments_continuous")
+            .put("responsePlayback","native_media_speech_unity")
             .put("turnLatency","vad-frame-to-useful-pcm-delivered-estimate-v1")
             .put("activationCue",HandsFreeCueSignal.VERSION)
     }
@@ -242,11 +244,12 @@ internal class HandsFreeTurnLatency(
     private val points=linkedMapOf<String,Long>()
     private var transcriptionId:String?=null
     private var speechId:String?=null
+    private val speechRequests=linkedSetOf<String>()
     private var firstUsefulFrame:Long?=null
     @Synchronized fun mark(name:String){markAt(name,clock())}
     @Synchronized fun markAt(name:String,at:Long){if(!points.containsKey(name) && points.size<32)points[name]=at}
     @Synchronized fun transcription(id:String){transcriptionId=id}
-    @Synchronized fun speech(id:String){speechId=id}
+    @Synchronized fun speech(id:String){if(speechId==null)speechId=id;if(speechRequests.size<128)speechRequests.add(id)}
     @Synchronized fun usefulFrame(index:Long){if(firstUsefulFrame==null)firstUsefulFrame=index}
     @Synchronized fun durations():Map<String,Long> {
         val result=linkedMapOf<String,Long>()
@@ -259,6 +262,8 @@ internal class HandsFreeTurnLatency(
         span("stt_multipart_prepare","stt_multipart_started","stt_request_started")
         span("stt_upload","stt_upload_started","stt_upload_completed")
         span("stt_wait_response","stt_upload_completed","stt_response_received")
+        span("stt_commit_residual","stt_commit_requested","stt_response_received")
+        span("first_final_segment","chat_request_started","first_final_segment_received")
         span("chat_client","chat_request_started","chat_response_received")
         for(point in listOf("first_byte","first_pcm_available","first_useful_pcm_available","first_useful_pcm_delivered"))
             span("tts_$point","tts_request_started","tts_$point")
@@ -271,13 +276,13 @@ internal class HandsFreeTurnLatency(
         val origin=points["endpoint_completed"]?:points.values.firstOrNull()?:clock()
         val relative=JSONObject();for((name,at) in points)relative.put(name,at-origin)
         val result=JSONObject().put("turnId",turnId).put("transcriptionRequestId",transcriptionId?:JSONObject.NULL)
-            .put("speechRequestId",speechId?:JSONObject.NULL).put("outcome",outcome)
+            .put("speechRequestId",speechId?:JSONObject.NULL).put("speechRequestCount",speechRequests.size).put("outcome",outcome)
             .put("clock","process-local System.nanoTime; milliseconds relative to endpoint")
             .put("vadFrameEstimate","last active frame sample position mapped to blocking capture read return; capture buffering/scheduling uncertainty remains")
             .put("speakerAcousticsMeasured",false).put("firstUsefulPcmThreshold",64)
             .put("firstUsefulPcmFrame",firstUsefulFrame?:JSONObject.NULL)
             .put("detailProfiling",includeMilestones).put("durationsMs",JSONObject(durations()))
-        if(includeMilestones)result.put("milestonesFromEndpointMs",relative)
+        if(includeMilestones)result.put("milestonesFromEndpointMs",relative).put("speechRequestIds",JSONArray(speechRequests.toList()))
         return result
     }
     companion object {fun now()=System.nanoTime()/1_000_000L}

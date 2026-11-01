@@ -61,6 +61,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    volumeControlStream=android.media.AudioManager.STREAM_MUSIC
     NodeNativeNotifications.initialize(this)
     onBackPressedDispatcher.addCallback(this,settingsBack)
     NodeUpdates.cleanup(this)
@@ -156,6 +157,6 @@ class MainActivity : TauriActivity() {
   fun handsFreeManualAcquire(payload:String):String=NodeHandsFree.manualAcquire(this,payload)
   fun handsFreeManualRelease(payload:String):String=NodeHandsFree.manualRelease(this,payload)
   fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)
-  override fun onDestroy(){super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
+  override fun onDestroy(){NodeManualSpeech.cancel();super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
 
 }

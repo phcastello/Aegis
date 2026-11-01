@@ -51,6 +51,8 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val epochCounter=java.util.concurrent.atomic.AtomicInteger(0)
     private val epoch:Int get()=epochCounter.get()
     @Volatile private var manualLease:String?=null
+    @Volatile private var manualAudioKind:String?=null
+    internal fun manualPlaybackActive():Boolean=synchronized(lock){manualLease!=null && manualAudioKind=="playback"}
     private var leaseTimeout:Runnable?=null
     @Volatile private var status="disabled"
     @Volatile private var message="Hands-free desligado."
@@ -154,12 +156,12 @@ internal class HandsFreeRuntime(private val context:Context) {
     fun manualAcquire(lease:String,kind:String):Boolean {
         synchronized(lock) {
             if(manualLease!=null || status in setOf("capturing","processing","speaking","continuation"))return false
-            manualLease=lease;metrics.event("manual_audio_acquired",JSONObject().put("kind",if(kind=="playback")"playback" else "capture"))
+            manualLease=lease;manualAudioKind=kind;metrics.event("manual_audio_acquired",JSONObject().put("kind",if(kind=="playback")"playback" else "capture"))
             epochCounter.incrementAndGet();try{recorder?.stop()}catch(_:Exception){}
         }
         val active=worker
         if(active!=null && active!==Thread.currentThread())active.join(1500)
-        if(active?.isAlive==true){manualLease=null;metrics.event("manual_audio_acquire_timeout");return false}
+        if(active?.isAlive==true){manualLease=null;manualAudioKind=null;metrics.event("manual_audio_acquire_timeout");return false}
         synchronized(lock) {
             if(manualLease!=lease)return false
             leaseTimeout?.let{main.removeCallbacks(it)}
@@ -170,7 +172,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         return true
     }
     fun manualRelease(lease:String) {
-        synchronized(lock){if(manualLease!=lease)return;manualLease=null;leaseTimeout?.let{main.removeCallbacks(it)};leaseTimeout=null;metrics.event("manual_audio_released")}
+        synchronized(lock){if(manualLease!=lease)return;manualLease=null;manualAudioKind=null;leaseTimeout?.let{main.removeCallbacks(it)};leaseTimeout=null;metrics.event("manual_audio_released")}
         reconcile()
     }
     internal fun releaseActivityAudio(){manualLease?.let{manualRelease(it)}}
@@ -240,7 +242,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         backend?:newBackend(generation,session).also{backend=it}
                     }
                     val sink=playback.openStream({current(generation) && !sessionCancelled && sessionId==session},{event->trace?.mark(event)})
-                    val turn=active.execute(command,session,conversationId,sink,trace)
+                    val turn=active.execute(command,session,conversationId,sink,trace,incremental=true)
                     command.fill(0)
                     if(!current(generation) || sessionCancelled)throw java.util.concurrent.CancellationException()
                     conversationId=turn.conversationId
@@ -292,6 +294,9 @@ internal class HandsFreeRuntime(private val context:Context) {
         val ring=HandsFreeRing()
         val command=ShortArray(360000) // 20s command plus 2.5s pre-roll, bounded.
         var commandStarted=0L;var captured=false
+        var realtime:HandsFreeRealtimeTranscription?=null
+        var capturedSuccessfully=false
+        var trace:HandsFreeTurnLatency?=null
         var classifier:NativeHandsFreeSpeechClassifier?=null
         var commandCapture:HandsFreeCommandCapture?=null
         var lastVadSample:Int?=null
@@ -336,7 +341,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(sessionCancelled && (captured || continuation))return ByteArray(0)
                 if(captured) {
                     val commandState=checkNotNull(commandCapture)
+                    val before=commandState.length
                     val ended=commandState.append(buffer,count)
+                    realtime?.append(buffer,commandState.length-before)
                     val last=commandState.lastActiveEndSample
                     if(last!=null && last!=lastVadSample) {
                         lastVadSample=last
@@ -346,11 +353,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                         val endpointAt=HandsFreeTurnLatency.now()
                         metrics.add("commandCaptureMs",now-commandStarted)
                         if(!commandState.hasUsefulAudio){metrics.add("commands_no_speech");return ByteArray(0)}
-                        val trace=HandsFreeTurnLatency()
-                        lastVadFrameAtMs?.let{trace.markAt("last_vad_active_frame_estimated",it)}
-                        trace.markAt("endpoint_completed",endpointAt);trace.mark("wav_prepare_started")
+                        val activeTrace=checkNotNull(trace)
+                        lastVadFrameAtMs?.let{activeTrace.markAt("last_vad_active_frame_estimated",it)}
+                        activeTrace.markAt("endpoint_completed",endpointAt)
+                        realtime?.commit()
+                        activeTrace.mark("wav_prepare_started")
                         val wav=handsFreeWav(command,commandState.length)
-                        trace.mark("wav_ready");capturedTurnLatency=trace
+                        activeTrace.mark("wav_ready");capturedTurnLatency=activeTrace;capturedSuccessfully=true
                         return wav
                     }
                     continue
@@ -384,12 +393,18 @@ internal class HandsFreeRuntime(private val context:Context) {
                         commandCapture?.lastActiveEndSample?.let{last->
                             lastVadSample=last;lastVadFrameAtMs=readReturnedAtMs-(length-last)*1000L/16000
                         }
+                        trace=HandsFreeTurnLatency().also{it.mark("wake_accepted")}
+                        val session=checkNotNull(sessionId)
+                        val activeBackend=backend?:newBackend(generation,session).also{backend=it}
+                        // Connection failure only selects captured batch later. It cannot close/reopen capture.
+                        realtime=try{activeBackend.beginCapture(checkNotNull(trace)).also{it.append(command,length)}}catch(_:Exception){null}
                         metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession();if(!continuation)beep()
                     }
                 }
             }
             return null
         }finally {
+            if(!capturedSuccessfully){realtime?.close();backend?.abortCapture()}
             captureConfirmed=false;recorder=null
             if(Build.VERSION.SDK_INT>=29 && recordingCallbackRegistered && recordingCallback!=null)try{audio.unregisterAudioRecordingCallback(recordingCallback)}catch(_:Exception){}
             try{audio.stop()}catch(_:Exception){};audio.release()

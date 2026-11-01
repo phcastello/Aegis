@@ -75,6 +75,16 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   val args=org.json.JSONObject(invoke.getArgs().toString())
   NodeUpdates.background {try{invoke.resolve(JSObject(NodeUpdates.install(activity,args.getString("version"),args.getString("url"),args.getLong("versionCode"),args.getString("sha256")).toString()))}catch(_:Exception){invoke.reject("update_installer_failed")} }
  }
+ @Command fun playNativeSpeech(invoke:Invoke) {
+  val args=org.json.JSONObject(invoke.getArgs().toString())
+  val turn=args.getString("turnId");val message=args.getString("assistantMessageId");val speech=args.getString("speechRequestId")
+  try {for(id in listOf(turn,message,speech))require(java.util.UUID.fromString(id).toString()==id)}catch(_:Exception){invoke.reject("invalid_request");return}
+  Thread({try{NodeManualSpeech.speak(activity.applicationContext,turn,message,speech);invoke.resolve(JSObject().put("played",true))}catch(_:Exception){invoke.reject("Não foi possível reproduzir a voz.")}},"AegisManualSpeech").apply{isDaemon=true;start()}
+ }
+ @Command fun stopNativeSpeech(invoke:Invoke) {
+  val args=org.json.JSONObject(invoke.getArgs().toString())
+  NodeManualSpeech.cancel(args.getString("speechRequestId"));invoke.resolve(JSObject().put("stopped",true))
+ }
  @Command fun requestHandsFreePermission(invoke:Invoke) {
   if(getPermissionState("handsFreeAudio")==PermissionState.GRANTED){NodeHandsFree.runtime(activity).recoverFromSystem();invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
   requestPermissionForAlias("handsFreeAudio",invoke,"handsFreePermissionCallback")

@@ -31,7 +31,9 @@ class NodeHandsFreeBackend internal constructor(
 
   private val cancelled = AtomicBoolean(false)
   private val executing = AtomicBoolean(false)
-  @Volatile private var active: Call? = null
+  private val activeCalls = java.util.concurrent.ConcurrentHashMap.newKeySet<Call>()
+  @Volatile private var realtime: HandsFreeRealtimeTranscription? = null
+  private val segmentDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<SegmentDownload>()
   @Volatile private var activePcm: HandsFreePcmSink? = null
   @Volatile private var turnId: String? = null
   @Volatile private var speechId: String? = null
@@ -40,6 +42,8 @@ class NodeHandsFreeBackend internal constructor(
   @Volatile private var correlationId:String?=null
   private var pinnedSessionId: String? = null
   private var pinnedConversationId: String? = null
+
+  private fun checkNotCancelled() {if(cancelled.get())throw CancellationException()}
 
   private fun checkCurrent() {
     if (cancelled.get()) throw CancellationException()
@@ -50,12 +54,12 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   private fun request(path: String, body: ByteArray, contentType: String, limit: Int, timeoutSeconds: Int,
-                      pcm: HandsFreePcmSink? = null, onFirstPcm: () -> Unit = {}, method: String = "POST", cleanup: Boolean = false): ByteArray {
+                      pcm: HandsFreePcmSink? = null, onFirstPcm: () -> Unit = {}, method: String = "POST", cleanup: Boolean = false, onLine: ((JSONObject) -> Unit)? = null, pcmDeliveryMetrics:Boolean=true, onFirstByte:()->Unit={}, onPcmAvailable:()->Unit={}): ByteArray {
     val pinned = scope ?: throw NodeNativeSession.IdentityUnavailable()
     require(path.startsWith("/api/") && !path.contains("..") && !path.contains("?"))
     if (!cleanup) checkCurrent()
     val trace=if(cleanup)null else latencyTrace
-    val requestStage=when(path){"/api/voice/transcriptions"->"stt";"/api/chat/messages"->"chat";"/api/voice/speech"->"tts";else->null}
+    val requestStage=when(path){"/api/voice/transcriptions"->"stt";"/api/chat/messages","/api/chat/messages/stream"->"chat";"/api/voice/speech","/api/voice/speech/segments"->"tts";else->null}
     val client = transport.newBuilder()
       .callTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
       .connectTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS)
@@ -76,7 +80,7 @@ class NodeHandsFreeBackend internal constructor(
     correlationId?.let{builder.header("X-Aegis-Turn-Id",it)}
     if (method == "DELETE") builder.delete() else builder.method(method,body.toRequestBody(contentType.toMediaType()))
     val call = client.newCall(builder.build())
-    if (!cleanup) active = call
+    if (!cleanup) activeCalls.add(call)
     try {
       if (!cleanup) checkCurrent()
       call.execute().use { response ->
@@ -88,10 +92,12 @@ class NodeHandsFreeBackend internal constructor(
         val advertised = payload.contentLength()
         require(advertised <= limit)
         val output = if (pcm == null) ByteArrayOutputStream() else null
+        val line = if(onLine != null) ByteArrayOutputStream() else null
+        val pcmTrace=if(pcmDeliveryMetrics)trace else null
         val framer = pcm?.let { HandsFreePcm16Framer(it,
-          onFirstPcmAvailable={trace?.mark("tts_first_pcm_available")},
-          onFirstUsefulPcmAvailable={frame->trace?.usefulFrame(frame);trace?.mark("tts_first_useful_pcm_available")},
-          onFirstUsefulPcmDelivered={trace?.mark("tts_first_useful_pcm_delivered")}) }
+          onFirstPcmAvailable={pcmTrace?.mark("tts_first_pcm_available");onPcmAvailable()},
+          onFirstUsefulPcmAvailable={frame->pcmTrace?.usefulFrame(frame);pcmTrace?.mark("tts_first_useful_pcm_available")},
+          onFirstUsefulPcmDelivered={pcmTrace?.mark("tts_first_useful_pcm_delivered")}) }
         val block = ByteArray(8192)
         var total = 0L
         var firstDelivered = false
@@ -103,7 +109,7 @@ class NodeHandsFreeBackend internal constructor(
               val count = stream.read(block)
               if (count < 0) break
               check(count > 0) { "empty_stream_read" }
-              if(pcm!=null && total==0L)trace?.mark("tts_first_byte")
+              if(pcm!=null && total==0L){pcmTrace?.mark("tts_first_byte");onFirstByte()}
               if (!cleanup && cancelled.get()) throw CancellationException()
               // Check authority after a possibly slow read, before delivering its audio. This is
               // time-bounded rather than decrypting the vault for every network/audio block.
@@ -111,7 +117,13 @@ class NodeHandsFreeBackend internal constructor(
                 checkCurrent(); checkedIdentityAt = System.nanoTime()
               }
               require(total + count <= limit); total += count
-              if (framer == null) output!!.write(block, 0, count)
+              if (onLine != null) {
+                for (index in 0 until count) {
+                  if (block[index] == 10.toByte()) {
+                    if (line!!.size() > 0) { onLine(JSONObject(line.toString("UTF-8").trimEnd('\r'))); line.reset() }
+                  } else { require(line!!.size() < 65536); line.write(block[index].toInt()) }
+                }
+              } else if (framer == null) output!!.write(block, 0, count)
               else {
                 framer.accept(block, count)
                 if (!firstDelivered && framer.samples > 0) { firstDelivered = true; onFirstPcm() }
@@ -119,12 +131,13 @@ class NodeHandsFreeBackend internal constructor(
             }
           }
           require(advertised < 0 || total == advertised) { "incomplete_http_body" }
+          if (onLine != null && line!!.size() > 0) onLine(JSONObject(line.toString("UTF-8")))
           framer?.verifyComplete()
           if (!cleanup) checkCurrent()
           return output?.toByteArray() ?: ByteArray(0)
         } finally { block.fill(0); framer?.clear() }
       }
-    } finally { if (active === call) active = null; call.cancel() }
+    } finally { activeCalls.remove(call); call.cancel() }
   }
 
   private fun json(path: String, body: JSONObject): JSONObject {
@@ -138,16 +151,25 @@ class NodeHandsFreeBackend internal constructor(
     try { return action() } finally { onStage(stage, (System.nanoTime() - start) / 1_000_000L) }
   }
 
+  internal fun beginCapture(trace: HandsFreeTurnLatency): HandsFreeRealtimeTranscription {
+    check(!executing.get())
+    if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
+    checkCurrent()
+    realtime?.close()
+    return HandsFreeRealtimeTranscription(transport, checkNotNull(scope), { checkCurrent() }, trace = trace, checkActive = {if(cancelled.get())throw CancellationException()}).also { realtime = it }
+  }
+  internal fun abortCapture() { realtime?.close(); realtime = null }
+
   /** Blocking: called only by the controller's bounded background executor. */
   fun execute(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink): HandsFreeTurn =
     execute(wav,sessionId,conversationId,pcm,null)
 
-  internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?):HandsFreeTurn {
+  internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?, incremental:Boolean=false):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
     latencyTrace=trace
     activePcm = pcm
     try {
-      return executeTurn(wav, sessionId, conversationId, pcm)
+      return executeTurn(wav, sessionId, conversationId, pcm, incremental)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -155,11 +177,11 @@ class NodeHandsFreeBackend internal constructor(
     }
     finally {
       if (activePcm === pcm) activePcm = null
-      try { pcm.close() } finally { latencyTrace=null;correlationId=null;executing.set(false) }
+      try { pcm.close() } finally { abortCapture();latencyTrace=null;correlationId=null;executing.set(false) }
     }
   }
 
-  private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink): HandsFreeTurn {
+  private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
     validateWav(wav)
@@ -175,25 +197,12 @@ class NodeHandsFreeBackend internal constructor(
     trace?.mark("turn_execution_started")
     val id=trace?.turnId?:UUID.randomUUID().toString()
     correlationId=id
-    val transcriptionId = UUID.randomUUID().toString()
-    trace?.transcription(transcriptionId);trace?.mark("stt_multipart_started")
-    val boundary = "aegis-${UUID.randomUUID()}"
-    val prefix = ("--$boundary\r\nContent-Disposition: form-data; name=\"transcriptionRequestId\"\r\n\r\n$transcriptionId\r\n" +
-      "--$boundary\r\nContent-Disposition: form-data; name=\"clientDurationMilliseconds\"\r\n\r\n${(wav.size - 44) * 1000L / 32000}\r\n" +
-      "--$boundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"command.wav\"\r\nContent-Type: audio/wav\r\n\r\n").toByteArray(Charsets.UTF_8)
-    val suffix = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-    val multipart = ByteArray(prefix.size + wav.size + suffix.size)
-    prefix.copyInto(multipart); wav.copyInto(multipart, prefix.size); suffix.copyInto(multipart, prefix.size + wav.size)
     try {
-      val transcript = timed("stt") {
-        trace?.mark("stt_request_started")
-        val response = request("/api/voice/transcriptions", multipart, "multipart/form-data; boundary=$boundary", 65536, 90)
-        try {
-          val result = JSONObject(String(response, Charsets.UTF_8))
-          require(result.getString("transcriptionRequestId") == transcriptionId)
-          trace?.mark("stt_response_received")
-          result.getString("text").trim()
-        } finally { response.fill(0) }
+      val realtimeAttempt = realtime
+      val streamed = try { realtimeAttempt?.awaitFinal() } finally { realtimeAttempt?.close();if(realtime===realtimeAttempt)realtime=null }
+      val transcript = streamed ?: run {
+        if (realtimeAttempt != null) trace?.mark("stt_batch_fallback")
+        transcribeBatch(wav)
       }
       // Wake word alone and empty STT never create a conversation or reach the model.
       val command = stripWakeWord(transcript)
@@ -204,6 +213,7 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcribed", 0)
       checkCurrent()
       turnId = id
+      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
         json("/api/chat/messages", JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
@@ -265,21 +275,236 @@ class NodeHandsFreeBackend internal constructor(
       pcm.abort()
       cleanupRemote()
       throw error
-    } finally { multipart.fill(0) }
+    }
   }
+
+  private fun transcribeBatch(wav:ByteArray):String {
+    val trace=latencyTrace
+    val transcriptionId = UUID.randomUUID().toString()
+    trace?.transcription(transcriptionId);trace?.mark("stt_multipart_started")
+    val boundary = "aegis-${UUID.randomUUID()}"
+    val prefix = ("--$boundary\r\nContent-Disposition: form-data; name=\"transcriptionRequestId\"\r\n\r\n$transcriptionId\r\n" +
+      "--$boundary\r\nContent-Disposition: form-data; name=\"clientDurationMilliseconds\"\r\n\r\n${(wav.size - 44) * 1000L / 32000}\r\n" +
+      "--$boundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"command.wav\"\r\nContent-Type: audio/wav\r\n\r\n").toByteArray(Charsets.UTF_8)
+    val suffix = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+    val multipart = ByteArray(prefix.size + wav.size + suffix.size)
+    prefix.copyInto(multipart); wav.copyInto(multipart, prefix.size); suffix.copyInto(multipart, prefix.size + wav.size)
+    try { return timed("stt") {
+      trace?.mark("stt_request_started")
+      val response=request("/api/voice/transcriptions",multipart,"multipart/form-data; boundary=$boundary",65536,90)
+      try {
+        val result=JSONObject(String(response,Charsets.UTF_8))
+        require(result.getString("transcriptionRequestId")==transcriptionId)
+        trace?.mark("stt_response_received");result.getString("text").trim()
+      }finally{response.fill(0)}
+    } }finally{multipart.fill(0)}
+  }
+
+  private class SegmentDownload(val event:JSONObject) : AutoCloseable {
+    // Half a second per unit. At most current+one ahead exist, independent of reply length.
+    val input=java.io.PipedInputStream(24000)
+    val output=java.io.PipedOutputStream(input)
+    val completed=java.util.concurrent.CountDownLatch(1)
+    val firstByte=java.util.concurrent.CountDownLatch(1)
+    val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+    var worker:Thread?=null
+    override fun close() {try{input.close()}catch(_:Exception){};try{output.close()}catch(_:Exception){}}
+  }
+
+  /** Two synthesis slots, bounded PCM pipes and one writer keep playback continuous. */
+  private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink):HandsFreeTurn {
+    val trace=latencyTrace
+    val events=java.util.concurrent.ArrayBlockingQueue<JSONObject>(2)
+    val units=java.util.concurrent.ArrayBlockingQueue<SegmentDownload>(2)
+    val permits=java.util.concurrent.Semaphore(2)
+    val readerFailure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+    val schedulerFailure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+    val stopped=AtomicBoolean(false)
+    fun failPipeline(error:Throwable) {
+      if(stopped.get())return
+      schedulerFailure.compareAndSet(null,error)
+      activePcm?.abort();segmentDownloads.forEach{it.close()};activeCalls.forEach{it.cancel()}
+    }
+    val bytes=JSONObject().put("turnId",id).put("conversationId",conversationId?:JSONObject.NULL)
+      .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
+      .toString().toByteArray(Charsets.UTF_8)
+    val reader=Thread({
+      try {
+        trace?.mark("chat_request_started")
+        request("/api/chat/messages/stream",bytes,"application/json",1048576,180,onLine={ event ->
+          checkCurrent();require(event.getString("turnId")==id)
+          when(event.getString("type")) {
+            "final_segment","done","error" -> {
+              while(!stopped.get() && !events.offer(event,200,TimeUnit.MILLISECONDS)) checkNotCancelled()
+              if(stopped.get())throw CancellationException()
+            }
+            "conversation","tool_status","memory_activity","token" -> Unit
+            else -> error("invalid_chat_event")
+          }
+        })
+      }catch(error:Throwable){if(!stopped.get())readerFailure.set(error)}
+      finally{bytes.fill(0)}
+    },"AegisFinalSegments").apply{isDaemon=true;start()}
+    val started=System.nanoTime()
+    val deadlineArmed=AtomicBoolean(true)
+    val deadline=ttsDeadlines.schedule({if(deadlineArmed.compareAndSet(true,false))requestCancellation()},ttsDeadlineMilliseconds,TimeUnit.MILLISECONDS)
+    val scheduler=Thread({
+      var destination=conversationId
+      var messageId:String?=null
+      var sequence=0
+      val seen=hashSetOf<String>()
+      var previous:SegmentDownload?=null
+      try {
+        while(!stopped.get()) {
+          checkNotCancelled();readerFailure.get()?.let{throw it}
+          val event=events.poll(200,TimeUnit.MILLISECONDS)
+          if(event==null){check(reader.isAlive || events.isNotEmpty()){"incomplete_chat_stream"};continue}
+          when(event.getString("type")) {
+            "error" -> error("chat_stream_failed")
+            "done" -> {
+              require(sequence>0 && event.getString("conversationId")==destination && event.getString("assistantMessageId")==messageId)
+              trace?.mark("chat_response_received")
+              // done cannot conceal a truncated HTTP body or later stream failure.
+              reader.join(3000);check(!reader.isAlive){"chat_stream_did_not_finish"}
+              readerFailure.get()?.let{throw it};require(events.isEmpty()){"events_after_done"}
+              val terminal=SegmentDownload(event)
+              while(!stopped.get() && !units.offer(terminal,200,TimeUnit.MILLISECONDS))checkNotCancelled()
+              break
+            }
+            "final_segment" -> {
+              require(sequence<128 && event.getInt("sequence")==sequence)
+              val nextDestination=event.getString("conversationId");requireUuid(nextDestination)
+              require(destination==null || nextDestination==destination);destination=nextDestination
+              val nextMessage=event.getString("assistantMessageId");requireUuid(nextMessage)
+              require(messageId==null || nextMessage==messageId);messageId=nextMessage
+              val segmentId=event.getString("segmentId");requireUuid(segmentId);require(seen.add(segmentId))
+              require(event.getString("content").isNotBlank() && event.getString("content").length<=8000)
+              trace?.mark("first_final_segment_received")
+              // Prior acceptance orders claims. Next synthesis begins while current PCM plays.
+              previous?.let {prior->
+                while(!stopped.get() && !prior.firstByte.await(200,TimeUnit.MILLISECONDS)) {
+                  checkNotCancelled();prior.failure.get()?.let{throw it}
+                  check(prior.completed.count>0){"empty_previous_segment"}
+                }
+              }
+              while(!stopped.get() && !permits.tryAcquire(200,TimeUnit.MILLISECONDS)){checkNotCancelled();readerFailure.get()?.let{throw it}}
+              if(stopped.get())throw CancellationException()
+              val unit=SegmentDownload(event);segmentDownloads.add(unit);previous=unit
+              val speech=UUID.randomUUID().toString();trace?.speech(speech)
+              val unitSequence=sequence
+              val body=JSONObject().put("turnId",id).put("speechRequestId",speech).put("assistantMessageId",messageId)
+                .put("conversationId",destination).put("segmentId",segmentId).put("sequence",sequence).toString().toByteArray(Charsets.UTF_8)
+              unit.worker=Thread({
+                val pipe=object:HandsFreePcmSink {
+                  override fun write(bytes:ByteArray,offset:Int,count:Int){unit.output.write(bytes,offset,count)}
+                  override fun finish()=Unit
+                  override fun abort()=unit.close()
+                  override fun close()=Unit
+                }
+                try {
+                  trace?.mark("tts_request_started")
+                  request("/api/voice/speech/segments",body,"application/json",24000*2*180,300,pcm=pipe,
+                    pcmDeliveryMetrics=false,onFirstByte={unit.firstByte.countDown();if(unitSequence==0)trace?.mark("tts_first_byte")},
+                    onPcmAvailable={if(unitSequence==0)trace?.mark("tts_first_pcm_available")})
+                }catch(error:Throwable){unit.failure.set(error);failPipeline(error)}
+                finally{body.fill(0);try{unit.output.close()}catch(_:Exception){};unit.completed.countDown()}
+              },"AegisSegmentPcm-$sequence").apply{isDaemon=true;start()}
+              while(!stopped.get() && !units.offer(unit,200,TimeUnit.MILLISECONDS))checkNotCancelled()
+              sequence++
+            }
+          }
+        }
+      }catch(error:Throwable){failPipeline(error)}
+    },"AegisSpeechPrefetch").apply{isDaemon=true;start()}
+    var totalPcmBytes=0L
+    var firstAudioAt=0L
+    var identityCheckedAt=System.nanoTime()
+    val boundedSink=object:HandsFreePcmSink {
+      override fun write(bytes:ByteArray,offset:Int,count:Int) {
+        checkNotCancelled();schedulerFailure.get()?.let{throw it}
+        if(System.nanoTime()-identityCheckedAt>=1000000000L){checkCurrent();identityCheckedAt=System.nanoTime()}
+        require(totalPcmBytes+count<=24000L*2*180);pcm.write(bytes,offset,count);totalPcmBytes+=count
+        if(firstAudioAt==0L){firstAudioAt=System.nanoTime();onStage("tts_first_audio",(firstAudioAt-started)/1000000)}
+      }
+      override fun finish()=pcm.finish()
+      override fun abort()=pcm.abort()
+      override fun close()=Unit
+    }
+    // Prefetched bytes are never counted as delivered to the native player.
+    val framer=HandsFreePcm16Framer(boundedSink,
+      onFirstUsefulPcmAvailable={frame->trace?.usefulFrame(frame);trace?.mark("tts_first_useful_pcm_available")},
+      onFirstUsefulPcmDelivered={trace?.mark("tts_first_useful_pcm_delivered")})
+    val block=ByteArray(8192)
+    try {
+      while(true) {
+        checkNotCancelled();schedulerFailure.get()?.let{throw it}
+        if(System.nanoTime()-identityCheckedAt>=1000000000L){checkCurrent();identityCheckedAt=System.nanoTime()}
+        val unit=units.poll(200,TimeUnit.MILLISECONDS)
+        if(unit==null){check(scheduler.isAlive || units.isNotEmpty()){"incomplete_segment_queue"};continue}
+        try {
+          if(unit.event.getString("type")=="done") {
+            framer.verifyComplete();pcm.finish();trace?.mark("playback_finished");checkCurrent()
+            val destination=unit.event.getString("conversationId")
+            // Best effort acknowledgement after the real playback head, without delaying onset.
+            try{completionCleanup.execute{try{request("/api/chat/turns/$id/complete",ByteArray(0),"application/json",65536,3,cleanup=true)}catch(_:Exception){}}}
+            catch(_:java.util.concurrent.RejectedExecutionException){}
+            pinnedConversationId=destination;speechId=null;turnId=null
+            return HandsFreeTurn(destination,true,unit.event.optString("voiceContinuation")=="continue")
+          }
+          while(true) {
+            checkNotCancelled();schedulerFailure.get()?.let{throw it};unit.failure.get()?.let{throw it}
+            if(System.nanoTime()-identityCheckedAt>=1000000000L){checkCurrent();identityCheckedAt=System.nanoTime()}
+            val count=unit.input.read(block)
+            if(count<0)break
+            framer.accept(block,count)
+          }
+          check(unit.completed.await(3000,TimeUnit.MILLISECONDS)){"segment_download_did_not_finish"}
+          unit.failure.get()?.let{throw it}
+        } finally {unit.close();segmentDownloads.remove(unit);if(unit.event.getString("type")=="final_segment")permits.release()}
+      }
+    } finally {
+      block.fill(0);framer.clear();stopped.set(true)
+      reader.interrupt();scheduler.interrupt();segmentDownloads.forEach{it.close()};activeCalls.forEach{it.cancel()}
+      reader.join(3000);scheduler.join(3000)
+      segmentDownloads.forEach{it.worker?.join(3000);it.close()};segmentDownloads.clear()
+      while(true){val abandoned=units.poll()?:break;abandoned.close()}
+      val withinDeadline=deadlineArmed.getAndSet(false);deadline.cancel(false)
+      if(!withinDeadline)requestCancellation()
+      onStage("tts_total",(System.nanoTime()-started)/1000000)
+    }
+  }
+
+  /** Manual Android chat uses exactly the same validated PCM transport and native sink. */
+  internal fun speakExisting(id:String,messageId:String,speech:String,pcm:HandsFreePcmSink) {
+    requireUuid(id);requireUuid(messageId);requireUuid(speech)
+    check(executing.compareAndSet(false,true));activePcm=pcm
+    if(scope==null)scope=readSession()?:throw NodeNativeSession.IdentityUnavailable()
+    speechId=speech;correlationId=id
+    val body=JSONObject().put("turnId",id).put("assistantMessageId",messageId).put("speechRequestId",speech).toString().toByteArray(Charsets.UTF_8)
+    val armed=AtomicBoolean(true)
+    val deadline=ttsDeadlines.schedule({if(armed.compareAndSet(true,false))requestCancellation()},ttsDeadlineMilliseconds,TimeUnit.MILLISECONDS)
+    try {request("/api/voice/speech",body,"application/json",24000*2*180,300,pcm=pcm);checkCurrent();pcm.finish();checkCurrent()}
+    catch(error:Exception){pcm.abort();cleanupRemote();throw error}
+    finally {armed.set(false);deadline.cancel(false);body.fill(0);pcm.close();activePcm=null;executing.set(false);turnId=null;speechId=null}
+  }
+
+  private fun requireUuid(value:String) {require(UUID.fromString(value).toString()==value)}
 
   /** Immediate, nonblocking invalidation even while an older remote cleanup is queued. */
   fun requestCancellation() {
     cancelled.set(true)
     activePcm?.abort()
+    segmentDownloads.forEach{it.close()}
     // Call.cancel closes the current exchange immediately, independently of queued remote DELETEs.
-    active?.cancel()
+    realtime?.close()
+    activeCalls.forEach { it.cancel() }
   }
 
   /** Called off the UI thread. No retries; call cancellation covers STT, chat and audio downloads. */
   fun cancel() {
     requestCancellation()
-    active?.cancel()
+    realtime?.close()
+    activeCalls.forEach { it.cancel() }
     cleanupRemote()
   }
 
@@ -294,6 +519,9 @@ class NodeHandsFreeBackend internal constructor(
   companion object {
     // The controller permits one active voice turn. At most one delayed task is retained
     // for it; cancelling a completed turn removes its task immediately. No polling.
+    private val completionCleanup = java.util.concurrent.ThreadPoolExecutor(1,1,30,TimeUnit.SECONDS,
+      java.util.concurrent.ArrayBlockingQueue<Runnable>(2),{task->Thread(task,"AegisPlaybackComplete").apply{isDaemon=true}},
+      java.util.concurrent.ThreadPoolExecutor.AbortPolicy()).apply{allowCoreThreadTimeOut(true)}
     private val ttsDeadlines = ScheduledThreadPoolExecutor(1) { task ->
       Thread(task, "AegisTtsDeadline").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }

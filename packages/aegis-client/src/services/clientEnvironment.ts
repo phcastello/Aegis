@@ -7,6 +7,11 @@ export interface ClientEnvironment {
   isForeground?: () => Promise<boolean>;
   // Android arbitrates WebView recording/playback with the native assistant.
   acquireAudio?: (kind: 'capture' | 'playback') => Promise<() => Promise<void>>;
+  // Android returns only after the shared native response player drains actual samples.
+  nativeSpeech?: {
+    speak: (turnId: string, assistantMessageId: string, speechRequestId: string) => Promise<void>;
+    stop: (speechRequestId: string) => Promise<void>;
+  };
   externalLinks: 'browser' | 'system';
   openExternalUrl?: (url: string) => Promise<void>;
 }

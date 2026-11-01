@@ -45,7 +45,7 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
     private fun openDevice(context: Context, onFocusLoss: () -> Unit): HandsFreePcmDevice {
         val manager = context.getSystemService(AudioManager::class.java)
         val attributes = AudioAttributes.Builder()
-            .setUsage(if (Build.VERSION.SDK_INT >= 26) AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_MEDIA)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
         val handler = Handler(Looper.getMainLooper())
         val listener = AudioManager.OnAudioFocusChangeListener { if (it < 0) onFocusLoss() }
@@ -70,6 +70,7 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                 .setBufferSizeInBytes(maxOf(minimum, 24000)).setTransferMode(AudioTrack.MODE_STREAM).build()
             output = track; check(track.state == AudioTrack.STATE_INITIALIZED)
+            check(track.setVolume(1.0f) == AudioTrack.SUCCESS) // Shared response gain; never changes device volume.
             // Default streaming threshold is the entire capacity. Modern Android can start even
             // a short reply immediately; older releases use the smallest accepted native buffer.
             if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)
