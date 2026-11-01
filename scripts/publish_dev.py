@@ -63,6 +63,12 @@ def scope(paths):
         # AGENTS and other Markdown documentation never publish applications.
         if path.endswith(".md") and not re.match(r"^backend/src/[^/]+/Prompts/", path):
             continue
+        # The root environment template defines defaults shared by both private
+        # Compose applications. Recognize this exact path only; unknown env files
+        # remain blocked instead of bypassing dependency classification.
+        if path == ".env.example":
+            result.update(("backend", "pwa"))
+            continue
         if path.startswith("backend/") or path.startswith("docker-compose"):
             result.add("backend")
         if path.startswith("frontend/aegis-pwa/") or path.startswith("docker-compose"):

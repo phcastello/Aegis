@@ -95,6 +95,7 @@ class PublicationTests(unittest.TestCase):
     def test_component_dependency_selection(self):
         cases = [(["backend/src/Aegis.Api/A.cs"], {"backend"}),
                  (["frontend/aegis-pwa/src/App.vue"], {"pwa"}),
+                 ([".env.example"], {"backend", "pwa"}),
                  (["docs/a.md", "AGENTS.md", "README.md"], set()),
                  (["apps/aegis-node/README.md", "backend/README.md", "frontend/aegis-pwa/README.md", "packages/aegis-client/README.md"], set()),
                  (["backend/src/Aegis.Infrastructure/Prompts/agent.md"], {"backend"}),
@@ -104,6 +105,11 @@ class PublicationTests(unittest.TestCase):
         for paths, expected in cases:
             with self.subTest(paths=paths):
                 self.assertEqual(dev.scope(paths), expected)
+
+    def test_unknown_environment_files_remain_fail_closed(self):
+        for path in (".env", ".env.production", ".env.example.bak", ".env.example/runtime.conf"):
+            with self.subTest(path=path), self.assertRaisesRegex(dev.Blocked, "Unclassified"):
+                dev.scope([path])
 
     def test_unknown_dependency_blocks(self):
         with self.assertRaisesRegex(dev.Blocked, "Unclassified"):
