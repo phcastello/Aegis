@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "branch": "feat/v0.8.0-hands-free",
+  "publishedSource": "350f892442acba5e1826ee60d376935c75a4fd49",
+  "privateOperation": "20261101T003658Z-81d6cfce",
+  "native": {
+    "schema": 2,
+    "version": "0.8.0-unstable.6",
+    "versionCode": 8000006,
+    "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "verifiedAt": "2026-11-01T00:49:33.296059+00:00",
+    "releaseUrl": "https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.6",
+    "workflowUrl": "https://github.com/phcastello/Aegis/actions/runs/41257700322",
+    "workflowConclusion": "success",
+    "previousVersion": "0.8.0-unstable.5",
+    "previousVersionCode": 8000005,
+    "apkSha256": "4318cf03eb83a03822427a9456bda9e399e3abdf1e15b235556a1f196355a913",
+    "apkBytes": 27778158,
+    "certificateSha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "certificateMatchesPrevious": true,
+    "apkCryptographicSignatureVerified": true,
+    "package": "com.aegis.node",
+    "androidReleaseFlagsPassed": true,
+    "nativeArchiveGuardPassed": true,
+    "windowsSha256": "8a4a9ee0d352359beb2c0e2dffc18bc2f3a0af83f96e1f172f40dccf99d22810",
+    "windowsBytes": 6390846,
+    "windowsUpdaterSignatureVerified": true,
+    "updaterKeyAndProductIdentityUnchanged": true,
+    "bothInstallerBytesMatchFeed": true,
+    "allPublishedChecksumsPassed": true,
+    "releaseManifestBytesMatchRecommendedFeed": true,
+    "existingMetadataValidatorPassed": true,
+    "ledgerAndSourceReservationPassed": true,
+    "compatibility": {
+      "api": 1,
+      "nodeData": 1
+    },
+    "deployment": {
+      "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "pwa": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      }
+    },
+    "physicalClientInstallationOrDetection": "not performed",
+    "r8DexPipelineMarkers": {
+      "streamingSttRelay": true,
+      "localCommit": true,
+      "commitResidualMetric": true,
+      "finalSegmentsOptIn": true,
+      "finalSegmentEvent": true,
+      "authorizedSegmentSpeechRoute": true,
+      "firstSegmentMetric": true,
+      "boundedPrefetchWorker": true,
+      "sharedPlaybackPolicy": true,
+      "manualPlaybackCommand": true,
+      "manualStopCommand": true,
+      "manualPlaybackLeaseGuard": true
+    },
+    "compiledAndroidSourceCommitPresent": true,
+    "testOnlyWebSocketFixtureAbsentFromApk": true,
+    "privateWakewordModelAbsentFromApk": true,
+    "requiredWakewordAndVadJniExportsPresent": true,
+    "nativeWakewordVadLoadAlignmentAtLeast16KiB": true,
+    "legacyFeedUnchanged": true,
+    "priorLedgerReservationsPreserved": true,
+    "updaterVerifierBinarySha256": "c5198908659a52e6117819ba6633f740e59cdeea617955690126ffaebb35ce17",
+    "independentlyObservedPrivateComponents": [
+      {
+        "component": "backend",
+        "image": "sha256:d583b6278841d785bc7b3486f96ddc6ba456397571ad7c16afd3f0013c5243bf",
+        "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "state": "running"
+      },
+      {
+        "component": "pwa",
+        "image": "sha256:3d0ee01ffc2745462294ef76b8bf39fca88a0de1dff7a8a17447787ec5103e08",
+        "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "state": "running"
+      }
+    ],
+    "publicApiHealth": {
+      "httpStatus": 200,
+      "bodySha256": "382bc58a937a4759fcfd5ee035c7c80d8c452389c14078e56363c4b88b2f4fdc"
+    }
+  },
+  "effectiveProduction": {
+    "onlyEnvironmentChange": "AEGIS_CHAT_REASONING_EFFORT=low",
+    "sameMounts": true,
+    "mainModel": "gpt-6-luna",
+    "serviceTier": "auto",
+    "maxOutputTokens": "7000",
+    "detailedProfilingEnabled": false,
+    "source": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "image": "sha256:d583b6278841d785bc7b3486f96ddc6ba456397571ad7c16afd3f0013c5243bf",
+    "newImage": true,
+    "originalWorktreePreserved": true
+  },
+  "productionSmoke": {
+    "backendSource": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "backendImage": "sha256:d583b6278841d785bc7b3486f96ddc6ba456397571ad7c16afd3f0013c5243bf",
+    "physicalSpeakerMeasured": false,
+    "effectiveModel": "gpt-6-luna",
+    "effectiveReasoning": "low",
+    "effectiveTier": "auto",
+    "ttsBefore": {
+      "httpStatus": 200,
+      "x-aegis-tts-source-commit": "1749f5fb29320dced0a16add618989e36954ee7b",
+      "x-aegis-tts-dsp-variant": "stable",
+      "x-aegis-tts-runtime-variant": "stable-codec22x22-onset-conservative-v1-startup320ms"
+    },
+    "stt": {
+      "connectReadyMs": 1221.2916780263186,
+      "capturedMs": 2580.0,
+      "endpointMs": 800.185619853437,
+      "residualCommitMs": 266.0728411283344
+    },
+    "transcriptionPresent": true,
+    "firstFinalSegmentMs": 3475.340300006792,
+    "generationDoneMs": 3973.1940678320825,
+    "semanticSmokePassed": true,
+    "segments": 1,
+    "firstSignalMs": 5267.366564832628,
+    "firstPcmMs": 5267.067965818569,
+    "streamedBeforeGenerationDone": true,
+    "actualProviderPayloads": [
+      {
+        "model": "gpt-6-luna",
+        "reasoning": {
+          "effort": "low"
+        },
+        "service_tier": "auto",
+        "max_output_tokens": 7000,
+        "store": false,
+        "text": null
+      }
+    ],
+    "success": true,
+    "syntheticFixturesRemoved": true,
+    "syntheticNodeRemoved": true,
+    "ttsAfter": {
+      "httpStatus": 200,
+      "x-aegis-tts-source-commit": "1749f5fb29320dced0a16add618989e36954ee7b",
+      "x-aegis-tts-dsp-variant": "stable",
+      "x-aegis-tts-runtime-variant": "stable-codec22x22-onset-conservative-v1-startup320ms"
+    },
+    "testClassification": "deployed HTTPS/WSS functional smoke; same prior fixture, not novel-latency proof or physical playback"
+  },
+  "httpsAndApiV1": true,
+  "unauthenticatedRealtimeStatus": 401,
+  "pendingMigrations": [],
+  "databaseMigratorExecuted": false,
+  "ttsModifiedOrDeployedByThisWork": false,
+  "originalWorktreeLocalChangesPreserved": true,
+  "cleanup": {
+    "temporaryProject": "aegis_latency_f6ab6a9e0f",
+    "removedContainers": 4,
+    "removedAnonymousSyntheticVolumes": 3,
+    "removedNetwork": true,
+    "credentialComposeRemoved": true,
+    "productionVolumesPreserved": true,
+    "productionContainersUnchanged": true
+  },
+  "rollback": {
+    "executed": false,
+    "backendSource": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+    "backendImage": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+    "pwaSource": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+    "pwaImage": "sha256:caa387d38b9985a0df7d0af961125c50378c4c1737ab3936677dd5a2aa9829af",
+    "configuration": "private operation 20261101T003658Z-81d6cfce previous.compose.private.json",
+    "reasoningInRollbackConfig": "low",
+    "nativeRestoresVersion": "0.8.0-unstable.5",
+    "nativeRequiresNewMonotonicCode": true,
+    "newSegmentedClientRequiresCompatibleBackend": true
+  },
+  "goal": {
+    "physical4SecondsProven": false,
+    "serverNovelSamples": 5,
+    "serverNovelAbove4Seconds": 5,
+    "serverNovelQualityPassed": 4,
+    "knownQualityFailuresRetained": true
+  },
+  "physicalPending": [
+    "same-phone PCM volume and hardware buttons",
+    "speaker end-of-speech-to-first-phoneme latency",
+    "lock screen, return, network and Bluetooth routes",
+    "natural human short utterances/corrections/names",
+    "active-session resource/battery effect"
+  ]
+}

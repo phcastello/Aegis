@@ -1,0 +1,4788 @@
+{
+  "schema": 1,
+  "generatedAtUtc": "2026-11-01T00:54:11.292853+00:00",
+  "dateLocal": "2026-10-31",
+  "timezone": "America/Sao_Paulo",
+  "measurement": {
+    "primaryMetric": "lastInputSignalToFirstOutputSignalMs",
+    "definition": "Host monotonic time from last input PCM sample with abs(sample)>=64 to receipt of the first output PCM chunk containing abs(sample)>=64. Derived as waveform-EOF-to-first-output-signal plus measured trailing input quiet.",
+    "endpointing": "800 ms of wall time simulated AFTER input WAV EOF, plus real trailing digital quiet in the WAV. Conservative host simulation; does not execute or change the approved Android VAD. No fake PCM padding is sent.",
+    "clockDomains": "Host perf_counter durations and server Stopwatch profiles are independent local monotonic clocks. Never subtract timestamps across these domains. Server profile elapsed times restart separately for stt/chat.",
+    "responseBoundary": "The real authorized reply, including natural style, counts; activation sound and artificial waiting phrases do not. Wrong responses are retained and never count as correct performance.",
+    "physicalLimits": [
+      "No physical Android VAD, speaker, route, volume or acoustic latency measured.",
+      "Input was synthetic eSpeak or Qwen speech, not phone microphone capture.",
+      "Real-time connection setup precedes paced WAV replay in this harness; native wake/pre-roll connection overlap is not simulated.",
+      "PCM bytes are downloaded; HTTP EOF and downloaded PCM duration do not prove playback completion.",
+      "Segment HTTP fetches use one worker; this does not simulate Android native prefetch/reproduction."
+    ],
+    "doneEventTiming": "Recorded generationDoneMs is done-event RECEPTION for segmented runs or whole-reply HTTP reception for batch runs, not provider model completion. The original segmented reader could wait for a TTS future with two pending units, delaying done reception for responses with more than two units. Exported as doneReceivedMs/replyReceivedMs with a backpressure flag. Provider completion is available only in independent server_chat profile marks; no host/server clocks are subtracted.",
+    "segmentRequestTimestamps": "Measurements preceded harness fix 45988f2. Legacy requestAtMs values are QUEUED timestamps, not actual HTTP starts for subsequent units. Exported as queuedAtMs; first-unit dispatch is explicitly only an approximation.",
+    "samplePolicy": "All 60 recorded attempts are exported, including 11 HTTP failures, incorrect responses and outliers. The readiness pilot and renewed matrix are not substitutions for discarded measurements.",
+    "corpusPolicy": "No corpus utterances, transcripts, response text, personal facts, audio, provider keys, identities, private paths or raw turn/request IDs are exported. Public IDs are phase-case pseudonyms. WAV hashes establish identical input reuse without publishing audio.",
+    "cacheLimits": "The same four input cases repeat across ablation stages; their timings alone do not establish novel-request success. The final five held-out cases are separate. Provider system/input cache hits were observed and partial token usage is disclosed.",
+    "statisticPolicy": "Descriptive summaries only for small per-stage samples; all raw values, min/max, mean/median, threshold counts and quality denominators are retained. Versions are not pooled for performance inference."
+  },
+  "sources": {
+    "baselineSource": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+    "measuredPipelineCandidate": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+    "harnessRequestTimingFix": "45988f2",
+    "phaseImages": [
+      {
+        "phase": "baseline",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "low",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "demand",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "realtime",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "incremental",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "outage-qwen-baseline",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "outage-qwen-low",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "outage-qwen-demand",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "readiness-gate-check",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "qwen-baseline",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "qwen-low",
+        "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+        "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c"
+      },
+      {
+        "phase": "qwen-demand",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "qwen-realtime",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "qwen-incremental",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      },
+      {
+        "phase": "qwen-full",
+        "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+        "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6"
+      }
+    ],
+    "harnessBackpressureClockFix": "3f6c5bf",
+    "publishedRuntimeSource": "350f892442acba5e1826ee60d376935c75a4fd49"
+  },
+  "comparisonGroups": [
+    {
+      "id": "renewed_same_tts_matrix",
+      "phases": [
+        "qwen-baseline",
+        "qwen-low",
+        "qwen-demand",
+        "qwen-realtime",
+        "qwen-incremental",
+        "qwen-full"
+      ],
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "inputVoiceTts": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "sameTtsIdentityBeforeAndAfterAllSix": true,
+      "limitation": "First five stages repeat four cases; final combined stage uses five previously held-out cases, so final corpus is not a paired per-question comparison."
+    },
+    {
+      "id": "initial_cross_version_series",
+      "limitation": "Initial baseline/low used a different TTS source from demand/realtime/incremental. Cross-version change is not attributable solely to application code."
+    }
+  ],
+  "overall": {
+    "attempts": 60,
+    "timedResponses": 49,
+    "httpFailures": 11,
+    "quality": {
+      "correct": 40,
+      "transcription_failure": 2,
+      "not_observed_http_failure": 11,
+      "wrong_intent": 6,
+      "model_failure": 1
+    }
+  },
+  "finalNovelRequests": {
+    "phase": "qwen-full",
+    "count": 5,
+    "allSamplesAbove4000ms": true,
+    "goalAchieved": false,
+    "latenciesMs": [
+      5411.587142920122,
+      4004.5361161064357,
+      4180.222479073331,
+      5556.598363971338,
+      4883.683454984799
+    ],
+    "qualityCorrect": 4,
+    "qualityIncorrect": 1,
+    "incorrectCase": "qwen-full-c03",
+    "arithmeticExpected": 46,
+    "arithmeticObserved": 56
+  },
+  "phases": [
+    {
+      "id": "baseline",
+      "group": "initial_cross_version_series",
+      "inputGenerator": "espeak_ng",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "medium",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43",
+        "dspVariant": "stable"
+      },
+      "ttsAfter": {
+        "sourceCommit": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43",
+        "dspVariant": "stable"
+      },
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "TTS versions differ across this series; do not attribute cross-version differences solely to the application.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 4
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 6929.232092997059,
+          "medianMs": 9309.10412456002,
+          "meanMs": 8851.776061796118,
+          "maxMs": 9859.66390506737,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 4,
+          "minMs": 6929.232092997059,
+          "medianMs": 9309.10412456002,
+          "meanMs": 8851.776061796118,
+          "maxMs": 9859.66390506737,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "low",
+      "group": "initial_cross_version_series",
+      "inputGenerator": "espeak_ng",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43",
+        "dspVariant": "stable"
+      },
+      "ttsAfter": {
+        "sourceCommit": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43",
+        "dspVariant": "stable"
+      },
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "TTS versions differ across this series; do not attribute cross-version differences solely to the application.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 4
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 5566.372281935066,
+          "medianMs": 6466.337394508533,
+          "meanMs": 6698.886240990832,
+          "maxMs": 8296.497893011197,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 4,
+          "minMs": 5566.372281935066,
+          "medianMs": 6466.337394508533,
+          "meanMs": 6698.886240990832,
+          "maxMs": 8296.497893011197,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "demand",
+      "group": "initial_cross_version_series",
+      "inputGenerator": "espeak_ng",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsAfter": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "TTS versions differ across this series; do not attribute cross-version differences solely to the application.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 4
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 5548.776827011257,
+          "medianMs": 7049.035545448773,
+          "meanMs": 6938.659295015968,
+          "maxMs": 8107.789262155071,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 4,
+          "minMs": 5548.776827011257,
+          "medianMs": 7049.035545448773,
+          "meanMs": 6938.659295015968,
+          "maxMs": 8107.789262155071,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "realtime",
+      "group": "initial_cross_version_series",
+      "inputGenerator": "espeak_ng",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "realtime_manual_commit",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsAfter": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "TTS versions differ across this series; do not attribute cross-version differences solely to the application.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 2,
+          "transcription_failure": 2
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4674.9764999412,
+          "medianMs": 5908.806030944921,
+          "meanMs": 5730.109300448094,
+          "maxMs": 6427.848639961332,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 2,
+          "minMs": 5613.289365967736,
+          "medianMs": 6020.569002964534,
+          "meanMs": 6020.569002964534,
+          "maxMs": 6427.848639961332,
+          "above4000ms": 2,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "incremental",
+      "group": "initial_cross_version_series",
+      "inputGenerator": "espeak_ng",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "final_segments",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsAfter": {
+        "sourceCommit": "04f884045a35e354e0c86e9d68e36ae01d69f84f",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1"
+      },
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "TTS versions differ across this series; do not attribute cross-version differences solely to the application.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 4
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4424.476822096854,
+          "medianMs": 5779.899251657538,
+          "meanMs": 5711.160547607578,
+          "maxMs": 6860.366865018383,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 4,
+          "minMs": 4424.476822096854,
+          "medianMs": 5779.899251657538,
+          "meanMs": 5711.160547607578,
+          "maxMs": 6860.366865018383,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "outage-qwen-baseline",
+      "group": "outage",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "medium",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "errorType": "HTTPError"
+      },
+      "ttsAfter": {
+        "errorType": "HTTPError"
+      },
+      "ttsFingerprint": "unverified_unavailable",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "Speech readiness was unavailable; original helper did not gate these attempts before STT/chat. All attempted samples are retained.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 0,
+        "httpFailures": 4,
+        "quality": {
+          "not_observed_http_failure": 4
+        },
+        "allTimedResponses": {
+          "count": 0
+        },
+        "correctResponsesOnly": {
+          "count": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "outage-qwen-low",
+      "group": "outage",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "errorType": "HTTPError"
+      },
+      "ttsAfter": {
+        "errorType": "HTTPError"
+      },
+      "ttsFingerprint": "unverified_unavailable",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "Speech readiness was unavailable; original helper did not gate these attempts before STT/chat. All attempted samples are retained.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 0,
+        "httpFailures": 4,
+        "quality": {
+          "not_observed_http_failure": 4
+        },
+        "allTimedResponses": {
+          "count": 0
+        },
+        "correctResponsesOnly": {
+          "count": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "outage-qwen-demand",
+      "group": "outage",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "errorType": "HTTPError"
+      },
+      "ttsAfter": {
+        "errorType": "HTTPError"
+      },
+      "ttsFingerprint": "unverified_unavailable",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "Speech readiness was unavailable; original helper did not gate these attempts before STT/chat. All attempted samples are retained.",
+      "summary": {
+        "attempts": 3,
+        "completedAudioTransfers": 0,
+        "httpFailures": 3,
+        "quality": {
+          "not_observed_http_failure": 3
+        },
+        "allTimedResponses": {
+          "count": 0
+        },
+        "correctResponsesOnly": {
+          "count": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "readiness-gate-check",
+      "group": "readiness_pilot",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "comparisonCaveat": "Pilot ran after speech-service recovery and is retained; it is outside the renewed comparison matrix.",
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4581.186754994094,
+          "medianMs": 5038.054625587538,
+          "meanMs": 5516.1172897443175,
+          "maxMs": 7407.1731528081,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 4914.812933057547,
+          "medianMs": 5161.296318117529,
+          "meanMs": 5827.760801327725,
+          "maxMs": 7407.1731528081,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-baseline",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "medium",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 5698.996592182666,
+          "medianMs": 7091.599238534458,
+          "meanMs": 7291.089822561946,
+          "maxMs": 9282.164220996201,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 5698.996592182666,
+          "medianMs": 7259.757318096235,
+          "meanMs": 7413.639377091701,
+          "maxMs": 9282.164220996201,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-low",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "image": "sha256:24349fcc66ae0125dc760cf7d059de968622ecbebacce4dada91e6481db7347c",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "mandatory_prefetch",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 5056.267581982538,
+          "medianMs": 6235.1769074667245,
+          "meanMs": 6516.4051889679395,
+          "maxMs": 8538.99935895577,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 5056.267581982538,
+          "medianMs": 6730.356028098613,
+          "meanMs": 6775.20765634564,
+          "maxMs": 8538.99935895577,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-demand",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4717.196320984513,
+          "medianMs": 5661.651776950806,
+          "meanMs": 5768.1814907356165,
+          "maxMs": 7032.226088056341,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 4717.196320984513,
+          "medianMs": 6200.160039849579,
+          "meanMs": 5983.194149630144,
+          "maxMs": 7032.226088056341,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-realtime",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "realtime_manual_commit",
+      "speechMode": "whole_reply",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4707.168947076425,
+          "medianMs": 5321.968820976093,
+          "meanMs": 5377.859907015692,
+          "maxMs": 6160.333039034158,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 4707.168947076425,
+          "medianMs": 5762.281129900366,
+          "meanMs": 5543.261038670316,
+          "maxMs": 6160.333039034158,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-incremental",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "batch",
+      "speechMode": "final_segments",
+      "casesReusedAcrossStages": true,
+      "heldOutNewRequests": false,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 4,
+        "completedAudioTransfers": 4,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 3,
+          "wrong_intent": 1
+        },
+        "allTimedResponses": {
+          "count": 4,
+          "minMs": 4127.0599820278585,
+          "medianMs": 5494.276191071607,
+          "meanMs": 5695.8771198061295,
+          "maxMs": 7667.896115053445,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 3,
+          "minMs": 4127.0599820278585,
+          "medianMs": 5997.737641008571,
+          "meanMs": 5930.897912696625,
+          "maxMs": 7667.896115053445,
+          "above4000ms": 3,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    },
+    {
+      "id": "qwen-full",
+      "group": "renewed_same_tts_matrix",
+      "inputGenerator": "qwen_tts",
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "image": "sha256:dfe84065eda23c1b118f9734171f77641aa19d885fdaa24ff14e58e2fb4ba5b6",
+      "model": "gpt-6-luna",
+      "reasoning": "low",
+      "serviceTier": "auto",
+      "maxOutputTokens": 7000,
+      "verbosityOverride": null,
+      "semanticMemoryPolicy": "model_tool_on_demand",
+      "sttMode": "realtime_manual_commit",
+      "speechMode": "final_segments",
+      "casesReusedAcrossStages": false,
+      "heldOutNewRequests": true,
+      "ttsBefore": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsAfter": {
+        "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+        "dspVariant": "stable",
+        "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+        "httpStatus": 200
+      },
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "ttsIdentityStableWithinRun": true,
+      "conditions": {
+        "hostSimulation": true,
+        "endpointSimulatedAfterWavEofMs": 800,
+        "physicalDevice": false,
+        "speakerAcousticsMeasured": false,
+        "androidVadExecuted": false,
+        "androidPrefetchSimulated": false,
+        "ttsHttpWorkers": 1,
+        "inputPcm": "signed16le mono 16000Hz",
+        "outputPcm": "signed16le mono 24000Hz"
+      },
+      "summary": {
+        "attempts": 5,
+        "completedAudioTransfers": 5,
+        "httpFailures": 0,
+        "quality": {
+          "correct": 4,
+          "model_failure": 1
+        },
+        "allTimedResponses": {
+          "count": 5,
+          "minMs": 4004.5361161064357,
+          "medianMs": 4883.683454984799,
+          "meanMs": 4807.325511411205,
+          "maxMs": 5556.598363971338,
+          "above4000ms": 5,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctResponsesOnly": {
+          "count": 4,
+          "minMs": 4004.5361161064357,
+          "medianMs": 5147.63529895246,
+          "meanMs": 4964.1012694956735,
+          "maxMs": 5556.598363971338,
+          "above4000ms": 4,
+          "above4000msFraction": 1.0,
+          "below4000ms": 0
+        },
+        "correctAndBelow4000ms": 0
+      }
+    }
+  ],
+  "samples": [
+    {
+      "id": "baseline-a01",
+      "phase": "baseline",
+      "case": "a01",
+      "fixtureSha256": "9a71f7399954ccca1055c213eed4565004bea7fe0d40dd7a08cfa85e4bdbfe58",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2630.0,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 2176.112388027832,
+        "ttsRequestAtMs": 7253.429661039263,
+        "firstSignalMs": 9527.72640506737,
+        "totalMs": 10840.019542025402,
+        "replyReceivedMs": 7253.425361122936
+      },
+      "lastInputSignalToFirstOutputSignalMs": 9859.66390506737,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 805.9163962025195,
+        "residualCommitMs": 1370.1921917963773
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 9526.665708050132,
+        "firstPcmMs": 9526.665708050132,
+        "firstSignalMs": 9527.72640506737,
+        "totalMs": 10839.980942197144,
+        "bytes": 203040,
+        "chunks": 54,
+        "peakPcm16": 17692,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 4230.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1137.8538962025195,
+        "sttFinalToDoneOrReplyReceivedMs": 5077.312973095104,
+        "firstTtsQueuedToFirstPcmMs": 2273.236047010869,
+        "firstPcmToFirstNonSilentChunkMs": 1.060697017237544
+      },
+      "serverProfileRows": 0
+    },
+    {
+      "id": "baseline-a02",
+      "phase": "baseline",
+      "case": "a02",
+      "fixtureSha256": "ae51e7ae283e6dce5529c035c1be6c2302d22c6bac336543f039770702e1a9ea",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2344.875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1227.0787488669157,
+        "ttsRequestAtMs": 4219.419906847179,
+        "firstSignalMs": 6597.294592997059,
+        "totalMs": 7491.2474697921425,
+        "replyReceivedMs": 4219.415606930852
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6929.232092997059,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.0953099690378,
+        "residualCommitMs": 426.9811389967799
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6596.907093888149,
+        "firstPcmMs": 6596.907093888149,
+        "firstSignalMs": 6597.294592997059,
+        "totalMs": 7491.223969962448,
+        "bytes": 160320,
+        "chunks": 46,
+        "peakPcm16": 15777,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3340.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0328099690378,
+        "sttFinalToDoneOrReplyReceivedMs": 2992.3368580639362,
+        "firstTtsQueuedToFirstPcmMs": 2377.4871870409697,
+        "firstPcmToFirstNonSilentChunkMs": 0.3874991089105606
+      },
+      "serverProfileRows": 0
+    },
+    {
+      "id": "baseline-a03",
+      "phase": "baseline",
+      "case": "a03",
+      "fixtureSha256": "c4d65a880f8d3a79978b0b82401b573cdc9c6fc4b8b78bb9daba3514cfd0c455",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 3480.875,
+      "trailingDigitalQuietMs": 332.0,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1416.3766771089286,
+        "ttsRequestAtMs": 4812.34463211149,
+        "firstSignalMs": 8537.272868212312,
+        "totalMs": 9154.577833134681,
+        "replyReceivedMs": 4812.3409321997315
+      },
+      "lastInputSignalToFirstOutputSignalMs": 8869.272868212312,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.791708054021,
+        "residualCommitMs": 615.5808691401035
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6444.661772111431,
+        "firstPcmMs": 6444.661772111431,
+        "firstSignalMs": 8537.272868212312,
+        "totalMs": 9154.55813310109,
+        "bytes": 302400,
+        "chunks": 85,
+        "peakPcm16": 17720,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 6300.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.791708054021,
+        "sttFinalToDoneOrReplyReceivedMs": 3395.964255090803,
+        "firstTtsQueuedToFirstPcmMs": 1632.317139999941,
+        "firstPcmToFirstNonSilentChunkMs": 2092.6110961008817
+      },
+      "serverProfileRows": 0
+    },
+    {
+      "id": "baseline-a04",
+      "phase": "baseline",
+      "case": "a04",
+      "fixtureSha256": "60d9299a2d0440e536dc126623df5b5b4528c06cc974ceab86c548f570800981",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2702.1875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1825.8483598474413,
+        "ttsRequestAtMs": 5877.6841829530895,
+        "firstSignalMs": 9416.99788090773,
+        "totalMs": 10867.250374983996,
+        "replyReceivedMs": 5877.681182930246
+      },
+      "lastInputSignalToFirstOutputSignalMs": 9748.93538090773,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.1929100137204,
+        "residualCommitMs": 1025.6525499280542
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 9396.09883283265,
+        "firstPcmMs": 9396.09883283265,
+        "firstSignalMs": 9416.99788090773,
+        "totalMs": 10867.222575005144,
+        "bytes": 195840,
+        "chunks": 52,
+        "peakPcm16": 17504,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 4080.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.1304100137204,
+        "sttFinalToDoneOrReplyReceivedMs": 4051.8328230828047,
+        "firstTtsQueuedToFirstPcmMs": 3518.41464987956,
+        "firstPcmToFirstNonSilentChunkMs": 20.899048075079918
+      },
+      "serverProfileRows": 0
+    },
+    {
+      "id": "low-a01",
+      "phase": "low",
+      "case": "a01",
+      "fixtureSha256": "9a71f7399954ccca1055c213eed4565004bea7fe0d40dd7a08cfa85e4bdbfe58",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2630.0,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 2247.8388098534197,
+        "ttsRequestAtMs": 6226.830314844847,
+        "firstSignalMs": 7964.560393011197,
+        "totalMs": 9614.416289841756,
+        "replyReceivedMs": 6226.824614917859
+      },
+      "lastInputSignalToFirstOutputSignalMs": 8296.497893011197,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.1024108380079,
+        "residualCommitMs": 1447.7250990457833
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 7961.658900836483,
+        "firstPcmMs": 7961.658900836483,
+        "firstSignalMs": 7964.560393011197,
+        "totalMs": 9614.386789966375,
+        "bytes": 233760,
+        "chunks": 65,
+        "peakPcm16": 18022,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 4870.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.039910838008,
+        "sttFinalToDoneOrReplyReceivedMs": 3978.98580506444,
+        "firstTtsQueuedToFirstPcmMs": 1734.828585991636,
+        "firstPcmToFirstNonSilentChunkMs": 2.9014921747148037
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "low-a02",
+      "phase": "low",
+      "case": "a02",
+      "fixtureSha256": "ae51e7ae283e6dce5529c035c1be6c2302d22c6bac336543f039770702e1a9ea",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2344.875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1364.4111058674753,
+        "ttsRequestAtMs": 3642.2191420570016,
+        "firstSignalMs": 5394.209984922782,
+        "totalMs": 7186.115327989683,
+        "replyReceivedMs": 3642.214542021975
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5726.147484922782,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.1239099539816,
+        "residualCommitMs": 564.2839958891273
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5393.90978589654,
+        "firstPcmMs": 5393.90978589654,
+        "firstSignalMs": 5394.209984922782,
+        "totalMs": 7186.077028978616,
+        "bytes": 248160,
+        "chunks": 76,
+        "peakPcm16": 14662,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 5170.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0614099539816,
+        "sttFinalToDoneOrReplyReceivedMs": 2277.8034361544997,
+        "firstTtsQueuedToFirstPcmMs": 1751.690643839538,
+        "firstPcmToFirstNonSilentChunkMs": 0.30019902624189854
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "low-a03",
+      "phase": "low",
+      "case": "a03",
+      "fixtureSha256": "c4d65a880f8d3a79978b0b82401b573cdc9c6fc4b8b78bb9daba3514cfd0c455",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 3480.875,
+      "trailingDigitalQuietMs": 332.0,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1398.9468209911138,
+        "ttsRequestAtMs": 3507.3373769409955,
+        "firstSignalMs": 5234.372281935066,
+        "totalMs": 6203.20057310164,
+        "replyReceivedMs": 3507.333976915106
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5566.372281935066,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.1672099344432,
+        "residualCommitMs": 598.7765111494809
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5233.18458488211,
+        "firstPcmMs": 5233.18458488211,
+        "firstSignalMs": 5234.372281935066,
+        "totalMs": 6203.181772958487,
+        "bytes": 168000,
+        "chunks": 46,
+        "peakPcm16": 25829,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3500.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.1672099344432,
+        "sttFinalToDoneOrReplyReceivedMs": 2108.3871559239924,
+        "firstTtsQueuedToFirstPcmMs": 1725.847207941115,
+        "firstPcmToFirstNonSilentChunkMs": 1.1876970529556274
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "low-a04",
+      "phase": "low",
+      "case": "a04",
+      "fixtureSha256": "60d9299a2d0440e536dc126623df5b5b4528c06cc974ceab86c548f570800981",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2702.1875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "ba1beb9eff78eedf1df1b71ceb94b8539bccad43|stable|not_exposed",
+      "hostTiming": {
+        "sttFinalAtMs": 1359.8303189501166,
+        "ttsRequestAtMs": 5156.117477919906,
+        "firstSignalMs": 6874.589804094285,
+        "totalMs": 7376.681555062532,
+        "replyReceivedMs": 5156.112477881834
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7206.527304094285,
+      "lastInputSignalMetricDerivedFromWaveformHash": true,
+      "stt": {
+        "endpointMs": 800.0964110251516,
+        "residualCommitMs": 559.7312080208212
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6873.418706934899,
+        "firstPcmMs": 6873.418706934899,
+        "firstSignalMs": 6874.589804094285,
+        "totalMs": 7376.666154945269,
+        "bytes": 141600,
+        "chunks": 39,
+        "peakPcm16": 15342,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2950.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0339110251516,
+        "sttFinalToDoneOrReplyReceivedMs": 3796.2821589317173,
+        "firstTtsQueuedToFirstPcmMs": 1717.3012290149927,
+        "firstPcmToFirstNonSilentChunkMs": 1.1710971593856812
+      },
+      "serverProfileRows": 48
+    },
+    {
+      "id": "demand-a01",
+      "phase": "demand",
+      "case": "a01",
+      "fixtureSha256": "9a71f7399954ccca1055c213eed4565004bea7fe0d40dd7a08cfa85e4bdbfe58",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2630.0,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 2536.855091108009,
+        "ttsRequestAtMs": 5484.49886101298,
+        "firstSignalMs": 7775.851762155071,
+        "totalMs": 7779.46045412682,
+        "replyReceivedMs": 5484.49436109513
+      },
+      "lastInputSignalToFirstOutputSignalMs": 8107.789262155071,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1821101643145,
+        "residualCommitMs": 1736.6695809178054
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 7775.6493631750345,
+        "firstPcmMs": 7775.6493631750345,
+        "firstSignalMs": 7775.851762155071,
+        "totalMs": 7779.44075409323,
+        "bytes": 54720,
+        "chunks": 15,
+        "peakPcm16": 16045,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 1140.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.1196101643145,
+        "sttFinalToDoneOrReplyReceivedMs": 2947.639269987121,
+        "firstTtsQueuedToFirstPcmMs": 2291.150502162054,
+        "firstPcmToFirstNonSilentChunkMs": 0.2023989800363779
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "demand-a02",
+      "phase": "demand",
+      "case": "a02",
+      "fixtureSha256": "ae51e7ae283e6dce5529c035c1be6c2302d22c6bac336543f039770702e1a9ea",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2344.875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1277.5944229215384,
+        "ttsRequestAtMs": 3150.3846659325063,
+        "firstSignalMs": 5216.839327011257,
+        "totalMs": 6264.492220943794,
+        "replyReceivedMs": 3150.3782658837736
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5548.776827011257,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.0997109338641,
+        "residualCommitMs": 477.49251197092235
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5216.472828062251,
+        "firstPcmMs": 5216.472828062251,
+        "firstSignalMs": 5216.839327011257,
+        "totalMs": 6264.425321016461,
+        "bytes": 168000,
+        "chunks": 45,
+        "peakPcm16": 15990,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3500.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0372109338641,
+        "sttFinalToDoneOrReplyReceivedMs": 1872.7838429622352,
+        "firstTtsQueuedToFirstPcmMs": 2066.088162129745,
+        "firstPcmToFirstNonSilentChunkMs": 0.36649894900619984
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "demand-a03",
+      "phase": "demand",
+      "case": "a03",
+      "fixtureSha256": "c4d65a880f8d3a79978b0b82401b573cdc9c6fc4b8b78bb9daba3514cfd0c455",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 3480.875,
+      "trailingDigitalQuietMs": 332.0,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1276.938724797219,
+        "ttsRequestAtMs": 3001.2619358021766,
+        "firstSignalMs": 5932.78814596124,
+        "totalMs": 7090.1871679816395,
+        "replyReceivedMs": 3001.2573359999806
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6264.78814596124,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1748099923134,
+        "residualCommitMs": 476.7603150103241
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5932.341846870258,
+        "firstPcmMs": 5932.341846870258,
+        "firstSignalMs": 5932.78814596124,
+        "totalMs": 7090.161368018016,
+        "bytes": 138720,
+        "chunks": 39,
+        "peakPcm16": 21357,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2890.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.1748099923134,
+        "sttFinalToDoneOrReplyReceivedMs": 1724.3186112027615,
+        "firstTtsQueuedToFirstPcmMs": 2931.079911068082,
+        "firstPcmToFirstNonSilentChunkMs": 0.44629909098148346
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "demand-a04",
+      "phase": "demand",
+      "case": "a04",
+      "fixtureSha256": "60d9299a2d0440e536dc126623df5b5b4528c06cc974ceab86c548f570800981",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2702.1875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1221.2456630077213,
+        "ttsRequestAtMs": 4890.151439001784,
+        "firstSignalMs": 7501.345444936305,
+        "totalMs": 8203.039299929515,
+        "replyReceivedMs": 4890.146539080888
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7833.282944936305,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1230109948665,
+        "residualCommitMs": 421.11895186826587
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 7501.139346044511,
+        "firstPcmMs": 7501.139346044511,
+        "firstSignalMs": 7501.345444936305,
+        "totalMs": 8203.00369989127,
+        "bytes": 117600,
+        "chunks": 36,
+        "peakPcm16": 15341,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2450.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0605109948665,
+        "sttFinalToDoneOrReplyReceivedMs": 3668.9008760731667,
+        "firstTtsQueuedToFirstPcmMs": 2610.987907042727,
+        "firstPcmToFirstNonSilentChunkMs": 0.20609889179468155
+      },
+      "serverProfileRows": 40
+    },
+    {
+      "id": "realtime-a01",
+      "phase": "realtime",
+      "case": "a01",
+      "fixtureSha256": "9a71f7399954ccca1055c213eed4565004bea7fe0d40dd7a08cfa85e4bdbfe58",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2630.0,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1026.822746032849,
+        "ttsRequestAtMs": 3816.689708037302,
+        "firstSignalMs": 5281.351865967736,
+        "totalMs": 6535.522547084838,
+        "replyReceivedMs": 3816.6866081301123
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5613.289365967736,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 385.39894204586744,
+        "capturedMs": 2630.0,
+        "endpointMs": 800.6002090405673,
+        "residualCommitMs": 218.97175605408847
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5281.208866043016,
+        "firstPcmMs": 5281.208866043016,
+        "firstSignalMs": 5281.351865967736,
+        "totalMs": 6535.486347042024,
+        "bytes": 156480,
+        "chunks": 43,
+        "peakPcm16": 15394,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3260.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.5377090405673,
+        "sttFinalToDoneOrReplyReceivedMs": 2789.8638620972633,
+        "firstTtsQueuedToFirstPcmMs": 1464.5191580057144,
+        "firstPcmToFirstNonSilentChunkMs": 0.14299992471933365
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "realtime-a02",
+      "phase": "realtime",
+      "case": "a02",
+      "fixtureSha256": "ae51e7ae283e6dce5529c035c1be6c2302d22c6bac336543f039770702e1a9ea",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2344.875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1010.6071869377047,
+        "ttsRequestAtMs": 2975.9265000466257,
+        "firstSignalMs": 4343.0389999412,
+        "totalMs": 5872.469595866278,
+        "replyReceivedMs": 2975.9229000192136
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4674.9764999412,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 250.52247708663344,
+        "capturedMs": 2344.875,
+        "endpointMs": 800.3379099536687,
+        "residualCommitMs": 207.30068488046527
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "transcription_failure",
+        "reason": "Transcri\u00e7\u00e3o inintelig\u00edvel impediu atender o pedido; o modelo solicitou repeti\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "transcription_failed_on_synthetic_input",
+        "modelHandledUnintelligibleInputSafely": true,
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4342.706400901079,
+        "firstPcmMs": 4342.706400901079,
+        "firstSignalMs": 4343.0389999412,
+        "totalMs": 5872.412896016613,
+        "bytes": 176640,
+        "chunks": 51,
+        "peakPcm16": 12531,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3680.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.2754099536687,
+        "sttFinalToDoneOrReplyReceivedMs": 1965.3157130815089,
+        "firstTtsQueuedToFirstPcmMs": 1366.7799008544534,
+        "firstPcmToFirstNonSilentChunkMs": 0.3325990401208401
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "realtime-a03",
+      "phase": "realtime",
+      "case": "a03",
+      "fixtureSha256": "c4d65a880f8d3a79978b0b82401b573cdc9c6fc4b8b78bb9daba3514cfd0c455",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 3480.875,
+      "trailingDigitalQuietMs": 332.0,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 984.2863520607352,
+        "ttsRequestAtMs": 2821.9986821059138,
+        "firstSignalMs": 6095.848639961332,
+        "totalMs": 9957.902834983543,
+        "replyReceivedMs": 2821.9959819689393
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6427.848639961332,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 258.2793580368161,
+        "capturedMs": 3480.875,
+        "endpointMs": 800.0893101561815,
+        "residualCommitMs": 183.97074285894632
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "transcriptionFidelity": "final_intent_preserved_but_discarded_operand_changed",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5208.431647159159,
+        "firstPcmMs": 5208.431647159159,
+        "firstSignalMs": 6095.848639961332,
+        "totalMs": 9957.883536117151,
+        "bytes": 588960,
+        "chunks": 161,
+        "peakPcm16": 22405,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 12270.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0893101561815,
+        "sttFinalToDoneOrReplyReceivedMs": 1837.709629908204,
+        "firstTtsQueuedToFirstPcmMs": 2386.4329650532454,
+        "firstPcmToFirstNonSilentChunkMs": 887.4169928021729
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "realtime-a04",
+      "phase": "realtime",
+      "case": "a04",
+      "fixtureSha256": "60d9299a2d0440e536dc126623df5b5b4528c06cc974ceab86c548f570800981",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2702.1875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1039.6121151279658,
+        "ttsRequestAtMs": 3666.3795821368694,
+        "firstSignalMs": 5872.3851959221065,
+        "totalMs": 12999.583372147754,
+        "replyReceivedMs": 3666.376582114026
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6204.3226959221065,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 253.5991701297462,
+        "capturedMs": 2702.1875,
+        "endpointMs": 800.0971111468971,
+        "residualCommitMs": 236.3075118046254
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "transcription_failure",
+        "reason": "Transcri\u00e7\u00e3o inintelig\u00edvel impediu atender o pedido; o modelo solicitou repeti\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "transcription_failed_on_synthetic_input",
+        "modelHandledUnintelligibleInputSafely": true,
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5872.196096926928,
+        "firstPcmMs": 5872.196096926928,
+        "firstSignalMs": 5872.3851959221065,
+        "totalMs": 12999.53817203641,
+        "bytes": 351840,
+        "chunks": 96,
+        "peakPcm16": 18952,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 7330.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.034611146897,
+        "sttFinalToDoneOrReplyReceivedMs": 2626.76446698606,
+        "firstTtsQueuedToFirstPcmMs": 2205.816514790058,
+        "firstPcmToFirstNonSilentChunkMs": 0.1890989951789379
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "incremental-a01",
+      "phase": "incremental",
+      "case": "a01",
+      "fixtureSha256": "9a71f7399954ccca1055c213eed4565004bea7fe0d40dd7a08cfa85e4bdbfe58",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2630.0,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 2209.132506046444,
+        "firstFinalSegmentMs": 5033.696481958032,
+        "firstSignalMs": 6528.429365018383,
+        "totalMs": 7844.624092103913,
+        "doneReceivedMs": 5496.767729986459
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6860.366865018383,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1020110677928,
+        "residualCommitMs": 1409.027195069939
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 5033.765182131901,
+          "audio": {
+            "firstByteMs": 6528.222864959389,
+            "firstPcmMs": 6528.222864959389,
+            "firstSignalMs": 6528.429365018383,
+            "totalMs": 7844.291992019862,
+            "bytes": 165600,
+            "chunks": 50,
+            "peakPcm16": 22288,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 5033.765182131901,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1494.4576828274876,
+          "queuedToFirstSignalMs": 1494.6641828864813
+        }
+      ],
+      "outputPcmDurationMs": 3450.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.0395110677928,
+        "sttFinalToDoneOrReplyReceivedMs": 3287.635223940015,
+        "firstTtsQueuedToFirstPcmMs": 1494.4576828274876,
+        "firstPcmToFirstNonSilentChunkMs": 0.20650005899369717
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2702.289,
+        "finalModelResponseCompleteElapsedMs": 2917.037,
+        "chatExitElapsedMs": 3165.879,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "incremental-a02",
+      "phase": "incremental",
+      "case": "a02",
+      "fixtureSha256": "ae51e7ae283e6dce5529c035c1be6c2302d22c6bac336543f039770702e1a9ea",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2344.875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1303.5045580472797,
+        "firstFinalSegmentMs": 2706.0108699370176,
+        "firstSignalMs": 4092.5393220968544,
+        "totalMs": 5386.467104079202,
+        "doneReceivedMs": 2985.558675136417
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4424.476822096854,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.8611081168056,
+        "residualCommitMs": 502.6408499106765
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2706.06597000733,
+          "audio": {
+            "firstByteMs": 4092.327622929588,
+            "firstPcmMs": 4092.327622929588,
+            "firstSignalMs": 4092.5393220968544,
+            "totalMs": 5383.868711069226,
+            "bytes": 182400,
+            "chunks": 57,
+            "peakPcm16": 14599,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2706.06597000733,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1386.2616529222578,
+          "queuedToFirstSignalMs": 1386.4733520895243
+        }
+      ],
+      "outputPcmDurationMs": 3800.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.7986081168056,
+        "sttFinalToDoneOrReplyReceivedMs": 1682.0541170891374,
+        "firstTtsQueuedToFirstPcmMs": 1386.2616529222578,
+        "firstPcmToFirstNonSilentChunkMs": 0.21169916726648808
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1350.667,
+        "finalModelResponseCompleteElapsedMs": 1500.286,
+        "chatExitElapsedMs": 1620.959,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "incremental-a03",
+      "phase": "incremental",
+      "case": "a03",
+      "fixtureSha256": "c4d65a880f8d3a79978b0b82401b573cdc9c6fc4b8b78bb9daba3514cfd0c455",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 3480.875,
+      "trailingDigitalQuietMs": 332.0,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1370.2056920155883,
+        "firstFinalSegmentMs": 2636.238244129345,
+        "firstSignalMs": 5736.7746331728995,
+        "totalMs": 9550.772448070347,
+        "doneReceivedMs": 2870.6463610287756
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6068.7746331728995,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1069100573659,
+        "residualCommitMs": 570.0961819384247
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2636.296543991193,
+          "audio": {
+            "firstByteMs": 4836.066573159769,
+            "firstPcmMs": 4836.066573159769,
+            "firstSignalMs": 5736.7746331728995,
+            "totalMs": 9550.14655017294,
+            "bytes": 588960,
+            "chunks": 174,
+            "peakPcm16": 22405,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2636.296543991193,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 2199.770029168576,
+          "queuedToFirstSignalMs": 3100.4780891817063
+        }
+      ],
+      "outputPcmDurationMs": 12270.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1132.106910057366,
+        "sttFinalToDoneOrReplyReceivedMs": 1500.4406690131873,
+        "firstTtsQueuedToFirstPcmMs": 2199.770029168576,
+        "firstPcmToFirstNonSilentChunkMs": 900.7080600131303
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1179.507,
+        "finalModelResponseCompleteElapsedMs": 1365.453,
+        "chatExitElapsedMs": 1411.791,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "incremental-a04",
+      "phase": "incremental",
+      "case": "a04",
+      "fixtureSha256": "60d9299a2d0440e536dc126623df5b5b4528c06cc974ceab86c548f570800981",
+      "inputGenerator": "espeak_ng",
+      "inputDurationMs": 2702.1875,
+      "trailingDigitalQuietMs": 331.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "04f884045a35e354e0c86e9d68e36ae01d69f84f|stable|stable-codec22x22-onset-conservative-v1",
+      "hostTiming": {
+        "sttFinalAtMs": 1373.8364831078798,
+        "firstFinalSegmentMs": 3763.411041116342,
+        "firstSignalMs": 5159.086370142177,
+        "totalMs": 6177.402937086299,
+        "doneReceivedMs": 4046.6696361545473
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5491.023870142177,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 801.5418071299791,
+        "residualCommitMs": 572.2916759550571
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 3763.4687412064523,
+          "audio": {
+            "firstByteMs": 5158.883569994941,
+            "firstPcmMs": 5158.883569994941,
+            "firstSignalMs": 5159.086370142177,
+            "totalMs": 6177.094537997618,
+            "bytes": 140640,
+            "chunks": 44,
+            "peakPcm16": 14674,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 3763.4687412064523,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1395.414828788489,
+          "queuedToFirstSignalMs": 1395.6176289357245
+        }
+      ],
+      "outputPcmDurationMs": 2930.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1133.4793071299791,
+        "sttFinalToDoneOrReplyReceivedMs": 2672.8331530466676,
+        "firstTtsQueuedToFirstPcmMs": 1395.414828788489,
+        "firstPcmToFirstNonSilentChunkMs": 0.20280014723539352
+      },
+      "serverProfileRows": 41,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2383.563,
+        "finalModelResponseCompleteElapsedMs": 2552.366,
+        "chatExitElapsedMs": 2666.042,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "outage-qwen-baseline-a01",
+      "phase": "outage-qwen-baseline",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 2572.448403108865,
+        "replyReceivedMs": 7625.12563704513
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.127109978348,
+        "residualCommitMs": 1772.3170930985361
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-baseline-a02",
+      "phase": "outage-qwen-baseline",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1422.0240639988333,
+        "replyReceivedMs": 4678.485865006223
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1476100180298,
+        "residualCommitMs": 621.8718539457768
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-baseline-a03",
+      "phase": "outage-qwen-baseline",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1387.2792499605566,
+        "replyReceivedMs": 4097.93440811336
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1225099433213,
+        "residualCommitMs": 587.1523399837315
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-baseline-a04",
+      "phase": "outage-qwen-baseline",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1429.9902440980077,
+        "replyReceivedMs": 5259.849218884483
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1324099022895,
+        "residualCommitMs": 629.8541340511292
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 48
+    },
+    {
+      "id": "outage-qwen-low-a01",
+      "phase": "outage-qwen-low",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 2301.7073760274798,
+        "replyReceivedMs": 5870.4097010195255
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 801.6679070424289,
+        "residualCommitMs": 1500.0361690763384
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-low-a02",
+      "phase": "outage-qwen-low",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1247.2403978463262,
+        "replyReceivedMs": 4359.3052588403225
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1287099905312,
+        "residualCommitMs": 447.1083879470825
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-low-a03",
+      "phase": "outage-qwen-low",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1280.199616914615,
+        "replyReceivedMs": 4337.389413965866
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1573099754751,
+        "residualCommitMs": 480.0387069117278
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 41
+    },
+    {
+      "id": "outage-qwen-low-a04",
+      "phase": "outage-qwen-low",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1236.6059250198305,
+        "replyReceivedMs": 4446.597542148083
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.148910144344,
+        "residualCommitMs": 436.4531149622053
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 48
+    },
+    {
+      "id": "outage-qwen-demand-a01",
+      "phase": "outage-qwen-demand",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 2247.0988389104605,
+        "replyReceivedMs": 5070.702651981264
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1722199842334,
+        "residualCommitMs": 1446.9232189003378
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 33
+    },
+    {
+      "id": "outage-qwen-demand-a02",
+      "phase": "outage-qwen-demand",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1277.3160389624536,
+        "replyReceivedMs": 2923.077467130497
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.0867201481014,
+        "residualCommitMs": 477.22741891629994
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 33
+    },
+    {
+      "id": "outage-qwen-demand-a03",
+      "phase": "outage-qwen-demand",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "unverified_unavailable",
+      "hostTiming": {
+        "sttFinalAtMs": 1325.4895200952888,
+        "replyReceivedMs": 3069.451204035431
+      },
+      "lastInputSignalToFirstOutputSignalMs": null,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1019200310111,
+        "residualCommitMs": 525.3846000414342
+      },
+      "quality": {
+        "basis": "transfer_failure_no_retained_reply",
+        "status": "not_observed_http_failure",
+        "reason": "Falha HTTP durante indisponibilidade da fala; resposta final n\u00e3o retida para avalia\u00e7\u00e3o.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": false,
+      "above4000ms": null,
+      "correctAndBelow4000ms": false,
+      "errorType": "HTTPError",
+      "serverProfileRows": 33
+    },
+    {
+      "id": "readiness-gate-check-a01",
+      "phase": "readiness-gate-check",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1215.6861920375377,
+        "ttsRequestAtMs": 2946.620408212766,
+        "firstSignalMs": 4801.608818117529,
+        "totalMs": 5899.67070100829,
+        "replyReceivedMs": 2946.612808154896
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5161.296318117529,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1520200632513,
+        "residualCommitMs": 415.53007205948234
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4801.305719185621,
+        "firstPcmMs": 4801.305719185621,
+        "firstSignalMs": 4801.608818117529,
+        "totalMs": 5899.6372011024505,
+        "bytes": 180960,
+        "chunks": 50,
+        "peakPcm16": 16552,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3770.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.8395200632513,
+        "sttFinalToDoneOrReplyReceivedMs": 1730.9266161173582,
+        "firstTtsQueuedToFirstPcmMs": 1854.6853109728545,
+        "firstPcmToFirstNonSilentChunkMs": 0.3030989319086075
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "readiness-gate-check-a02",
+      "phase": "readiness-gate-check",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1212.447099853307,
+        "ttsRequestAtMs": 3139.2866319511086,
+        "firstSignalMs": 4876.375433057547,
+        "totalMs": 5273.609449854121,
+        "replyReceivedMs": 3139.277531998232
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4914.812933057547,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1721198670566,
+        "residualCommitMs": 412.2705801855773
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4876.0842338670045,
+        "firstPcmMs": 4876.0842338670045,
+        "firstSignalMs": 4876.375433057547,
+        "totalMs": 5273.568250006065,
+        "bytes": 149280,
+        "chunks": 43,
+        "peakPcm16": 15028,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3110.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 838.6096198670566,
+        "sttFinalToDoneOrReplyReceivedMs": 1926.830432144925,
+        "firstTtsQueuedToFirstPcmMs": 1736.797601915896,
+        "firstPcmToFirstNonSilentChunkMs": 0.29119919054210186
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "readiness-gate-check-a03",
+      "phase": "readiness-gate-check",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1263.855071971193,
+        "ttsRequestAtMs": 2680.152866989374,
+        "firstSignalMs": 4341.936754994094,
+        "totalMs": 4853.575089015067,
+        "replyReceivedMs": 2680.148567073047
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4581.186754994094,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.2023189328611,
+        "residualCommitMs": 463.64845312200487
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4341.652455972508,
+        "firstPcmMs": 4341.652455972508,
+        "firstSignalMs": 4341.936754994094,
+        "totalMs": 4853.540989104658,
+        "bytes": 125760,
+        "chunks": 38,
+        "peakPcm16": 16783,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2620.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.452318932861,
+        "sttFinalToDoneOrReplyReceivedMs": 1416.2934951018542,
+        "firstTtsQueuedToFirstPcmMs": 1661.4995889831334,
+        "firstPcmToFirstNonSilentChunkMs": 0.2842990215867758
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "readiness-gate-check-a04",
+      "phase": "readiness-gate-check",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1294.8143959511071,
+        "ttsRequestAtMs": 5513.881754828617,
+        "firstSignalMs": 7171.5481528081,
+        "totalMs": 7531.584961805493,
+        "replyReceivedMs": 5513.8767547905445
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7407.1731528081,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1686199568212,
+        "residualCommitMs": 494.64277597144246
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 7171.327153919265,
+        "firstPcmMs": 7171.327153919265,
+        "firstSignalMs": 7171.5481528081,
+        "totalMs": 7531.5498628187925,
+        "bytes": 129600,
+        "chunks": 39,
+        "peakPcm16": 9117,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2700.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.7936199568212,
+        "sttFinalToDoneOrReplyReceivedMs": 4219.062358839437,
+        "firstTtsQueuedToFirstPcmMs": 1657.4453990906477,
+        "firstPcmToFirstNonSilentChunkMs": 0.22099888883531094
+      },
+      "serverProfileRows": 40
+    },
+    {
+      "id": "qwen-baseline-a01",
+      "phase": "qwen-baseline",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 2629.806991899386,
+        "ttsRequestAtMs": 7099.697730969638,
+        "firstSignalMs": 8922.476720996201,
+        "totalMs": 9942.319697001949,
+        "replyReceivedMs": 7099.689031019807
+      },
+      "lastInputSignalToFirstOutputSignalMs": 9282.164220996201,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1991198398173,
+        "residualCommitMs": 1829.6033721417189
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 8922.046321909875,
+        "firstPcmMs": 8922.046321909875,
+        "firstSignalMs": 8922.476720996201,
+        "totalMs": 9942.272196989506,
+        "bytes": 165120,
+        "chunks": 45,
+        "peakPcm16": 16546,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3440.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.8866198398173,
+        "sttFinalToDoneOrReplyReceivedMs": 4469.882039120421,
+        "firstTtsQueuedToFirstPcmMs": 1822.348590940237,
+        "firstPcmToFirstNonSilentChunkMs": 0.4303990863263607
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-baseline-a02",
+      "phase": "qwen-baseline",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1259.2856839764863,
+        "ttsRequestAtMs": 3985.986336134374,
+        "firstSignalMs": 5660.559092182666,
+        "totalMs": 7068.848807131872,
+        "replyReceivedMs": 3985.9801360871643
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5698.996592182666,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1742199994624,
+        "residualCommitMs": 459.10666417330503
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5660.323993070051,
+        "firstPcmMs": 5660.323993070051,
+        "firstSignalMs": 5660.559092182666,
+        "totalMs": 7068.816407117993,
+        "bytes": 216480,
+        "chunks": 60,
+        "peakPcm16": 16530,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 4510.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 838.6117199994624,
+        "sttFinalToDoneOrReplyReceivedMs": 2726.694452110678,
+        "firstTtsQueuedToFirstPcmMs": 1674.337656935677,
+        "firstPcmToFirstNonSilentChunkMs": 0.23509911261498928
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-baseline-a03",
+      "phase": "qwen-baseline",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1718.1902478914708,
+        "ttsRequestAtMs": 4972.6038940716535,
+        "firstSignalMs": 6684.191158972681,
+        "totalMs": 6835.550684016198,
+        "replyReceivedMs": 4972.598193911836
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6923.441158972681,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1723201014102,
+        "residualCommitMs": 918.0131279863417
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6683.834860101342,
+        "firstPcmMs": 6683.834860101342,
+        "firstSignalMs": 6684.191158972681,
+        "totalMs": 6835.526284063235,
+        "bytes": 87360,
+        "chunks": 24,
+        "peakPcm16": 19831,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 1820.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.4223201014102,
+        "sttFinalToDoneOrReplyReceivedMs": 3254.4079460203648,
+        "firstTtsQueuedToFirstPcmMs": 1711.2309660296887,
+        "firstPcmToFirstNonSilentChunkMs": 0.35629887133836746
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-baseline-a04",
+      "phase": "qwen-baseline",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1304.2474719695747,
+        "ttsRequestAtMs": 5169.024107977748,
+        "firstSignalMs": 7024.132318096235,
+        "totalMs": 7335.313146933913,
+        "replyReceivedMs": 5169.018408050761
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7259.757318096235,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1782190985978,
+        "residualCommitMs": 504.06585284508765
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 7023.7663181032985,
+        "firstPcmMs": 7023.7663181032985,
+        "firstSignalMs": 7024.132318096235,
+        "totalMs": 7335.277148056775,
+        "bytes": 121920,
+        "chunks": 33,
+        "peakPcm16": 18530,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2540.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.8032190985978,
+        "sttFinalToDoneOrReplyReceivedMs": 3864.770936081186,
+        "firstTtsQueuedToFirstPcmMs": 1854.7422101255506,
+        "firstPcmToFirstNonSilentChunkMs": 0.3659999929368496
+      },
+      "serverProfileRows": 48
+    },
+    {
+      "id": "qwen-low-a01",
+      "phase": "qwen-low",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 2237.0429639704525,
+        "ttsRequestAtMs": 6335.947121027857,
+        "firstSignalMs": 8179.311858955771,
+        "totalMs": 9195.225744973868,
+        "replyReceivedMs": 6335.942120989785
+      },
+      "lastInputSignalToFirstOutputSignalMs": 8538.99935895577,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1874200999737,
+        "residualCommitMs": 1436.8498439434916
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 8179.077960085124,
+        "firstPcmMs": 8179.077960085124,
+        "firstSignalMs": 8179.311858955771,
+        "totalMs": 9195.198245113716,
+        "bytes": 165120,
+        "chunks": 44,
+        "peakPcm16": 16546,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3440.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.8749200999737,
+        "sttFinalToDoneOrReplyReceivedMs": 4098.899157019332,
+        "firstTtsQueuedToFirstPcmMs": 1843.1308390572667,
+        "firstPcmToFirstNonSilentChunkMs": 0.23389887064695358
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-low-a02",
+      "phase": "qwen-low",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1292.7109010051936,
+        "ttsRequestAtMs": 3331.3429560512304,
+        "firstSignalMs": 5017.830081982538,
+        "totalMs": 5647.062924923375,
+        "replyReceivedMs": 3331.3394559081644
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5056.267581982538,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.6108179688454,
+        "residualCommitMs": 492.0975831337273
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5017.550582997501,
+        "firstPcmMs": 5017.550582997501,
+        "firstSignalMs": 5017.830081982538,
+        "totalMs": 5647.036225069314,
+        "bytes": 152160,
+        "chunks": 46,
+        "peakPcm16": 15674,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3170.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 839.0483179688454,
+        "sttFinalToDoneOrReplyReceivedMs": 2038.6285549029708,
+        "firstTtsQueuedToFirstPcmMs": 1686.2076269462705,
+        "firstPcmToFirstNonSilentChunkMs": 0.2794989850372076
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-low-a03",
+      "phase": "qwen-low",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1364.9169218260795,
+        "ttsRequestAtMs": 3810.018270974979,
+        "firstSignalMs": 5500.747786834836,
+        "totalMs": 6076.135363895446,
+        "replyReceivedMs": 3810.0131708197296
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5739.997786834836,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.0899199396372,
+        "residualCommitMs": 564.8242018651217
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5500.537887914106,
+        "firstPcmMs": 5500.537887914106,
+        "firstSignalMs": 5500.747786834836,
+        "totalMs": 6076.095363823697,
+        "bytes": 129120,
+        "chunks": 37,
+        "peakPcm16": 17016,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2690.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.3399199396372,
+        "sttFinalToDoneOrReplyReceivedMs": 2445.09624899365,
+        "firstTtsQueuedToFirstPcmMs": 1690.5196169391274,
+        "firstPcmToFirstNonSilentChunkMs": 0.20989892072975636
+      },
+      "serverProfileRows": 41
+    },
+    {
+      "id": "qwen-low-a04",
+      "phase": "qwen-low",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "a7759e98ebf6e3e463bc4d8aacfbd5a423bc783b",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1380.5022828746587,
+        "ttsRequestAtMs": 4829.894146881998,
+        "firstSignalMs": 6494.731028098613,
+        "totalMs": 6886.296558892354,
+        "replyReceivedMs": 4829.89014708437
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6730.356028098613,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1500200480223,
+        "residualCommitMs": 580.348463030532
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6494.531128089875,
+        "firstPcmMs": 6494.531128089875,
+        "firstSignalMs": 6494.731028098613,
+        "totalMs": 6886.243358952925,
+        "bytes": 133920,
+        "chunks": 37,
+        "peakPcm16": 13254,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2790.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.7750200480223,
+        "sttFinalToDoneOrReplyReceivedMs": 3449.3878642097116,
+        "firstTtsQueuedToFirstPcmMs": 1664.6369812078774,
+        "firstPcmToFirstNonSilentChunkMs": 0.19990000873804092
+      },
+      "serverProfileRows": 48
+    },
+    {
+      "id": "qwen-demand-a01",
+      "phase": "qwen-demand",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 2349.4085872080177,
+        "ttsRequestAtMs": 4959.930327022448,
+        "firstSignalMs": 6672.538588056341,
+        "totalMs": 7662.075840169564,
+        "replyReceivedMs": 4959.925827104598
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7032.226088056341,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.0997200142592,
+        "residualCommitMs": 1549.3052671663463
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 6672.357189003378,
+        "firstPcmMs": 6672.357189003378,
+        "firstSignalMs": 6672.538588056341,
+        "totalMs": 7662.0482401922345,
+        "bytes": 165120,
+        "chunks": 45,
+        "peakPcm16": 16546,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3440.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.7872200142592,
+        "sttFinalToDoneOrReplyReceivedMs": 2610.5172398965806,
+        "firstTtsQueuedToFirstPcmMs": 1712.42686198093,
+        "firstPcmToFirstNonSilentChunkMs": 0.1813990529626608
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "qwen-demand-a02",
+      "phase": "qwen-demand",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1360.291332937777,
+        "ttsRequestAtMs": 2952.220493927598,
+        "firstSignalMs": 4678.758820984513,
+        "totalMs": 5297.916388837621,
+        "replyReceivedMs": 2952.214593999088
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4717.196320984513,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 806.0555048286915,
+        "residualCommitMs": 554.2331282049417
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4678.664522012696,
+        "firstPcmMs": 4678.664522012696,
+        "firstSignalMs": 4678.758820984513,
+        "totalMs": 5297.886688960716,
+        "bytes": 148320,
+        "chunks": 45,
+        "peakPcm16": 14827,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3090.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 844.4930048286915,
+        "sttFinalToDoneOrReplyReceivedMs": 1591.9232610613108,
+        "firstTtsQueuedToFirstPcmMs": 1726.4440280850977,
+        "firstPcmToFirstNonSilentChunkMs": 0.09429897181689739
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "qwen-demand-a03",
+      "phase": "qwen-demand",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1497.3815951962024,
+        "ttsRequestAtMs": 3183.9244212023914,
+        "firstSignalMs": 4883.893514052033,
+        "totalMs": 5676.578153157607,
+        "replyReceivedMs": 3183.9203210547566
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5123.143514052033,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1948201563209,
+        "residualCommitMs": 697.1839750185609
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4883.746515028179,
+        "firstPcmMs": 4883.746515028179,
+        "firstSignalMs": 4883.893514052033,
+        "totalMs": 5676.557152997702,
+        "bytes": 152160,
+        "chunks": 44,
+        "peakPcm16": 14878,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3170.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.444820156321,
+        "sttFinalToDoneOrReplyReceivedMs": 1686.5387258585542,
+        "firstTtsQueuedToFirstPcmMs": 1699.8220938257873,
+        "firstPcmToFirstNonSilentChunkMs": 0.1469990238547325
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "qwen-demand-a04",
+      "phase": "qwen-demand",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1296.1998919490725,
+        "ttsRequestAtMs": 4298.363662790507,
+        "firstSignalMs": 5964.535039849579,
+        "totalMs": 6551.599986851215,
+        "replyReceivedMs": 4298.360462998971
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6200.160039849579,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.0908198300749,
+        "residualCommitMs": 496.1066721007228
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5964.387839892879,
+        "firstPcmMs": 5964.387839892879,
+        "firstSignalMs": 5964.535039849579,
+        "totalMs": 6551.5426869969815,
+        "bytes": 129120,
+        "chunks": 34,
+        "peakPcm16": 13791,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2690.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.715819830075,
+        "sttFinalToDoneOrReplyReceivedMs": 3002.160571049899,
+        "firstTtsQueuedToFirstPcmMs": 1666.024177102372,
+        "firstPcmToFirstNonSilentChunkMs": 0.1471999567002058
+      },
+      "serverProfileRows": 40
+    },
+    {
+      "id": "qwen-realtime-a01",
+      "phase": "qwen-realtime",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1039.0492279548198,
+        "ttsRequestAtMs": 3615.6596520449966,
+        "firstSignalMs": 5402.593629900366,
+        "totalMs": 6379.373912932351,
+        "replyReceivedMs": 3615.654951892793
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5762.281129900366,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 794.2051340360194,
+        "capturedMs": 2340.0,
+        "endpointMs": 800.0960198696703,
+        "residualCommitMs": 224.19904498383403
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5402.453331043944,
+        "firstPcmMs": 5402.453331043944,
+        "firstSignalMs": 5402.593629900366,
+        "totalMs": 6379.345812834799,
+        "bytes": 165120,
+        "chunks": 45,
+        "peakPcm16": 16546,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 3440.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.7835198696703,
+        "sttFinalToDoneOrReplyReceivedMs": 2576.6057239379734,
+        "firstTtsQueuedToFirstPcmMs": 1786.7936789989471,
+        "firstPcmToFirstNonSilentChunkMs": 0.1402988564223051
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "qwen-realtime-a02",
+      "phase": "qwen-realtime",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 989.4870510324836,
+        "ttsRequestAtMs": 2905.1335111726075,
+        "firstSignalMs": 4668.731447076425,
+        "totalMs": 4769.793597050011,
+        "replyReceivedMs": 2905.127211008221
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4707.168947076425,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 270.8136299625039,
+        "capturedMs": 1950.0,
+        "endpointMs": 800.0894200522453,
+        "residualCommitMs": 187.94433516450226
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4668.502547079697,
+        "firstPcmMs": 4668.502547079697,
+        "firstSignalMs": 4668.731447076425,
+        "totalMs": 4769.7680972050875,
+        "bytes": 121920,
+        "chunks": 32,
+        "peakPcm16": 15030,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2540.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 838.5269200522453,
+        "sttFinalToDoneOrReplyReceivedMs": 1915.6401599757373,
+        "firstTtsQueuedToFirstPcmMs": 1763.3690359070897,
+        "firstPcmToFirstNonSilentChunkMs": 0.228899996727705
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "qwen-realtime-a03",
+      "phase": "qwen-realtime",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1029.5883531216532,
+        "ttsRequestAtMs": 2933.566641062498,
+        "firstSignalMs": 4642.406512051821,
+        "totalMs": 5102.012075018138,
+        "replyReceivedMs": 2933.563041035086
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4881.656512051821,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 260.25005616247654,
+        "capturedMs": 2980.0,
+        "endpointMs": 800.1681200694293,
+        "residualCommitMs": 227.553236996755
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 4641.99341321364,
+        "firstPcmMs": 4641.99341321364,
+        "firstSignalMs": 4642.406512051821,
+        "totalMs": 5101.983275031671,
+        "bytes": 125760,
+        "chunks": 36,
+        "peakPcm16": 22616,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2620.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.4181200694293,
+        "sttFinalToDoneOrReplyReceivedMs": 1903.9746879134327,
+        "firstTtsQueuedToFirstPcmMs": 1708.4267721511424,
+        "firstPcmToFirstNonSilentChunkMs": 0.4130988381803036
+      },
+      "serverProfileRows": 26
+    },
+    {
+      "id": "qwen-realtime-a04",
+      "phase": "qwen-realtime",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1003.5693170502782,
+        "ttsRequestAtMs": 4213.607073063031,
+        "firstSignalMs": 5924.708039034158,
+        "totalMs": 6612.4656370375305,
+        "replyReceivedMs": 4213.600773131475
+      },
+      "lastInputSignalToFirstOutputSignalMs": 6160.333039034158,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 240.15310616232455,
+        "capturedMs": 2500.0,
+        "endpointMs": 800.1689200755209,
+        "residualCommitMs": 201.50360092520714
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "audio": {
+        "firstByteMs": 5924.500339198858,
+        "firstPcmMs": 5924.500339198858,
+        "firstSignalMs": 5924.708039034158,
+        "totalMs": 6612.438437063247,
+        "bytes": 132960,
+        "chunks": 40,
+        "peakPcm16": 12277,
+        "partialSampleAtEof": false
+      },
+      "outputPcmDurationMs": 2770.0,
+      "ttsFirstRequestTiming": "client_mark_immediately_before_http",
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.7939200755209,
+        "sttFinalToDoneOrReplyReceivedMs": 3210.0314560811967,
+        "firstTtsQueuedToFirstPcmMs": 1710.8932661358267,
+        "firstPcmToFirstNonSilentChunkMs": 0.20769983530044556
+      },
+      "serverProfileRows": 33
+    },
+    {
+      "id": "qwen-incremental-a01",
+      "phase": "qwen-incremental",
+      "case": "a01",
+      "fixtureSha256": "aea79ea388816492d2f886910cc61bc7b7cbd930f70ded797f22d35f5aa9d926",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2340.0,
+      "trailingDigitalQuietMs": 359.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 2605.9189510997385,
+        "firstFinalSegmentMs": 5501.87848508358,
+        "firstSignalMs": 7308.208615053445,
+        "totalMs": 8309.479437069967,
+        "doneReceivedMs": 5977.410207968205
+      },
+      "lastInputSignalToFirstOutputSignalMs": 7667.896115053445,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1288201194257,
+        "residualCommitMs": 1805.7847309391946
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 5501.955084037036,
+          "audio": {
+            "firstByteMs": 7307.988515123725,
+            "firstPcmMs": 7307.988515123725,
+            "firstSignalMs": 7308.208615053445,
+            "totalMs": 8308.963337913156,
+            "bytes": 165120,
+            "chunks": 52,
+            "peakPcm16": 16546,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 5501.955084037036,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1806.0334310866892,
+          "queuedToFirstSignalMs": 1806.2535310164094
+        }
+      ],
+      "outputPcmDurationMs": 3440.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1159.8163201194257,
+        "sttFinalToDoneOrReplyReceivedMs": 3371.4912568684667,
+        "firstTtsQueuedToFirstPcmMs": 1806.0334310866892,
+        "firstPcmToFirstNonSilentChunkMs": 0.22009992972016335
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2425.66,
+        "finalModelResponseCompleteElapsedMs": 2549.252,
+        "chatExitElapsedMs": 2905.218,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-incremental-a02",
+      "phase": "qwen-incremental",
+      "case": "a02",
+      "fixtureSha256": "e452b6381720a4cfe32528d408353752300021832d8d1056299b7095de5278e1",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 1950.0,
+      "trailingDigitalQuietMs": 38.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1240.2362308930606,
+        "firstFinalSegmentMs": 2382.801402825862,
+        "firstSignalMs": 4088.6224820278585,
+        "totalMs": 4684.622006956488,
+        "doneReceivedMs": 2570.415938971564
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4127.0599820278585,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1150200143456,
+        "residualCommitMs": 440.1171109639108
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2382.8690028749406,
+          "audio": {
+            "firstByteMs": 4088.2822829298675,
+            "firstPcmMs": 4088.2822829298675,
+            "firstSignalMs": 4088.6224820278585,
+            "totalMs": 4684.126507956535,
+            "bytes": 148320,
+            "chunks": 46,
+            "peakPcm16": 14827,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2382.8690028749406,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1705.4132800549269,
+          "queuedToFirstSignalMs": 1705.7534791529179
+        }
+      ],
+      "outputPcmDurationMs": 3090.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 838.5525200143456,
+        "sttFinalToDoneOrReplyReceivedMs": 1330.1797080785036,
+        "firstTtsQueuedToFirstPcmMs": 1705.4132800549269,
+        "firstPcmToFirstNonSilentChunkMs": 0.3401990979909897
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1111.725,
+        "finalModelResponseCompleteElapsedMs": 1214.662,
+        "chatExitElapsedMs": 1299.755,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-incremental-a03",
+      "phase": "qwen-incremental",
+      "case": "a03",
+      "fixtureSha256": "3efbdb37d7efe8f949ae4a3e29f671708fd10670b0590427e29ddac5f17f13e8",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2980.0,
+      "trailingDigitalQuietMs": 239.25,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1530.4949120618403,
+        "firstFinalSegmentMs": 3006.342659937218,
+        "firstSignalMs": 4751.564741134644,
+        "totalMs": 5212.783900089562,
+        "doneReceivedMs": 3285.3375701233745
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4990.814741134644,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1665200572461,
+        "residualCommitMs": 730.3254918660969
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "wrong_intent",
+        "reason": "Resposta usou o valor descartado na autocorre\u00e7\u00e3o. Os n\u00fameros permaneceram, mas a nega\u00e7\u00e3o ficou amb\u00edgua na transcri\u00e7\u00e3o.",
+        "transcriptionAmbiguity": true,
+        "causalAssignment": "input_synthesis_stt_and_model_interpretation_not_isolated",
+        "transcriptionFidelity": "numbers_preserved_negation_binding_ambiguous",
+        "countAsCorrectPerformance": false
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 3006.428960012272,
+          "audio": {
+            "firstByteMs": 4751.358542125672,
+            "firstPcmMs": 4751.358542125672,
+            "firstSignalMs": 4751.564741134644,
+            "totalMs": 5212.298400932923,
+            "bytes": 125760,
+            "chunks": 40,
+            "peakPcm16": 22616,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 3006.428960012272,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1744.9295821134,
+          "queuedToFirstSignalMs": 1745.1357811223716
+        }
+      ],
+      "outputPcmDurationMs": 2620.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1039.416520057246,
+        "sttFinalToDoneOrReplyReceivedMs": 1754.8426580615342,
+        "firstTtsQueuedToFirstPcmMs": 1744.9295821134,
+        "firstPcmToFirstNonSilentChunkMs": 0.2061990089714527
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1329.883,
+        "finalModelResponseCompleteElapsedMs": 1478.4,
+        "chatExitElapsedMs": 1609.136,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-incremental-a04",
+      "phase": "qwen-incremental",
+      "case": "a04",
+      "fixtureSha256": "bdbd6efe12e980b545a13792f5e0c0c5c89d38e14b0b2075801be85195f8d298",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2500.0,
+      "trailingDigitalQuietMs": 235.625,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1296.0851918905973,
+        "firstFinalSegmentMs": 4067.7957329899073,
+        "firstSignalMs": 5762.112641008571,
+        "totalMs": 6465.560199925676,
+        "doneReceivedMs": 4318.446513032541
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5997.737641008571,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "endpointMs": 800.1718199811876,
+        "residualCommitMs": 495.90847198851407
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 4067.871432984248,
+          "audio": {
+            "firstByteMs": 5761.904041050002,
+            "firstPcmMs": 5761.904041050002,
+            "firstSignalMs": 5762.112641008571,
+            "totalMs": 6465.101700974628,
+            "bytes": 132960,
+            "chunks": 42,
+            "peakPcm16": 12277,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 4067.871432984248,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1694.0326080657542,
+          "queuedToFirstSignalMs": 1694.241208024323
+        }
+      ],
+      "outputPcmDurationMs": 2770.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1035.7968199811876,
+        "sttFinalToDoneOrReplyReceivedMs": 3022.3613211419433,
+        "firstTtsQueuedToFirstPcmMs": 1694.0326080657542,
+        "firstPcmToFirstNonSilentChunkMs": 0.20859995856881142
+      },
+      "serverProfileRows": 41,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2764.823,
+        "finalModelResponseCompleteElapsedMs": 2891.186,
+        "chatExitElapsedMs": 3015.617,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-full-c01",
+      "phase": "qwen-full",
+      "case": "c01",
+      "fixtureSha256": "3f9145849897848d4970815c8693c950d685718fc7d7a894582f6e5420bdd119",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2350.0,
+      "trailingDigitalQuietMs": 336.9375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1014.5820898469537,
+        "firstFinalSegmentMs": 3194.5070950314403,
+        "firstSignalMs": 5074.649642920122,
+        "totalMs": 5501.715885940939,
+        "doneReceivedMs": 3664.466831833124
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5411.587142920122,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 1369.274411117658,
+        "capturedMs": 2350.0,
+        "endpointMs": 800.1857199706137,
+        "residualCommitMs": 204.48759384453297
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 3194.5861948188394,
+          "audio": {
+            "firstByteMs": 5073.474645847455,
+            "firstPcmMs": 5073.474645847455,
+            "firstSignalMs": 5074.649642920122,
+            "totalMs": 5501.197587000206,
+            "bytes": 134880,
+            "chunks": 41,
+            "peakPcm16": 16766,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 3194.5861948188394,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1878.8884510286152,
+          "queuedToFirstSignalMs": 1880.0634481012821
+        }
+      ],
+      "outputPcmDurationMs": 2810.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1137.1232199706137,
+        "sttFinalToDoneOrReplyReceivedMs": 2649.8847419861704,
+        "firstTtsQueuedToFirstPcmMs": 1878.8884510286152,
+        "firstPcmToFirstNonSilentChunkMs": 1.1749970726668835
+      },
+      "serverProfileRows": 27,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2025.674,
+        "finalModelResponseCompleteElapsedMs": 2140.225,
+        "chatExitElapsedMs": 2500.221,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-full-c02",
+      "phase": "qwen-full",
+      "case": "c02",
+      "fixtureSha256": "5a1daa70bbd78f7bc4ad8f0e363110b0197455c580e745e2490f58e3dc125cd9",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2580.0,
+      "trailingDigitalQuietMs": 10.1875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 994.3841390777379,
+        "firstFinalSegmentMs": 2356.9850670173764,
+        "firstSignalMs": 3994.3486161064357,
+        "totalMs": 6000.342851970345,
+        "doneReceivedMs": 2594.6314791217446
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4004.5361161064357,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 382.84205296076834,
+        "capturedMs": 2580.0,
+        "endpointMs": 800.1681200694293,
+        "residualCommitMs": 192.1989240217954
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2357.062567025423,
+          "audio": {
+            "firstByteMs": 3993.816117057577,
+            "firstPcmMs": 3993.816117057577,
+            "firstSignalMs": 3994.3486161064357,
+            "totalMs": 5999.737753067166,
+            "bytes": 253920,
+            "chunks": 78,
+            "peakPcm16": 14357,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2357.062567025423,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1636.7535500321537,
+          "queuedToFirstSignalMs": 1637.2860490810126
+        }
+      ],
+      "outputPcmDurationMs": 5290.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 810.3556200694293,
+        "sttFinalToDoneOrReplyReceivedMs": 1600.2473400440067,
+        "firstTtsQueuedToFirstPcmMs": 1636.7535500321537,
+        "firstPcmToFirstNonSilentChunkMs": 0.532499048858881
+      },
+      "serverProfileRows": 27,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1328.99,
+        "finalModelResponseCompleteElapsedMs": 1455.95,
+        "chatExitElapsedMs": 1567.045,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-full-c03",
+      "phase": "qwen-full",
+      "case": "c03",
+      "fixtureSha256": "4427e0faa5c52a78f3dadb99d7615abc5857dd30820b2702f72f6eab03c35c45",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2510.0,
+      "trailingDigitalQuietMs": 292.4375,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1023.2395681086928,
+        "firstFinalSegmentMs": 2158.755558077246,
+        "firstSignalMs": 3887.7849790733308,
+        "totalMs": 4091.336876153946,
+        "doneReceivedMs": 2388.0733910482377
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4180.222479073331,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 316.97341590188444,
+        "capturedMs": 2510.0,
+        "endpointMs": 800.1672199461609,
+        "residualCommitMs": 221.2868530768901
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "model_failure",
+        "reason": "Resultado aritm\u00e9tico incorreto para os operandos finais reconhecidos.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "final_model_arithmetic_result",
+        "transcriptionFidelity": "minor_non_operand_error",
+        "countAsCorrectPerformance": false,
+        "expectedArithmeticResult": 46,
+        "observedArithmeticResult": 56
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2158.854558132589,
+          "audio": {
+            "firstByteMs": 3887.397580081597,
+            "firstPcmMs": 3887.397580081597,
+            "firstSignalMs": 3887.7849790733308,
+            "totalMs": 4090.8863770309836,
+            "bytes": 127200,
+            "chunks": 40,
+            "peakPcm16": 15002,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2158.854558132589,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1728.543021949008,
+          "queuedToFirstSignalMs": 1728.930420940742
+        }
+      ],
+      "outputPcmDurationMs": 2650.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1092.604719946161,
+        "sttFinalToDoneOrReplyReceivedMs": 1364.833822939545,
+        "firstTtsQueuedToFirstPcmMs": 1728.543021949008,
+        "firstPcmToFirstNonSilentChunkMs": 0.38739899173378944
+      },
+      "serverProfileRows": 27,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1001.822,
+        "finalModelResponseCompleteElapsedMs": 1123.637,
+        "chatExitElapsedMs": 1231.302,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-full-c04",
+      "phase": "qwen-full",
+      "case": "c04",
+      "fixtureSha256": "c7595c0b60fdb8d565b4e90c2e8f0b05fad1421f0880f3f2754c2812d8ce2eec",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 2620.0,
+      "trailingDigitalQuietMs": 288.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1052.520995028317,
+        "firstFinalSegmentMs": 3612.3359608463943,
+        "firstSignalMs": 5267.910863971338,
+        "totalMs": 6595.503279007971,
+        "doneReceivedMs": 3798.489899840206
+      },
+      "lastInputSignalToFirstOutputSignalMs": 5556.598363971338,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 244.17569604702294,
+        "capturedMs": 2620.0,
+        "endpointMs": 800.2546199131757,
+        "residualCommitMs": 250.63857901841402
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 3612.4079609289765,
+          "audio": {
+            "firstByteMs": 5267.706263810396,
+            "firstPcmMs": 5267.706263810396,
+            "firstSignalMs": 5267.910863971338,
+            "totalMs": 6595.018079970032,
+            "bytes": 186720,
+            "chunks": 58,
+            "peakPcm16": 13858,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 3612.4079609289765,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1655.2983028814197,
+          "queuedToFirstSignalMs": 1655.5029030423611
+        }
+      ],
+      "outputPcmDurationMs": 3890.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": false,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1088.9421199131757,
+        "sttFinalToDoneOrReplyReceivedMs": 2745.968904811889,
+        "firstTtsQueuedToFirstPcmMs": 1655.2983028814197,
+        "firstPcmToFirstNonSilentChunkMs": 0.2046001609414816
+      },
+      "serverProfileRows": 34,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 2552.994,
+        "finalModelResponseCompleteElapsedMs": 2669.291,
+        "chatExitElapsedMs": 2739.408,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    },
+    {
+      "id": "qwen-full-c05",
+      "phase": "qwen-full",
+      "case": "c05",
+      "fixtureSha256": "c54f19eeddf93be89b82bbf01ff39c8eb93b38f14f8c5884006a5faba8c8ea6a",
+      "inputGenerator": "qwen_tts",
+      "inputDurationMs": 3950.0,
+      "trailingDigitalQuietMs": 460.6875,
+      "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+      "ttsFingerprint": "1749f5fb29320dced0a16add618989e36954ee7b|stable|stable-codec22x22-onset-conservative-v1-startup320ms",
+      "hostTiming": {
+        "sttFinalAtMs": 1023.0004689656198,
+        "firstFinalSegmentMs": 2741.9649148359895,
+        "firstSignalMs": 4422.995954984799,
+        "totalMs": 13943.25999589637,
+        "doneReceivedMs": 6086.774037918076
+      },
+      "lastInputSignalToFirstOutputSignalMs": 4883.683454984799,
+      "lastInputSignalMetricDerivedFromWaveformHash": false,
+      "stt": {
+        "connectReadyMs": 250.04168110899627,
+        "capturedMs": 3950.0,
+        "endpointMs": 800.1667198259383,
+        "residualCommitMs": 214.98446818441153
+      },
+      "quality": {
+        "basis": "final_authorized_text_against_reserved_source_intent",
+        "status": "correct",
+        "reason": "Resposta final corresponde \u00e0 inten\u00e7\u00e3o e aos fatos esperados no cen\u00e1rio sint\u00e9tico.",
+        "transcriptionAmbiguity": false,
+        "causalAssignment": "not_applicable",
+        "countAsCorrectPerformance": true
+      },
+      "completedAudioTransfer": true,
+      "above4000ms": true,
+      "correctAndBelow4000ms": false,
+      "segments": [
+        {
+          "sequence": 0,
+          "queuedAtMs": 2742.038114927709,
+          "audio": {
+            "firstByteMs": 4422.65795590356,
+            "firstPcmMs": 4422.65795590356,
+            "firstSignalMs": 4422.995954984799,
+            "totalMs": 6085.205442039296,
+            "bytes": 228480,
+            "chunks": 70,
+            "peakPcm16": 15831,
+            "partialSampleAtEof": false
+          },
+          "requestAtMsApproximation": 2742.038114927709,
+          "requestTiming": "first_worker_dispatch_approximation",
+          "queuedToFirstPcmMs": 1680.6198409758508,
+          "queuedToFirstSignalMs": 1680.95784005709
+        },
+        {
+          "sequence": 1,
+          "queuedAtMs": 2937.503330875188,
+          "audio": {
+            "firstByteMs": 7755.899106850848,
+            "firstPcmMs": 7755.899106850848,
+            "firstSignalMs": 7756.229307036847,
+            "totalMs": 10412.639332935214,
+            "bytes": 314400,
+            "chunks": 99,
+            "peakPcm16": 24643,
+            "partialSampleAtEof": false
+          },
+          "requestTiming": "queued_only_actual_http_start_not_recorded",
+          "queuedToFirstPcmMs": 4818.3957759756595,
+          "queuedToFirstSignalMs": 4818.725976161659
+        },
+        {
+          "sequence": 2,
+          "queuedAtMs": 6086.455038981512,
+          "audio": {
+            "firstByteMs": 12089.456483954564,
+            "firstPcmMs": 12089.456483954564,
+            "firstSignalMs": 12089.662682963535,
+            "totalMs": 13942.764197010547,
+            "bytes": 251520,
+            "chunks": 79,
+            "peakPcm16": 19123,
+            "partialSampleAtEof": false
+          },
+          "requestTiming": "queued_only_actual_http_start_not_recorded",
+          "queuedToFirstPcmMs": 6003.001444973052,
+          "queuedToFirstSignalMs": 6003.207643982023
+        }
+      ],
+      "outputPcmDurationMs": 16550.0,
+      "ttsFirstRequestTiming": "legacy_queued_timestamp_first_unit_approximation",
+      "ndjsonReaderBackpressurePossible": true,
+      "derivedHostStages": {
+        "inputSignalToCommitMs": 1260.8542198259383,
+        "sttFinalToDoneOrReplyReceivedMs": 5063.773568952456,
+        "firstTtsQueuedToFirstPcmMs": 1680.6198409758508,
+        "firstPcmToFirstNonSilentChunkMs": 0.33799908123910427
+      },
+      "serverProfileRows": 31,
+      "serverTextProgress": {
+        "clockDomain": "server_chat",
+        "firstFinalSegmentElapsedMs": 1712.033,
+        "finalModelResponseCompleteElapsedMs": 2220.334,
+        "chatExitElapsedMs": 2319.255,
+        "firstFinalSegmentBeforeFinalModelResponseComplete": true,
+        "note": "Does not compare host PCM arrival against server model completion."
+      }
+    }
+  ],
+  "serverProfiles": {
+    "file": "conversational-pipeline-stages.csv",
+    "rows": 2018,
+    "samplesWithProfiles": 56,
+    "samplesWithoutProfiles": [
+      "baseline-a01",
+      "baseline-a02",
+      "baseline-a03",
+      "baseline-a04"
+    ],
+    "repeatedLogRowsRemoved": 1164,
+    "unmappedRowsExcluded": 380,
+    "note": "Only LatencyProfile numeric regex matches are exported; repeated cumulative Docker logs deduplicate by private turn/stage/elapsed/duration/count, then IDs are pseudonymized. Nested stage durations are not additive."
+  },
+  "cost": {
+    "audits": 69,
+    "mainHttpCalls": 89,
+    "usageKnownDeduplicated": 71,
+    "usageUnknown": 18,
+    "settingsAcrossAllCounterfactualStages": {
+      "model": [
+        "gpt-6-luna"
+      ],
+      "service_tier": [
+        "auto"
+      ],
+      "max_output_tokens": [
+        "7000"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium"
+      ]
+    },
+    "tokensKnown": {
+      "inputTokens": 940329,
+      "cachedInputTokens": 829477,
+      "cacheWriteTokens": 44390,
+      "outputTokens": 2869
+    },
+    "monetaryCost": "not reported; partial usage, auxiliary providers/jobs not included",
+    "deduplication": "provider responseId across audits/assistant metadata; first two fresh followup log rounds added only after verifying final log round equals final metadata",
+    "pipelineAudioAttempts": 60,
+    "pipelineInputAudioSeconds": 155.2296875,
+    "pipelineOutputPcmSeconds": 196.88,
+    "syntheticInputVoiceGenerationRequests": 9,
+    "costScopeNote": "These pipeline audio durations omit separate direct probes, quality-only tests and production smoke; no complete bill is inferred.",
+    "speechAndTranscriptionCostCoverage": "Per-phase captured input duration and output PCM bytes are available per sample; no provider billing receipt or complete monetary charge is exposed. Missing usage and auxiliary extraction/embedding/TTS costs prevent a total cost claim."
+  },
+  "productionSmoke": {
+    "backendSource": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "backendImage": "sha256:d583b6278841d785bc7b3486f96ddc6ba456397571ad7c16afd3f0013c5243bf",
+    "physicalSpeakerMeasured": false,
+    "effectiveModel": "gpt-6-luna",
+    "effectiveReasoning": "low",
+    "effectiveTier": "auto",
+    "transcriptionPresent": true,
+    "firstFinalSegmentMs": 3475.340300006792,
+    "semanticSmokePassed": true,
+    "segments": 1,
+    "firstSignalMs": 5267.366564832628,
+    "firstPcmMs": 5267.067965818569,
+    "success": true,
+    "syntheticFixturesRemoved": true,
+    "syntheticNodeRemoved": true,
+    "actualProviderPayloads": [
+      {
+        "model": "gpt-6-luna",
+        "reasoning": {
+          "effort": "low"
+        },
+        "service_tier": "auto",
+        "max_output_tokens": 7000,
+        "store": false,
+        "text": null
+      }
+    ],
+    "id": "production-smoke-01",
+    "ttsBefore": {
+      "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+      "dspVariant": "stable",
+      "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+      "httpStatus": 200
+    },
+    "ttsAfter": {
+      "sourceCommit": "1749f5fb29320dced0a16add618989e36954ee7b",
+      "dspVariant": "stable",
+      "runtimeVariant": "stable-codec22x22-onset-conservative-v1-startup320ms",
+      "httpStatus": 200
+    },
+    "stt": {
+      "connectReadyMs": 1221.2916780263186,
+      "capturedMs": 2580.0,
+      "endpointMs": 800.185619853437,
+      "residualCommitMs": 266.0728411283344
+    },
+    "timingReference": "waveform EOF; host simulation; no physical playback",
+    "doneReceivedMs": 3973.1940678320825,
+    "firstSegmentBeforeDoneEventReceived": true,
+    "firstSegmentToDoneReceivedMs": 497.85376782529056,
+    "doesNotProvePcmBeforeProviderCompletion": true,
+    "trailingDigitalQuietMs": 10.1875,
+    "lastInputSignalToFirstOutputSignalMs": 5277.554064832628
+  },
+  "memoryQuality": {
+    "sourceCommit": "2ea7ea9fec45131830a68dddba6cf823cdd78c13",
+    "measurementBoundary": "text request through authorized final generation; no STT, TTS or speaker timing",
+    "cases": [
+      {
+        "id": "memory-01",
+        "case": "implicit_preference",
+        "elapsedMs": 4452.328626997769,
+        "passedHeuristic": true,
+        "modelCalls": 2,
+        "tools": [
+          "memory_search"
+        ],
+        "reasoningEfforts": [
+          "low",
+          "low"
+        ],
+        "continuation": "close"
+      },
+      {
+        "id": "memory-02",
+        "case": "indirect_missing",
+        "elapsedMs": 4416.343716904521,
+        "passedHeuristic": true,
+        "modelCalls": 2,
+        "tools": [
+          "memory_search"
+        ],
+        "reasoningEfforts": [
+          "low",
+          "low"
+        ],
+        "continuation": "close",
+        "sameConversation": true
+      },
+      {
+        "id": "memory-03",
+        "case": "corrected_current",
+        "elapsedMs": 2929.3493148870766,
+        "passedHeuristic": true,
+        "modelCalls": 2,
+        "tools": [
+          "memory_search"
+        ],
+        "reasoningEfforts": [
+          "low",
+          "low"
+        ],
+        "continuation": "close"
+      },
+      {
+        "id": "memory-04",
+        "case": "forgotten_absence",
+        "elapsedMs": 2909.637864213437,
+        "passedHeuristic": true,
+        "modelCalls": 2,
+        "tools": [
+          "memory_search"
+        ],
+        "reasoningEfforts": [
+          "low",
+          "low"
+        ],
+        "continuation": "close"
+      },
+      {
+        "id": "memory-05",
+        "case": "historical_current",
+        "elapsedMs": 4156.235364032909,
+        "passedHeuristic": false,
+        "modelCalls": 2,
+        "tools": [
+          "memory_search"
+        ],
+        "reasoningEfforts": [
+          "low",
+          "low"
+        ],
+        "continuation": "close"
+      },
+      {
+        "id": "memory-06",
+        "case": "relative_date",
+        "elapsedMs": 1654.545885976404,
+        "passedHeuristic": true,
+        "modelCalls": 1,
+        "tools": [],
+        "reasoningEfforts": [
+          "low"
+        ],
+        "continuation": "close"
+      },
+      {
+        "id": "memory-07",
+        "case": "natural_question",
+        "elapsedMs": 1568.614199059084,
+        "passedHeuristic": true,
+        "modelCalls": 1,
+        "tools": [],
+        "reasoningEfforts": [
+          "low"
+        ],
+        "continuation": "continue"
+      },
+      {
+        "id": "memory-08",
+        "case": "continuation",
+        "elapsedMs": 1478.7969221360981,
+        "passedHeuristic": true,
+        "modelCalls": 1,
+        "tools": [],
+        "reasoningEfforts": [
+          "low"
+        ],
+        "continuation": "close",
+        "sameConversation": true
+      }
+    ],
+    "initialPassedHeuristic": 7,
+    "initialTotal": 8,
+    "historicalCurrentFollowup": {
+      "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "elapsedMs": 8454.393279040232,
+      "passed": true,
+      "bothCanonicalRecordsObserved": true,
+      "modelCalls": 3,
+      "tools": [
+        "memory_search",
+        "memory_search"
+      ],
+      "reasoningEfforts": [
+        "low",
+        "low",
+        "low"
+      ],
+      "manuallyReviewedTemporalMapping": true,
+      "currentAndPastAssignedCorrectly": true,
+      "usageTotals": {
+        "inputTokens": 43540,
+        "cachedInputTokens": 37373,
+        "cacheWriteTokens": 733,
+        "outputTokens": 153
+      }
+    }
+  },
+  "cleanup": {
+    "removedContainers": 4,
+    "removedAnonymousSyntheticVolumes": 3,
+    "removedNetwork": true,
+    "credentialComposeRemoved": true,
+    "productionVolumesPreserved": true,
+    "productionContainersUnchanged": true
+  },
+  "verification": {
+    "nodeTestsPassed": 163,
+    "pwaTestsPassed": 94,
+    "releaseContractsPassed": 53,
+    "rustPortablePassed": 90,
+    "rustPortableOptInIgnored": 2,
+    "androidArm64NativeRustCheckPassed": true,
+    "nodeAndPwaBuildTypecheckPassed": true,
+    "backendBroadPassed": 788,
+    "backendBroadExternalOptInSkipped": 100,
+    "postgresFocusedPassed": 38,
+    "postgresFocusedSkipped": 0,
+    "physicalDeviceValidation": false
+  },
+  "publicationFile": "conversational-pipeline-publication.json"
+}
