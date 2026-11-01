@@ -115,6 +115,50 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(dev.Blocked, "Unclassified"):
             dev.scope(["new-runtime/runtime.conf"])
 
+    def test_reconciled_reasoning_default_requires_exact_reviewed_change_and_runtime_low(self):
+        before = "services:\n  aegis-api:\n    environment:\n      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}\n"
+        after = before.replace("EFFORT:-medium", "EFFORT:-low")
+        self.assertTrue(dev.reconciled_reasoning_default(["docker-compose.yml"], before, after,
+                                                       {"AEGIS_CHAT_REASONING_EFFORT": "low"}))
+        cases = [
+            (["docker-compose.yml"], before, after, {"AEGIS_CHAT_REASONING_EFFORT": "medium"}),
+            (["docker-compose.yml"], before, after, {}),
+            (["docker-compose.private.yml"], before, after, {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+            (["docker-compose.yml", "docker-compose.private.yml"], before, after, {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+            (["docker-compose.yml"], before, after + "\n", {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+            (["docker-compose.yml"], before, after.replace("aegis-api", "other-api"), {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+            (["docker-compose.yml"], before, before, {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+            (["docker-compose.yml"], before + before, after + after, {"AEGIS_CHAT_REASONING_EFFORT": "low"}),
+        ]
+        for paths, old, new, environment in cases:
+            with self.subTest(paths=paths, environment=environment, changed=new):
+                self.assertFalse(dev.reconciled_reasoning_default(paths, old, new, environment))
+
+    def test_preflight_records_only_proved_reasoning_reconciliation(self):
+        before = "services:\n  aegis-api:\n    environment:\n      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}\n"
+        after = before.replace("EFFORT:-medium", "EFFORT:-low")
+        for runtime, expected in (("low", True), ("medium", False)):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                host = object.__new__(dev.PrivateHost)
+                host.source = host.op = Path(directory)
+                host.api_env = {"AEGIS_CHAT_REASONING_EFFORT": runtime}
+                host.api = host.pwa = host.pg = {"State": {"Running": True}}
+                host.others = []
+                host.git = lambda *args: "docker-compose.yml" if args[0] == "diff" else ""
+                host.run = lambda args, **kwargs: before if args[2].startswith("old:") else after
+                host.gh = lambda path: {"status": "identical"} if path.startswith("compare/") else {"check_runs": []}
+                host.validate = lambda *args, **kwargs: None
+                candidate = plan(previous={"backend": {"sha": "old"}}, branch="feature")
+                if expected:
+                    host.preflight(candidate)
+                    evidence = json.loads((host.op / "compose-reconciliation.json").read_text())
+                    self.assertEqual(evidence["runtimeReasoningEffort"], "low")
+                    self.assertEqual(evidence["sourceCommit"], candidate["sha"])
+                else:
+                    with self.assertRaisesRegex(dev.Blocked, "Compose changes"):
+                        host.preflight(candidate)
+                    self.assertFalse((host.op / "compose-reconciliation.json").exists())
+
     def test_docs_only_no_application_mutation(self):
         host = FixtureHost()
         dev.publish(host, plan(components=()), {})

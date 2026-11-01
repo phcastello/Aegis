@@ -84,6 +84,16 @@ def scope(paths):
     return result
 
 
+def reconciled_reasoning_default(paths, before, after, runtime_env):
+    """Allow only the reviewed default change already active on this installation."""
+    old = "      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}\n"
+    new = "      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-low}\n"
+    return (paths == ["docker-compose.yml"]
+            and runtime_env.get("AEGIS_CHAT_REASONING_EFFORT") == "low"
+            and before.count(old) == 1
+            and after == before.replace(old, new, 1))
+
+
 def migration_policy(source, pending):
     for migration in pending:
         path = source / "backend/src/Aegis.Infrastructure/Migrations" / (migration + ".cs")
@@ -310,7 +320,21 @@ class PrivateHost:
         if "backend" in plan["components"] and plan["previous"]["backend"]["sha"]:
             config_changes = self.git("diff", "--name-only", plan["previous"]["backend"]["sha"], plan["sha"],
                                       "docker-compose.yml", "docker-compose.private.yml")
-            require(not config_changes, "Compose changes require reconciliation with the real installation before image publication.")
+            if config_changes:
+                paths = config_changes.splitlines()
+                reconciled = False
+                if paths == ["docker-compose.yml"]:
+                    # Keep complete bytes, including whitespace: a second edit must
+                    # not be hidden by the git helper's normal output stripping.
+                    previous_sha = plan["previous"]["backend"]["sha"]
+                    before = self.run(["git", "show", previous_sha + ":docker-compose.yml"])
+                    after = self.run(["git", "show", plan["sha"] + ":docker-compose.yml"])
+                    reconciled = reconciled_reasoning_default(paths, before, after, self.api_env)
+                require(reconciled, "Compose changes require reconciliation with the real installation before image publication.")
+                save(self.op / "compose-reconciliation.json", {
+                    "reviewedChange": "conversation-reasoning-default-medium-to-low",
+                    "runtimeReasoningEffort": self.api_env["AEGIS_CHAT_REASONING_EFFORT"],
+                    "previousBackendCommit": previous_sha, "sourceCommit": plan["sha"]})
         checks = self.gh(f"commits/{plan['sha']}/check-runs?per_page=100")
         save(self.op / "existing-checks.json", [{k: c[k] for k in ("name", "status", "conclusion", "head_sha")}
                                                for c in checks["check_runs"]])
