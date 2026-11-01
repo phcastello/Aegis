@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000005,
+  "highWaterMark": 8000006,
   "reservations": [
     {
       "schema": 2,
@@ -454,6 +454,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000005
+    },
+    {
+      "schema": 2,
+      "sha": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "branch": "feat/v0.8.0-hands-free",
+      "number": 6,
+      "platform": "both",
+      "version": "0.8.0-unstable.6",
+      "kind": "normal",
+      "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "pwa": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-01T00:39:42.611Z",
+      "repository": "phcastello/Aegis",
+      "runId": "41257700322",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000006
     }
   ],
   "recommended": {
