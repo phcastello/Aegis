@@ -117,7 +117,6 @@ def segmented(base, payload, started):
     done = None
     transcript = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as worker:
-        pending = []
         with bench.http(base, "/api/chat/messages/stream", payload) as response:
             for line in response:
                 event = json.loads(line)
@@ -128,8 +127,12 @@ def segmented(base, payload, started):
                     # Do not derive speech from token/argument/intermediate events.
                     if first_segment is None:
                         first_segment = (time.perf_counter()-started)*1000
-                    if len(pending) >= 2:
-                        pending.pop(0).result()
+                    # Never block the transcript reader on synthesis: otherwise
+                    # delayed reception of done falsely looks like slow generation.
+                    # Text/futures are bounded; the sole worker keeps GPU requests
+                    # sequential. This harness does not emulate Android prefetch.
+                    if len(segments) >= 48:
+                        raise RuntimeError("too many final speech units")
                     segment = event.get("segment", event)
                     body = {k: segment[k] for k in ("turnId", "conversationId", "assistantMessageId", "segmentId", "sequence")}
                     body["speechRequestId"] = str(uuid.uuid4())
@@ -142,7 +145,6 @@ def segmented(base, payload, started):
                                 "requestAtMs": (requested-started)*1000,
                                 "audio": bench.pcm(audio, started)}
                     future = worker.submit(fetch)
-                    pending.append(future)
                     segments.append(future)
                 if event.get("type") == "done":
                     done = (time.perf_counter()-started)*1000
