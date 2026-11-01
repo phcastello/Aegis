@@ -47,6 +47,9 @@ public sealed class RealtimeTranscriptionController(ElevenLabsRealtimeTranscript
         }
         finally
         {
+            // RunAsync has already ended the paid upstream. Release admission before the
+            // peer observes close/error and immediately starts its next bounded attempt.
+            lease.Dispose();
             // Public errors contain codes only. Provider errors may contain credentials/content.
             using var close = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             try
@@ -56,7 +59,7 @@ public sealed class RealtimeTranscriptionController(ElevenLabsRealtimeTranscript
                 if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
                     await socket.CloseOutputAsync(reason == "completed" ? WebSocketCloseStatus.NormalClosure : WebSocketCloseStatus.PolicyViolation, reason, close.Token);
             }
-            catch (Exception error) when (error is OperationCanceledException or WebSocketException) { socket.Abort(); }
+            catch (Exception error) when (error is OperationCanceledException or WebSocketException or ObjectDisposedException or IOException) { socket.Abort(); }
             if (reason != "completed") logger.LogInformation("aegis_stt_realtime_ended TranscriptionRequestId={TranscriptionRequestId} Reason={Reason}", requestId, reason);
         }
     }

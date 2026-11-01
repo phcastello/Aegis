@@ -206,7 +206,9 @@ public sealed class RealtimeTranscriptionTests
             await Read(first);
             await first.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "cancelled", default);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await first.ReceiveAsync(new ArraySegment<byte>(new byte[256]), deadline.Token);
+            var closed = await first.ReceiveAsync(new ArraySegment<byte>(new byte[256]), deadline.Token);
+            Assert.Equal(WebSocketMessageType.Close, closed.MessageType);
+            // Observing the close is enough: no retry/backoff or artificial settling delay.
         }
         using var second = await fixture.Connect();
         Assert.Equal("ready", (await Read(second)).GetProperty("type").GetString());

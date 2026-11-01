@@ -69,6 +69,14 @@ public sealed class ElevenLabsRealtimeTranscription(
         using var connect = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
         connect.CancelAfter(TimeSpan.FromSeconds(8));
         using var upstream = await connector.ConnectAsync(ProviderUri(), providerOptions.Value.ApiKey, connect.Token);
+        var upstreamStopped = false;
+        void StopUpstream()
+        {
+            if (upstreamStopped) return;
+            upstreamStopped = true;
+            try { upstream.Abort(); }
+            catch (ObjectDisposedException) { } // A remote disconnect may already have released it.
+        }
         try
         {
             using (var started = await ReceiveJson(upstream, 32768, connect.Token))
@@ -101,9 +109,9 @@ public sealed class ElevenLabsRealtimeTranscription(
             finally
             {
                 session.Cancel();
-                upstream.Abort();
+                StopUpstream();
                 try { await Task.WhenAll(input, output); }
-                catch (Exception e) when (e is OperationCanceledException or WebSocketException or RealtimeTranscriptionException or JsonException) { }
+                catch (Exception e) when (e is OperationCanceledException or WebSocketException or RealtimeTranscriptionException or JsonException or IOException or ObjectDisposedException) { }
             }
 
             async Task SendInput()
@@ -165,7 +173,7 @@ public sealed class ElevenLabsRealtimeTranscription(
                 }
             }
         }
-        finally { upstream.Abort(); }
+        finally { StopUpstream(); }
     }
 
     private static string Language(string language) => language.Trim().ToLowerInvariant() switch { "por" or "pt-br" => "pt", _ => language.Trim() };
