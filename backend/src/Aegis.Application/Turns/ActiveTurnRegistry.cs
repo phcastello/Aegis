@@ -51,10 +51,12 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             }
 
             string? supersededNativeSpeechRequestId = null;
+            IReadOnlyList<string>? supersededSegments = null;
             if (currentByConversation.TryGetValue(conversationId, out var priorId) &&
                 turns.TryGetValue(priorId, out var prior))
             {
                 supersededNativeSpeechRequestId = prior.NativeSpeechRequestId;
+                supersededSegments = prior.SegmentRequests.Values.ToArray();
                 CancelUnsafe(prior, "superseded_by_new_turn");
             }
 
@@ -62,7 +64,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             turns.Add(turnId, turn);
             metrics.TurnsStarted.Add(1);
             metrics.ActiveTurnStarted();
-            return new TurnRegistrationInfo(turn, supersededNativeSpeechRequestId);
+            return new TurnRegistrationInfo(turn, supersededNativeSpeechRequestId, supersededSegments);
         }
     }
 
@@ -117,12 +119,61 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         }
     }
 
+    public bool TryAuthorizeSpeechSegment(Guid turnId, FinalSpeechSegment segment)
+    {
+        lock (gate)
+        {
+            if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) || turn.Status != TurnStatus.GeneratingText ||
+                segment.Sequence != turn.SpeechSegments.Count || segment.Sequence >= 48 ||
+                turn.SpeechSegments.Any(s => s.Id == segment.Id) ||
+                (turn.AssistantMessageId is { } messageId && messageId != segment.AssistantMessageId)) return false;
+            turn.AssistantMessageId = segment.AssistantMessageId;
+            turn.SpeechSegments.Add(segment);
+            return true;
+        }
+    }
+
+    public FinalSpeechSegment? FindSpeechSegment(Guid turnId, Guid segmentId)
+    {
+        lock (gate)
+            return turns.TryGetValue(turnId, out var turn) && IsActiveUnsafe(turn)
+                ? turn.SpeechSegments.FirstOrDefault(s => s.Id == segmentId) : null;
+    }
+
+    public bool TryBeginSegmentSpeech(Guid turnId, Guid segmentId, Guid speechRequestId, string nativeRequestId)
+    {
+        lock (gate)
+        {
+            if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
+                turn.Status is not (TurnStatus.GeneratingText or TurnStatus.TextCompleted) || turn.SpeechRequestId is not null ||
+                turnBySpeechRequest.ContainsKey(speechRequestId) ||
+                turn.SegmentRequests.Count - turn.CompletedSegmentRequests.Count >= 2) return false;
+            var segment = turn.SpeechSegments.FirstOrDefault(s => s.Id == segmentId);
+            if (segment is null || segment.Sequence != turn.SegmentRequests.Count) return false;
+            turn.SegmentRequests[speechRequestId] = nativeRequestId;
+            turnBySpeechRequest[speechRequestId] = turnId;
+            return true;
+        }
+    }
+
+    public bool CompleteSegmentSpeech(Guid speechRequestId)
+    {
+        lock (gate)
+        {
+            if (!turnBySpeechRequest.TryGetValue(speechRequestId, out var id) || !turns.TryGetValue(id, out var turn) ||
+                !turn.SegmentRequests.ContainsKey(speechRequestId)) return false;
+            turn.CompletedSegmentRequests.Add(speechRequestId);
+            if (turn.TextCompletedAt is not null) turn.TextCompletedAt = DateTimeOffset.UtcNow;
+            return true;
+        }
+    }
+
     public bool TrySetTextCompleted(Guid turnId, Guid assistantMessageId)
     {
         lock (gate)
         {
             if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
-                turn.Status != TurnStatus.GeneratingText)
+                turn.Status != TurnStatus.GeneratingText || (turn.AssistantMessageId is { } known && known != assistantMessageId))
             {
                 return false;
             }
@@ -139,7 +190,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         lock (gate)
         {
             if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
-                turn.Status != TurnStatus.TextCompleted)
+                turn.Status != TurnStatus.TextCompleted || turn.SpeechSegments.Count > 0)
             {
                 return false;
             }
@@ -196,7 +247,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             if (!turns.TryGetValue(turnId, out var turn)) return false;
             if (turn.Status == TurnStatus.Completed) return true;
-            if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null)
+            if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null ||
+                (turn.SpeechSegments.Count > 0 && (turn.SegmentRequests.Count != turn.SpeechSegments.Count ||
+                    turn.CompletedSegmentRequests.Count != turn.SegmentRequests.Count)))
             {
                 return false;
             }
@@ -234,13 +287,13 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
                 return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
             }
 
-            var wasSpeech = turn.SpeechRequestId is not null;
+            var wasSpeech = turn.SpeechRequestId is not null || turn.SegmentRequests.Count > 0;
             var nativeSpeechRequestId = turn.NativeSpeechRequestId;
             var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
             CancelUnsafe(turn, reason);
             return new TurnCancellationInfo(
                 new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
-                nativeSpeechRequestId);
+                nativeSpeechRequestId, turn.SegmentRequests.Values.ToArray());
         }
     }
 
@@ -252,12 +305,12 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             var cancellations = new List<TurnCancellationInfo>();
             foreach (var turn in turns.Values.Where(IsActiveUnsafe).ToList())
             {
-                var wasSpeech = turn.SpeechRequestId is not null;
+                var wasSpeech = turn.SpeechRequestId is not null || turn.SegmentRequests.Count > 0;
                 var nativeSpeechRequestId = turn.NativeSpeechRequestId;
                 CancelUnsafe(turn, reason);
                 cancellations.Add(new TurnCancellationInfo(
                     new CancelTurnResult(turn.TurnId, "cancelled", true, wasSpeech),
-                    nativeSpeechRequestId));
+                    nativeSpeechRequestId, turn.SegmentRequests.Values.ToArray()));
             }
 
             return cancellations;
@@ -321,7 +374,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     private void CleanupUnsafe()
     {
         var cutoff = DateTimeOffset.UtcNow - TerminalRetention;
-        foreach (var turn in turns.Values.Where(turn => turn.Status == TurnStatus.TextCompleted && turn.TextCompletedAt < DateTimeOffset.UtcNow - TextCompletionGrace).ToList())
+        foreach (var turn in turns.Values.Where(turn => turn.Status == TurnStatus.TextCompleted && turn.SegmentRequests.Count == turn.CompletedSegmentRequests.Count && turn.TextCompletedAt < DateTimeOffset.UtcNow - TextCompletionGrace).ToList())
         {
             CompleteUnsafe(turn);
         }
@@ -330,6 +383,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             turns.Remove(pair.Key);
             if (pair.Value.SpeechRequestId is { } speechRequestId) turnBySpeechRequest.Remove(speechRequestId);
+            foreach (var requestId in pair.Value.SegmentRequests.Keys) turnBySpeechRequest.Remove(requestId);
             pair.Value.Dispose();
         }
 
@@ -345,6 +399,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             if (IsActiveUnsafe(oldest)) break;
             turns.Remove(oldest.TurnId);
             if (oldest.SpeechRequestId is { } speechRequestId) turnBySpeechRequest.Remove(speechRequestId);
+            foreach (var requestId in oldest.SegmentRequests.Keys) turnBySpeechRequest.Remove(requestId);
             oldest.Dispose();
         }
     }

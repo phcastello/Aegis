@@ -153,3 +153,61 @@ somente de diagnóstico não gera evento de habilitação. Até 64 transições 
 são preservadas, com `configurationTransitionsDropped`, contador total e primeiro/
 último timestamp para tornar a retenção explícita. Esses dados não dependem da
 janela geral de 128 eventos, que pode girar durante os três dias de uso.
+
+## Pipeline de baixa latência (compatível com o contrato anterior)
+
+O esforço padrão do modelo conversacional é `low` em `OpenAIOptions`, nos dois
+appsettings, Compose e `.env.example`. `AEGIS_CHAT_REASONING_EFFORT` continua sendo
+a configuração operacional explícita; a publicação deve conferir seu valor efetivo
+e o `reasoning.effort` das requisições auditadas. Modelo, tier, limite de saída e
+configurações independentes de títulos/extração de memória permanecem preservados.
+
+Em toda origem `hands_free`, a primeira rodada conserva histórico, contexto
+operacional, horário, ações pendentes e memórias já observadas na conversa, mas
+não chama a recuperação semântica automática. O próprio modelo consulta
+`memory_search` quando faltar evidência pessoal relevante, inclusive referências
+indiretas, preferências e validade histórica. Não existe classificador anterior.
+As escritas automáticas, indexação, grafo e ferramentas continuam ativos. O chat
+de texto conserva a recuperação automática anterior; a política diferente é
+explícita por modalidade.
+
+Clientes novos enviam `voiceSegments: true` em `POST /api/chat/messages/stream`.
+Nesse caminho, `hands_free_reply_segments({segments, continuation})` substitui a
+função terminal antiga. Cada string completa de `segments` representa uma unidade
+final e imutável em limite linguístico natural; não muda estilo ou ordem. O schema
+é estrito e o payload usa `parallel_tool_calls=false`, impedindo chamadas de ação
+junto da função terminal. As ferramentas necessárias terminam em rodadas anteriores.
+O parser só libera strings JSON completamente fechadas e validadas do array;
+nunca entrega o JSON, argumentos truncados, raciocínio ou comentários de ferramenta.
+Ao fim, a resposta completa deve confirmar exatamente os segmentos já emitidos.
+
+Antes de cada evento `final_segment`, o servidor persiste o prefixo final numa
+única mensagem assistant. O evento contém `turnId`, `conversationId`,
+`assistantMessageId`, `segmentId`, `sequence` (começa em zero) e `content`.
+Os metadados persistem IDs, ordem e estado `generating`, `complete` ou `interrupted`.
+Falha posterior conserva esse prefixo, interrompe geração/áudio e nunca o substitui
+por outra resposta. A decisão `voiceContinuation` chega em `done`, no mesmo turno.
+
+`POST /api/voice/speech/segments` aceita somente
+`{turnId,speechRequestId,assistantMessageId,segmentId,sequence}`. O servidor busca
+a unidade autorizada e seu texto; não recebe texto do cliente. Valida vínculo à
+mensagem/conversa/turno atual, ordem, uso único e limite de duas sínteses simultâneas.
+Cada unidade reutiliza `/v1/aegis/speech`, prioridade e formato atuais, com ULID
+próprio. Cancelar/suplantar um turno cancela todos os requests. O limite é de 48
+unidades de até 1.500 caracteres, além do limite de saída já existente.
+
+O Android mantém um AudioTrack para todo o turno e só abre a continuação após
+geração final, processamento das unidades e drenagem real da última amostra.
+Depois disso, `POST /api/chat/turns/{id}/complete` libera o turno de modo idempotente;
+o servidor exige texto concluído e todas as unidades transferidas. EOF HTTP
+individual não conclui o turno. Clientes sem opt-in preservam suas rotas antigas.
+
+`FinalSpeechSegmentTests` e `OpenAiStreamingToolTests` verificam liberação antes
+do fim do modelo, persistência anterior à síntese, caracteres/escapes fragmentados,
+números e abreviações intactos, alteração terminal rejeitada, falha após download
+parcial, cancelamento de todas as unidades, ordem/replay/capacidade e conclusão.
+A política de memória é testada nas duas modalidades, mantendo suas escritas.
+São testes de contrato e persistência sintética, sem avaliação acústica física.
+
+O novo transporte de entrada está em
+[hands-free-realtime-stt](hands-free-realtime-stt.md); STT parcial nunca inicia chat.

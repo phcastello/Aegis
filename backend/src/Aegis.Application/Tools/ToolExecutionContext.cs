@@ -5,4 +5,5 @@ public sealed record ToolExecutionContext(
     Guid UserMessageId,
     string UserContent,
     string? Origin = null,
-    Guid? VoiceSessionId = null);
+    Guid? VoiceSessionId = null,
+    bool VoiceSegments = false);

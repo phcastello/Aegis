@@ -53,6 +53,10 @@ public static class HandsFreeReply
             "e continuation=continue somente quando uma continuação for útil; caso contrário, close. " +
             "continue abre no máximo dois segundos para início de fala após o fim real da reprodução. " +
             "Não altere permissões ou exigências de confirmação por ser voz.";
+        if (request.VoiceSegments)
+            context = context.Replace("hands_free_reply como única chamada, com speech contendo a resposta final",
+                "hands_free_reply_segments como única chamada, com segments contendo unidades finais ordenadas da resposta");
+        context += " Memória semântica é consultada sob demanda nesta rodada: quando um fato pessoal necessário não estiver no histórico ou contexto, use memory_search; não adivinhe. Considere também referências indiretas, preferências pertinentes, correções e validade temporal. Se a busca não trouxer evidência, reconheça a ausência.";
         var item = JsonSerializer.SerializeToElement(new { role = "developer", content = context });
         return prompt with
         {

@@ -10,6 +10,9 @@ public sealed class ActiveTurn : IDisposable
         Cancellation = new CancellationTokenSource();
     }
 
+    internal List<FinalSpeechSegment> SpeechSegments { get; } = [];
+    internal Dictionary<Guid, string> SegmentRequests { get; } = [];
+    internal HashSet<Guid> CompletedSegmentRequests { get; } = [];
     public Guid TurnId { get; }
     public Guid ConversationId { get; }
     public Guid? UserMessageId { get; internal set; }
@@ -27,3 +30,5 @@ public sealed class ActiveTurn : IDisposable
 
     public void Dispose() => Cancellation.Dispose();
 }
+
+public sealed record FinalSpeechSegment(Guid Id, int Sequence, Guid AssistantMessageId, string Content);

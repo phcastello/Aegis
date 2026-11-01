@@ -19,7 +19,42 @@ public sealed class VoiceService(
             await speechClient.CancelAsync(registration.SupersededNativeSpeechRequestId, CancellationToken.None);
         }
 
+        foreach (var native in registration.SupersededSegmentRequestIds ?? [])
+            await speechClient.CancelAsync(native, CancellationToken.None);
         return registration.Turn;
+    }
+
+    public async Task<VoiceStream> StartSegmentSpeechAsync(StartSegmentSpeechRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.TurnId == Guid.Empty || request.SpeechRequestId == Guid.Empty || request.AssistantMessageId == Guid.Empty || request.SegmentId == Guid.Empty || request.Sequence < 0)
+            throw new ArgumentException("Valid segment identifiers are required.");
+        var turn = turnRegistry.Find(request.TurnId) ?? throw new KeyNotFoundException("Unknown turn.");
+        var segment = turnRegistry.FindSpeechSegment(request.TurnId, request.SegmentId)
+            ?? throw new InvalidOperationException("The speech segment is not authorized.");
+        var message = await dbContext.GetChatMessageAsync(request.AssistantMessageId, cancellationToken)
+            ?? throw new KeyNotFoundException("Unknown assistant message.");
+        if (segment.AssistantMessageId != message.Id || segment.Sequence != request.Sequence || message.Role != ChatRoles.Assistant ||
+            message.ConversationId != turn.ConversationId || !turnRegistry.IsCurrent(turn.ConversationId, turn.TurnId))
+            throw new InvalidOperationException("The segment does not belong to this turn.");
+        var nativeId = NativeSpeechRequestId.Create();
+        if (!turnRegistry.TryBeginSegmentSpeech(turn.TurnId, segment.Id, request.SpeechRequestId, nativeId))
+            throw new InvalidOperationException("The segment was already requested, is out of order or exceeds queue capacity.");
+        try
+        {
+            var upstream = await speechClient.StreamSpeechAsync(new SpeechRequest(turn.TurnId, request.SpeechRequestId, nativeId,
+                segment.Content, turn.ConversationId), turn.Cancellation.Token);
+            if (!turnRegistry.IsCurrent(turn.ConversationId, turn.TurnId))
+            {
+                await upstream.DisposeAsync();
+                throw new OperationCanceledException(turn.Cancellation.Token);
+            }
+            return new VoiceStream(turn.TurnId, request.SpeechRequestId, turn.Cancellation.Token, upstream);
+        }
+        catch
+        {
+            await CancelTurnAsync(turn.TurnId, "segment_speech_failed", CancellationToken.None);
+            throw;
+        }
     }
 
     public async Task<VoiceStream> StartSpeechAsync(StartSpeechRequest request, CancellationToken cancellationToken = default)
@@ -101,6 +136,8 @@ public sealed class VoiceService(
             await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
         }
 
+        foreach (var native in cancellation.SegmentNativeSpeechRequestIds ?? [])
+            await speechClient.CancelAsync(native, CancellationToken.None);
         return cancellation.Result;
     }
 
@@ -111,6 +148,8 @@ public sealed class VoiceService(
         {
             await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
         }
+        foreach (var native in cancellation.SegmentNativeSpeechRequestIds ?? [])
+            await speechClient.CancelAsync(native, CancellationToken.None);
         return cancellation.Result;
     }
 
@@ -120,6 +159,8 @@ public sealed class VoiceService(
         var cancellations = turnRegistry.BeginShutdownAndCancelAll(reason);
         foreach (var cancellation in cancellations)
         {
+            foreach (var native in cancellation.SegmentNativeSpeechRequestIds ?? [])
+                await speechClient.CancelAsync(native, CancellationToken.None);
             if (cancellation.Result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(cancellation.NativeSpeechRequestId))
             {
                 await speechClient.CancelAsync(cancellation.NativeSpeechRequestId, CancellationToken.None);
@@ -134,6 +175,7 @@ public sealed class VoiceService(
         var turn = turnRegistry.FindBySpeechRequest(speechRequestId);
         if (turn is not null && !turn.Cancellation.IsCancellationRequested)
         {
+            if (turnRegistry.CompleteSegmentSpeech(speechRequestId)) return;
             turnRegistry.Complete(turn.TurnId);
         }
     }

@@ -13,5 +13,7 @@ public sealed class SendMessageRequest
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsHandsFree => Origin == "hands_free";
 
+    public bool VoiceSegments { get; init; }
+
     public string Content { get; init; } = string.Empty;
 }

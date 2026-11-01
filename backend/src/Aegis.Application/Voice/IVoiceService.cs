@@ -5,6 +5,8 @@ namespace Aegis.Application.Voice;
 public interface IVoiceService
 {
     Task<ActiveTurn> RegisterTurnAsync(Guid turnId, Guid conversationId, CancellationToken cancellationToken = default);
+    Task<VoiceStream> StartSegmentSpeechAsync(StartSegmentSpeechRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
     Task<VoiceStream> StartSpeechAsync(StartSpeechRequest request, CancellationToken cancellationToken = default);
     Task<CancelTurnResult> CancelSpeechAsync(Guid speechRequestId, CancellationToken cancellationToken = default);
     Task<CancelTurnResult> CancelTurnAsync(Guid turnId, string reason, CancellationToken cancellationToken = default);

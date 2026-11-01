@@ -67,7 +67,7 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
 
         try
@@ -165,14 +165,19 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
         var modelRequest = CreateModelRequest(promptResult, userContent, request);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
-                request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId), turnToken);
+                request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments), turnToken);
 
         var content = new StringBuilder();
+        ChatMessage? segmentedMessage = null;
+        var segments = new List<FinalSpeechSegment>();
+        var streamCompleted = false;
+        try
+        {
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
             EnsureCurrent(turn);
@@ -180,8 +185,30 @@ public sealed class ChatService(
             {
                 yield return ChatStreamEvent.ToolStatus(turn.TurnId, status.Category, status.State, status.Message);
             }
+            if (chunk.FinalSpeechSegment is { } segmentContent)
+            {
+                if (!request.IsHandsFree || !request.VoiceSegments) throw new InvalidOperationException("Unexpected speech segment.");
+                FinalSpeechSegments.Validate(segmentContent);
+                if (segments.Count > 0) content.Append(' ');
+                content.Append(segmentContent);
+                if (segmentedMessage is null)
+                {
+                    segmentedMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+                    dbContext.AddChatMessage(segmentedMessage);
+                }
+                else segmentedMessage.UpdateContent(content.ToString());
+                var segment = new FinalSpeechSegment(Guid.NewGuid(), segments.Count, segmentedMessage.Id, segmentContent);
+                segments.Add(segment);
+                segmentedMessage.AttachAuditData(null, null, null, SpeechSegmentMetadata(turn.TurnId, "generating", segments));
+                await dbContext.SaveChangesAsync(turnToken);
+                EnsureCurrent(turn);
+                if (!turnRegistry.TryAuthorizeSpeechSegment(turn.TurnId, segment)) throw new OperationCanceledException(turnToken);
+                TurnLatencyProfile.Mark("chat.final_segment", segment.Sequence);
+                yield return ChatStreamEvent.FinalSegment(turn.TurnId, conversation.Id, segmentedMessage.Id, segment.Id, segment.Sequence, segmentContent);
+            }
             if (!string.IsNullOrEmpty(chunk.Content))
             {
+                if (segments.Count > 0) throw new InvalidOperationException("A committed voice response cannot be replaced.");
                 content.Append(chunk.Content);
                 yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
@@ -199,28 +226,45 @@ public sealed class ChatService(
             EnsureCurrent(turn);
             TurnLatencyProfile.Mark("chat.text_ready", content.Length);
             var finalContent = content.ToString();
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
+            var assistantMessage = segmentedMessage ?? conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);
             }
 
-            dbContext.AddChatMessage(assistantMessage);
+            if (segmentedMessage is null) dbContext.AddChatMessage(assistantMessage);
             assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
-                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext, chunk.MetadataJson);
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
+                segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
                 await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
+                streamCompleted = true;
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
                     conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation);
             }
+            streamCompleted = true;
             yield break;
         }
 
         throw new InvalidOperationException("Model streaming ended before a final event was received.");
+        }
+        finally
+        {
+            if (!streamCompleted)
+            {
+                if (segmentedMessage is not null)
+                {
+                    segmentedMessage.AttachAuditData(segmentedMessage.Model, segmentedMessage.PromptSnapshot,
+                        segmentedMessage.RuntimeContextSnapshot, SpeechSegmentMetadata(turn.TurnId, "interrupted", segments));
+                    await dbContext.SaveChangesAsync(CancellationToken.None);
+                }
+                await voiceService.CancelTurnAsync(turn.TurnId, "text_stream_interrupted", CancellationToken.None);
+            }
+        }
     }
 
     public async Task<ConversationResponse?> GetConversationAsync(
@@ -343,6 +387,7 @@ public sealed class ChatService(
         IReadOnlyList<ChatMessage> history,
         string userContent,
         Guid conversationId,
+        bool handsFree,
         CancellationToken cancellationToken)
     {
         using var timing = TurnLatencyProfile.Measure("chat.prepare", metrics?.ChatPreparationSeconds);
@@ -372,7 +417,7 @@ public sealed class ChatService(
         if (reminders is not null && await TurnLatencyProfile.MeasureAsync("context.reminders", () => reminders.GetContextAsync(conversationId, cancellationToken)) is { } reminderContext)
             states.Add(reminderContext);
         var pendingState = string.Join("\n", states);
-        var automaticContext = hybrid is null ? MemoryAutomaticContextResult.Empty :
+        var automaticContext = handsFree || hybrid is null ? MemoryAutomaticContextResult.Empty :
             await TurnLatencyProfile.MeasureAsync("context.automatic_memory", () => hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken));
         var observedContext = memory is null ? MemoryObservedContextResult.Empty :
             await TurnLatencyProfile.MeasureAsync("context.observed_memory", () => memory.GetContextResultAsync(conversationId, cancellationToken));
@@ -388,6 +433,9 @@ public sealed class ChatService(
             UsedRelationIds = automaticContext.RelationIds.Distinct().ToArray()
         };
     }
+
+    private static string SpeechSegmentMetadata(Guid turnId, string state, IReadOnlyList<FinalSpeechSegment> segments, string? modelMetadata = null) =>
+        System.Text.Json.JsonSerializer.Serialize(new { voiceSegments = new { version = 1, turnId, state, segments }, modelMetadata });
 
     private async Task<MemoryActivitySnapshot?> CompleteMemoryActivityAsync(PromptBuildResult prompt,
         Guid conversationId, Guid userMessageId, Guid assistantMessageId, CancellationToken ct)
@@ -437,7 +485,7 @@ public sealed class ChatService(
         var response = await toolLoop.RunAsync(
             request,
             new ToolExecutionContext(conversationId, userMessageId, userContent,
-                clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId),
+                clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments),
             cancellationToken);
 
         return new ModelCompletionResponse(
@@ -550,6 +598,7 @@ public sealed class ChatService(
         if (request.IsHandsFree)
         {
             metadata["origin"] = HandsFreeReply.Origin;
+            if (request.VoiceSegments) metadata["voice_segments"] = "1";
             metadata["voice_session_id"] = request.VoiceSessionId!.Value.ToString("D");
         }
         return new ModelRequest(

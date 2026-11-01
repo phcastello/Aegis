@@ -1,6 +1,7 @@
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Voice;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
@@ -145,6 +146,9 @@ public sealed class OpenAIResponsesClient(
         string responseModel = model;
         var firstText = false;
         var firstArguments = false;
+        var segmentParser = request.Tools.Any(t => t.Name == FinalSpeechSegments.ToolName) ? new FinalSpeechSegmentParser() : null;
+        string? terminalItemId = null;
+        var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -280,6 +284,24 @@ public sealed class OpenAIResponsesClient(
                             // Arguments are not speech. This mark only bounds the potential
                             // overlap; the terminal call still requires full validation.
                             TurnLatencyProfile.Mark("model.first_argument_delta");
+                        }
+                        if (segmentParser is not null && eventType == "response.output_item.added" &&
+                            root.TryGetProperty("item", out var outputItem) &&
+                            outputItem.TryGetProperty("type", out var outputType) && outputType.GetString() == "function_call")
+                        {
+                            var itemId = outputItem.GetProperty("id").GetString()!;
+                            functionItemIds.Add(itemId);
+                            if (functionItemIds.Count > 1) throw new InvalidOperationException("Parallel calls are forbidden for final speech.");
+                            if (outputItem.GetProperty("name").GetString() == FinalSpeechSegments.ToolName) terminalItemId = itemId;
+                        }
+                        if (segmentParser is not null && terminalItemId is not null && eventType == "response.function_call_arguments.delta" &&
+                            root.TryGetProperty("item_id", out var argumentItem) && argumentItem.GetString() == terminalItemId)
+                        {
+                            foreach (var segment in segmentParser.Append(root.GetProperty("delta").GetString() ?? ""))
+                            {
+                                TurnLatencyProfile.Mark("model.final_segment", segment.Length);
+                                yield return new ModelToolStreamChunk(null, false, [], [], FinalSpeechSegment: segment);
+                            }
                         }
                         TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
 
@@ -483,7 +505,7 @@ public sealed class OpenAIResponsesClient(
                 name = tool.Name,
                 description = tool.Description,
                 parameters = tool.ParametersSchema,
-                strict = false
+                strict = tool.Name == FinalSpeechSegments.ToolName
             }),
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null
