@@ -211,3 +211,20 @@ São testes de contrato e persistência sintética, sem avaliação acústica f�
 
 O novo transporte de entrada está em
 [hands-free-realtime-stt](hands-free-realtime-stt.md); STT parcial nunca inicia chat.
+
+### Consulta temporal após a avaliação real
+
+Um caso sintético real que comparava um fato atual com um fato passado revelou
+uma lacuna: uma busca apenas atual não trouxe a versão histórica e o modelo
+encerrou declarando que não a encontrou. O registro histórico existia e não foi
+inventado um substituto. O contrato de `memory_search` e o contexto hands-free
+agora explicitam consultas separadas, com `asOf` no instante passado, e impedem
+interpretar ausência atual como ausência histórica. Fatos de outra pessoa não
+substituem a evidência solicitada. A decisão continua na rodada conversacional,
+sem classificador, pré-busca ou mudança de reasoning.
+
+`MemoryAsOfToolContractTests` executa a ferramenta real com persistência sintética:
+a mesma pergunta composta retorna somente o fato atual sem `asOf`, somente o fato
+válido no instante passado com offset explícito, e exclui um fato apagado em ambos.
+Uma data histórica inválida falha em vez de recair silenciosamente no presente.
+O caso real anterior permanece no relatório, separado da verificação posterior.
