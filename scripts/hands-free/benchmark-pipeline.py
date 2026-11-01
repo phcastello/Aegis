@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import secrets
 import time
+import urllib.error
 import urllib.request
 import uuid
 import wave
@@ -59,8 +60,11 @@ def tts_identity():
         headers["Authorization"] = "Bearer " + env["AEGIS_TTS_API_TOKEN"]
     try:
         with urllib.request.urlopen(urllib.request.Request(base + "/ready", headers=headers), timeout=15) as response:
-            return {k: v for k, v in response.headers.items()
-                    if k.lower().startswith(("x-aegis-tts-", "x-aegis-voice-"))}
+            return {"httpStatus": response.status, **{k: v for k, v in response.headers.items()
+                    if k.lower().startswith(("x-aegis-tts-", "x-aegis-voice-"))}}
+    except urllib.error.HTTPError as error:
+        return {"httpStatus": error.code, **{k: v for k, v in error.headers.items()
+                    if k.lower().startswith(("x-aegis-tts-", "x-aegis-voice-"))}}
     except Exception as error:
         return {"errorType": type(error).__name__}
 
@@ -179,6 +183,9 @@ def main():
             "endpointSimulatedMs": args.endpoint_ms, "waveformEndReference": True,
             "realtime": args.realtime, "segments": args.segments}, "samples": []}
     private = []
+    if output["ttsBefore"].get("httpStatus") != 200:
+        (args.directory / (args.label + ".json")).write_text(json.dumps(output, indent=2))
+        raise SystemExit("TTS is not ready; no transcription/model/speech calls started")
     node, credential = fixture_identity(state) if args.realtime else (None, None)
     try:
         for case in corpus:
