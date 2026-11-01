@@ -7,6 +7,7 @@ public sealed class SttOptions : ITranscriptionSettings
     public const string SectionName = "AegisStt";
 
     public bool Enabled { get; set; } = true;
+    public bool RealtimeEnabled { get; set; } = true;
     public string PrimaryProvider { get; set; } = "elevenlabs";
     public bool FallbackEnabled { get; set; } = true;
     public string FallbackProvider { get; set; } = "openai";

@@ -33,6 +33,7 @@ public static class NodeApiServices
         services.AddSingleton<Aegis.Application.Nodes.INodeLiveDomainSignals>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Application.Nodes.INodeConnections>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Api.Controllers.NodeHandshakeCapacity>();
+        services.AddSingleton<Aegis.Api.Controllers.RealtimeTranscriptionCapacity>();
         services.AddHostedService<Transport.NodeConnectionWatchdog>();
         services.AddRateLimiter(options =>
         {

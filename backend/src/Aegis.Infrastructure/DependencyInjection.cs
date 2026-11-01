@@ -95,6 +95,7 @@ public static class DependencyInjection
         {
             configuration.GetSection(SttOptions.SectionName).Bind(options);
             options.Enabled = ReadBool(configuration, "AEGIS_STT_ENABLED", options.Enabled);
+            options.RealtimeEnabled = ReadBool(configuration, "AEGIS_STT_REALTIME_ENABLED", options.RealtimeEnabled);
             options.PrimaryProvider = Read(configuration, "AEGIS_STT_PRIMARY_PROVIDER", options.PrimaryProvider);
             options.FallbackEnabled = ReadBool(configuration, "AEGIS_STT_FALLBACK_ENABLED", options.FallbackEnabled);
             options.FallbackProvider = Read(configuration, "AEGIS_STT_FALLBACK_PROVIDER", options.FallbackProvider);
@@ -119,6 +120,8 @@ public static class DependencyInjection
             options.BaseUrl = Read(configuration, "AEGIS_STT_OPENAI_BASE_URL", options.BaseUrl);
         });
         services.AddSingleton<ISttKeytermProvider, SttKeytermProvider>();
+        services.AddSingleton<IRealtimeTranscriptionConnector, RealtimeTranscriptionConnector>();
+        services.AddScoped<ElevenLabsRealtimeTranscription>();
         services.AddHttpClient<ElevenLabsTranscriptionClient>((provider, client) =>
         {
             var stt = provider.GetRequiredService<IOptions<ElevenLabsSttOptions>>().Value;
