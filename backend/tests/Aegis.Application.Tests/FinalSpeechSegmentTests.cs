@@ -1,4 +1,7 @@
 using System.Diagnostics.Metrics;
+using Aegis.Api.Controllers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -103,6 +106,45 @@ public sealed class FinalSpeechSegmentTests
     }
 
     [Fact]
+    public async Task RejectedDuplicateSpeechRequestCannotCancelItsOriginalOwner()
+    {
+        using var fixture = new Fixture();
+        await using var events = fixture.Chat.StreamMessageAsync(fixture.Request()).GetAsyncEnumerator();
+        await events.MoveNextAsync();
+        await events.MoveNextAsync();
+        var segment = events.Current;
+        var request = new StartSegmentSpeechRequest(segment.TurnId!.Value, Guid.NewGuid(), segment.AssistantMessageId!.Value, segment.SegmentId!.Value, 0);
+        await using var pcm = await fixture.Voice.StartSegmentSpeechAsync(request);
+        var controller = new VoiceSegmentsController(fixture.Voice)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        await controller.Speech(request, CancellationToken.None);
+        Assert.Equal(409, controller.Response.StatusCode);
+        Assert.False(pcm.TurnCancellationToken.IsCancellationRequested);
+        Assert.Empty(fixture.Speech.Cancelled);
+        Assert.True(fixture.Registry.IsCurrent(segment.ConversationId!.Value, segment.TurnId.Value));
+    }
+
+    [Fact]
+    public async Task RequestCancellationDuringTtsAcquisitionCancelsTheTurnAndNativeUnit()
+    {
+        using var fixture = new Fixture();
+        fixture.Speech.HoldAcquisition = true;
+        await using var events = fixture.Chat.StreamMessageAsync(fixture.Request()).GetAsyncEnumerator();
+        await events.MoveNextAsync();
+        await events.MoveNextAsync();
+        var segment = events.Current;
+        using var cancellation = new CancellationTokenSource();
+        var pending = fixture.Voice.StartSegmentSpeechAsync(new(segment.TurnId!.Value, Guid.NewGuid(), segment.AssistantMessageId!.Value, segment.SegmentId!.Value, 0), cancellation.Token);
+        await fixture.Speech.AcquisitionStarted.Task;
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(fixture.Registry.Find(segment.TurnId.Value)!.Cancellation.IsCancellationRequested);
+        Assert.Contains(fixture.Speech.Requests[0].NativeRequestId, fixture.Speech.Cancelled);
+    }
+
+    [Fact]
     public void SegmentOwnershipOrderingReplayAndCapacityAreBounded()
     {
         using var metrics = new AegisMetrics();
@@ -179,8 +221,15 @@ public sealed class FinalSpeechSegmentTests
     {
         public List<SpeechRequest> Requests { get; } = [];
         public List<string> Cancelled { get; } = [];
-        public Task<SpeechStreamResponse> StreamSpeechAsync(SpeechRequest request, CancellationToken cancellationToken = default)
-        { Requests.Add(request); return Task.FromResult(new SpeechStreamResponse(new MemoryStream([0, 1, 0, 2]), new("pcm_s16le", 24000, 1, "test"))); }
+        public bool HoldAcquisition;
+        public TaskCompletionSource AcquisitionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<SpeechStreamResponse> StreamSpeechAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            AcquisitionStarted.TrySetResult();
+            if (HoldAcquisition) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new SpeechStreamResponse(new MemoryStream([0, 1, 0, 2]), new("pcm_s16le", 24000, 1, "test"));
+        }
         public Task CancelAsync(string nativeSpeechRequestId, CancellationToken cancellationToken = default) { Cancelled.Add(nativeSpeechRequestId); return Task.CompletedTask; }
         public Task<SpeechServiceStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new SpeechServiceStatus(true, true, "test", 24000, 1));
     }

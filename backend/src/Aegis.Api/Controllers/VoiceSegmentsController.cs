@@ -11,9 +11,11 @@ public sealed class VoiceSegmentsController(IVoiceService voice) : ControllerBas
     public async Task Speech([FromBody] StartSegmentSpeechRequest request, CancellationToken cancellationToken)
     {
         var completed = false;
+        var acquired = false;
         try
         {
             await using var stream = await voice.StartSegmentSpeechAsync(request, cancellationToken);
+            acquired = true;
             var format = stream.Upstream.Format;
             Response.ContentType = "application/octet-stream";
             Response.Headers.CacheControl = "no-store";
@@ -47,7 +49,7 @@ public sealed class VoiceSegmentsController(IVoiceService voice) : ControllerBas
         catch (OperationCanceledException) { if (Response.HasStarted) HttpContext.Abort(); }
         finally
         {
-            if (!completed)
+            if (acquired && !completed)
                 await voice.CancelSpeechAsync(request.SpeechRequestId, CancellationToken.None);
         }
     }

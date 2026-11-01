@@ -26,6 +26,7 @@ public sealed class VoiceService(
 
     public async Task<VoiceStream> StartSegmentSpeechAsync(StartSegmentSpeechRequest request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (request.TurnId == Guid.Empty || request.SpeechRequestId == Guid.Empty || request.AssistantMessageId == Guid.Empty || request.SegmentId == Guid.Empty || request.Sequence < 0)
             throw new ArgumentException("Valid segment identifiers are required.");
         var turn = turnRegistry.Find(request.TurnId) ?? throw new KeyNotFoundException("Unknown turn.");
@@ -41,8 +42,9 @@ public sealed class VoiceService(
             throw new InvalidOperationException("The segment was already requested, is out of order or exceeds queue capacity.");
         try
         {
+            using var acquisition = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
             var upstream = await speechClient.StreamSpeechAsync(new SpeechRequest(turn.TurnId, request.SpeechRequestId, nativeId,
-                segment.Content, turn.ConversationId), turn.Cancellation.Token);
+                segment.Content, turn.ConversationId), acquisition.Token);
             if (!turnRegistry.IsCurrent(turn.ConversationId, turn.TurnId))
             {
                 await upstream.DisposeAsync();
