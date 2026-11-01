@@ -135,9 +135,11 @@ def segmented(base, payload, started):
                     body["speechRequestId"] = str(uuid.uuid4())
                     queued = time.perf_counter()
                     def fetch(body=body, queued=queued):
+                        requested = time.perf_counter()
                         with bench.http(base, "/api/voice/speech/segments", body) as audio:
                             validate_audio(audio)
-                            return {"sequence": body["sequence"], "requestAtMs": (queued-started)*1000,
+                            return {"sequence": body["sequence"], "queuedAtMs": (queued-started)*1000,
+                                "requestAtMs": (requested-started)*1000,
                                 "audio": bench.pcm(audio, started)}
                     future = worker.submit(fetch)
                     pending.append(future)
