@@ -157,6 +157,8 @@ class MainActivity : TauriActivity() {
   fun handsFreeManualAcquire(payload:String):String=NodeHandsFree.manualAcquire(this,payload)
   fun handsFreeManualRelease(payload:String):String=NodeHandsFree.manualRelease(this,payload)
   fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)
+  fun handsFreeCollectionConfigure(payload:String):String=NodeHandsFree.configureCollection(this,payload)
+  fun handsFreeCollectionDelete(payload:String):String=NodeHandsFree.deleteCollection(this)
   override fun onDestroy(){NodeManualSpeech.cancel();super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
 
 }

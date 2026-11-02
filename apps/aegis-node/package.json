@@ -22,7 +22,8 @@
     "version:check": "node scripts/version.mjs",
     "test:release": "node --test scripts/*.test.mjs",
     "build:android:release": "tauri android build --apk --target aarch64",
-    "test:rust:desktop": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib"
+    "test:rust:desktop": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib",
+    "test:hands-free-reviewer-browser": "node tests/hands-free-reviewer-browser.mjs"
   },
   "dependencies": {
     "@aegis/client": "file:../../packages/aegis-client",

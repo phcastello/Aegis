@@ -77,7 +77,7 @@ class NodeHandsFreeBackendTest {
       assertTrue(result.playedAudio)
       assertArrayEquals(byteArrayOf(1, 2, 3, 4), lastSink.bytes.toByteArray())
       assertTrue(result.continueListening)
-      assertEquals(listOf("stt", "transcribed", "chat", "tts_first_audio", "tts_fetch", "tts_total", "tts_playback"), stages)
+      assertEquals(listOf("transcription_started", "stt", "transcription_final", "transcribed", "chat", "tts_first_audio", "tts_fetch", "tts_total", "tts_playback"), stages)
       assertEquals(listOf("/api/voice/transcriptions", "/api/chat/messages", "/api/voice/speech"), fixture.requests.map { it.path })
       val transcription = fixture.requests[0]
       assertTrue(transcription.contentType.startsWith("multipart/form-data; boundary=aegis-"))
@@ -109,7 +109,7 @@ class NodeHandsFreeBackendTest {
         assertEquals(0,lastSink.bytes.size())
         assertFalse(result.continueListening)
         assertEquals(listOf("/api/voice/transcriptions"), fixture.requests.map { it.path })
-        assertEquals(listOf("stt", "empty"), stages)
+        assertEquals(listOf("transcription_started", "stt", "transcription_final", "empty"), stages)
       }
     }
   }

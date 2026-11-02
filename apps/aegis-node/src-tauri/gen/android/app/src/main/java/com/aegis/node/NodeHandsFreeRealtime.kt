@@ -19,7 +19,8 @@ internal class HandsFreeRealtimeTranscription(
     val requestId: String = UUID.randomUUID().toString(),
     private val trace: HandsFreeTurnLatency? = null,
     private val finalTimeoutMilliseconds: Long = 12000,
-    private val checkActive: () -> Unit = {}
+    private val checkActive: () -> Unit = {},
+    private val onPartial: (String) -> Unit = {}
 ) : AutoCloseable {
     private val lock = Any()
     private val completed = CountDownLatch(1)
@@ -30,6 +31,8 @@ internal class HandsFreeRealtimeTranscription(
     private var ready = false
     private var totalBytes = 0L
     private var finalText: String? = null
+    private val partialDisplay=HandsFreePartialDisplayLimiter()
+    private fun displayPartial(value:String) { try { onPartial(value) } catch (_:Exception) { /* Presentation cannot fail STT. */ } }
     // OkHttp's pre-connect queue is bounded here too, independently of its 16 MiB cap.
     private val pending = ArrayDeque<ByteArray>()
     private var pendingBytes = 0
@@ -44,7 +47,7 @@ internal class HandsFreeRealtimeTranscription(
         socket = transport.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
-                    checkIdentity(); require(text.length <= 65536)
+                    checkIdentity(); checkActive(); require(text.length <= 65536)
                     val event = JSONObject(text)
                     require(event.optString("transcriptionRequestId") == requestId)
                     synchronized(lock) {
@@ -59,10 +62,12 @@ internal class HandsFreeRealtimeTranscription(
                                 }
                                 if (committed) check(webSocket.send("{\"type\":\"commit\"}"))
                             }
-                            "partial" -> Unit // Never retained, rewritten or delivered to the conversation.
+                            "partial" -> if(ready)partialDisplay.offer(event.getString("text"))?.let{displayPartial(it)}
                             "final" -> {
                                 check(committed && finalText == null)
-                                finalText = event.getString("text"); completed.countDown()
+                                finalText = event.getString("text")
+                                partialDisplay.clear();displayPartial("")
+                                completed.countDown()
                                 trace?.mark("stt_response_received")
                             }
                             "error" -> failLocked()
@@ -84,7 +89,7 @@ internal class HandsFreeRealtimeTranscription(
             if (closed || failed) return
             try {
                 checkActive(); check(!committed)
-                require(totalBytes + count * 2 <= 720000) // Same 22.5s capture ceiling as the native ring+command.
+                require(totalBytes + count * 2 <= 720000) // Transport ceiling; controller applies its 20s post-activation bound.
                 val bytes = ByteArray(count * 2)
                 for (i in 0 until count) { bytes[i * 2] = samples[i].toByte(); bytes[i * 2 + 1] = (samples[i].toInt() shr 8).toByte() }
                 totalBytes += bytes.size
@@ -125,14 +130,16 @@ internal class HandsFreeRealtimeTranscription(
         return synchronized(lock) { if (!committed || failed || closed) null else finalText }
     }
     private fun failLocked() {
-        if(finalText!=null)return
+        if(failed || closed || finalText!=null)return
         failed = true; pending.forEach { it.fill(0) }; pending.clear(); pendingBytes = 0
+        partialDisplay.clear();displayPartial("")
         socket?.cancel(); completed.countDown()
     }
     private fun fail() = synchronized(lock) { if (!closed) failLocked() }
     override fun close() = synchronized(lock) {
         if (closed) return@synchronized
         closed = true; pending.forEach { it.fill(0) }; pending.clear(); pendingBytes = 0
+        partialDisplay.clear();displayPartial("")
         socket?.cancel(); completed.countDown()
     }
 }

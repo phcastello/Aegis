@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const source = path => readFileSync(new URL(`../src-tauri/${path}`, import.meta.url), 'utf8');
+const androidSource = name => source(`gen/android/app/src/main/java/com/aegis/node/${name}.kt`);
 
 test('hands-free selected capability keeps the closed app command on Android main only', () => {
   const config = JSON.parse(source('tauri.conf.json'));
@@ -34,4 +35,80 @@ test('Android framework gate runs real hands-free IPC before granting microphone
   assert.doesNotMatch(android, /mockIPC|__TAURI_INTERNALS__\s*=/);
   assert.ok(android.includes('hands_free_real_ipc_initial_state'));
   assert.ok(host.includes("phases.has('hands_free_real_ipc_initial_state')"));
+});
+
+test('activation collection controls retain their closed Rust JNI Activity and R8 contracts', () => {
+  const bridge = source('src/hands_free.rs');
+  const signature = bridge.match(/pub async fn node_hands_free\(([\s\S]*?)\)\s*->\s*Result/)[1];
+  const names = [...signature.matchAll(/^\s*(\w+)\s*:/gm)].map(match => match[1]);
+  assert.deepEqual(names, ['app', 'operation', 'enabled', 'diagnostic', 'collection_enabled', 'collection_limit_mi_b', 'lease_id', 'audio_kind', 'turn_id', 'assistant_message_id', 'speech_request_id']);
+  assert.match(signature, /collection_enabled:\s*Option<bool>/);
+  assert.match(signature, /collection_limit_mi_b:\s*Option<u32>/);
+  const configure = bridge.slice(bridge.indexOf('"collectionConfigure" =>'), bridge.indexOf('"collectionDelete" =>'));
+  assert.match(configure, /10\.\.=2048/);
+  assert.match(configure, /"handsFreeCollectionConfigure"/);
+  assert.match(configure, /json!\(\{\s*"enabled"\s*:\s*collection_enabled[\s\S]*?"limitMiB"\s*:\s*limit\s*\}\)/);
+  assert.match(bridge, /"collectionDelete"\s*=>\s*\("handsFreeCollectionDelete",\s*json!\(\{\}\)\)/);
+  assert.match(bridge, /_\s*=>\s*return Err\(HandsFreeError::new\("invalid_request"\)\)/);
+  const activity = androidSource('MainActivity');
+  const r8 = source('gen/android/app/proguard-rules.pro');
+  for (const [method, target] of [['handsFreeCollectionConfigure', 'configureCollection'], ['handsFreeCollectionDelete', 'deleteCollection']]) {
+    assert.match(activity, new RegExp(`fun ${method}\\(payload:String\\):String=NodeHandsFree\\.${target}\\(this(?:,payload)?\\)`));
+    assert.ok(r8.includes(`public java.lang.String ${method}(java.lang.String);`), `${method} must survive JNI reflection after R8`);
+  }
+});
+
+test('export asks Android SAF for a ZIP and returns state without exposing private recording paths', () => {
+  const bridge = source('src/hands_free.rs');
+  const exportBranch = bridge.slice(bridge.indexOf('"permission" | "assistant" | "import" | "export" =>'), bridge.indexOf('_ => return Err', bridge.indexOf('"permission" | "assistant" | "import" | "export" =>')));
+  assert.match(exportBranch, /"exportHandsFreeMetrics"/);
+  assert.match(exportBranch, /run_mobile_plugin_async\(method,\s*\(\)\)/);
+  const plugin = androidSource('NodeNotificationsPlugin');
+  const exportFlow = plugin.slice(plugin.indexOf('@Command fun exportHandsFreeMetrics'), plugin.indexOf('companion object', plugin.indexOf('@Command fun exportHandsFreeMetrics')));
+  assert.match(exportFlow, /Intent\.ACTION_CREATE_DOCUMENT/);
+  assert.match(exportFlow, /setType\("application\/zip"\)/);
+  assert.match(exportFlow, /Intent\.EXTRA_TITLE,\s*HandsFreeActivationCollection\.exportName\(\)/);
+  assert.match(exportFlow, /contentResolver\.openOutputStream\(uri,"wt"\)/);
+  assert.match(exportFlow, /runtime\.collection\.export\(output\)\s*\{runtime\.metrics\.export\(\)\}/);
+  assert.match(exportFlow, /invoke\.resolve\(JSObject\(NodeHandsFree\.state\(activity\)\)\)/);
+  assert.doesNotMatch(exportFlow, /\.absolutePath|file:\/\/|evaluateJavascript|loadUrl|toDataURL|Base64/);
+});
+
+test('local collection has no upload or logging dependency and uses backup-excluded private storage', () => {
+  const collector = androidSource('NodeHandsFreeActivationCollection');
+  assert.match(collector, /context\.noBackupFilesDir/);
+  assert.match(collector, /initialEnabled:Boolean=false/);
+  assert.match(collector, /ArrayBlockingQueue<Runnable>\(256\)/);
+  assert.doesNotMatch(collector, /NodeHandsFreeBackend|HandsFreeRealtimeTranscription|OkHttp|HttpURLConnection|java\.net|android\.net|android\.util\.Log|\bLog\.[diewv]\s*\(/);
+  const exports = [...collector.matchAll(/fun export\(([^)]*)\)/g)];
+  assert.equal(exports.length, 2);
+  assert.match(exports[0][1], /output:OutputStream,\s*metricsJson:String/);
+  assert.match(collector, /fun export\(output:OutputStream,metricsJson:\(\)->String\)/);
+  for(const candidate of exports)assert.doesNotMatch(candidate[1], /url|origin|credential|token|backend/i);
+});
+
+test('wake upload begins at the native decision suffix and cancellation uses the tested PCM prefix', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const capture = runtime.slice(runtime.indexOf('private fun capture('));
+  assert.doesNotMatch(capture, /ring\.copyTo\(\s*command\s*\)/);
+  assert.match(capture, /HandsFreeActivationBoundary\(detectorSamples-count,count,event\)/);
+  assert.match(capture, /buffer\.copyInto\(command,0,offset,count\)/);
+  assert.match(capture, /handsFreeSamplesBeforeCancellation\(/);
+  assert.match(capture, /it\.append\(command,length\)/);
+  assert.doesNotMatch(capture, /(?:realtime|activeBackend)\??\.[^\n]*(?:contextPcm|triggerContext|trigger_context|ring\.)/);
+  assert.match(capture, /collection\.finishCapture\(captureEvent\)/);
+  const execute = runtime.match(/active\.execute\(([^\n]*)\)/)[1];
+  assert.match(execute, /^command,session,conversationId,sink/);
+  assert.doesNotMatch(execute, /context|ring|trigger/i);
+});
+
+test('native first-event score observations survive JNI and R8 without exposing model or audio to the bridge', () => {
+  const audio = androidSource('NodeHandsFreeAudio');
+  const jni = source('gen/android/app/src/main/cpp/AegisMicroWakeWord_jni.cpp');
+  assert.match(audio, /external fun activationScores\(handle:Long\):FloatArray/);
+  assert.match(jni, /JNIEXPORT jfloatArray JNICALL Java_com_aegis_node_MicroWakeWordNative_activationScores/);
+  assert.match(jni, /aegis_mww_event_score\([\s\S]*?aegis_mww_event_average\(/);
+  assert.match(source('gen/android/app/proguard-rules.pro'), /-keep class com\.aegis\.node\.MicroWakeWordNative\s*\{\s*\*;\s*\}/);
+  const bridge = source('src/hands_free.rs');
+  assert.doesNotMatch(bridge, /"(?:activationScores|readRecording|uploadRecording|readModel|setThreshold|train|setWeights)"\s*=>/);
 });

@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { handsFree, handsFreeError, type HandsFreeDiagnosticCode, type HandsFreeOperation, type HandsFreeState } from '../services/handsFree.js';
+import { handsFree, handsFreeError, type HandsFreeDiagnosticCode, type HandsFreeOperation, type HandsFreeState, type HandsFreeOptions } from '../services/handsFree.js';
 
 export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   const state = ref<HandsFreeState | null>(null);
@@ -13,7 +13,7 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   let generation = 0;
   let refreshQueued = false;
 
-  async function request(operation: HandsFreeOperation, options?: { enabled: boolean; diagnostic: boolean }): Promise<void> {
+  async function request(operation: HandsFreeOperation, options?: HandsFreeOptions): Promise<void> {
     if (disposed) return;
     if (busy.value) { if (operation === 'state') refreshQueued = true; return; }
     const token = ++generation;
@@ -42,7 +42,11 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
       diagnostic: diagnostic ?? state.value.diagnostic
     } : undefined);
   }
+  async function configureCollection(enabled: boolean, limitMiB: number): Promise<void> {
+    if (!canAct.value || !state.value) return;
+    await request('collectionConfigure', { collectionEnabled: enabled, collectionLimitMiB: limitMiB });
+  }
   function dispose() { disposed = true; generation++; refreshQueued = false; }
   onBeforeUnmount(dispose);
-  return { state, busy, current, stale, canAct, error, diagnosticCode, refresh, run, dispose };
+  return { state, busy, current, stale, canAct, error, diagnosticCode, refresh, run, configureCollection, dispose };
 }

@@ -108,3 +108,35 @@ test('manual audio uses the same closed authorized command and releases a matchi
   assert.equal(calls[0].args.operation, 'manualAcquire'); assert.equal(calls[0].args.audioKind, 'capture');
   assert.equal(calls[1].args.operation, 'manualRelease'); assert.equal(calls[1].args.leaseId, calls[0].args.leaseId);
 });
+
+
+test('collection controls use typed closed bridge arguments without PCM or private paths', async () => {
+  globalThis.window = {}; const calls = [];
+  const collection = { enabled: false, limitMiB: 100, bytes: 0, ready: true, status: 'ready', skippedEvents: 0 };
+  mockIPC((command, args) => { calls.push({ command, args }); return { ...initial, collection }; });
+  await handsFree('collectionConfigure', { collectionEnabled: true, collectionLimitMiB: 250 });
+  await handsFree('collectionDelete'); await handsFree('export');
+  assert.deepEqual(calls, [
+    { command: 'node_hands_free', args: { operation: 'collectionConfigure', collectionEnabled: true, collectionLimitMiB: 250 } },
+    { command: 'node_hands_free', args: { operation: 'collectionDelete' } },
+    { command: 'node_hands_free', args: { operation: 'export' } }
+  ]);
+});
+
+test('collection states reject invalid limits, raw diagnostics and unbounded counters', async () => {
+  globalThis.window = {};
+  const valid = { enabled: false, limitMiB: 100, bytes: 0, ready: true, status: 'ready', skippedEvents: 0 };
+  for (const collection of [null, {}, { ...valid, limitMiB: 0 }, { ...valid, limitMiB: 2049 }, { ...valid, bytes: -1 }, { ...valid, skippedEvents: Number.MAX_SAFE_INTEGER+1 }, { ...valid, status: '/private/audio/error' }, { ...valid, enabled: 'false' }]) {
+    mockIPC(() => ({ ...initial, collection }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
+test('collection configuration requires fresh state and keeps explicit consent separate from diagnostic mode', async () => {
+  const calls = []; const collection = { enabled: false, limitMiB: 100, bytes: 0, ready: true, status: 'ready', skippedEvents: 0 };
+  const settings = useHandsFreeSettings(async (operation, options) => { calls.push({ operation, options }); return { ...initial, collection }; });
+  await settings.configureCollection(true,250); assert.equal(calls.length,0);
+  await settings.refresh(); await settings.configureCollection(true,250);
+  assert.deepEqual(calls[1],{ operation:'collectionConfigure',options:{collectionEnabled:true,collectionLimitMiB:250} });
+  assert.equal(settings.state.value.diagnostic,false);
+});

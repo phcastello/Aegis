@@ -17,6 +17,8 @@ pub async fn node_hands_free(
     operation: String,
     enabled: Option<bool>,
     diagnostic: Option<bool>,
+    collection_enabled: Option<bool>,
+    collection_limit_mi_b: Option<u32>,
     lease_id: Option<String>,
     audio_kind: Option<String>,
     turn_id: Option<String>,
@@ -30,6 +32,12 @@ pub async fn node_hands_free(
             json!({"enabled": enabled.ok_or_else(|| HandsFreeError::new("invalid_request"))?, "diagnostic": diagnostic.unwrap_or(false)}),
         ),
         "cancel" => ("handsFreeCancel", json!({})),
+        "collectionConfigure" => {
+            let limit = collection_limit_mi_b.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
+            if !(10..=2048).contains(&limit) { return Err(HandsFreeError::new("invalid_request")); }
+            ("handsFreeCollectionConfigure", json!({"enabled":collection_enabled.ok_or_else(|| HandsFreeError::new("invalid_request"))?,"limitMiB":limit}))
+        }
+        "collectionDelete" => ("handsFreeCollectionDelete", json!({})),
         "manualAcquire" | "manualRelease" => {
             let id = lease_id.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
             let id =

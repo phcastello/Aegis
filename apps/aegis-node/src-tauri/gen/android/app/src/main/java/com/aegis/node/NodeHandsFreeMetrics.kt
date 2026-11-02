@@ -216,7 +216,7 @@ internal class HandsFreeMetrics internal constructor(
         event("identity_boundary",JSONObject().put("identityId",selected));persist()
     }
     companion object {
-        private fun detectorConfiguration()=JSONObject().put("sampleRate",16000).put("featureStepMs",10).put("stride",3)
+        internal fun detectorConfiguration()=JSONObject().put("sampleRate",16000).put("featureStepMs",10).put("stride",3)
             .put("threshold",.5).put("scoreWindow",5).put("hysteresisFraction",.6).put("refractoryMs",1000)
             .put("endpointing",JSONObject().put("version",HandsFreeVad.VERSION).put("frameSamples",HandsFreeVad.FRAME_SAMPLES)
                 .put("onsetSamples",HandsFreeVad.ONSET_SAMPLES).put("noSpeechSamples",HandsFreeVad.NO_SPEECH_SAMPLES))

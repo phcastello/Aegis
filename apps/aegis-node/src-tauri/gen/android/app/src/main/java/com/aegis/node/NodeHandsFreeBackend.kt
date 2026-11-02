@@ -151,12 +151,12 @@ class NodeHandsFreeBackend internal constructor(
     try { return action() } finally { onStage(stage, (System.nanoTime() - start) / 1_000_000L) }
   }
 
-  internal fun beginCapture(trace: HandsFreeTurnLatency): HandsFreeRealtimeTranscription {
+  internal fun beginCapture(trace: HandsFreeTurnLatency, onPartial: (String) -> Unit = {}): HandsFreeRealtimeTranscription {
     check(!executing.get())
     if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
     checkCurrent()
     realtime?.close()
-    return HandsFreeRealtimeTranscription(transport, checkNotNull(scope), { checkCurrent() }, trace = trace, checkActive = {if(cancelled.get())throw CancellationException()}).also { realtime = it }
+    return HandsFreeRealtimeTranscription(transport, checkNotNull(scope), { checkCurrent() }, trace = trace, checkActive = {if(cancelled.get())throw CancellationException()}, onPartial = onPartial).also { realtime = it }
   }
   internal fun abortCapture() { realtime?.close(); realtime = null }
 
@@ -198,12 +198,14 @@ class NodeHandsFreeBackend internal constructor(
     val id=trace?.turnId?:UUID.randomUUID().toString()
     correlationId=id
     try {
+      onStage("transcription_started", 0)
       val realtimeAttempt = realtime
       val streamed = try { realtimeAttempt?.awaitFinal() } finally { realtimeAttempt?.close();if(realtime===realtimeAttempt)realtime=null }
       val transcript = streamed ?: run {
         if (realtimeAttempt != null) trace?.mark("stt_batch_fallback")
         transcribeBatch(wav)
       }
+      onStage("transcription_final", 0)
       // Wake word alone and empty STT never create a conversation or reach the model.
       val command = stripWakeWord(transcript)
       if (command.isBlank()) {

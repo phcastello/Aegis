@@ -113,16 +113,16 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Arquivo incompatível. Importe o modelo privado Aegis de 39.552 bytes selecionado na PoC.")}}
  }
  @Command fun exportHandsFreeMetrics(invoke:Invoke) {
-  startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,"aegis-hands-free-metrics.json"),"handsFreeExportCallback")
+  startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,HandsFreeActivationCollection.exportName()),"handsFreeExportCallback")
  }
  @ActivityCallback private fun handsFreeExportCallback(invoke:Invoke,result:ActivityResult) {
   val uri=result.data?.data
   if(result.resultCode!=Activity.RESULT_OK || uri==null){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
   handsFreeIo.execute{try{
-    val bytes=NodeHandsFree.runtime(activity).metrics.export().toByteArray(Charsets.UTF_8)
-    activity.contentResolver.openOutputStream(uri,"wt").use{output->require(output!=null);output.write(bytes)}
+    val runtime=NodeHandsFree.runtime(activity)
+    activity.contentResolver.openOutputStream(uri,"wt").use{output->require(output!=null);runtime.collection.export(output){runtime.metrics.export()}}
     invoke.resolve(JSObject(NodeHandsFree.state(activity)))
-  }catch(_:Exception){invoke.reject("Não foi possível exportar as métricas. Escolha outro destino.")}}
+  }catch(_:Exception){invoke.reject("Não foi possível exportar o ZIP. Escolha outro destino.")}}
  }
  companion object {private val handsFreeIo=java.util.concurrent.Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeFiles").apply{isDaemon=true}}}
 

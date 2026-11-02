@@ -22,7 +22,7 @@ class NodeHandsFreeRealtimeTest {
     private fun ready(id:String)=JSONObject().put("type","ready").put("transcriptionRequestId",id).put("minAudioMilliseconds",0).toString()
     private fun final(id:String)=JSONObject().put("type","final").put("transcriptionRequestId",id).put("text","não, 27, às 13h40, Ana").toString()
 
-    @Test fun streamsPrerollAndFreshPcmInOrderWithoutSendingCommitBeforeLocalEndpoint() {
+    @Test fun streamsSuppliedPostActivationPcmInOrderWithoutSendingCommitBeforeLocalEndpoint() {
         MockWebServer().use { server ->
             val frames=CopyOnWriteArrayList<ByteString>();val commands=CopyOnWriteArrayList<String>()
             val ready=CountDownLatch(1);val received=CountDownLatch(16)
@@ -36,14 +36,14 @@ class NodeHandsFreeRealtimeTest {
             val request=server.takeRequest(5,TimeUnit.SECONDS)!!;requestId.set(attempt.requestId)
             assertEquals("AegisNode test-secret",request.getHeader("Authorization"))
             assertEquals(attempt.requestId,request.requestUrl!!.queryParameter("transcriptionRequestId"))
-            val pre=ShortArray(40000){it.toShort()};val fresh=ShortArray(8000){(-it).toShort()}
-            attempt.append(pre,pre.size);attempt.append(fresh,fresh.size)
+            val initialPost=ShortArray(40000){it.toShort()};val fresh=ShortArray(8000){(-it).toShort()}
+            attempt.append(initialPost,initialPost.size);attempt.append(fresh,fresh.size)
             while(peer.get()==null)Thread.yield()
             peer.get().send(ready(attempt.requestId));ready.countDown()
             assertTrue(received.await(5,TimeUnit.SECONDS));assertTrue(commands.isEmpty())
             assertTrue(frames.all{it.size<=6400});assertEquals(96000,frames.sumOf{it.size})
             val delivered=frames.flatMap{it.toByteArray().toList()}.toByteArray()
-            val expected=handsFreeWav(pre+fresh,48000).copyOfRange(44,96044)
+            val expected=handsFreeWav(initialPost+fresh,48000).copyOfRange(44,96044)
             assertArrayEquals(expected,delivered)
             attempt.commit();assertEquals("não, 27, às 13h40, Ana",attempt.awaitFinal())
             assertEquals(listOf("{\"type\":\"commit\"}"),commands);attempt.close()
@@ -102,6 +102,54 @@ class NodeHandsFreeRealtimeTest {
             val attempt=HandsFreeRealtimeTranscription(client,identity(server),{},finalTimeoutMilliseconds=100)
             repeat(30){attempt.append(ShortArray(3200),3200)}
             attempt.commit();assertNull(attempt.awaitFinal());attempt.close()
+        }
+    }
+
+    @Test fun partialDisplayIsBoundedClearedOnFinalAndNeverBecomesACommand() {
+        MockWebServer().use {server->
+            val id=java.util.UUID.randomUUID().toString()
+            val shown=CopyOnWriteArrayList<String>();val displayed=CountDownLatch(1)
+            val peer=AtomicReference<WebSocket>()
+            server.enqueue(MockResponse().withWebSocketUpgrade(object:WebSocketListener(){
+                override fun onOpen(ws:WebSocket,response:Response){peer.set(ws);ws.send(ready(id))
+                    ws.send(JSONObject().put("type","partial").put("transcriptionRequestId",id).put("text","p".repeat(10000)).toString())}
+                override fun onMessage(ws:WebSocket,text:String){ws.send(final(id))}
+            }))
+            val attempt=HandsFreeRealtimeTranscription(client,identity(server),{},requestId=id,onPartial={shown.add(it);if(it.isNotEmpty())displayed.countDown()})
+            assertTrue(displayed.await(5,TimeUnit.SECONDS))
+            assertEquals(listOf("p".repeat(240)),shown.toList())
+            attempt.append(ShortArray(3200),3200);attempt.commit()
+            assertEquals("não, 27, às 13h40, Ana",attempt.awaitFinal())
+            assertEquals("",shown.last())
+            attempt.close()
+            peer.get().send(JSONObject().put("type","partial").put("transcriptionRequestId",id).put("text","late").toString())
+            assertFalse(shown.contains("late"))
+        }
+    }
+
+    @Test fun staleRequestOrRevokedCaptureNeverDisplaysPartialAndPresenterFailureCannotFailFinal() {
+        for(staleRequest in listOf(true,false))MockWebServer().use {server->
+            val peer=AtomicReference<WebSocket>();val active=AtomicBoolean(true)
+            val shown=CopyOnWriteArrayList<String>()
+            server.enqueue(MockResponse().withWebSocketUpgrade(object:WebSocketListener(){override fun onOpen(ws:WebSocket,response:Response){peer.set(ws)}}))
+            val attempt=HandsFreeRealtimeTranscription(client,identity(server),{},finalTimeoutMilliseconds=100,
+                checkActive={check(active.get())},onPartial={shown.add(it)})
+            server.takeRequest(5,TimeUnit.SECONDS)
+            while(peer.get()==null)Thread.yield()
+            peer.get().send(ready(attempt.requestId))
+            if(!staleRequest)active.set(false)
+            peer.get().send(JSONObject().put("type","partial").put("transcriptionRequestId",if(staleRequest)"another-request" else attempt.requestId).put("text","must not display").toString())
+            attempt.append(ShortArray(3200),3200);attempt.commit();assertNull(attempt.awaitFinal());attempt.close()
+            assertTrue(shown.all{it.isEmpty()})
+        }
+        MockWebServer().use {server->
+            val id=java.util.UUID.randomUUID().toString()
+            server.enqueue(MockResponse().withWebSocketUpgrade(object:WebSocketListener(){
+                override fun onOpen(ws:WebSocket,response:Response){ws.send(ready(id));ws.send(JSONObject().put("type","partial").put("transcriptionRequestId",id).put("text","temporary").toString())}
+                override fun onMessage(ws:WebSocket,text:String){ws.send(final(id))}
+            }))
+            val attempt=HandsFreeRealtimeTranscription(client,identity(server),{},requestId=id,onPartial={throw IllegalStateException("view unavailable")})
+            attempt.append(ShortArray(3200),3200);attempt.commit();assertEquals("não, 27, às 13h40, Ana",attempt.awaitFinal());attempt.close()
         }
     }
 }

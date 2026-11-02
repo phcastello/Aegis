@@ -28,10 +28,16 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
     private var ready=false
     private var registered=false
     private var foreground=false
+    private val presentation=HandsFreePresentationPolicy()
     private val main=Handler(Looper.getMainLooper())
     private val runtime by lazy{NodeHandsFree.runtime(this)}
     private val receiver=object:BroadcastReceiver(){override fun onReceive(context:Context,intent:Intent){
         if(intent.action==ACTION_STOP){runtime.configure(false,false);return}
+        if(intent.action==Intent.ACTION_SCREEN_OFF){
+            // The broadcast does not identify why the display went off. Conservatively
+            // honor every screen-off transition for the rest of this activation.
+            presentation.screenOff();NodeVoiceInteractionSession.current?.suppressScreenOn()
+        }
         snapshot(intent)
         if(intent.action=="android.media.action.MICROPHONE_MUTE_CHANGED")runtime.recoverFromSystem()
         else if(intent.action!="android.intent.action.BATTERY_CHANGED")runtime.reconcile()
@@ -57,7 +63,7 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
     private var modeListener:Any?=null
     override fun onReady() {
         super.onReady();if(tornDown || registered)return
-        ready=true;registered=true
+        ready=true;registered=true;current=this
         // The assistant has no need for content or screenshots from the foreground application.
         setDisabledShowContext(VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT)
         ContextCompat.registerReceiver(this,receiver,IntentFilter().apply{
@@ -97,17 +103,23 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
     }
     internal fun updateNotification(text:String){if(foreground)getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(text))}
     internal fun stopHandsFreeForeground(){if(foreground){foreground=false;stopForeground(STOP_FOREGROUND_REMOVE)}}
-    internal fun showHandsFreeSession(token:String){if(ready && !tornDown)showSession(Bundle().apply{putBoolean("activation",true);putString("sessionId",token)},0)}
+    internal fun acceptedHandsFreeActivation(token:String){presentation.accepted(token)}
+    internal fun presentationDecision(token:String,wakeScreen:Boolean):HandsFreePresentationPolicy.Decision =
+        if(ready && !tornDown)presentation.begin(token,wakeScreen) else HandsFreePresentationPolicy.Decision(false,false)
+    internal fun showHandsFreeSession(token:String,wakeScreen:Boolean=false){if(ready && !tornDown){
+        presentation.accepted(token)
+        showSession(Bundle().apply{putBoolean("activation",true);putString("sessionId",token);putBoolean("wakeScreen",wakeScreen)},0)
+    }}
     override fun onLaunchVoiceAssistFromKeyguard(){if(ready && !tornDown)showSession(Bundle(),0)}
     override fun onShutdown(){tearDown();super.onShutdown()}
     override fun onDestroy(){tearDown();super.onDestroy()}
     private fun tearDown() {
-        if(tornDown)return;tornDown=true;ready=false
+        if(tornDown)return;tornDown=true;ready=false;if(current===this)current=null
         if(registered){registered=false;try{unregisterReceiver(receiver)}catch(_:IllegalArgumentException){}
             val manager=getSystemService(AudioManager::class.java);manager.unregisterAudioDeviceCallback(devices);manager.unregisterAudioRecordingCallback(recording)
             if(Build.VERSION.SDK_INT>=31)modeListener?.let{manager.removeOnModeChangedListener(it as AudioManager.OnModeChangedListener)}
         }
         main.removeCallbacks(recovery);runtime.detach(this);stopHandsFreeForeground()
     }
-    companion object {private const val CHANNEL="aegis-hands-free";private const val NOTIFICATION=580;private const val ACTION_STOP="com.aegis.node.HANDS_FREE_STOP"}
+    companion object {@Volatile internal var current:NodeVoiceInteractionService?=null;private const val CHANNEL="aegis-hands-free";private const val NOTIFICATION=580;private const val ACTION_STOP="com.aegis.node.HANDS_FREE_STOP"}
 }

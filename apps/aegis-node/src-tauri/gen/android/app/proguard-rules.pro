@@ -48,6 +48,8 @@
 -keepclassmembers class com.aegis.node.MainActivity {
   public java.lang.String handsFreeState(java.lang.String);
   public java.lang.String handsFreeConfigure(java.lang.String);
+  public java.lang.String handsFreeCollectionConfigure(java.lang.String);
+  public java.lang.String handsFreeCollectionDelete(java.lang.String);
   public java.lang.String handsFreeManualAcquire(java.lang.String);
   public java.lang.String handsFreeManualRelease(java.lang.String);
   public java.lang.String handsFreeCancel(java.lang.String);
