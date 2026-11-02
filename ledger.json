@@ -607,8 +607,8 @@
     }
   ],
   "recommended": {
-    "version": "0.8.0-unstable.6",
-    "versionCode": 8000006,
-    "sha256": "d11c42ce7092a2cc627c4d9dadbec979789d2a0ef229a49daabaf3ee7670f153"
+    "version": "0.8.0-unstable.10",
+    "versionCode": 8000010,
+    "sha256": "83b6e116140280c88fb0c43794112934d118f733d210ede8f5b5d7e938cf363d"
   }
 }
