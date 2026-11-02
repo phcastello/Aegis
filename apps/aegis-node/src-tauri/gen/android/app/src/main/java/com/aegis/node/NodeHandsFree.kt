@@ -535,7 +535,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     val metadata=activationMetadata(if(diagnostic)"diagnostic" else "wake_word",event,offset,MicroWakeWordNative.activationScores(detector),token)
                                     if(diagnostic)metadata.put("groupId",recordingGroup)
                                     // Map the sample boundary to capture read return; buffering remains an explicit uncertainty.
-                                    metadata.put("activatedAt",java.time.OffsetDateTime.now().minusNanos((count-offset)*1_000_000_000L/16000).toString())
+                                    val observedAt=java.time.OffsetDateTime.now()
+                                    val inferenceDelay=(HandsFreeTurnLatency.now()-readReturnedAtMs).coerceAtLeast(0)*1_000_000L
+                                    metadata.put("activatedAt",observedAt.minusNanos(inferenceDelay+(count-offset)*1_000_000_000L/16000).toString())
                                     metadata.put("timestampBasis","sample_boundary_mapped_from_capture_read_return")
                                     val id=collection.begin(metadata,contextPcm)
                                     if(diagnostic)captureEvent=id else {sessionId=token;activeEvent=id;service?.acceptedHandsFreeActivation(token);holdSessionPower(token)}
