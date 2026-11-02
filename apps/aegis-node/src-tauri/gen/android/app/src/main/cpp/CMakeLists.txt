@@ -266,12 +266,12 @@ else()
   target_link_libraries(aegis_microwakeword tflite_micro_frontend tflite_micro_interpreter fvad)
 endif()
 
-# Optional JVM/native endpointing verification on a host, never packaged in an APK.
-option(AEGIS_BUILD_VAD_HOST_JNI "Expose VAD JNI in the host test library" OFF)
+# Optional JVM/native verification on a host, never packaged in an APK.
+option(AEGIS_BUILD_VAD_HOST_JNI "Expose audio JNI in the host test library" OFF)
 if(AEGIS_BUILD_VAD_HOST_JNI AND NOT ANDROID)
   find_path(AEGIS_JNI_INCLUDE jni.h HINTS "$ENV{JAVA_HOME}/include" REQUIRED)
   find_path(AEGIS_JNI_PLATFORM_INCLUDE jni_md.h HINTS "$ENV{JAVA_HOME}/include/linux" "$ENV{JAVA_HOME}/include/darwin" "$ENV{JAVA_HOME}/include/win32" REQUIRED)
-  target_sources(aegis_microwakeword PRIVATE AegisSpeechVad_jni.cpp)
+  target_sources(aegis_microwakeword PRIVATE AegisSpeechVad_jni.cpp AegisMicroWakeWord_jni.cpp)
   target_include_directories(aegis_microwakeword PRIVATE "${AEGIS_JNI_INCLUDE}" "${AEGIS_JNI_PLATFORM_INCLUDE}")
 endif()
 

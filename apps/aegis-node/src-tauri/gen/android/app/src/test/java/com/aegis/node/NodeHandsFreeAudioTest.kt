@@ -22,6 +22,103 @@ class NodeHandsFreeAudioTest {
         assertArrayEquals(stream.copyOfRange(24000,64000),command.copyOf(size))
         ring.clear();assertEquals(0,ring.copyTo(command))
     }
+    @Test fun conversationBeforeDecisionRemainsOnlyInLocalContext() {
+        val ring=HandsFreeRing()
+        val conversation=ShortArray(40000){111}
+        ring.append(conversation,conversation.size)
+        val block=ShortArray(3200){if(it<1760)222 else 333}
+        ring.append(block,block.size)
+        val boundary=HandsFreeActivationBoundary(40000,3200,41760)
+        val command=ShortArray(320000)
+        assertEquals(1440,boundary.copyPostTo(block,command))
+        assertTrue(command.take(1440).all{it.toInt()==333})
+        val context=boundary.context(ring)
+        assertEquals(33440,context.size)
+        assertTrue(context.take(30240).all{it.toInt()==111})
+        assertTrue(context.slice(30240 until 32000).all{it.toInt()==222})
+        assertTrue(context.takeLast(1440).all{it.toInt()==333})
+    }
+    @Test fun isolatedKeywordOrFalseActivationNeverSeedsOldSpeechIntoCommand() {
+        for(keyword in listOf(222,777)) {
+            val ring=HandsFreeRing();ring.append(speech(40000),40000)
+            val block=ShortArray(3200){if(it<3040)keyword.toShort() else 0}
+            ring.append(block,block.size)
+            val command=ShortArray(320000)
+            val count=HandsFreeActivationBoundary(40000,3200,43040).copyPostTo(block,command)
+            val capture=HandsFreeCommandCapture(command,count,voice)
+            repeat(15){capture.append(ShortArray(3200),3200)}
+            assertFalse(capture.hasSpeech)
+            assertFalse(capture.hasUsefulAudio)
+            assertTrue(command.take(capture.length).all{it.toInt()==0})
+        }
+    }
+    @Test fun unpausedCommandAndNearBlockEdgesPreserveEverySampleAfterDecision() {
+        for(offset in listOf(0,1,159,160,1760,3199,3200)) {
+            val block=ShortArray(3200){(it+1).toShort()}
+            val command=ShortArray(320000)
+            val boundary=HandsFreeActivationBoundary(9600,3200,9600L+offset)
+            val initial=boundary.copyPostTo(block,command)
+            val capture=HandsFreeCommandCapture(command,initial,neverSpeech)
+            val next=ShortArray(3200){(it+3201).toShort()}
+            capture.append(next,next.size)
+            assertArrayEquals(block.copyOfRange(offset,3200)+next,command.copyOf(capture.length))
+        }
+    }
+    @Test fun cancellationAtDecisionBoundaryProducesValidEmptyPostWav() {
+        val boundary=HandsFreeActivationBoundary(0,3200,3200)
+        val command=ShortArray(320000)
+        assertEquals(0,boundary.copyPostTo(speech(3200),command))
+        val wav=handsFreeWav(command,0)
+        val header=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(44,wav.size);assertEquals(36,header.getInt(4));assertEquals(0,header.getInt(40))
+        assertEquals(16000,header.getInt(24));assertEquals(1,header.getShort(22).toInt())
+    }
+    @Test fun prematureCancellationRetainsOnlyAlreadyCapturedPostSamples() {
+        val block=ShortArray(3200){it.toShort()};val command=ShortArray(320000)
+        val n=HandsFreeActivationBoundary(0,3200,3040).copyPostTo(block,command)
+        val capture=HandsFreeCommandCapture(command,n,neverSpeech)
+        val wav=handsFreeWav(command,capture.length)
+        val data=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(160,capture.length);assertEquals(320,data.getInt(40))
+        for(i in 0 until 160)assertEquals(block[3040+i],data.getShort(44+i*2))
+    }
+    @Test fun invalidDetectorOffsetsAreRejectedInsteadOfSendingRingPreroll() {
+        for(sample in listOf(3199L,6401L)) {
+            try {HandsFreeActivationBoundary(3200,3200,sample);fail("outside_block_accepted")}
+            catch(_:IllegalArgumentException){}
+        }
+    }
+    @Test fun initialPostSuffixCountsTowardTheTwentySecondHardLimit() {
+        val command=ShortArray(320000);speech(3040).copyInto(command)
+        val capture=HandsFreeCommandCapture(command,3040,voice)
+        repeat(99){assertFalse(capture.append(speech(3200),3200))}
+        assertTrue(capture.append(speech(3200),3200))
+        assertEquals(320000,capture.length)
+        assertTrue(capture.append(speech(3200),3200))
+        assertEquals(320000,capture.length)
+    }
+    @Test fun cancellationInsideReadRetainsTheExactPrefixBeforeItsClockBoundary() {
+        val count=3200;val readAt=1000L
+        for((cancelAt,expected) in listOf(799L to 0,800L to 0,801L to 16,900L to 1600,999L to 3184,1000L to 3200,1001L to 3200)) {
+            val accepted=handsFreeSamplesBeforeCancellation(count,readAt,cancelAt)
+            assertEquals(expected,accepted)
+            val pcm=ShortArray(count){it.toShort()}
+            val wav=handsFreeWav(pcm,accepted)
+            val data=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+            assertEquals(accepted*2,data.getInt(40))
+            for(i in 0 until accepted)assertEquals(pcm[i],data.getShort(44+i*2))
+        }
+    }
+    @Test fun cancellationOfEmptyOrPartialReadCannotAddSamples() {
+        assertEquals(0,handsFreeSamplesBeforeCancellation(0,1000,900))
+        assertEquals(0,handsFreeSamplesBeforeCancellation(0,1000,1001))
+        assertEquals(1,handsFreeSamplesBeforeCancellation(17,1000,999))
+        assertEquals(0,handsFreeSamplesBeforeCancellation(17,1000,998))
+        assertEquals(17,handsFreeSamplesBeforeCancellation(17,1000,1001))
+        assertEquals(0,handsFreeSamplesBeforeCancellation(3200,Long.MAX_VALUE,Long.MIN_VALUE))
+        try{handsFreeSamplesBeforeCancellation(-1,1000,999);fail("negative_count_accepted")}
+        catch(_:IllegalArgumentException){}
+    }
     @Test fun actualActivationPathDoesNotSeedSpeechForEightHundredMillisecondsOfSilence() {
         // Exact controller helper/initialization, including its full pre-roll. A keyword event is not evidence.
         val command=HandsFreeCommandCapture(ShortArray(360000),40000,neverSpeech)

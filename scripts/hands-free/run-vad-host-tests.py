@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--kotlin-version',default='2.2.10')
     parser.add_argument('--java',default='java')
     parser.add_argument('--continuous-wav',type=Path,help='Optional private 16kHz PCM16 synthetic continuous request for cue overlap regression')
+    parser.add_argument('--wake-model',type=Path,help='Also verify frozen wake detector JNI boundaries/scores using this private model')
     args=parser.parse_args();os.umask(0o077)
     library=args.library_dir/'libaegis_microwakeword.so'
     if not library.is_file():parser.error('Build the host JNI library first')
@@ -46,6 +47,9 @@ def main():
     base=REPO/'apps/aegis-node/src-tauri/gen/android/app/src'
     sources=[base/'main/java/com/aegis/node/NodeHandsFreeAudio.kt',base/'main/java/com/aegis/node/NodeHandsFreeSpeechClassifier.kt',
              base/'test/java/com/aegis/node/NodeHandsFreeAudioTest.kt',Path(__file__).with_name('NodeHandsFreeRealVadTest.kt')]
+    if args.wake_model:
+        if not args.wake_model.is_file():parser.error('Missing private frozen wake model')
+        sources.append(Path(__file__).with_name('NodeHandsFreeWakeBoundaryTest.kt'))
     classes=args.output/'classes';classes.mkdir()
     cp=os.pathsep.join(map(str,runtime))
     compile_cmd=[args.java,'-cp',os.pathsep.join(map(str,compiler)),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
@@ -53,6 +57,9 @@ def main():
     execute_cmd=[args.java,'--enable-native-access=ALL-UNNAMED','-Djava.library.path='+str(args.library_dir.resolve()),
                  '-Daegis.vad.privateRoot='+str(args.private_root.resolve()),'-cp',str(classes)+os.pathsep+cp,
                  'org.junit.runner.JUnitCore','com.aegis.node.NodeHandsFreeAudioTest','com.aegis.node.NodeHandsFreeRealVadTest']
+    if args.wake_model:
+        execute_cmd.insert(1,'-Daegis.wake.model='+str(args.wake_model.resolve()))
+        execute_cmd.append('com.aegis.node.NodeHandsFreeWakeBoundaryTest')
     if args.continuous_wav:
         if not args.continuous_wav.is_file():parser.error('Missing private continuous request WAV')
         execute_cmd.insert(1,'-Daegis.vad.continuousWav='+str(args.continuous_wav.resolve()))
@@ -63,7 +70,7 @@ def main():
             'platform':'host JVM/native, not Android execution or physical playback',
             'nativeLibrarySha256':hashlib.sha256(library.read_bytes()).hexdigest(),
             'kotlinVersion':version,'sourcesSha256':{str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
-            'passed':True,'modelUsed':False,'microphoneUsed':False,'audioOrTranscriptionsExported':False,
+            'passed':True,'modelUsed':bool(args.wake_model),'microphoneUsed':False,'audioOrTranscriptionsExported':False,
             'continuousCueOverlapTestEnabled':bool(args.continuous_wav)}
     (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
     print('Host VAD tests passed; private report: '+str(args.output/'result.json'))

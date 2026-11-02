@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <vector>
 #include "flatbuffers/flatbuffers.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -27,6 +28,7 @@ struct AegisDetector {
     int64_t samplesSeen=0, lastEvent=-16000;
     bool latched=false;
     float lastScore=0, maxScore=0;
+    float eventScore=std::numeric_limits<float>::quiet_NaN(), eventAverage=std::numeric_limits<float>::quiet_NaN();
     AegisDetector(const uint8_t* data,size_t length):model(data,data+length) {}
     bool init() {
         flatbuffers::Verifier verifier(model.data(),model.size());
@@ -58,10 +60,12 @@ struct AegisDetector {
            out->params.scale!=0.00390625f || out->params.zero_point!=0)return false;
         frontend=std::make_unique<MicroFrontendWrapper>(16000,10);
         pendingSize=0;frame=0;scoreCount=0;scoreIndex=0;scores.fill(0);samplesSeen=0;lastEvent=-16000;latched=false;lastScore=0;maxScore=0;
+        eventScore=eventAverage=std::numeric_limits<float>::quiet_NaN();
         return frontend->isInitialized();
     }
     int64_t process(const int16_t* data,size_t length) {
         int64_t event=-1;
+        eventScore=eventAverage=std::numeric_limits<float>::quiet_NaN();
         while(length) {
             size_t n=std::min(length,160-pendingSize);
             std::memcpy(pending.data()+pendingSize,data,n*sizeof(int16_t));pendingSize+=n;data+=n;length-=n;
@@ -86,7 +90,8 @@ struct AegisDetector {
                 maxScore=std::max(maxScore,average);
                 if(average<0.5f*0.6f)latched=false;
                 if(average>=0.5f && !latched && samplesSeen-lastEvent>=16000) {
-                    latched=true;lastEvent=samplesSeen;if(event<0)event=samplesSeen;
+                    latched=true;lastEvent=samplesSeen;
+                    if(event<0){event=samplesSeen;eventScore=lastScore;eventAverage=average;}
                 }
             }
         }
@@ -104,3 +109,5 @@ extern "C" bool aegis_mww_reset(void* handle){return handle && static_cast<Aegis
 extern "C" int64_t aegis_mww_process(void* handle,const int16_t* data,size_t length){return handle?static_cast<AegisDetector*>(handle)->process(data,length):-2;}
 extern "C" float aegis_mww_last_score(void* handle){return static_cast<AegisDetector*>(handle)->lastScore;}
 extern "C" float aegis_mww_max_score(void* handle){return static_cast<AegisDetector*>(handle)->maxScore;}
+extern "C" float aegis_mww_event_score(void* handle){return handle?static_cast<AegisDetector*>(handle)->eventScore:std::numeric_limits<float>::quiet_NaN();}
+extern "C" float aegis_mww_event_average(void* handle){return handle?static_cast<AegisDetector*>(handle)->eventAverage:std::numeric_limits<float>::quiet_NaN();}

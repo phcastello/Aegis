@@ -16,3 +16,9 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_aegis_node_MicroWakeWordNative_proce
     env->ReleaseShortArrayElements(audio,samples,JNI_ABORT);
     return result;
 }
+extern "C" JNIEXPORT jfloatArray JNICALL Java_com_aegis_node_MicroWakeWordNative_activationScores(JNIEnv* env,jobject,jlong handle) {
+    const jfloat scores[]={aegis_mww_event_score(reinterpret_cast<void*>(handle)),aegis_mww_event_average(reinterpret_cast<void*>(handle))};
+    auto result=env->NewFloatArray(2);
+    if(result)env->SetFloatArrayRegion(result,0,2,scores);
+    return result;
+}
