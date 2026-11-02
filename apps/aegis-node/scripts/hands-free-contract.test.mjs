@@ -112,3 +112,16 @@ test('native first-event score observations survive JNI and R8 without exposing 
   const bridge = source('src/hands_free.rs');
   assert.doesNotMatch(bridge, /"(?:activationScores|readRecording|uploadRecording|readModel|setThreshold|train|setWeights)"\s*=>/);
 });
+
+test('cancellation after endpoint closes the persistent event before creating or sending a backend turn', () => {
+  const runtime=androidSource('NodeHandsFree');
+  const run=runtime.slice(runtime.indexOf('private fun run(generation:'),runtime.indexOf('private fun capture('));
+  const captured=run.slice(run.indexOf('val command=capture('));
+  const cancelled=captured.match(/if\(sessionCancelled\)\{command\.fill\(0\);[\s\S]*?continue\}/)?.[0];
+  assert.ok(cancelled,'completed PCM still needs the cancellation gate before backend execution');
+  assert.match(cancelled,/finishEvent\("cancelled",endReason\?:"operation_cancelled"\)/);
+  assert.match(cancelled,/closePanel\(token\)/);
+  assert.ok(captured.indexOf(cancelled)<captured.indexOf('val session=sessionId?:UUID'));
+  assert.ok(captured.indexOf(cancelled)<captured.indexOf('active.execute(command,'));
+  assert.match(run,/finishEvent\("failed",if\(error is MicrophoneUnavailable\)"microphone_unavailable"/);
+});

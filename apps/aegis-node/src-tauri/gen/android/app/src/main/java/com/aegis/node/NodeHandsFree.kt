@@ -322,8 +322,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                 val command=capture(generation,detector,continuation)?:break
                 if(!current(generation)){command.fill(0);break}
                 if(command.isEmpty()){val token=sessionId;synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
+                if(sessionCancelled){command.fill(0);val token=sessionId;synchronized(lock){finishEvent("cancelled",endReason?:"operation_cancelled")};continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val session=sessionId?:UUID.randomUUID().toString().also{sessionId=it}
-                if(sessionCancelled){command.fill(0);val token=sessionId;continuation=false;conversationId=null;sessionId=null;backend=null;closePanel(token);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val turnIdentity=metrics.identityToken()
                 val trace=capturedTurnLatency
                 var turnOutcome="failed"
@@ -357,8 +357,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                 }
                 if(!MicroWakeWordNative.reset(detector))error("detector_reset")
             }
-        }catch(_:Throwable) {
+        }catch(error:Throwable) {
             if(current(generation)) {
+                synchronized(lock){finishEvent("failed",if(error is MicrophoneUnavailable)"microphone_unavailable" else if(detector==0L)"model_runtime_unavailable" else "capture_or_detector_failure")}
                 metrics.add("capture_failures");main.post{if(epoch==generation)service?.stopHandsFreeForeground()}
                 if(detector==0L){modelReady=false;setState("model_incompatible","Falha de integridade ou compatibilidade do detector. Importe novamente o modelo privado.")}
                 else {setState("microphone_unavailable","Escuta indisponível: confira o microfone, chamadas, permissões e o assistente padrão.")
