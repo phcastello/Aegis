@@ -161,12 +161,12 @@ internal class HandsFreeActivationCollection internal constructor(
         data.fill(0);pcm.fill(0)
         if(name==POST)record.postSamples+=take else record.contextSamples+=take
         // Keep RIFF sizes usable after an abrupt process death. The writer never runs on capture.
-        patchWav(File(record.folder,name))
+        if(patchWav(File(record.folder,name)))addIssue(record.metadata,"storageIssues","wav_header_repaired")
     }
     private fun checkpoint(record:Record) {
         for(name in listOf(CONTEXT,POST)) {
             val file=File(record.folder,name)
-            if(file.exists()){patchWav(file);record.metadata.put(if(name==CONTEXT)"triggerContext" else "postActivation",audioInfo(file,name))}
+            if(file.exists()){if(patchWav(file))addIssue(record.metadata,"storageIssues","wav_header_repaired");record.metadata.put(if(name==CONTEXT)"triggerContext" else "postActivation",audioInfo(file,name))}
             else addIssue(record.metadata,"storageIssues","missing_$name")
         }
         record.metadata.put("captureClosed",record.captureClosed)
@@ -251,13 +251,18 @@ internal class HandsFreeActivationCollection internal constructor(
         fun exportName()="aegis-handsfree-${OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ssxx"))}.zip"
         private fun atomicJson(file:File,row:JSONObject){val temp=File(file.parentFile,file.name+".tmp");FileOutputStream(temp).use{it.write(row.toString(2).toByteArray(Charsets.UTF_8));it.fd.sync()};check(temp.renameTo(file))}
         private fun writeWav(file:File,pcm:ShortArray){FileOutputStream(file).use{it.write(handsFreeWav(pcm,pcm.size));it.fd.sync()}}
-        private fun patchWav(file:File) {
+        private fun patchWav(file:File):Boolean =
             RandomAccessFile(file,"rw").use{f->
+                val header=handsFreeWav(ShortArray(0),0)
+                val previous=ByteArray(44)
+                val available=f.read(previous)
+                val damaged=available<44 || header.indices.any{it !in 4..7 && it !in 40..43 && previous[it]!=header[it]}
                 val count=((f.length()-44).coerceAtLeast(0)/2)*2;f.setLength(44+count)
-                fun le(offset:Long,value:Long){f.seek(offset);repeat(4){f.write(((value shr (it*8)) and 255).toInt())}}
-                le(4,36+count);le(40,count);f.fd.sync()
+                val sizes=java.nio.ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                sizes.putInt(4,(36+count).toInt());sizes.putInt(40,count.toInt())
+                f.seek(0);f.write(header);f.fd.sync()
+                damaged
             }
-        }
         private fun audioInfo(file:File,path:String)=JSONObject().put("path",path).put("sampleRate",16000).put("channels",1).put("encoding","PCM16LE")
             .put("samples",((file.length()-44)/2).coerceAtLeast(0)).put("durationMs",((file.length()-44).coerceAtLeast(0)*1000/32000))
             .put("sha256",file.inputStream().use{input->val digest=MessageDigest.getInstance("SHA-256");val buffer=ByteArray(8192);while(true){val n=input.read(buffer);if(n<0)break;digest.update(buffer,0,n)};digest.digest().joinToString(""){"%02x".format(it)}})

@@ -12,6 +12,24 @@ import java.time.OffsetDateTime
 import java.util.zip.ZipInputStream
 
 class NodeHandsFreeActivationCollectionTest {
+    @Test fun crashDuringWavHeaderWriteRebuildsCanonicalHeaderAndPreservesRecoverablePcm() {
+        for(headerLength in listOf(0,10,44)) {
+            val(store,dir)=store()
+            try {
+                store.begin(JSONObject(),ShortArray(0))!!.let{store.appendPost(it,shortArrayOf(101,-202,303))};store.awaitIdle()
+                val wav=dir.walkTopDown().single{it.name==HandsFreeActivationCollection.POST}
+                java.io.RandomAccessFile(wav,"rw").use{file->if(headerLength<44)file.setLength(headerLength.toLong()) else {file.seek(0);file.writeInt(0)}}
+                val recovered=HandsFreeActivationCollection(dir,asset={byteArrayOf()});recovered.awaitIdle()
+                val zip=archive(recovered);val row=JSONObject(zip.getValue("manifest.jsonl").decodeToString().trim())
+                val audio=row.getJSONObject("postActivation");val bytes=zip.getValue(audio.getString("path"))
+                val expected=if(headerLength<44)ShortArray(0) else shortArrayOf(101,-202,303)
+                assertArrayEquals(handsFreeWav(expected,expected.size),bytes)
+                assertEquals(hash(bytes),audio.getString("sha256"));assertEquals(expected.size,audio.getInt("samples"))
+                assertTrue(row.getJSONArray("storageIssues").toString().contains("wav_header_repaired"))
+                assertTrue(row.isNull("endedAt"));assertEquals("interrupted",row.getString("finalState"))
+            }finally{dir.deleteRecursively()}
+        }
+    }
     @Test fun failedSnapshotCleansStagingAndPreservesOriginalEvents() {
         val(store,dir)=store()
         try {
