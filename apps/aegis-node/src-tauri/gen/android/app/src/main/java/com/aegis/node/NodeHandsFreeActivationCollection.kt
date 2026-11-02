@@ -128,15 +128,22 @@ internal class HandsFreeActivationCollection internal constructor(
         if(extra!=null)for(key in extra.keys())result.put(key,extra.get(key))
         if(!enqueue {complete(id,result)}){pendingFinishes[id]=result;enqueue {}}
     }
-    private fun enqueue(task:()->Unit):Boolean=try {executor.execute{try{task()}catch(_:Throwable){recordProblem("storage_failure")}finally{drainPending();persistStatusIfNeeded()}};true}catch(_:java.util.concurrent.RejectedExecutionException){recordProblem("persistence_queue_full");false}
+    private fun enqueue(task:()->Unit):Boolean=try {executor.execute{try{task()}catch(_:Throwable){recordProblem("storage_failure")}finally{
+        // Cleanup failure is still a storage failure. It must never escape the worker
+        // into Android's uncaught-exception handler and terminate normal voice capture.
+        try{drainPending()}catch(_:Throwable){recordProblem("storage_failure")}
+        persistStatusIfNeeded()
+    }};true}catch(_:java.util.concurrent.RejectedExecutionException){recordProblem("persistence_queue_full");false}
     private fun drainPending() {
         for((id,issue) in pendingIssues.entries.toList())sessions[id]?.let {record->addIssue(record.metadata,"captureIssues",issue);pendingIssues.remove(id)}
         // Fallback controls execute only after all PCM queued before them has drained.
         if(executor.queue.isNotEmpty())return
         for(id in pendingCaptureClose.toList())sessions[id]?.let{record->
+            try {
             record.captureClosed=true
             pendingCaptureDetails.remove(id)?.let{details->for(key in details.keys())record.metadata.put(key,details.get(key))}
             checkpoint(record);pendingCaptureClose.remove(id)
+            }catch(_:Throwable){addIssue(record.metadata,"storageIssues","capture_finalization_failed");recordProblem("storage_failure")}
         }
         for((id,result) in pendingFinishes.entries.toList())complete(id,result)
     }

@@ -12,6 +12,33 @@ import java.time.OffsetDateTime
 import java.util.zip.ZipInputStream
 
 class NodeHandsFreeActivationCollectionTest {
+    @Test fun storageFailureWhileDrainingSaturatedCaptureCloseNeverEscapesWriter() {
+        val(store,dir)=store()
+        val release=java.util.concurrent.CountDownLatch(1)
+        try {
+            val id=store.begin(JSONObject(),ShortArray(0))!!;store.awaitIdle()
+            val executor=store.javaClass.getDeclaredField("executor").also{it.isAccessible=true}.get(store) as java.util.concurrent.ThreadPoolExecutor
+            val started=java.util.concurrent.CountDownLatch(1)
+            val escaped=java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+            val writer=java.util.concurrent.atomic.AtomicReference<Thread>()
+            executor.execute{writer.set(Thread.currentThread());Thread.currentThread().uncaughtExceptionHandler=Thread.UncaughtExceptionHandler{_,error->escaped.add(error)};started.countDown();release.await()}
+            assertTrue(started.await(5,java.util.concurrent.TimeUnit.SECONDS))
+            val event=dir.walkTopDown().single{it.name=="event.json"}
+            val obstruction=java.io.File(event.parentFile,"event.json.tmp");assertTrue(obstruction.mkdir())
+            repeat(256){store.appendPost(id,shortArrayOf(it.toShort()))}
+            store.finishCapture(id) // Saturated control queue falls back to the drain path.
+            release.countDown()
+            val deadline=System.nanoTime()+10_000_000_000L
+            while(System.nanoTime()<deadline && (executor.activeCount>0 || executor.queue.isNotEmpty()))Thread.sleep(10)
+            assertEquals(0,executor.activeCount);assertTrue(executor.queue.isEmpty())
+            assertTrue("No storage error may reach Android's process-killing exception handler",escaped.isEmpty())
+            assertTrue(writer.get().isAlive);assertEquals("storage_failure",store.state().getString("status"))
+            assertTrue(obstruction.delete());store.awaitIdle();store.finish(id,"cancelled","explicit_cancel")
+            val row=JSONObject(archive(store).getValue("manifest.jsonl").decodeToString().trim())
+            assertEquals(256,row.getJSONObject("postActivation").getInt("samples"))
+            assertTrue(row.getJSONArray("storageIssues").toString().contains("capture_finalization_failed"))
+        }finally{release.countDown();dir.deleteRecursively()}
+    }
     @Test fun crashDuringWavHeaderWriteRebuildsCanonicalHeaderAndPreservesRecoverablePcm() {
         for(headerLength in listOf(0,10,44)) {
             val(store,dir)=store()
