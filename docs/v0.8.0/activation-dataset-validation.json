@@ -1,0 +1,193 @@
+{
+  "schema": 1,
+  "branch": "fix/v0.8.0-activation-lifecycle",
+  "model": {
+    "version": "aegis-mww-fleurs-dev-2026-10-31",
+    "sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+    "parametersChanged": false
+  },
+  "nativeParity": {
+    "schema": 1,
+    "passed": true,
+    "platform": "host native C API; no physical Android validation",
+    "modelSha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+    "baselineLibrarySha256": "7fb79993fbe65113661c9cb035d9958b34a7b23fdd988e9ddacfd2fc8d72fd75",
+    "candidateLibrarySha256": "e97e93581919b8542d5c05402af38642e06268bde26bc52f5169885cd0fd6e59",
+    "fixtures": 37,
+    "samples": 1856302,
+    "activations": 30,
+    "processComparisons": 14596,
+    "chunkPatterns": [
+      [
+        160
+      ],
+      [
+        3200
+      ],
+      [
+        17,
+        257,
+        89,
+        480,
+        3200
+      ]
+    ],
+    "eventsAndScoresExactlyEqual": true,
+    "eventScoresIndependentOfBatching": true
+  },
+  "validation": {
+    "androidKotlinUnit": {
+      "tests": 105,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "hostKotlinJni": {
+      "passed": true,
+      "tests": 31,
+      "physicalMicrophone": false,
+      "optionalContinuousCueFixtureEnabled": false,
+      "executed": 30,
+      "conditionalNotExecuted": 1
+    },
+    "node": {
+      "passed": 166,
+      "failed": 0
+    },
+    "nodeBuildAndTypecheck": true,
+    "releaseBridgeContracts": {
+      "passed": 59,
+      "failed": 0
+    },
+    "rustPortable": {
+      "passed": 90,
+      "failed": 0,
+      "ignored": 2
+    },
+    "offlineReviewer": {
+      "platform": "Chromium file://, synthetic WAV fixtures",
+      "wavDecodeAndPlayback": true,
+      "labelsAndKeyboard": true,
+      "datasetZipAndHashes": true,
+      "outboundHttpRequests": 0
+    },
+    "settingsBrowser": {
+      "passed": true,
+      "nativeIpc": "mocked"
+    },
+    "physicalAndroid": {
+      "available": false,
+      "performed": false,
+      "connectedAdbDevices": 0
+    },
+    "collectorToReviewerIntegration": {
+      "schema": 1,
+      "passed": true,
+      "platform": "real collector on host JVM + Chromium file://; synthetic PCM; no physical Android",
+      "events": 1,
+      "nestedWavs": 2,
+      "hashesValid": true,
+      "groupPreserved": true,
+      "playersPlayed": true,
+      "humanLabelInitiallyNull": true,
+      "outboundHttpRequests": 0,
+      "sourceCommit": "00f21ff816df67df9ba84085590507bc3e5c14cc"
+    }
+  },
+  "publication": {
+    "components": [
+      "native"
+    ],
+    "pendingMigrations": [],
+    "previousBackendSha": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "previousPwaSha": "350f892442acba5e1826ee60d376935c75a4fd49",
+    "status": "published-recommended",
+    "sourceCommit": "00f21ff816df67df9ba84085590507bc3e5c14cc",
+    "version": "0.8.0-unstable.10",
+    "androidVersionCode": 8000010,
+    "runId": 41375742888,
+    "url": "https://github.com/phcastello/Aegis/actions/runs/41375742888",
+    "cancelledAttempts": [
+      {
+        "version": "0.8.0-unstable.7",
+        "sourceCommit": "ff8a1ece7060d106630bfd52a9f511a8f8a640e2",
+        "runId": 41373906229,
+        "conclusion": "cancelled",
+        "published": false,
+        "reason": "repair interrupted WAV header recovery before publication"
+      },
+      {
+        "version": "0.8.0-unstable.8",
+        "sourceCommit": "b9101a558b797e05c4a5214524df7acb08b45784",
+        "runId": 41374443282,
+        "conclusion": "cancelled",
+        "published": false,
+        "reason": "finalize persistent event on cancellation after endpoint and before STT"
+      },
+      {
+        "version": "0.8.0-unstable.9",
+        "sourceCommit": "ddba654da2245e15711ec35a34c4425d638f553d",
+        "runId": 41375134665,
+        "conclusion": "cancelled",
+        "published": false,
+        "reason": "isolate fallback finalization I/O failure from Android uncaught exception handler"
+      }
+    ],
+    "ciConclusion": "success",
+    "ciCompletedAt": "2026-11-02T02:14:00Z",
+    "releasePublishedAt": "2026-11-02T02:13:52Z",
+    "releaseUrl": "https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.10",
+    "recommendedFeedVerified": true,
+    "acceptance": "skipped_by_preview_policy",
+    "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be"
+  },
+  "productionBackendPwaChanged": false,
+  "limitations": [
+    "No physical Android validation",
+    "Waking screen is best effort; no keyguard dismissal or forced screen off",
+    "Async persistence may lose unwritten tail at process death; recoverable files finalized without invented termination timestamp",
+    "Storage/queue exhaustion reported; no automatic deletion",
+    "Browser dataset assembly depends on available RAM; local folder selection required"
+  ],
+  "artifactVerification": {
+    "schema": 1,
+    "passed": true,
+    "sourceCommit": "00f21ff816df67df9ba84085590507bc3e5c14cc",
+    "version": "0.8.0-unstable.10",
+    "androidVersionCode": 8000010,
+    "feedMatchesSignedArtifacts": true,
+    "artifacts": {
+      "Aegis-Android-arm64.apk": {
+        "sha256": "d8a742b43d6a04d5113b2cbdb423591d3092b0f003391fb83b79089db549dbd4",
+        "bytes": 27835837
+      },
+      "Aegis-Windows-x86_64-Setup.exe": {
+        "sha256": "0c27fdcd572ebd24686e155ce5ccbd2d32314710aa5c5e958ece71908c6bed60",
+        "bytes": 6393014
+      },
+      "Aegis-Windows-x86_64-Setup.exe.sig": {
+        "sha256": "b984441521a7f43cee1b2335caa59a6b24e011c9b7107f2c74263e8c6fc8c06e",
+        "bytes": 456
+      }
+    },
+    "reviewerAssetsMatchSource": {
+      "index.html": "1fa2e86d6500d6f9bd1e72816292fe0912a5fbc4ac06f6c32122cf61ad2b6a6b",
+      "reviewer.js": "01105f63abe130840c085827e08dc4fcdddc17a09f36ea8771ae6dca720c8206",
+      "reviewer.css": "978ae027fb417b912bc5083e68872b93d02661ebdaa18e1b5248065dae3e8c8c",
+      "README.txt": "ec77c3f702ddbe7761fc86a82c10a7abecd04cfee02c3452d20be93c07345a4d"
+    },
+    "newBridgeAndScoreNamesPresentAfterR8": true,
+    "scoreJniSymbolPresent": true,
+    "noRecordingsOrPrivateTfliteInApk": true,
+    "windowsUpdaterSignatureAndVersionVerified": true,
+    "androidApkSignatureSchemes": [
+      "v2",
+      "v3"
+    ],
+    "androidCertificateSha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "zipalign16KiB": true,
+    "physicalValidation": false,
+    "publishedDownloadsMatchSignedArtifacts": true,
+    "unauthenticatedRecommendedFeedVerified": true
+  }
+}
