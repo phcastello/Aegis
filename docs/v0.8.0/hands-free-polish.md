@@ -117,6 +117,13 @@ desliga a decoração e a interpolação; o nível real pode atualizar em 5 Hz.
 Erros apresentam frase curta e fechamento limitado, mantendo detalhes nas
 configurações/diagnóstico existentes.
 
+O cancelamento genérico também fecha o erro depois de o turno ter terminado.
+O pedido guarda um snapshot da apresentação; antes de fechar, o callback exige
+runtime ainda inativo, mesma instância e mesmo snapshot. Nova apresentação,
+ocultação ou destruição invalida esse snapshot. Assim, um cancelamento atrasado
+não fecha o painel da próxima sessão, inclusive quando o Android reutiliza a
+mesma instância da janela.
+
 ## Identidade editorial
 
 `releaseIdentity.ts` reconhece toda a família `0.8.x`, incluindo
@@ -144,14 +151,14 @@ Verificações executadas em 04/11/2026, com fontes congeladas ao final da revis
 
 | Verificação | Resultado e limite |
 | --- | --- |
-| Kotlin/JVM Android, código de produção | 136 aprovados, zero falhas/skips; inclui 16 de continuidade, oito do painel, três do journal e 32 do backend HTTP/WS em loopback |
+| Kotlin/JVM Android, código de produção | 138 aprovados, zero falhas/skips; inclui 16 de continuidade, dez do painel, três do journal e 32 do backend HTTP/WS em loopback |
 | Instrumentação Android/Tauri | `compileUniversalDebugAndroidTestKotlin` aprovado; novo teste de `conversationChanges` compilado, não executado em dispositivo |
 | Node/interface compartilhada | 175 aprovados; typecheck e build de produção aprovados |
 | PWA/interface compartilhada | 103 aprovados; typecheck, build e service worker aprovados |
 | Chromium: sincronização hands-free | 21 verificações aprovadas com Vue/HTTP real e journal Android simulado |
 | Chromium: streaming/navegação/leitura | 260 verificações aprovadas em PWA, Android simulado e Windows simulado |
 | Chromium: identidade editorial/Sobre | 30 cenários de layout e nove variantes da versão de runtime aprovados nos três hosts, 320–1.100 px e fonte 100%/200%; zero falhas no relatório final |
-| Contratos de release/IPC/painel | 65 aprovados |
+| Contratos de release/IPC/painel | 66 aprovados |
 | Rust portátil | 90 aprovados; dois opt-in existentes ignorados |
 | Rust Android ARM64 | `cargo check --target aarch64-linux-android --locked` aprovado com Rust 1.94/NDK 29 |
 | APK Android ARM64 | `npm run build:android` aprovado; ZIP conferido com somente `arm64-v8a` e sem `.tflite` |
@@ -203,6 +210,39 @@ a versão/código distribuídos serão os reservados pelo publicador oficial.
 
 O ADB disponível em `/tmp/aegis-hands-free-sdk/platform-tools/adb` listou zero
 dispositivos conectados nesta execução.
+
+### Preparação da preview
+
+Implementação enviada ao remoto em `6e4e233df12bbac1eed5e06eed1d0f50d803ff9e`.
+O plano oficial `publish-dev --plan` confirmou somente `pwa` e `native`, com
+nenhuma migration pendente. A operação
+`20261104T142743Z-21082efa` publicou a PWA e solicitou a distribuição assinada
+pelo workflow confiável da `main`, sem executar código candidato com as chaves.
+
+A PWA está no SHA da implementação, imagem
+`sha256:17741b0915057f6c2a580ea465b95f0d89b1e966c12be3ca6a0b8457981337d0`.
+A API permanece no SHA `350f892442acba5e1826ee60d376935c75a4fd49`, imagem
+`sha256:d583b6278841d785bc7b3486f96ddc6ba456397571ad7c16afd3f0013c5243bf`.
+IDs, imagens e instantes de início da API, PostgreSQL, Qdrant e Neo4j foram
+comparados antes/depois e permaneceram iguais. Não houve deploy ou reinício de
+TTS, API ou bancos, migrador, limpeza de dados, instalação em Node ou mudança
+de configuração de serviços.
+
+O ledger reservou **0.8.0-unstable.11**, código Android **8000011**, no
+[run 41847991639](https://github.com/phcastello/Aegis/actions/runs/41847991639),
+com fonte `6e4e233`. Essa reserva já está consumida e não pode ser reutilizada.
+O run foi cancelado antes da assinatura/publicação após a auditoria encontrar
+um caso residual: o cancelamento genérico durante o erro terminal não fechava
+imediatamente o cartão, embora seu botão funcionasse. A reserva `unstable.11`
+permanece consumida; a correção recebe uma nova tentativa, sem reutilizar seus
+bytes, versão ou código. O feed continua em `unstable.10` nesse checkpoint.
+Aceite físico e a matriz extensa de release estável não são gates desta preview
+e continuam pendentes.
+
+A correção é `09f21c6`; o lote completo foi repetido com 138 testes JVM e 66
+contratos aprovados, além da compilação de instrumentação. Os testes de UI/web
+anteriores continuam válidos: essa correção altera somente Kotlin Android,
+seus testes e documentação.
 
 Permanecem obrigatórias no aparelho: atualização assinada sobre a instalação
 existente e preservação dos dados; wake word/nível real/silêncio; alto-falante e
