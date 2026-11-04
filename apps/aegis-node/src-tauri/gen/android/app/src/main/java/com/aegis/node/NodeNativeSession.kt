@@ -14,6 +14,30 @@ object NodeNativeSession {
   private const val VAULT = "keyring-aegis-node-identity-v1"
   private const val ENTRY = "installation\uFEFF@\uFEFFcom.aegis.node.identity.v1"
   data class Session(val origin: String, val nodeId: String, val credential: String)
+  /** Memory-only authority key. Credentials never leave the existing vault/session path. */
+  internal fun fingerprint(session: Session): String = java.security.MessageDigest.getInstance("SHA-256")
+    .digest(JSONObject().put("origin", session.origin).put("nodeId", session.nodeId)
+      .put("credential", session.credential).toString().toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
+
+  /** No timer: observe the existing vault and native binding at their mutation boundaries. */
+  internal fun observeIdentity(context: Context, changed: () -> Unit): AutoCloseable {
+    val app = context.applicationContext
+    val vault = app.getSharedPreferences(VAULT, Context.MODE_PRIVATE)
+    val binding = NodeNativeNotifications.prefs(app)
+    val vaultListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+      if (key == null || key == ENTRY) changed()
+    }
+    val bindingListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+      if (key == null || key == "nodeId" || key == "origin") changed()
+    }
+    vault.registerOnSharedPreferenceChangeListener(vaultListener)
+    binding.registerOnSharedPreferenceChangeListener(bindingListener)
+    return AutoCloseable {
+      vault.unregisterOnSharedPreferenceChangeListener(vaultListener)
+      binding.unregisterOnSharedPreferenceChangeListener(bindingListener)
+    }
+  }
   // Native AndroidKeyStore/SharedPreferences only: no JNI callback or Rust mutex.
   private fun vault(context:Context):JSONObject? {
     val encrypted = context.getSharedPreferences(VAULT, Context.MODE_PRIVATE).getString(ENTRY, null)

@@ -120,7 +120,10 @@ test('cancellation after endpoint closes the persistent event before creating or
   const cancelled=captured.match(/if\(sessionCancelled\)\{command\.fill\(0\);[\s\S]*?continue\}/)?.[0];
   assert.ok(cancelled,'completed PCM still needs the cancellation gate before backend execution');
   assert.match(cancelled,/finishEvent\("cancelled",endReason\?:"operation_cancelled"\)/);
-  assert.match(cancelled,/closePanel\(token\)/);
+  assert.match(cancelled,/endConversationSession\(sessionId\)/);
+  const endSession=runtime.slice(runtime.indexOf('private fun endConversationSession('),runtime.indexOf('    init {'));
+  assert.match(endSession,/conversationContinuity\.end\(continuityActivation\)/);
+  assert.match(endSession,/if\(close\)closePanel\(token\)/);
   assert.ok(captured.indexOf(cancelled)<captured.indexOf('val session=sessionId?:UUID'));
   assert.ok(captured.indexOf(cancelled)<captured.indexOf('active.execute(command,'));
   assert.match(run,/finishEvent\("failed",if\(error is MicrophoneUnavailable\)"microphone_unavailable"/);
