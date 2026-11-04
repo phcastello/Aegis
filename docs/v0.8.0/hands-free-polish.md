@@ -244,6 +244,59 @@ contratos aprovados, além da compilação de instrumentação. Os testes de UI/
 anteriores continuam válidos: essa correção altera somente Kotlin Android,
 seus testes e documentação.
 
+### Preview publicada
+
+A operação `20261104T143739Z-d083f4fe` selecionou somente `native`, sem migration,
+build ou reinício da API/PWA. A reserva seguinte é **0.8.0-unstable.12**, código
+**8000012**, fonte `eec07bb3b4b8d85d2588f0352e2e777cdafb0a1b`.
+O [run 41849480078](https://github.com/phcastello/Aegis/actions/runs/41849480078)
+concluiu com sucesso: plano, builds Android ARM64/Windows x86_64 e assinatura
+oficial. A homologação extensa de release estável foi ignorada conforme o fluxo
+documentado de preview; não foi apresentada como aprovada.
+
+O feed recomendado foi lido novamente e contém a versão, código e fonte acima,
+com `compatibility: { api: 1, nodeData: 1 }`. A API continua em `350f892` e a PWA
+em `6e4e233`; seus IDs e horários de início, assim como os dos bancos, permaneceram
+iguais durante essa segunda operação. A distribuição está disponível pelo
+updater existente e na
+[release oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.12).
+Não houve instalação no Node do proprietário, limpeza de dados ou ação no TTS.
+
+A verificação independente baixou os cinco assets públicos da release:
+APK, instalador Windows, assinatura Windows, `latest.json` e `SHA256SUMS`.
+Todos os hashes conferiram; o manifesto reconstruído pelo `metadata()` oficial
+coincidiu com o asset e com o feed público. Tag, ledger e fonte foram conferidos.
+O APK passou os guards oficiais de arquivo/certificado, pacote/versão/código,
+flags de produção e alinhamento de 16 KB, com somente ARM64 e sem fixtures,
+modelos, WAVs ou keystores. A assinatura criptográfica e a versão vinculada ao
+instalador Windows passaram no verificador oficial com a chave pública existente.
+Não foram buscadas configurações privadas de Firebase; os gates correspondentes
+e os do BuildConfig passaram no workflow oficial, sem alegar repetição local.
+
+| Artefato oficial | SHA-256 conferido |
+| --- | --- |
+| `Aegis-Android-arm64.apk` | `3de8e9489d1eca56b136ddfbe10ab10a5cd61fafbde2ea205333a18a65c0c246` |
+| `Aegis-Windows-x86_64-Setup.exe` | `21262a7de289080988bcfe56cc17370ccd0921915019a8e8dc602a72184c05ca` |
+
+Evidências locais sintéticas/públicas: `/tmp/aegis-polish-*.log`,
+`/tmp/aegis-polish-identity-final/` e `/tmp/aegis-polish-official12-verify/`.
+A operação privada conserva seu journal fora do Git. A distribuição assinada
+não substitui a homologação física ainda pendente.
+
+### Commits da rodada
+
+| Responsabilidade | Commits |
+| --- | --- |
+| Identidade editorial e expectativas dos hosts | `5dbd92b`, `0a7805a` |
+| Continuidade, identidade e marcador de playback | `8c57dd7` |
+| Painel, erro terminal e cancelamento com snapshot | `3e2559c`, `e442ac5`, `09f21c6` |
+| Sincronização, eventos, concorrência e testes web | `185f3fa` |
+| Documentação e revisão da primeira reserva | `6e4e233`, `eec07bb` |
+
+Todos na branch solicitada, enviados ao remoto. Não foi aberto PR, integrado
+trabalho na `main`, feito squash ou force push. O commit de distribuição é
+`eec07bb`; este registro final acrescenta somente documentação.
+
 Permanecem obrigatórias no aparelho: atualização assinada sobre a instalação
 existente e preservação dos dados; wake word/nível real/silêncio; alto-falante e
 fim da fala; chamadas nos limites de dez segundos; continuação sem wake word;

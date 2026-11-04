@@ -10,10 +10,10 @@ Implementação na branch `feat/v0.8.0-hands-free`, derivada de `913e629`
 e suas alterações locais foram preservadas. Esta entrega prepara interação real
 e diagnóstico no Node existente; a homologação no telefone ainda é necessária.
 
-Distribuição atual publicada: **0.8.0-unstable.6**, código Android
-**8000006**, fonte `350f892442acba5e1826ee60d376935c75a4fd49`. Disponível em
+Distribuição atual publicada: **0.8.0-unstable.12**, código Android
+**8000012**, fonte `eec07bb3b4b8d85d2588f0352e2e777cdafb0a1b`. Disponível em
 **Configurações → Atualizações** ou pelo
-[APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.6/Aegis-Android-arm64.apk).
+[APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.12/Aegis-Android-arm64.apk).
 O [pipeline conversacional](conversational-pipeline.md) registra reasoning low,
 STT streaming, memória sob demanda, unidades finais de fala, player Android
 compartilhado, implantação e medições completas. A meta de quatro segundos e
