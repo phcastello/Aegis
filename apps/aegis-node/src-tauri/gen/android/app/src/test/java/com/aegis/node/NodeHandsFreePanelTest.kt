@@ -85,4 +85,30 @@ class NodeHandsFreePanelTest {
         assertEquals(HandsFreePanelState.CAPTURING,presentation.state)
     }
 
+    @Test fun genericCancellationCanDismissTheStillCurrentTerminalErrorImmediately() {
+        val presentation=HandsFreePanelPresentation()
+        presentation.begin("failed-session")
+        assertTrue(presentation.delayClose(immediate=false,failed=true))
+        val captured=checkNotNull(presentation.snapshot())
+        assertEquals("failed-session",captured.session)
+        assertTrue(presentation.isCurrent(captured))
+        // Generic cancel dismisses this presentation without waiting for its error timer.
+        presentation.end()
+        assertFalse(presentation.isCurrent(captured))
+        assertNull(presentation.snapshot())
+    }
+    @Test fun anOldCancellationSnapshotCannotDismissANewOrReopenedPresentation() {
+        val presentation=HandsFreePanelPresentation()
+        presentation.begin("old-session")
+        presentation.delayClose(immediate=false,failed=true)
+        val captured=checkNotNull(presentation.snapshot())
+        presentation.begin("new-session")
+        assertFalse(presentation.isCurrent(captured))
+        val fresh=checkNotNull(presentation.snapshot())
+        assertTrue(presentation.isCurrent(fresh))
+        presentation.begin("new-session") // The system can reuse the same panel and session.
+        assertFalse(presentation.isCurrent(fresh))
+        assertFalse(presentation.isCurrent(captured))
+    }
+
 }

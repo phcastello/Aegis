@@ -255,9 +255,16 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
     internal fun releaseActivityAudio(){manualLease?.let{manualRelease(it)}}
     fun cancelSession(expectedSession:String?=null) {
+        val panelCancellation=if(expectedSession==null)NodeVoiceInteractionSession.current?.cancellationSnapshot() else null
         synchronized(lock) {
             if(expectedSession!=null && expectedSession!=sessionId)return
-            if(sessionId==null && !pendingActivation){if(diagnostic){cancelledAt=HandsFreeTurnLatency.now();diagnosticCancelEpoch.incrementAndGet()};return}
+            if(sessionId==null && !pendingActivation){
+                if(diagnostic){cancelledAt=HandsFreeTurnLatency.now();diagnosticCancelEpoch.incrementAndGet()}
+                // A terminal error may outlive its turn. Dismiss only the presentation
+                // captured by this request, while no new activation has taken ownership.
+                if(panelCancellation!=null)main.post{synchronized(lock){if(sessionId==null && !pendingActivation)panelCancellation.run()}}
+                return
+            }
             val captureActive=status=="capturing"
             pendingActivation=false;cancelledAt=HandsFreeTurnLatency.now();sessionCancelled=true;endReason="explicit_cancel";playback.cancel();activationCue.cancel();cancelBackend();metrics.add("sessions_cancelled")
             // Capture owns its last in-flight read and FIFO finalization. A pending manual

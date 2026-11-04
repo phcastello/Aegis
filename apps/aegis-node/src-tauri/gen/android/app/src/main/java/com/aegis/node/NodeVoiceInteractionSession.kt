@@ -89,13 +89,14 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         return root
     }
     override fun onShow(args:Bundle?,showFlags:Int) {
-        main.removeCallbacks(dismissError);presentation.begin()
+        main.removeCallbacks(dismissError)
         visible=true;super.onShow(args,showFlags)
         val runtime=NodeHandsFree.runtime(context)
         val previousSession=boundSession
         boundSession=if(args?.getBoolean("activation")==true)args.getString("sessionId") else runtime.activateFromAssistant() ?: runtime.activeSessionToken()
         if(args?.getBoolean("activation")==true && boundSession!=runtime.activeSessionToken()){finishQuietly();return}
         if(previousSession!=boundSession){displayedState="";partialRequestId=null;partial?.text="";partial?.visibility=View.GONE}
+        presentation.begin(boundSession)
         current=this
         val decision=boundSession?.let{NodeVoiceInteractionService.current?.presentationDecision(it,args?.getBoolean("wakeScreen")==true || runtime.activationNeedsWake(it))}
             ?: HandsFreePresentationPolicy.Decision(false,false)
@@ -144,8 +145,12 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
         } else finishQuietly()
     }
+    internal fun cancellationSnapshot():Runnable? {
+        val snapshot=presentation.snapshot()?:return null
+        return Runnable{if(current===this && presentation.isCurrent(snapshot))finishQuietly()}
+    }
     internal fun finishQuietly(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;finish()}
-    private fun stopVisuals(){main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
+    private fun stopVisuals(){presentation.end();main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
     override fun onHide(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onHide()}
     override fun onDestroy(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onDestroy()}
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}

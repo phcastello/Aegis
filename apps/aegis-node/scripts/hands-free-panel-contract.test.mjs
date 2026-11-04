@@ -55,3 +55,14 @@ test('terminal failure presentation is explicit and scoped to the still-bound se
   assert.match(runtime, /finishIfSession\(token,immediate,failed\)/);
   assert.match(runtime, /closePanel\(session,failed=!cancelled\)/);
 });
+
+test('generic cancellation of a terminal error cannot dismiss a newly activated or rebound panel', () => {
+  const panel = android('NodeVoiceInteractionSession');
+  const runtime = android('NodeHandsFree');
+  const cancellation = runtime.slice(runtime.indexOf('fun cancelSession('), runtime.indexOf('internal fun activateFromAssistant('));
+  assert.match(cancellation, /expectedSession==null\)NodeVoiceInteractionSession\.current\?\.cancellationSnapshot\(\)/);
+  assert.match(cancellation, /if\(expectedSession!=null && expectedSession!=sessionId\)return/);
+  assert.match(cancellation, /main\.post\{synchronized\(lock\)\{if\(sessionId==null && !pendingActivation\)panelCancellation\.run\(\)\}\}/);
+  assert.match(panel, /Runnable\{if\(current===this && presentation\.isCurrent\(snapshot\)\)finishQuietly\(\)\}/);
+  assert.match(panel, /private fun stopVisuals\(\)\{presentation\.end\(\)/);
+});
