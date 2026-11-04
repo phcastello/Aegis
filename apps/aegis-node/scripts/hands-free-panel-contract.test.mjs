@@ -46,3 +46,12 @@ test('temporary transcription still rejects updates from a previous session or r
   assert.match(partial, /if\(partialRequestId!=requestId\)return/);
   assert.match(partial, /HandsFreePartialDisplayLimiter\.MAX_CHARACTERS/);
 });
+
+test('terminal failure presentation is explicit and scoped to the still-bound session', () => {
+  const panel = android('NodeVoiceInteractionSession');
+  const close = panel.slice(panel.indexOf('internal fun finishIfSession('), panel.indexOf('internal fun finishQuietly('));
+  assert.ok(close.indexOf('if(boundSession!=token)return') < close.indexOf('presentation.delayClose(immediate,failed)'));
+  const runtime = android('NodeHandsFree');
+  assert.match(runtime, /finishIfSession\(token,immediate,failed\)/);
+  assert.match(runtime, /closePanel\(session,failed=!cancelled\)/);
+});

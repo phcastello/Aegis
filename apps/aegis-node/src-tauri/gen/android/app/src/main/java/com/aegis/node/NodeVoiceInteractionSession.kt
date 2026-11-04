@@ -43,7 +43,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     private var boundSession:String?=null
     private var displayedState=""
     private var partialRequestId:String?=null
-    private var panelState=HandsFreePanelState.IDLE
+    private val presentation=HandsFreePanelPresentation()
     private val dismissError=Runnable{finishQuietly()}
     private fun dp(value:Int)=(value*context.resources.displayMetrics.density+0.5f).toInt()
     override fun onCreateContentView():View {
@@ -71,7 +71,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         panel.addView(header)
         visualizer=HandsFreePanelView(context).also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(60)))}
         label=TextView(context).apply{
-            text=panelState.label;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
+            text=presentation.state.label;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
             setPadding(0,dp(4),dp(8),0);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
         }.also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))}
         partial=TextView(context).apply{
@@ -89,7 +89,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         return root
     }
     override fun onShow(args:Bundle?,showFlags:Int) {
-        main.removeCallbacks(dismissError)
+        main.removeCallbacks(dismissError);presentation.begin()
         visible=true;super.onShow(args,showFlags)
         val runtime=NodeHandsFree.runtime(context)
         val previousSession=boundSession
@@ -122,10 +122,10 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         else outInsets.touchableRegion.setEmpty()
     }
     internal fun refresh(state:String,@Suppress("UNUSED_PARAMETER") message:String) {
+        if(!presentation.refresh(state))return
         if(displayedState!=state){partial?.text="";partial?.visibility=View.GONE;partialRequestId=null;HandsFreePanelSignal.reset(this)}
         displayedState=state
-        val next=HandsFreePanelState.fromRuntime(state)
-        panelState=next;label?.text=next.label;visualizer?.state(next)
+        label?.text=presentation.state.label;visualizer?.state(presentation.state)
     }
     internal fun showPartial(token:String,requestId:String,text:String) {
         if(boundSession!=token || !visible || displayedState !in setOf("capturing","continuation"))return
@@ -136,9 +136,13 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     }
     internal fun suppressScreenOn(){releaseWindowFlags()}
     private fun releaseWindowFlags(){window?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)}
-    internal fun finishIfSession(token:String,immediate:Boolean=false) {
+    internal fun finishIfSession(token:String,immediate:Boolean=false,failed:Boolean=false) {
         if(boundSession!=token)return
-        if(!immediate && panelState==HandsFreePanelState.ERROR){main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)} else finishQuietly()
+        if(presentation.delayClose(immediate,failed)){
+            partial?.text="";partial?.visibility=View.GONE;HandsFreePanelSignal.reset(this)
+            label?.text=presentation.state.label;visualizer?.state(presentation.state)
+            main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
+        } else finishQuietly()
     }
     internal fun finishQuietly(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;finish()}
     private fun stopVisuals(){main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}

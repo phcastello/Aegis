@@ -321,7 +321,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
         collection.finish(id,finalState,reason,transcription)
     }
-    private fun closePanel(token:String?,immediate:Boolean=false){if(token!=null){releaseSessionPower(token);main.post{NodeVoiceInteractionSession.current?.finishIfSession(token,immediate)}}}
+    private fun closePanel(token:String?,immediate:Boolean=false,failed:Boolean=false){if(token!=null){releaseSessionPower(token);main.post{NodeVoiceInteractionSession.current?.finishIfSession(token,immediate,failed)}}}
     private fun beep(){activationCue.play()}
 
     private class MicrophoneUnavailable:Exception()
@@ -393,7 +393,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                     synchronized(lock){finishEvent(turnOutcome,endReason?:if(cancelled)"operation_cancelled" else if(transcriptionStatus=="in_progress")"transcription_failed" else "session_processing_failed")}
                     metrics.addForIdentity(if(cancelled)"turns_cancelled" else "sessions_failed",1,turnIdentity);continuation=false;cancelBackend();endConversationSession(session,false)
                     if(current(generation) && !cancelled)setState("session_failed","Não foi possível concluir o pedido. Diga Aegis para tentar novamente.")
-                    closePanel(session)
+                    closePanel(session,failed=!cancelled)
                 }finally {
                     command.fill(0)
                     trace?.let{it.mark("turn_ended");metrics.turnLatency(it,turnOutcome,turnIdentity)}

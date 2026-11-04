@@ -53,3 +53,21 @@ internal enum class HandsFreePanelState(val label:String,val animated:Boolean=fa
         }
     }
 }
+
+/** A terminal error survives a queued return-to-listening until dismissal or a new presentation. */
+internal class HandsFreePanelPresentation {
+    var state=HandsFreePanelState.IDLE
+        private set
+    private var terminalError=false
+    fun begin(){terminalError=false;state=HandsFreePanelState.IDLE}
+    fun refresh(status:String):Boolean {
+        if(terminalError)return false
+        state=HandsFreePanelState.fromRuntime(status)
+        return true
+    }
+    fun delayClose(immediate:Boolean,failed:Boolean):Boolean {
+        if(immediate)return false
+        if(failed){terminalError=true;state=HandsFreePanelState.ERROR}
+        return state==HandsFreePanelState.ERROR
+    }
+}

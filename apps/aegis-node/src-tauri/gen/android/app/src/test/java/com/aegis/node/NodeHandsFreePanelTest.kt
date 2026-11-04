@@ -69,4 +69,20 @@ class NodeHandsFreePanelTest {
         assertFalse(HandsFreePanelState.ERROR.animated)
         assertEquals("Não consegui concluir. Tente novamente.",HandsFreePanelState.ERROR.label)
     }
+    @Test fun explicitTerminalFailureSurvivesDroppedOrQueuedRuntimeStatus() {
+        val presentation=HandsFreePanelPresentation()
+        presentation.begin();presentation.refresh("processing")
+        // The runtime may have already returned to listening before its UI callback runs.
+        assertTrue(presentation.delayClose(immediate=false,failed=true))
+        assertEquals(HandsFreePanelState.ERROR,presentation.state)
+        assertFalse(presentation.refresh("listening"))
+        assertFalse(presentation.refresh("session_failed"))
+        assertEquals(HandsFreePanelState.ERROR,presentation.state)
+        // Explicit cancel never waits for the short error presentation.
+        assertFalse(presentation.delayClose(immediate=true,failed=false))
+        presentation.begin()
+        assertTrue(presentation.refresh("capturing"))
+        assertEquals(HandsFreePanelState.CAPTURING,presentation.state)
+    }
+
 }
