@@ -250,7 +250,7 @@ try {
   if (phase === 'after') {
     const nativeUrl = servers.find(server => server.host === 'native').url;
     report.runtimeVersions = [];
-    for (const runtimeVersion of ['0.7.0', '0.7.2', 'v0.7.1', undefined, 'not-a-version', '0.8.0']) {
+    for (const runtimeVersion of ['0.7.0', '0.7.2', 'v0.7.1', undefined, 'not-a-version', '0.8.0', '0.8.0-unstable.11', '0.8.2', '0.9.0']) {
       const context = await browser.newContext({ viewport: { width: 360, height: 1000 } });
       await context.route('**/api/**', api);
       await nativeFixture(context, runtimeVersion);
@@ -263,9 +263,9 @@ try {
         const sidebar = await openSidebar(page);
         const identity = sidebar.getByRole('region', { name: 'Identidade da Aegis', exact: true });
         const known = typeof runtimeVersion === 'string' && /^v?0\.7\./.test(runtimeVersion);
-        const valid = known || runtimeVersion === '0.8.0';
+        const valid = typeof runtimeVersion === 'string' && /^v?\d+\.\d+\.\d+(?:-unstable\.\d+)?$/.test(runtimeVersion);
         const expectedVersion = valid ? `v${runtimeVersion.replace(/^v/, '')}` : 'Versão indisponível';
-        const expectedCodename = known ? legacyReleaseIdentity.codename : 'Codinome indisponível';
+        const expectedCodename = valid ? expectedReleaseIdentity(runtimeVersion).codename : 'Codinome indisponível';
         assert.equal(await identity.getByText(expectedVersion, { exact: true }).isVisible(), true, `version fallback/normalization for ${runtimeVersion}`);
         assert.equal(await identity.getByText(expectedCodename, { exact: true }).isVisible(), true, `family/fallback for ${runtimeVersion}`);
         assert.equal((await identity.innerText()).includes('vv'), false, 'duplicate version prefix');

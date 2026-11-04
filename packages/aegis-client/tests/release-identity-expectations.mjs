@@ -4,6 +4,10 @@ export const legacyReleaseIdentity = Object.freeze({
   codename: "It's Not Stalking. It's a Feature.",
   tagline: "You're terrible at hiding.",
 });
+export const handsFreeReleaseIdentity = Object.freeze({
+  codename: 'I Miss the Peace and Quiet',
+  tagline: null,
+});
 export function expectedReleaseIdentity(version) {
   const normalized = version.replace(/^v/, '');
   const family = /^(\d+)\.(\d+)\./.exec(normalized);
@@ -11,6 +15,7 @@ export function expectedReleaseIdentity(version) {
   return {
     versionLabel: `v${normalized}`,
     ...(family[1] === '0' && family[2] === '7' ? legacyReleaseIdentity
+      : family[1] === '0' && family[2] === '8' ? handsFreeReleaseIdentity
       : { codename: 'Codinome indisponível', tagline: null }),
   };
 }
