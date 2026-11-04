@@ -1,5 +1,10 @@
 # Coleta de ativações e sessão hands-free — v0.8.0
 
+O [polish hands-free](hands-free-polish.md) posterior preserva a coleta e a
+separação do ciclo de vida, mas revisa a apresentação: cartão inferior com
+visualizador PCM, sem manter a tela ligada. A descrição superior e os flags de
+energia abaixo registram o comportamento da `unstable.10`.
+
 Correção derivada de `feat/v0.8.0-hands-free` em `c7779ab`, na branch
 `fix/v0.8.0-activation-lifecycle`, worktree `/home/phc/Aegis-activation-fix`.
 A pasta inicial `/home/phc/Aegis` estava em `feat/v0.7.0-completion` com alterações

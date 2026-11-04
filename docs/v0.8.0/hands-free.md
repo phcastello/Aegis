@@ -1,5 +1,10 @@
 # Aegis v0.8.0 — primeiro incremento hands-free Android
 
+O [polish hands-free](hands-free-polish.md) acrescenta sincronização com o chat
+aberto, continuidade renovável de dez segundos e painel visual inferior. Ele
+preserva a coleta de ativações publicada na `unstable.10`; as evidências e a
+distribuição desse refinamento estão no documento específico.
+
 Implementação na branch `feat/v0.8.0-hands-free`, derivada de `913e629`
 (`feat/v0.8.0-wakeword-poc`), que contém a main `8607dc0`. A worktree original
 e suas alterações locais foram preservadas. Esta entrega prepara interação real
