@@ -283,7 +283,7 @@ export async function transcribeAudio(
 }
 
 export async function getConversation(conversationId: string): Promise<Conversation> {
-  return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`);
+  return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`, { cache: 'no-store' });
 }
 
 export function getMemoryActivity(assistantMessageId: string, signal?: AbortSignal): Promise<MemoryActivitySnapshot> {
@@ -298,7 +298,7 @@ export async function getConversations(limit = 30, cursor?: string | null): Prom
     params.set('cursor', cursor);
   }
 
-  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`);
+  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`, { cache: 'no-store' });
 }
 
 export async function renameConversation(

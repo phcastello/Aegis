@@ -27,6 +27,7 @@ pub async fn node_hands_free(
 ) -> Result<Value, HandsFreeError> {
     let (method, payload) = match operation.as_str() {
         "state" => ("handsFreeState", json!({})),
+        "conversationChanges" => ("conversationChanges", json!({})),
         "configure" => (
             "handsFreeConfigure",
             json!({"enabled": enabled.ok_or_else(|| HandsFreeError::new("invalid_request"))?, "diagnostic": diagnostic.unwrap_or(false)}),

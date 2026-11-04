@@ -19,6 +19,7 @@ import HandsFreeSettings from './components/HandsFreeSettings.vue';
 import { useUpdates } from './composables/useUpdates';
 import { checkUpdate } from './services/updates';
 import type { RuntimeInfo } from './services/runtime';
+import { readConversationChanges, type ConversationChangeSnapshot } from './services/conversationChanges';
 const RemindersPanel = defineAsyncComponent(() => import('./components/RemindersPanel.vue'));
 const PlacesPanel = defineAsyncComponent(() => import('./components/PlacesPanel.vue'));
 const props = defineProps<{ runtime: RuntimeInfo }>();
@@ -45,7 +46,38 @@ function navigate(value: SettingsSection) { dismissKeyboard(); dirty.value = fal
 function close() { section.value = null; dirty.value = false; void refreshIdentity(); void refreshPendingActions(); }
 function foreground() {
   if (document.visibilityState !== 'visible' || foregroundTimer !== null) return;
-  foregroundTimer = setTimeout(async () => { foregroundTimer = null; if (document.visibilityState !== 'visible') return; void updates.start(); try { const current = await transportServices.status(); if (current.transportState === 'offline') await transportServices.reconnect(); } catch { /* Native lifecycle also reconciles independently. */ } if (Date.now() - lastIdentityCheck > 30000) {void refreshIdentity();void refreshPendingActions();} }, 250);
+  foregroundTimer = setTimeout(async () => { foregroundTimer = null; if (document.visibilityState !== 'visible') return; if (props.runtime.platform === 'android') { try { if (await invoke<boolean>('node_read_visibility')) conversationRecovery(); } catch { /* Next native visibility event retries. */ } } void updates.start(); try { const current = await transportServices.status(); if (current.transportState === 'offline') await transportServices.reconnect(); } catch { /* Native lifecycle also reconciles independently. */ } if (Date.now() - lastIdentityCheck > 30000) {void refreshIdentity();void refreshPendingActions();} }, 250);
+}
+let changeSnapshotBusy = false; let changeSnapshotRequested = false;
+let changeRetryTimer: ReturnType<typeof setTimeout> | undefined; let changeRetry = 0;
+let changeGeneration: string | null = null;
+const changeRevisions = new Map<string, number>();
+async function syncConversationChanges(retrying = false): Promise<void> {
+  if (props.runtime.platform !== 'android' || disposed) return;
+  if (!retrying) { changeRetry = 0; clearTimeout(changeRetryTimer); }
+  changeSnapshotRequested = true;
+  if (changeSnapshotBusy) return;
+  changeSnapshotBusy = true;
+  try {
+    while (changeSnapshotRequested && !disposed) {
+      changeSnapshotRequested = false;
+      const snapshot: ConversationChangeSnapshot = await readConversationChanges();
+      if (disposed) return;
+      if (snapshot.generation !== changeGeneration) { if (changeGeneration !== null) { chat.value?.resetConversationChanges(); void chat.value?.reconcileConversations(); } changeGeneration = snapshot.generation; changeRevisions.clear(); }
+      for (const row of snapshot.changes) {
+        if (row.revision <= (changeRevisions.get(row.conversationId) ?? 0)) continue;
+        chat.value?.conversationChanged(row.conversationId);
+        changeRevisions.set(row.conversationId, row.revision);
+      }
+    }
+  } catch { if (!disposed && changeRetry++ < 3) changeRetryTimer = setTimeout(() => { void syncConversationChanges(true); }, 1000); }
+  finally { changeSnapshotBusy = false; }
+}
+function nativeConversationChanged(): void { void syncConversationChanges(); }
+function conversationRecovery(): void {
+  if (props.runtime.platform !== 'android' || document.visibilityState !== 'visible') return;
+  void syncConversationChanges();
+  void chat.value?.reconcileConversations();
 }
 function nativeBack() { if (shell.value?.dismissPending()) return; if (section.value === 'reminders' && remindersPanel.value?.requestBack()) return; if (section.value === 'places' && placesPanel.value?.requestBack()) return; if (section.value) shell.value?.requestClose(); }
 function consumeNativeDestination() { void invoke('node_consume_reminder_open').catch(() => undefined); }
@@ -84,8 +116,8 @@ let stopConversationListener: (() => void) | undefined;
 async function subscribeReminderOpen() { try { const stop = await listen<{conversationId:string}>('aegis-conversation-open', event => showConversation(event.payload.conversationId)); if (disposed) stop(); else stopConversationListener = stop; } catch {} try { const unlisten = await listen<{reminderId:string}>('aegis-reminder-open', event => showReminder(event.payload.reminderId)); if (disposed) unlisten(); else stopReminderListener = unlisten; } catch { /* Android DOM bridge remains available. */ } try { const pending = await invoke<{reminderId:string|null;conversationId?:string|null}>('node_consume_reminder_open'); if (!disposed) { showReminder(pending.reminderId); showConversation(pending.conversationId); } } catch { /* Older runtimes have no stored deep link. */ } }
 function syncNavigation() { void invoke('node_settings_open', { open: section.value !== null || hasNavigationLayer() }).catch(() => undefined); }
 watch(section, value => { syncNavigation(); if (value === 'updates') void updates.start(); });
-onMounted(() => { window.addEventListener('aegis-navigation-layer', syncNavigation); void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); window.addEventListener('aegis-conversation-open', openConversation); });
-onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNavigation); disposed = true; stopReminderListener?.(); stopConversationListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); window.removeEventListener('aegis-conversation-open', openConversation); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
+onMounted(() => { window.addEventListener('aegis-navigation-layer', syncNavigation); window.addEventListener('aegis-conversation-changed', nativeConversationChanged); window.addEventListener('aegis-app-visibility', foreground); window.addEventListener('online', conversationRecovery); void syncConversationChanges(); void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); window.addEventListener('aegis-conversation-open', openConversation); });
+onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNavigation); window.removeEventListener('aegis-conversation-changed', nativeConversationChanged); window.removeEventListener('aegis-app-visibility', foreground); window.removeEventListener('online', conversationRecovery); disposed = true; clearTimeout(changeRetryTimer); stopReminderListener?.(); stopConversationListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); window.removeEventListener('aegis-conversation-open', openConversation); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
 </script>
 <template>
   <ChatView ref="chat" :app-version="runtime.version" @activity-changed="activity = $event">

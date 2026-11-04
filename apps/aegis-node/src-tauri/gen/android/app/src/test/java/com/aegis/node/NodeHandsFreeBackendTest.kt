@@ -43,6 +43,75 @@ class NodeHandsFreeBackendTest {
     return execute(wav,sessionId,conversationId,sink)
   }
 
+  @Test fun persistedChatInvalidatesBeforeSpeechEvenWhenTtsFails() {
+    val changes=mutableListOf<String>()
+    Fixture(respond={request,normal->
+      if(request.path=="/api/voice/speech") {assertEquals(listOf(conversation),changes);Reply(503)} else normal
+    }).use { fixture ->
+      val backend=fixture.backend(onChanged={_,id->changes.add(id)})
+      assertThrows(Exception::class.java){backend.runTurn(wav(),session,null)}
+      assertEquals(listOf(conversation),changes)
+    }
+  }
+
+  @Test fun delayedOldIdentityResponseCannotEraseNewIdentityJournal() {
+    val entered=CountDownLatch(1);val release=CountDownLatch(1)
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages"){entered.countDown();check(release.await(5,TimeUnit.SECONDS))};normal
+    }).use {fixture->
+      val authority=AtomicReference(fixture.identity)
+      val backend=NodeHandsFreeBackend({authority.get()})
+      val executor=Executors.newSingleThreadExecutor()
+      try {
+        val old=executor.submit<HandsFreeTurn>{backend.runTurn(wav(),session,null)}
+        assertTrue(entered.await(5,TimeUnit.SECONDS))
+        val replacement=fixture.identity.copy(nodeId="replacement-node",credential="replacement-credential")
+        authority.set(replacement)
+        val destination=UUID.randomUUID().toString()
+        NodeConversationChanges.changed(replacement,destination)
+        release.countDown()
+        assertThrows(ExecutionException::class.java){old.get(5,TimeUnit.SECONDS)}
+        val replay=JSONObject(NodeConversationChanges.snapshot(replacement)).getJSONArray("changes")
+        assertEquals(1,replay.length());assertEquals(destination,replay.getJSONObject(0).getString("conversationId"))
+      }finally{release.countDown();backend.cancel();executor.shutdownNow()}
+    }
+  }
+
+  @Test fun emptySttAndInvalidChatNeverInvalidateAnUnpersistedDestination() {
+    for(empty in listOf(true,false)) {
+      val changes=mutableListOf<String>()
+      Fixture(transcript=if(empty) "Aegis" else "Aegis, diga oi",respond={request,normal->
+        if(!empty && request.path=="/api/chat/messages") Reply.json(JSONObject(String(normal.bytes)).put("conversationId","invalid")) else normal
+      }).use {fixture->
+        val backend=fixture.backend(onChanged={_,id->changes.add(id)})
+        if(empty)backend.runTurn(wav(),session,null) else assertThrows(Exception::class.java){backend.runTurn(wav(),session,null)}
+        assertTrue(changes.isEmpty())
+      }
+    }
+  }
+
+  @Test fun streamingPersistenceInvalidatesBeforePlaybackDrainAndSurvivesTtsFailure() {
+    val changes=java.util.concurrent.CopyOnWriteArrayList<String>()
+    val firstPersisted=CountDownLatch(1)
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        val turn=JSONObject(request.text()).getString("turnId")
+        val accepted=JSONObject().put("type","conversation").put("turnId",turn).put("conversationId",conversation).toString()+"\n"
+        val segment=JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
+          .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",0).put("content","Oi.").toString()+"\n"
+        val done=JSONObject().put("type","done").put("turnId",turn).put("conversationId",conversation).put("assistantMessageId",message).toString()+"\n"
+        Reply(bytes=(accepted+segment+done).toByteArray(),stream={out->
+          out.write(accepted.toByteArray());out.flush();assertTrue(firstPersisted.await(5,TimeUnit.SECONDS))
+          out.write((segment+done).toByteArray());out.flush()
+        })
+      } else if(request.path=="/api/voice/speech/segments") Reply(503) else normal
+    }).use {fixture->
+      val backend=fixture.backend(onChanged={_,id->changes.add(id);firstPersisted.countDown()})
+      assertThrows(Exception::class.java){backend.execute(wav(),session,null,RecordingSink(),HandsFreeTurnLatency(),incremental=true)}
+      assertEquals(listOf(conversation,conversation,conversation),changes)
+    }
+  }
+
   @Test fun immediateCancellationBlocksChatBeforeDeferredNetworkCleanupRuns() {
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
@@ -617,6 +686,11 @@ class NodeHandsFreeBackendTest {
         try {
           socket.soTimeout = 5000
           val input = BufferedInputStream(socket.getInputStream())
+          // OkHttp may cancel a just-connected prefetched exchange before sending
+          // any request byte. Partial headers still fail the strict parser below.
+          input.mark(1)
+          if(input.read()<0)return
+          input.reset()
           fun line(): String {
             val bytes = ByteArrayOutputStream()
             while (true) {
@@ -661,8 +735,8 @@ class NodeHandsFreeBackendTest {
         }
       }
     }
-    fun backend(ttsDeadlineMilliseconds:Long=300000,onStage: (String, Long) -> Unit = { _, _ -> }) =
-      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds)
+    fun backend(ttsDeadlineMilliseconds:Long=300000,onChanged:(NodeNativeSession.Session,String)->Unit=NodeConversationChanges::changed,onStage: (String, Long) -> Unit = { _, _ -> }) =
+      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds,onChanged)
     private fun normal(request: Request): Reply {
       if (request.method == "DELETE") return Reply.json(JSONObject())
       return when (request.path) {

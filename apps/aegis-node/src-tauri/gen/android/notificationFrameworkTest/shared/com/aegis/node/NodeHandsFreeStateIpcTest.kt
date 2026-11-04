@@ -36,9 +36,9 @@ class NodeHandsFreeStateIpcTest {
         check(done.await(10,TimeUnit.SECONDS)){"hands_free_webview_callback_timeout"}
         return result
     }
-    private fun state(view:WebView):JSONObject {
+    private fun state(view:WebView,operation:String="state"):JSONObject {
         // Call only the distributed API. Do not replace invoke, permission checks or native state.
-        evaluate(view,"window.__aegisHandsFreeStateTest=null;window.__TAURI_INTERNALS__.invoke('node_hands_free',{operation:'state'}).then(function(value){window.__aegisHandsFreeStateTest={ok:true,value:value};}).catch(function(){window.__aegisHandsFreeStateTest={ok:false};});null")
+        evaluate(view,"window.__aegisHandsFreeStateTest=null;window.__TAURI_INTERNALS__.invoke('node_hands_free',{operation:'$operation'}).then(function(value){window.__aegisHandsFreeStateTest={ok:true,value:value};}).catch(function(){window.__aegisHandsFreeStateTest={ok:false};});null")
         val until=SystemClock.elapsedRealtime()+15000
         while(SystemClock.elapsedRealtime()<until) {
             val raw=evaluate(view,"window.__aegisHandsFreeStateTest")
@@ -74,6 +74,14 @@ class NodeHandsFreeStateIpcTest {
         while(evaluate(view,"Boolean(window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)")!="true") {
             check(SystemClock.elapsedRealtime()<deadline){"hands_free_real_ipc_bootstrap_timeout"};SystemClock.sleep(100)
         }
+        // The same distributed ACL/JNI path also exposes only replayable invalidations,
+        // before microphone permission, model import, pairing or assistant activation.
+        val changes=state(view,"conversationChanges")
+        assertEquals(2,changes.length())
+        val generation=changes.getString("generation")
+        assertEquals(generation,java.util.UUID.fromString(generation).toString())
+        assertEquals(0,changes.getJSONArray("changes").length())
+        assertFalse(changes.has("credential"));assertFalse(changes.has("transcript"));assertFalse(changes.has("audio"))
         repeat(2) {
             val result=state(view)
             for(key in listOf("enabled","assistantSelected","permissionGranted","modelReady","captureConfirmed"))

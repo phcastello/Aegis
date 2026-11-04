@@ -31,7 +31,10 @@ test('Android framework gate runs real hands-free IPC before granting microphone
   assert.ok(invoke < host.indexOf('permission(true);'));
   assert.ok(fixture < 0 || invoke < fixture);
   const android = source('gen/android/notificationFrameworkTest/shared/com/aegis/node/NodeHandsFreeStateIpcTest.kt');
-  assert.ok(android.includes("__TAURI_INTERNALS__.invoke('node_hands_free',{operation:'state'})"));
+  assert.ok(android.includes("__TAURI_INTERNALS__.invoke('node_hands_free',{operation:'$operation'})"));
+  assert.ok(android.includes('operation:String="state"'));
+  assert.ok(android.includes('state(view,"conversationChanges")'));
+  assert.ok(android.includes('val result=state(view)'));
   assert.doesNotMatch(android, /mockIPC|__TAURI_INTERNALS__\s*=/);
   assert.ok(android.includes('hands_free_real_ipc_initial_state'));
   assert.ok(host.includes("phases.has('hands_free_real_ipc_initial_state')"));
@@ -127,4 +130,14 @@ test('cancellation after endpoint closes the persistent event before creating or
   assert.ok(captured.indexOf(cancelled)<captured.indexOf('val session=sessionId?:UUID'));
   assert.ok(captured.indexOf(cancelled)<captured.indexOf('active.execute(command,'));
   assert.match(run,/finishEvent\("failed",if\(error is MicrophoneUnavailable\)"microphone_unavailable"/);
+});
+
+test('conversation replay validates authority under the same monitor as persisted invalidation', () => {
+  const activity = source('gen/android/app/src/main/java/com/aegis/node/MainActivity.kt');
+  const backend = source('gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeBackend.kt');
+  const journal = source('gen/android/app/src/main/java/com/aegis/node/NodeConversationChanges.kt');
+  assert.match(activity, /fun conversationChanges\(payload:String\):String = synchronized\(NodeConversationChanges\) \{\s*NodeConversationChanges.snapshot\(NodeNativeSession.read\(this\)\)/);
+  assert.match(backend, /synchronized\(NodeConversationChanges\) \{\s*checkCurrent\(\)\s*onConversationChanged/);
+  assert.match(journal, /@Synchronized fun snapshot\(session:/);
+  assert.match(journal, /@Synchronized fun changed\(session:/);
 });

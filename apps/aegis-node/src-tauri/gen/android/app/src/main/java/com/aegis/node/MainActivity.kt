@@ -69,9 +69,18 @@ class MainActivity : TauriActivity() {
   }
 
   private var connectivityCallback:android.net.ConnectivityManager.NetworkCallback?=null
+  private val conversationChanged: (org.json.JSONObject) -> Unit = { event ->
+    val payload=event.toString()
+    currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-conversation-changed',{detail:$payload}))",null) }
+  }
+  // Native Rust JNI only; replay is read-only so a failed WebView fetch never consumes an event.
+  fun conversationChanges(payload:String):String = synchronized(NodeConversationChanges) {
+    NodeConversationChanges.snapshot(NodeNativeSession.read(this))
+  }
   override fun onResume() {
     super.onResume()
     readResumed=true
+    NodeConversationChanges.listener=conversationChanged
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged={currentWebView?.post{currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-actions-changed'))",null)}}
     if(connectivityCallback==null) {
@@ -87,6 +96,7 @@ class MainActivity : TauriActivity() {
   }
   override fun onPause() {
     readResumed=false
+    if(NodeConversationChanges.listener===conversationChanged)NodeConversationChanges.listener=null
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged=null
     connectivityCallback?.let{try{getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it)}catch(_:Exception){}}

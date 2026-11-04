@@ -47,6 +47,7 @@
 # Closed hands-free JNI bridge and system assistant metadata retain exact class/method names.
 -keepclassmembers class com.aegis.node.MainActivity {
   public java.lang.String handsFreeState(java.lang.String);
+  public java.lang.String conversationChanges(java.lang.String);
   public java.lang.String handsFreeConfigure(java.lang.String);
   public java.lang.String handsFreeCollectionConfigure(java.lang.String);
   public java.lang.String handsFreeCollectionDelete(java.lang.String);

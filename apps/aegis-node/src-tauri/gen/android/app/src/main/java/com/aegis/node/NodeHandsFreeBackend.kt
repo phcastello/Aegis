@@ -24,7 +24,8 @@ data class HandsFreeTurn(val conversationId: String?, val playedAudio: Boolean, 
 class NodeHandsFreeBackend internal constructor(
   private val readSession: () -> NodeNativeSession.Session?,
   private val onStage: (String, Long) -> Unit = { _, _ -> },
-  private val ttsDeadlineMilliseconds: Long = 300000
+  private val ttsDeadlineMilliseconds: Long = 300000,
+  private val onConversationChanged: (NodeNativeSession.Session, String) -> Unit = NodeConversationChanges::changed
 ) {
   constructor(context: Context, onStage: (String, Long) -> Unit = { _, _ -> }) :
     this({ NodeNativeSession.read(context.applicationContext) }, onStage)
@@ -42,6 +43,16 @@ class NodeHandsFreeBackend internal constructor(
   @Volatile private var correlationId:String?=null
   private var pinnedSessionId: String? = null
   private var pinnedConversationId: String? = null
+
+  private fun conversationChanged(id: String) {
+    requireUuid(id)
+    // Serialize authority validation with journal binding/replay. An old worker can
+    // never bind its scope after a newer identity has already published changes.
+    synchronized(NodeConversationChanges) {
+      checkCurrent()
+      onConversationChanged(checkNotNull(scope), id)
+    }
+  }
 
   private fun checkNotCancelled() {if(cancelled.get())throw CancellationException()}
 
@@ -230,7 +241,7 @@ class NodeHandsFreeBackend internal constructor(
       pinnedConversationId = destination
       val messageId = message.getString("id")
       require(UUID.fromString(messageId).toString() == messageId)
-      checkCurrent()
+      conversationChanged(destination)
       val speechRequest = UUID.randomUUID().toString()
       trace?.speech(speechRequest)
       speechId = speechRequest
@@ -331,16 +342,36 @@ class NodeHandsFreeBackend internal constructor(
       .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
       .toString().toByteArray(Charsets.UTF_8)
     val reader=Thread({
+      var persistedDestination=conversationId
+      var persistedMessage:String?=null
+      var persistedSequence=0
       try {
         trace?.mark("chat_request_started")
         request("/api/chat/messages/stream",bytes,"application/json",1048576,180,onLine={ event ->
           checkCurrent();require(event.getString("turnId")==id)
           when(event.getString("type")) {
+            "conversation" -> {
+              val destination=event.getString("conversationId");requireUuid(destination)
+              require(persistedDestination==null || persistedDestination==destination)
+              persistedDestination=destination
+              conversationChanged(destination)
+            }
             "final_segment","done","error" -> {
+              // These stream boundaries follow SaveChanges, independently of speech backpressure.
+              if(event.getString("type")!="error") {
+                val destination=event.getString("conversationId");requireUuid(destination)
+                require(persistedDestination==null || persistedDestination==destination)
+                val message=event.getString("assistantMessageId");requireUuid(message)
+                require(persistedMessage==null || persistedMessage==message)
+                if(event.getString("type")=="final_segment") require(event.getInt("sequence")==persistedSequence++)
+                else require(persistedSequence>0)
+                persistedDestination=destination;persistedMessage=message
+                conversationChanged(destination)
+              }
               while(!stopped.get() && !events.offer(event,200,TimeUnit.MILLISECONDS)) checkNotCancelled()
               if(stopped.get())throw CancellationException()
             }
-            "conversation","tool_status","memory_activity","token" -> Unit
+            "tool_status","memory_activity","token" -> Unit
             else -> error("invalid_chat_event")
           }
         })

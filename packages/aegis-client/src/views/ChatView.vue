@@ -11,6 +11,7 @@ import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
+import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
 import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../services/navigation';
 import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
@@ -35,6 +36,7 @@ import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import { pollMemoryActivity } from '../services/memoryActivityPolling';
 import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
+  Conversation,
   ConversationSummary,
   FeedbackRating,
   LocalChatMessage,
@@ -584,8 +586,11 @@ async function restoreConversation(): Promise<void> {
   if (conversationId.value) await openConversation(conversationId.value, true);
 }
 
+let summaryRevision = 0;
+const summaryRevisions = new Map<string, number>();
 function mergeConversationSummary(summary: ConversationSummary): void {
   if (deletedConversations.has(summary.id)) return;
+  summaryRevisions.set(summary.id, ++summaryRevision);
   const context = contexts.get(summary.id);
   if (context) { context.title = summary.title ?? 'Nova conversa'; context.createdAt = summary.createdAt; }
   if (summary.id === conversationId.value) activeConversationCreatedAt.value = summary.createdAt;
@@ -596,15 +601,73 @@ function mergeConversationSummary(summary: ConversationSummary): void {
   });
 }
 
+// Native invalidation never selects a chat, touches the composer or replaces a live turn.
+const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation; revision: number; summaryRevision: number }>(async id => {
+  const revision = contexts.get(id)?.revision ?? 0;
+  const summaryRevision = summaryRevisions.get(id) ?? 0;
+  return { snapshot: await getConversation(id), revision, summaryRevision };
+}, (id, { snapshot, revision, summaryRevision }) => {
+  if (disposed || deletedConversations.has(id)) return true;
+  const owner = contexts.get(id);
+  if ((owner && owner.revision !== revision) || (summaryRevisions.get(id) ?? 0) !== summaryRevision) return false;
+  mergeConversationSummary({ ...conversations.value.find(row => row.id === id), id,
+    title: snapshot.title, titleSource: snapshot.titleSource, createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt, messageCount: snapshot.messages.length,
+    lastMessagePreview: snapshot.messages.at(-1)?.content ?? null });
+  if (owner) {
+    owner.revision++;
+    owner.messages = mergeConversationMessages(owner.messages, snapshot.messages);
+    owner.loaded = true;
+    if (owner === selected.value) { resumeMemoryActivityPolling(); void nextTick(observeProactiveMessages); }
+  }
+  return true;
+}, id => disposed || [...activeTurns.values()].some(turn => turn.owner.id === id));
+let conversationSyncTimer: ReturnType<typeof setTimeout> | undefined;
+const conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function flushConversationChanges(): void { void conversationSync.flush(); }
+function resetConversationChanges(): void {
+  conversationSync.reset(); clearTimeout(conversationSyncTimer);
+  for (const timer of conversationRetryTimers.values()) clearTimeout(timer);
+  conversationRetryTimers.clear();
+}
+function conversationChanged(id: string): void {
+  if (deletedConversations.has(id)) return;
+  conversationSync.invalidate(id);
+  clearTimeout(conversationSyncTimer);
+  conversationSyncTimer = setTimeout(flushConversationChanges, 120);
+  // Bounded targeted retries also observe the existing asynchronous title job.
+  const previous = conversationRetryTimers.get(id);
+  if (previous !== undefined) clearTimeout(previous);
+  const retry = (attempt: number): void => {
+    conversationRetryTimers.set(id, setTimeout(async () => {
+      conversationRetryTimers.delete(id);
+      if (disposed || deletedConversations.has(id)) return;
+      conversationSync.invalidate(id); await conversationSync.flush();
+      const summary = conversations.value.find(row => row.id === id);
+      if (attempt < 3 && (conversationSync.pending(id) || !summary || summary.titleSource === 'default' || !summary.title || summary.title === 'Nova conversa')) retry(attempt + 1);
+    }, attempt === 0 ? 1800 : 3400));
+  };
+  retry(0);
+}
+async function reconcileConversations(): Promise<void> {
+  if (disposed || document.visibilityState !== 'visible') return;
+  if (selected.value.id) conversationSync.invalidate(selected.value.id);
+  await Promise.allSettled([refreshProactiveHistory(), conversationSync.flush()]);
+}
+watch(() => [...activeTurns.values()].map(turn => turn.owner.id).filter((id): id is string => !!id), (current, previous) => {
+  for (const id of new Set([...current, ...previous])) if (conversationSync.pending(id)) conversationSync.invalidate(id);
+  flushConversationChanges();
+});
+
 async function refreshProactiveHistory(): Promise<void> {
+  const revision = summaryRevision;
   const page = await getConversations(30, null);
+  if (disposed) return;
   if (conversations.value.length === 0) {
     nextHistoryCursor.value = page.nextCursor ?? null; hasMoreHistory.value = page.hasMore;
   }
   // Merge the current head without discarding pages the reader already loaded or their cursor.
-  for (const summary of page.items) mergeConversationSummary(summary);
-  const active = page.items.find(c => c.id === conversationId.value);
-  if (active) activeConversationTitle.value = active.title ?? 'Nova conversa';
+  for (const summary of page.items) if ((summaryRevisions.get(summary.id) ?? 0) <= revision) mergeConversationSummary(summary);
 }
 
 async function loadConversationHistory(reset = false): Promise<void> {
@@ -621,8 +684,11 @@ async function loadConversationHistory(reset = false): Promise<void> {
   historyErrorMessage.value = null;
 
   try {
+    const revision = summaryRevision;
     const page = await getConversations(30, reset ? null : nextHistoryCursor.value);
-    const incoming = reset ? page.items : [...conversations.value, ...page.items];
+    if (disposed) return;
+    const updatedDuringRead = conversations.value.filter(row => (summaryRevisions.get(row.id) ?? 0) > revision);
+    const incoming = reset ? [...updatedDuringRead, ...page.items] : [...updatedDuringRead, ...conversations.value, ...page.items];
     const seen = new Set<string>();
     conversations.value = incoming.filter((conversation) => {
       if (seen.has(conversation.id) || deletedConversations.has(conversation.id)) {
@@ -631,7 +697,8 @@ async function loadConversationHistory(reset = false): Promise<void> {
 
       seen.add(conversation.id);
       return true;
-    });
+    }).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime() || b.id.localeCompare(a.id));
+    for (const summary of page.items) if ((summaryRevisions.get(summary.id) ?? 0) <= revision) summaryRevisions.set(summary.id, ++summaryRevision);
     nextHistoryCursor.value = page.nextCursor ?? null;
     hasMoreHistory.value = page.hasMore;
 
@@ -702,12 +769,16 @@ async function openConversation(targetConversationId: string, restoring = false)
   }
   isRestoring.value = !owner.loaded;
   const revision = owner.revision;
+  const metadataRevision = summaryRevisions.get(targetConversationId) ?? 0;
   try {
     const conversation = await getConversation(targetConversationId);
     if (request !== conversationLoad || selected.value !== owner || owner.revision !== revision) return;
-    owner.title = conversation.title ?? 'Nova conversa';
-    owner.createdAt = conversation.createdAt;
-    owner.messages = conversation.messages.map(message => ({ ...message, serverId: message.id }));
+    if ((summaryRevisions.get(targetConversationId) ?? 0) === metadataRevision) {
+      owner.title = conversation.title ?? 'Nova conversa';
+      owner.createdAt = conversation.createdAt;
+    }
+    owner.revision++;
+    owner.messages = mergeConversationMessages(owner.messages, conversation.messages);
     owner.loaded = true;
     resumeMemoryActivityPolling();
   } catch {
@@ -1081,7 +1152,7 @@ function navigateToConversation(id: string): void {
 watch(isRestoring, restoring => {
   if (!restoring && explicitDestination) { const id = explicitDestination; explicitDestination = null; void openConversation(id); }
 });
-defineExpose({ openConversation: navigateToConversation });
+defineExpose({ openConversation: navigateToConversation, conversationChanged, reconcileConversations, resetConversationChanges });
 onMounted(() => {
   document.addEventListener('visibilitychange', serverForeground);
   window.addEventListener('focus', serverForeground);
@@ -1143,6 +1214,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true;
+  conversationSync.dispose(); clearTimeout(conversationSyncTimer); for (const timer of conversationRetryTimers.values()) clearTimeout(timer); conversationRetryTimers.clear();
   healthController?.abort();
   document.removeEventListener('visibilitychange', serverForeground);
   window.removeEventListener('focus', serverForeground);
