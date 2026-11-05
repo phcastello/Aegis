@@ -17,12 +17,15 @@ ROOT = Path.home() / '.cache/aegis-wakeword-poc/comparison/microwakeword'
 class MicroWakeWordDetector:
     block_samples = 160  # official microfrontend: 10 ms at 16 kHz
 
-    def __init__(self, config='default', model_path=None):
+    def __init__(self, config='default', model_path=None, threshold=None, release_below=None):
         from ai_edge_litert.interpreter import Interpreter
         from pymicro_features import MicroFrontend
         self._frontend_class = MicroFrontend
         self.config = config
         self.threshold, self.average_window = CONFIGS[config]
+        if threshold is not None:
+            self.threshold = float(threshold)
+        self.release_below = release_below
         self.model_path = Path(model_path or ROOT / 'model/aegis.int8.tflite')
         self._interpreter_class = Interpreter
         self._model_content = self.model_path.read_bytes()
@@ -82,7 +85,7 @@ class MicroWakeWordDetector:
                 continue
             averaged = float(np.mean(self._scores))
             self.max_score = max(self.max_score, averaged)
-            if averaged < self.threshold * .6:
+            if averaged < (self.threshold * .6 if self.release_below is None else self.release_below):
                 self._latched = False
             timestamp = self._samples_seen / 16000
             if averaged >= self.threshold and not self._latched and timestamp - self._last_event >= 1.:
