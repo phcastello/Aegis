@@ -41,6 +41,30 @@ test('invalid state payloads are rejected instead of becoming invented setup sta
   }
 });
 
+test('model identity from native state survives baseline, strong, rollback and absent-model responses', async () => {
+  globalThis.window = {};
+  const baseline = { modelName: 'Baseline', modelVersion: 'aegis-mww-fleurs-dev-2026-10-31', modelSha256: 'f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514' };
+  const strong = { modelName: 'Strong — época 2', modelVersion: 'aegis-mww-strong-epoch-02-2026-11-05', modelSha256: '1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e' };
+  for (const identity of [baseline, strong, baseline]) {
+    const response = { ...initial, modelReady: true, ...identity };
+    mockIPC(() => response);
+    assert.deepEqual(await handsFree('state'), response);
+  }
+  const missing = { ...initial, modelName: null, modelVersion: null, modelSha256: null };
+  mockIPC(() => missing);
+  assert.deepEqual(await handsFree('state'), missing);
+  mockIPC(() => initial);
+  assert.deepEqual(await handsFree('state'), initial, 'legacy state remains readable without inventing baseline identity');
+});
+
+test('invalid model identity is rejected at the native state boundary', async () => {
+  globalThis.window = {};
+  for (const identity of [{ modelName: {} }, { modelName: '' }, { modelVersion: 2 }, { modelVersion: 'x'.repeat(101) }, { modelSha256: 'not-a-hash' }, { modelSha256: 'a'.repeat(65) }]) {
+    mockIPC(() => ({ ...initial, ...identity }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
 test('first rejection ends loading; retry recovers and clears the old diagnostic', async () => {
   let fail = true;
   const s = useHandsFreeSettings(async () => { if (fail) throw { code: 'command_not_authorized' }; return initial; });

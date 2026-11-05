@@ -6,6 +6,9 @@ export interface HandsFreeState {
   assistantSelected: boolean;
   permissionGranted: boolean;
   modelReady: boolean;
+  modelName?: string | null;
+  modelVersion?: string | null;
+  modelSha256?: string | null;
   status: string;
   message: string;
   captureConfirmed?: boolean;
@@ -43,6 +46,12 @@ function stateResponse(value: unknown): HandsFreeState {
   if (!['enabled', 'diagnostic', 'assistantSelected', 'permissionGranted', 'modelReady'].every(key => typeof row[key] === 'boolean') ||
       typeof row.status !== 'string' || !/^[a-z_]{1,64}$/.test(row.status) || typeof row.message !== 'string' || row.message.length > 400 ||
       (row.captureConfirmed !== undefined && typeof row.captureConfirmed !== 'boolean')) throw new HandsFreeError('invalid_response');
+  for (const field of ['modelName', 'modelVersion'] as const) {
+    if (row[field] !== undefined && row[field] !== null && (typeof row[field] !== 'string' || row[field].length < 1 || row[field].length > 100))
+      throw new HandsFreeError('invalid_response');
+  }
+  if (row.modelSha256 !== undefined && row.modelSha256 !== null && (typeof row.modelSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.modelSha256)))
+    throw new HandsFreeError('invalid_response');
   if (row.collection !== undefined) {
     const c = row.collection as Record<string, unknown>;
     if (!c || typeof c !== 'object' || typeof c.enabled !== 'boolean' || typeof c.ready !== 'boolean' ||

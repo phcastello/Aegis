@@ -17,6 +17,7 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
       <label class="audio-preference"><input type="checkbox" :checked="state.enabled" :disabled="!canAct" @change="run('configure', ($event.target as HTMLInputElement).checked)" /> Escutar “Aegis”</label>
       <p role="status">{{ stale ? 'Último estado conhecido: ' : '' }}{{ state.message }}</p>
       <p v-if="stale" class="settings-muted">A escuta e o recebimento de áudio não estão confirmados neste momento.</p>
+      <p v-if="state.modelReady" class="settings-muted">{{ stale ? 'Último modelo informado:' : 'Modelo instalado:' }} <strong>{{ state.modelName || 'Identificação indisponível' }}</strong></p>
       <div class="settings-actions">
         <button v-if="!state.permissionGranted" type="button" :disabled="!canAct" @click="run('permission')">Permitir microfone</button>
         <button v-if="!state.assistantSelected" type="button" :disabled="!canAct" @click="run('assistant')">Selecionar assistente no Android</button>

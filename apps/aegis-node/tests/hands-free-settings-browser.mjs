@@ -22,6 +22,7 @@ try {
     window.hfFixture = { fail: 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
     window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       if (command === 'node_hands_free') {
+        if (args.operation === 'conversationChanges') return { generation: '00000000-0000-4000-8000-000000000001', changes: [] };
         const f = window.hfFixture; f.calls.push({ ...args }); f.peak = Math.max(f.peak, ++f.active);
         try {
           if (f.hold) { f.hold = false; return await new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; }); }
@@ -63,12 +64,26 @@ try {
   for (const name of ['Permitir microfone', 'Selecionar assistente no Android', 'Importar modelo privado'])
     assert.equal(await hf.getByRole('button', { name, exact: true }).isEnabled(), true);
   assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), false);
+  assert.equal(await hf.getByText('Modelo instalado:', { exact: false }).count(), 0, 'no model identity is invented before import');
   assert.deepEqual(await page.evaluate(() => [...new Set(window.hfFixture.calls.map(x => x.operation))]), ['state'], 'query never requests permissions/configuration');
+
+  for (const identity of [
+    { modelName: 'Baseline', modelVersion: 'aegis-mww-fleurs-dev-2026-10-31', modelSha256: 'f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514' },
+    { modelName: 'Strong — época 2', modelVersion: 'aegis-mww-strong-epoch-02-2026-11-05', modelSha256: '1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e' },
+    { modelName: 'Baseline', modelVersion: 'aegis-mww-fleurs-dev-2026-10-31', modelSha256: 'f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514' }
+  ]) {
+    await page.evaluate(identity => { Object.assign(window.hfFixture.initial, { modelReady: true, ...identity }); }, identity);
+    await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+    await hf.getByText(`Modelo instalado: ${identity.modelName}`, { exact: true }).waitFor();
+    assert.equal(await hf.getByRole('button', { name: 'Importar modelo novamente', exact: true }).isEnabled(), true);
+  }
+  assert.deepEqual(await page.evaluate(() => [...new Set(window.hfFixture.calls.map(x => x.operation))]), ['state'], 'model labels never replace or enable a model implicitly');
 
   await page.evaluate(() => { window.hfFixture.fail = 'timeout'; });
   await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
   await hf.getByText('Código: timeout', { exact: true }).waitFor();
   assert.equal(await hf.getByText('Último estado conhecido: Escuta desligada.', { exact: true }).count(), 1);
+  assert.equal(await hf.getByText('Último modelo informado: Baseline', { exact: true }).count(), 1, 'stale identity is presented as last known rather than active');
   assert.equal(await hf.getByRole('button', { name: 'Permitir microfone', exact: true }).isEnabled(), false);
   assert.equal(await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).isEnabled(), true);
   assert.equal(await hf.getByText('Atualizando estado…', { exact: true }).count(), 0);
