@@ -119,6 +119,7 @@ def main():
     shutil.copyfile(summary_path,output/'metrics.json')
     manifest={'schema':1,'created_at':datetime.now(timezone.utc).isoformat(),
         'decision':'GO PARA PILOTO','production_approved':False,'selected_model':selected,
+        'pilot_scope':'Restricted comparative and reversible homologation; experience gain remains unproven. Final test was unfavorable; inspect metrics before use.',
         'selection_sha256':sha256(selection_path),'metrics_sha256':sha256(output/'metrics.json'),
         'models':{filename:{'sha256':model['model_sha256'], 'threshold':model['threshold'],
             'contract':contracts[filename]} for filename,model in entries.items()},
@@ -133,7 +134,9 @@ def main():
     write(output/'manifest.json',manifest)
     (output/'INSTRUCOES.txt').write_text(f'''Aegis v0.8.0 — pacote privado de piloto
 
-Decisão: GO PARA PILOTO. Produção não aprovada. Candidata congelada: {selected}.
+Decisão: GO PARA PILOTO restrito, comparativo e reversível. Produção não aprovada.
+Candidata congelada: {selected}. Ganho de experiência ainda não demonstrado;
+o teste final teve perdas de chamadas relevantes. Leia metrics.json antes do uso.
 Threshold: {threshold}; média de 5 scores; liberação abaixo de 0,3;
 refratário de 16.000 amostras (1 s). Preserve estado streaming entre blocos.
 
@@ -149,7 +152,11 @@ Preparação e importação
    que carregue aegis.int8.tflite pelo SHA do manifesto e configure exatamente
    o threshold acima. Este pacote não instala nem altera aplicativos.
 5. Antes de qualquer promoção, execute replay ARM64 e compare reset/streaming,
-   chamadas reais perto/longe e uso contínuo no telefone. Registre chamadas
+   chamadas reais perto/longe e uso contínuo no telefone CONTRA O BASELINE.
+   Use o piloto como homologação acompanhada, com rollback imediato; não como
+   substituição diária não monitorada. Registre todas as tentativas legítimas,
+   inclusive as perdidas, e a exposição contínua de cada configuração.
+   Registre chamadas
    perdidas, falsos disparos, latência, CPU/bateria e estabilidade. Não envie
    áudio a serviços externos. Não altere TTS para esses testes.
 

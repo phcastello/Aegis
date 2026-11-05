@@ -106,6 +106,10 @@ def main():
                   'One lost call costs four FP by engineering preference, not universal scientific equivalence.',
                   'Host numeric kernels differ; loading and reset checks do not establish physical ARM64 compatibility.']}
     private = {'alias_to_id':{v:k for k,v in aliases.items()}, 'paired_changes':{}}
+    validation = read(a.root/'validation-summary-v1.json')
+    if validation['selection_sha256'] != sha256(selection_path):
+        raise ValueError('Validation summary refers to a different selection')
+    result['validation'] = validation
     for name, ev in evaluations.items():
         model = selection['models'][name]
         if (ev['model_sha256']!=model['model_sha256'] or sha256(Path(model['model_path']))!=model['model_sha256']
@@ -118,6 +122,12 @@ def main():
             raise ValueError('Final library/rules/chronology differs: '+name)
         out = {'model_sha256':ev['model_sha256'], 'model_bytes':ev['model_bytes'],
                'threshold':model['threshold'], 'runtimes':{}, 'native_comparison':native_summary(ev)}
+        if 'weights_sha256' in model:
+            out['float_checkpoint_sha256'] = model['weights_sha256']
+        out['native_comparison']['activated_context_mismatch_aliases'] = [
+            aliases[r['id']] for r in ev['native_comparison']['cases'] if not r['activated_file_equal']]
+        out['native_comparison']['event_stride_mismatch_aliases'] = [
+            aliases[r['id']] for r in ev['native_comparison']['cases'] if not r['events_within_stride']]
         result['models'][name] = out
         result['provenance'][name+'_evaluation_sha256'] = sha256(a.root/f'eval-{name}-final/evaluation.json')
         private['paired_changes'][name] = {}
@@ -141,9 +151,11 @@ def main():
     training = read(a.root/'finetune-v1/training.json')
     # Whitelist fields to avoid accidentally serializing original event identifiers.
     result['finetune'] = {k:training[k] for k in ('plan','best_epoch','best_key','params','frozen_batch_norm_layers','model_sha256','elapsed_seconds','protocol_sha256','features_manifest_sha256') if k in training}
+    result['finetune']['execution'] = {k:training[k] for k in ('training_script_sha256','wall_seconds_plan_to_last_epoch_write','finalization_recovery') if k in training}
     result['finetune']['history'] = []
     for row in training['history']:
         safe = {k:row[k] for k in ('epoch','train_loss','original_validation_bce','original_validation_recall','validation_negative_contexts_litert_native','selection_key','model_sha256','validation_sha256','real_training_unique_events','real_training_class_counts') if k in row}
+        safe['float_checkpoint_sha256'] = row['checkpoint_sha256']
         draws = row['real_event_draws']
         if len(draws['real_positive'])!=91 or len(draws['real_negative'])!=130 or any(v<1 for d in draws.values() for v in d.values()):
             raise ValueError('TRAIN event omitted in finetune')
@@ -172,6 +184,10 @@ def main():
                 **summary, 'gap_events':con['gap_event_count'],
                 'by_origin_split_label':con['by_origin_split_label'], 'protocol':con['protocol']}}
     result['provenance']['controls_sha256'] = sha256(controls_path)
+    for filename in ('training-code-hardening-v1.json','finetune-v1/manifest-recovery-v1.json'):
+        path = a.root/filename
+        if path.exists():
+            result['provenance'][filename+'_sha256'] = sha256(path)
     android = a.root/'android-readiness-v1.json'
     if android.exists():
         result['android'] = read(android)
