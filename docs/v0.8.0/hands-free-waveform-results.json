@@ -1,0 +1,258 @@
+{
+  "schema": 1,
+  "branch": "feat/v0.8.0-hands-free-waveform",
+  "baseCommit": "af2855c",
+  "implementationCommit": "f5af6e393092a9b0001d1340fb665e40e04f3293",
+  "publication": {
+    "created_at": "2026-11-05T22:38:54.885691+00:00",
+    "result": "PASS",
+    "version": "0.8.0-unstable.14",
+    "versionCode": 8000014,
+    "sourceCommit": "f5af6e393092a9b0001d1340fb665e40e04f3293",
+    "run": "https://github.com/phcastello/Aegis/actions/runs/42121625315",
+    "apk": "/home/phc/.cache/aegis-hands-free-waveform/official-0.8.0-unstable.14/Aegis-Android-arm64.apk",
+    "apk_url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.14/Aegis-Android-arm64.apk",
+    "apk_sha256": "3286f994a4b20a1df77302b69d2668a762efad6baab00919c220880462bcf01e",
+    "apk_bytes": 27852221,
+    "official_certificate_sha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "signature_verified": true,
+    "actual_packaged_manifest_verified": true,
+    "archive_guard_verified": true,
+    "zipalign_16kb": true,
+    "abis": [
+      "arm64-v8a"
+    ],
+    "private_model_or_audio_or_keystore": "absent",
+    "authorized_model_sha_and_version_literals_in_dex": true,
+    "release_asset_manifest_equals_feed": true,
+    "public_feed_matches_api": true,
+    "tag_source_verified": true,
+    "limits": "Official workflow succeeded. Firebase and generated BuildConfig gates are evidence of that workflow; not rerun locally with fabricated source or provider configuration. No install, model import or physical activation.",
+    "script_sha256": "c1fd3f967074a5e4c9ba4eeef6e10bbe4062da99ffc2d9631836e80a14c1895a"
+  },
+  "localValidation": {
+    "sourceCommit": "f5af6e393092a9b0001d1340fb665e40e04f3293",
+    "kotlin": {
+      "suites": [
+        {
+          "name": "com.aegis.node.NodeHandsFreeActivationCollectionTest",
+          "tests": "13",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeAudioTest",
+          "tests": "23",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeBackendTest",
+          "tests": "32",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeContinuityTest",
+          "tests": "16",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeManualLeaseTest",
+          "tests": "4",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeMetricsTest",
+          "tests": "19",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeModelTest",
+          "tests": "8",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePanelMotionTest",
+          "tests": "4",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePanelTest",
+          "tests": "21",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePcmStreamTest",
+          "tests": "10",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePresentationTest",
+          "tests": "4",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeRealtimeTest",
+          "tests": "7",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ],
+      "tests": 161,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "javascriptContracts": {
+      "tests": 18,
+      "failures": 0,
+      "status": "PASS"
+    },
+    "hostVisual": {
+      "scope": "Production Kotlin amplitudes rendered in host Canvas. Geometry reproduction is not Android Canvas/physical approval.",
+      "frames": 781,
+      "encodedFps": 60,
+      "signalWindowMs": 20,
+      "historyMs": 1280,
+      "presentationDelayMs": 200,
+      "quietFrames": 72,
+      "quietMax": 0,
+      "voiceFrames": 156,
+      "independentlyVariedFrames": 156,
+      "interiorChangingRatio": 1,
+      "meanFrameDeltaInsideBlock": 0.0632852120943029,
+      "meanFrameDeltaAtBlockBoundary": 0.06463155487091346,
+      "raf": {
+        "callbacks": 781,
+        "medianMs": 16.699999999999818,
+        "p95Ms": 16.700000000000728,
+        "maxMs": 16.80000000000109,
+        "over40ms": 0
+      },
+      "assertions": "PASS"
+    },
+    "independentVisualReview": {
+      "physical_android": false,
+      "adb_connected_devices": 0,
+      "android_emulator": "not available in existing SDK; /dev/kvm absent",
+      "visual_scope": "Production Kotlin signal values and source-matched host Canvas geometry, observed as adjacent decoded video frames and phrase sequence. Android Canvas execution and physical display not claimed.",
+      "source_signal_sha256": "bb4b93f4fd70f45ca0f4e40e6d3cf1e170d7b5c53526dab24db3265ec05310dd",
+      "independent_dynamic_inspection": "PASS",
+      "quiet_peak": 0,
+      "volume_peaks": {
+        "low": 0.40668815,
+        "normal": 0.70247936,
+        "loud": 0.8925455
+      },
+      "last_visual_nonzero_at_ms": 9167,
+      "last_input_voice_at_ms": 7600,
+      "full_visual_history_flush_ms": 1567,
+      "production_capture_wakeword_model_vad_sources_unchanged": [
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFree.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeModel.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeAudio.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeBackend.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreePlayback.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeRealtime.kt",
+        "apps/aegis-node/src-tauri/gen/android/app/src/main/cpp/AegisMicroWakeWord.cpp"
+      ],
+      "motion_artifacts": [
+        "render-final/waveform-synthetic.mp4",
+        "render-final/subframe-contact-sheet.png",
+        "render-final/phrase-contact-sheet.png",
+        "render-final/raf-timing.json"
+      ],
+      "superseded_artifact": "/tmp/aegis-waveform-visual-v1 keeps the first exponential-tail candidate; the quiet-tail assertion exposed excess tail and finite 150ms quiet release was implemented before this final export."
+    },
+    "physicalAndroid": {
+      "connectedAdbDevices": 0,
+      "tested": false
+    },
+    "preservation": {
+      "captureModelVadSttTtsSourcesUnchanged": true,
+      "modelHashesUnchanged": true
+    },
+    "visualArtifacts": "/home/phc/.cache/aegis-hands-free-waveform/visual-v3"
+  },
+  "protectedSourceSha256": {
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFree.kt": "a1c12aa065a377317d87114cbc591113b0f2ef68fb2d6ac851c889ff7fd73f32",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeModel.kt": "81e5c057cc98042068755dd82dadaeede23ed0e1660209ba6cb215f96727c414",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeAudio.kt": "6acbbcfdafe0a6e6339c537b2ae08c9a81d48aa2756f06ca6d47ebb6942cf952",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeBackend.kt": "78f7eec0b2d5295ed35a89a5edafdfe632ca27ea3099e2e090c67ae1fb79b56a",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreePlayback.kt": "fccf291b4da150ba019bc2cba0c008d36b97b428e250ebb810d3977ddf6d2341",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreeRealtime.kt": "c9a2602da894548227bb9f8156442e9ebf22b1a13998c5ffaec62103752d4e9f",
+    "apps/aegis-node/src-tauri/gen/android/app/src/main/cpp/AegisMicroWakeWord.cpp": "d960305b50de5e2b1b102a1cd724d8b75ec477fb8980641dd2842583a9d57e4a"
+  },
+  "services": {
+    "publisherComponents": [
+      "native"
+    ],
+    "pendingMigrations": [],
+    "previousContainerIdsImagesStartedAtUnchanged": true,
+    "backendPwaTtsDatabaseDeployment": false
+  },
+  "waveform": {
+    "bars": 32,
+    "pcm": "PCM16 mono16000Hz already captured",
+    "measurementWindowMs": 20,
+    "acousticValuesPerSecond": 50,
+    "existingDeliveryMs": 200,
+    "historyMs": 1280,
+    "bufferAmplitudeCapacity": 80,
+    "presentationDelayMs": 200,
+    "attackTimeConstantMs": 40,
+    "releaseMs": 150,
+    "quietRelease": "finite ramp to zero for measured silence",
+    "scaleDbfs": [
+      -58,
+      -12
+    ],
+    "automaticGain": false,
+    "pcmRetained": false,
+    "rendering": "postOnAnimation vsync, nominal60FPS on60Hz display; physical cadence unmeasured",
+    "reducedMotion": "explicit animator scale and battery saver; capture-driven redraw plus single expiry",
+    "hidden": "callbacks/listeners detached; no signal history"
+  },
+  "physicalAndroid": {
+    "availableDevices": 0,
+    "tested": false,
+    "pending": "Visual motion, latency and CPU confirmation on owner phone"
+  },
+  "dataPreservation": {
+    "installedModel": "preserved",
+    "authorizedModelHashes": [
+      "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+      "1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e"
+    ],
+    "pairingCredentialsConversationsRecordingsLabelsPreferences": "preserved",
+    "privateWeightsInGitOrApk": false
+  },
+  "artifacts": {
+    "root": "/home/phc/.cache/aegis-hands-free-waveform",
+    "motionVideo": "/home/phc/.cache/aegis-hands-free-waveform/visual-v3/waveform-synthetic.mp4",
+    "temporalFrames": "/home/phc/.cache/aegis-hands-free-waveform/visual-v3/subframe-contact-sheet.png",
+    "interactiveFixture": "/home/phc/.cache/aegis-hands-free-waveform/visual-v3/inspection.html"
+  },
+  "stableRelease": false
+}

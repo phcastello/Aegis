@@ -160,10 +160,58 @@ ANDROID_HOME=/tmp/aegis-polish-sdk ./gradlew :app:testUniversalDebugUnitTest \
 # Na raiz:
 node --test apps/aegis-node/scripts/hands-free-contract.test.mjs \
   apps/aegis-node/scripts/hands-free-panel-contract.test.mjs
+# Destinos sempre novos; compilador Kotlin e Playwright/Chromium já existentes:
+python3 apps/aegis-node/scripts/export-waveform-visual.py --output <novo-export>
+AEGIS_PLAYWRIGHT_CORE=<modulo-playwright-core-existente> \
+PLAYWRIGHT_CHROMIUM_EXECUTABLE=<chromium-existente> FFMPEG=<ffmpeg-existente> \
+  node apps/aegis-node/scripts/waveform-visual.mjs \
+  --frames <novo-export>/frames.json --output <novo-render>
 ```
 
-As evidências de inspeção temporal, publicação oficial, versão e APK serão
-registradas depois da validação e distribuição. O publicador deve confirmar
-somente `native`, sem migrations, e reservar a próxima `0.8.0-unstable.N` no
-ledger. Pesos privados não entram no Git nem no APK. Pareamento, conversas,
-credenciais, configurações, áudios e rótulos existentes são preservados.
+## Preview oficial publicada
+
+O plano oficial confirmou somente `native`, sem migrations. A operação
+`20261105T222706Z-ab3b08e2` solicitou a distribuição da fonte
+`f5af6e393092a9b0001d1340fb665e40e04f3293`. O ledger reservou
+**0.8.0-unstable.14**, código Android **8000014**, sem reutilizar números.
+
+O [run 42121625315](https://github.com/phcastello/Aegis/actions/runs/42121625315)
+concluiu com sucesso: builds Android ARM64/Windows, verificações selecionadas,
+assinatura oficial isolada, publicação e avanço do feed. A matriz extensa de
+aceite de release estável foi ignorada pelo fluxo de preview; não é apresentada
+como aprovada, e a v0.8.0 não foi promovida a estável.
+
+- [Release oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.14).
+- [APK Android ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.14/Aegis-Android-arm64.apk).
+- SHA-256 do APK: `3286f994a4b20a1df77302b69d2668a762efad6baab00919c220880462bcf01e`.
+- Certificado oficial: `df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31`.
+- Feed recomendado: `https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json`.
+
+A verificação independente baixou o APK, manifesto e SHA256SUMS da release e
+conferiu assinatura/certificado, manifesto real, pacote `com.aegis.node`, versão,
+código, flags de produção, somente `arm64-v8a` e alinhamento de 16 KB. Os dois
+hashes/versões autorizados continuam presentes no DEX; pesos privados, WAVs,
+fixtures e keystores estão ausentes. Feed público/API, manifesto da release,
+tag e `sourceCommit` coincidem. Os gates Firebase/BuildConfig são evidência do
+workflow oficial, sem alegar repetição local com fontes ou configurações fabricadas.
+
+Todos os containers previamente em execução mantiveram IDs, imagens e instantes
+de início antes/depois. Não houve deploy/reinício de backend, PWA, TTS ou bancos.
+Não houve instalação, desinstalação, limpeza de dados ou nova importação de
+modelo em aparelho nesta rodada. A atualização preserva pareamento, conversas,
+credenciais, configurações, áudios, rótulos e o modelo já instalado. O Strong e
+o baseline continuam aceitos com os mesmos hashes e parâmetros da `unstable.13`.
+
+Para verificar no telefone: atualizar pelo updater existente, fazer uma chamada
+normal com pausas/volumes diferentes, observar deslocamento contínuo e retorno
+ao silêncio, alternar processamento/reprodução, cancelar e reabrir e testar a
+preferência de remoção de animações. Essa confirmação física continua pendente.
+
+Evidências persistentes: `~/.cache/aegis-hands-free-waveform/`, incluindo
+`visual-v3/`, `local-validation-v1.json`, `protected-source-hashes-v1.json`,
+`official-0.8.0-unstable.14/verification.json` e comparação dos serviços.
+[Resultados estruturados seguros](hands-free-waveform-results.json).
+
+Commit da implementação: `f5af6e3`. O APK utiliza exatamente essa fonte; o
+registro posterior acrescenta somente documentação. Branch enviada ao remoto
+com Conventional Commits, sem PR, merge na `main` ou modificação de outras worktrees.
