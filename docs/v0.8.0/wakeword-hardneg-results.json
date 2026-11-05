@@ -1,0 +1,1307 @@
+{
+  "schema": 1,
+  "selected_strategy": "C",
+  "decision": "NO-GO: validation legitimate-call preservation failed; research artifact only",
+  "validation_gate_passed": false,
+  "protocol_sha256": "7c7b1576890f43029204e15e6cb6c836494fad752cddaa044faa45849983fecf",
+  "selection_sha256": "ec91cb4444ffe315e39ec2571a41d9c30ce2647feea9b3d23ce3eb5c2aa2467d",
+  "final_replay_launch_sha256": "6ae13d77659cb839a25020ace10eba9e6a7a2b0eaebafd80618028c87ef659b0",
+  "audit": {
+    "labels": {
+      "false_positive": 146,
+      "correct": 15
+    },
+    "wav_files": 322,
+    "all_declared_hashes_match": true,
+    "all_wav_formats_pcm16_mono_16khz": true,
+    "overlap_exact_events": 161,
+    "issues": {
+      "decision_context_not_full_two_seconds": 10
+    },
+    "duration_seconds": {
+      "triggerContext": 345.59000000000003,
+      "postActivation": 725.027
+    }
+  },
+  "split_counts": {
+    "train": {
+      "false_positive": 57,
+      "correct": 4
+    },
+    "validation": {
+      "correct": 4,
+      "false_positive": 25
+    },
+    "test": {
+      "false_positive": 64,
+      "correct": 7
+    }
+  },
+  "training": {
+    "A": {
+      "strategy": "A",
+      "config": {
+        "epochs": 8,
+        "learning_rate": 0.0001,
+        "initialization": "baseline weights; fresh Adam"
+      },
+      "params": 13057,
+      "best_epoch": 8,
+      "best_objective": 0.0022304641643131617,
+      "model_bytes": 39552,
+      "model_sha256": "11ea711b55107f6a56fd16bd54dd2d13bdea1bccc3c9628abb763cee28633130",
+      "input_shape": [
+        1,
+        3,
+        40
+      ],
+      "input_quantization": [
+        0.10196078568696976,
+        -128
+      ],
+      "output_shape": [
+        1,
+        1
+      ],
+      "output_quantization": [
+        0.00390625,
+        0
+      ],
+      "elapsed_seconds": 98.0926896550227,
+      "versions": {
+        "tensorflow-cpu": "2.18.1",
+        "keras": "3.15.1",
+        "numpy": "2.0.2",
+        "pymicro-features": "2.0.2",
+        "ai-edge-litert": "2.3.0"
+      }
+    },
+    "B": {
+      "strategy": "B",
+      "config": {
+        "epochs": 20,
+        "learning_rate": 0.001,
+        "initialization": "random; same architecture"
+      },
+      "params": 13057,
+      "best_epoch": 17,
+      "best_objective": 0.004190369632851798,
+      "model_bytes": 39552,
+      "model_sha256": "439bf4eadfc70bb1a8075d1b3c75246e64a8954948d5621e22804e14a11155e6",
+      "input_shape": [
+        1,
+        3,
+        40
+      ],
+      "input_quantization": [
+        0.10196078568696976,
+        -128
+      ],
+      "output_shape": [
+        1,
+        1
+      ],
+      "output_quantization": [
+        0.00390625,
+        0
+      ],
+      "elapsed_seconds": 201.3304890699219,
+      "versions": {
+        "tensorflow-cpu": "2.18.1",
+        "keras": "3.15.1",
+        "numpy": "2.0.2",
+        "pymicro-features": "2.0.2",
+        "ai-edge-litert": "2.3.0"
+      }
+    },
+    "C": {
+      "strategy": "A",
+      "config": {
+        "epochs": 1,
+        "learning_rate": 0.0001,
+        "initialization": "baseline weights; fresh Adam; one-epoch conservative followup C"
+      },
+      "params": 13057,
+      "best_epoch": 1,
+      "best_objective": 0.047792419711186085,
+      "model_bytes": 39552,
+      "model_sha256": "cb050f025d40daa779269922d65a05868e6b4541022f945c89d7ead8eecb44dd",
+      "input_shape": [
+        1,
+        3,
+        40
+      ],
+      "input_quantization": [
+        0.10196078568696976,
+        -128
+      ],
+      "output_shape": [
+        1,
+        1
+      ],
+      "output_quantization": [
+        0.00390625,
+        0
+      ],
+      "elapsed_seconds": 22.82460938487202,
+      "versions": {
+        "tensorflow-cpu": "2.18.1",
+        "keras": "3.15.1",
+        "numpy": "2.0.2",
+        "pymicro-features": "2.0.2",
+        "ai-edge-litert": "2.3.0"
+      }
+    }
+  },
+  "validation": {
+    "baseline": {
+      "false_positive": {
+        "contexts": 25,
+        "any_event_contexts": 23,
+        "near_decision_event_contexts": 23,
+        "events": 23,
+        "near_decision_events": 23,
+        "full_2s_precontext": 23,
+        "full_precontext_any_event_contexts": 21,
+        "full_precontext_near_decision_event_contexts": 21
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 4,
+        "near_decision_event_contexts": 4,
+        "events": 4,
+        "near_decision_events": 4,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 4,
+        "full_precontext_near_decision_event_contexts": 4
+      }
+    },
+    "A": {
+      "false_positive": {
+        "contexts": 25,
+        "any_event_contexts": 1,
+        "near_decision_event_contexts": 1,
+        "events": 1,
+        "near_decision_events": 1,
+        "full_2s_precontext": 23,
+        "full_precontext_any_event_contexts": 1,
+        "full_precontext_near_decision_event_contexts": 1
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 3,
+        "near_decision_event_contexts": 3,
+        "events": 3,
+        "near_decision_events": 3,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 3,
+        "full_precontext_near_decision_event_contexts": 3
+      }
+    },
+    "B": {
+      "false_positive": {
+        "contexts": 25,
+        "any_event_contexts": 0,
+        "near_decision_event_contexts": 0,
+        "events": 0,
+        "near_decision_events": 0,
+        "full_2s_precontext": 23,
+        "full_precontext_any_event_contexts": 0,
+        "full_precontext_near_decision_event_contexts": 0
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 3,
+        "near_decision_event_contexts": 3,
+        "events": 3,
+        "near_decision_events": 3,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 3,
+        "full_precontext_near_decision_event_contexts": 3
+      }
+    },
+    "C": {
+      "false_positive": {
+        "contexts": 25,
+        "any_event_contexts": 3,
+        "near_decision_event_contexts": 3,
+        "events": 3,
+        "near_decision_events": 3,
+        "full_2s_precontext": 23,
+        "full_precontext_any_event_contexts": 3,
+        "full_precontext_near_decision_event_contexts": 3
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 3,
+        "near_decision_event_contexts": 3,
+        "events": 3,
+        "near_decision_events": 3,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 3,
+        "full_precontext_near_decision_event_contexts": 3
+      }
+    }
+  },
+  "test": {
+    "baseline": {
+      "false_positive": {
+        "contexts": 64,
+        "any_event_contexts": 58,
+        "near_decision_event_contexts": 58,
+        "events": 58,
+        "near_decision_events": 58,
+        "full_2s_precontext": 62,
+        "full_precontext_any_event_contexts": 56,
+        "full_precontext_near_decision_event_contexts": 56
+      },
+      "correct": {
+        "contexts": 7,
+        "any_event_contexts": 7,
+        "near_decision_event_contexts": 7,
+        "events": 7,
+        "near_decision_events": 7,
+        "full_2s_precontext": 6,
+        "full_precontext_any_event_contexts": 6,
+        "full_precontext_near_decision_event_contexts": 6
+      }
+    },
+    "A": {
+      "false_positive": {
+        "contexts": 64,
+        "any_event_contexts": 9,
+        "near_decision_event_contexts": 9,
+        "events": 9,
+        "near_decision_events": 9,
+        "full_2s_precontext": 62,
+        "full_precontext_any_event_contexts": 9,
+        "full_precontext_near_decision_event_contexts": 9
+      },
+      "correct": {
+        "contexts": 7,
+        "any_event_contexts": 7,
+        "near_decision_event_contexts": 7,
+        "events": 7,
+        "near_decision_events": 7,
+        "full_2s_precontext": 6,
+        "full_precontext_any_event_contexts": 6,
+        "full_precontext_near_decision_event_contexts": 6
+      }
+    },
+    "B": {
+      "false_positive": {
+        "contexts": 64,
+        "any_event_contexts": 9,
+        "near_decision_event_contexts": 8,
+        "events": 9,
+        "near_decision_events": 8,
+        "full_2s_precontext": 62,
+        "full_precontext_any_event_contexts": 8,
+        "full_precontext_near_decision_event_contexts": 7
+      },
+      "correct": {
+        "contexts": 7,
+        "any_event_contexts": 7,
+        "near_decision_event_contexts": 7,
+        "events": 7,
+        "near_decision_events": 7,
+        "full_2s_precontext": 6,
+        "full_precontext_any_event_contexts": 6,
+        "full_precontext_near_decision_event_contexts": 6
+      }
+    },
+    "C": {
+      "false_positive": {
+        "contexts": 64,
+        "any_event_contexts": 21,
+        "near_decision_event_contexts": 21,
+        "events": 21,
+        "near_decision_events": 21,
+        "full_2s_precontext": 62,
+        "full_precontext_any_event_contexts": 20,
+        "full_precontext_near_decision_event_contexts": 20
+      },
+      "correct": {
+        "contexts": 7,
+        "any_event_contexts": 7,
+        "near_decision_event_contexts": 7,
+        "events": 7,
+        "near_decision_events": 7,
+        "full_2s_precontext": 6,
+        "full_precontext_any_event_contexts": 6,
+        "full_precontext_near_decision_event_contexts": 6
+      }
+    }
+  },
+  "legacy": {
+    "baseline": {
+      "quality": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "continuous": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "public": {
+        "seconds": 2100.0,
+        "events": 4
+      }
+    },
+    "A": {
+      "quality": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "continuous": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "public": {
+        "seconds": 2100.0,
+        "events": 1
+      }
+    },
+    "B": {
+      "quality": {
+        "positive": {
+          "files": 23,
+          "activated_files": 22,
+          "events": 22
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "continuous": {
+        "positive": {
+          "files": 23,
+          "activated_files": 22,
+          "events": 22
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "public": {
+        "seconds": 2100.0,
+        "events": 1
+      }
+    },
+    "C": {
+      "quality": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "continuous": {
+        "positive": {
+          "files": 23,
+          "activated_files": 23,
+          "events": 23
+        },
+        "negative": {
+          "files": 8,
+          "activated_files": 1,
+          "events": 1
+        }
+      },
+      "public": {
+        "seconds": 2100.0,
+        "events": 2
+      }
+    }
+  },
+  "native": {
+    "baseline": {
+      "unavailable": null,
+      "test": {
+        "false_positive": {
+          "contexts": 64,
+          "any_event_contexts": 58,
+          "near_decision_event_contexts": 58,
+          "events": 58,
+          "near_decision_events": 58,
+          "full_2s_precontext": 62,
+          "full_precontext_any_event_contexts": 56,
+          "full_precontext_near_decision_event_contexts": 56
+        },
+        "correct": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "legacy": {
+        "quality": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "continuous": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "public": {
+          "seconds": 2100.0,
+          "events": 4
+        }
+      },
+      "max_context_score_delta": 0.078125,
+      "context_event_stride_mismatch": 0,
+      "train_period_diagnostic": {
+        "false_positive": {
+          "contexts": 57,
+          "any_event_contexts": 57,
+          "near_decision_event_contexts": 57,
+          "events": 60,
+          "near_decision_events": 57,
+          "full_2s_precontext": 52,
+          "full_precontext_any_event_contexts": 52,
+          "full_precontext_near_decision_event_contexts": 52
+        },
+        "correct": {
+          "contexts": 4,
+          "any_event_contexts": 4,
+          "near_decision_event_contexts": 4,
+          "events": 5,
+          "near_decision_events": 4,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 4,
+          "full_precontext_near_decision_event_contexts": 4
+        }
+      },
+      "new_correct_all15_conditional": {
+        "contexts": 15,
+        "near_decision_detected": 15,
+        "any_context_detected": 15,
+        "by_split": {
+          "train": {
+            "contexts": 4,
+            "any_event_contexts": 4,
+            "near_decision_event_contexts": 4,
+            "events": 5,
+            "near_decision_events": 4,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 4,
+            "full_precontext_near_decision_event_contexts": 4
+          },
+          "validation": {
+            "contexts": 4,
+            "any_event_contexts": 4,
+            "near_decision_event_contexts": 4,
+            "events": 4,
+            "near_decision_events": 4,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 4,
+            "full_precontext_near_decision_event_contexts": 4
+          },
+          "final": {
+            "contexts": 7,
+            "any_event_contexts": 7,
+            "near_decision_event_contexts": 7,
+            "events": 7,
+            "near_decision_events": 7,
+            "full_2s_precontext": 6,
+            "full_precontext_any_event_contexts": 6,
+            "full_precontext_near_decision_event_contexts": 6
+          }
+        },
+        "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+      }
+    },
+    "A": {
+      "unavailable": null,
+      "test": {
+        "false_positive": {
+          "contexts": 64,
+          "any_event_contexts": 10,
+          "near_decision_event_contexts": 10,
+          "events": 10,
+          "near_decision_events": 10,
+          "full_2s_precontext": 62,
+          "full_precontext_any_event_contexts": 10,
+          "full_precontext_near_decision_event_contexts": 10
+        },
+        "correct": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "legacy": {
+        "quality": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "continuous": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "public": {
+          "seconds": 2100.0,
+          "events": 1
+        }
+      },
+      "max_context_score_delta": 0.08203125,
+      "context_event_stride_mismatch": 1,
+      "train_period_diagnostic": {
+        "false_positive": {
+          "contexts": 57,
+          "any_event_contexts": 6,
+          "near_decision_event_contexts": 6,
+          "events": 6,
+          "near_decision_events": 6,
+          "full_2s_precontext": 52,
+          "full_precontext_any_event_contexts": 4,
+          "full_precontext_near_decision_event_contexts": 4
+        },
+        "correct": {
+          "contexts": 4,
+          "any_event_contexts": 1,
+          "near_decision_event_contexts": 1,
+          "events": 1,
+          "near_decision_events": 1,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 1,
+          "full_precontext_near_decision_event_contexts": 1
+        }
+      },
+      "new_correct_all15_conditional": {
+        "contexts": 15,
+        "near_decision_detected": 11,
+        "any_context_detected": 11,
+        "by_split": {
+          "train": {
+            "contexts": 4,
+            "any_event_contexts": 1,
+            "near_decision_event_contexts": 1,
+            "events": 1,
+            "near_decision_events": 1,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 1,
+            "full_precontext_near_decision_event_contexts": 1
+          },
+          "validation": {
+            "contexts": 4,
+            "any_event_contexts": 3,
+            "near_decision_event_contexts": 3,
+            "events": 3,
+            "near_decision_events": 3,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 3,
+            "full_precontext_near_decision_event_contexts": 3
+          },
+          "final": {
+            "contexts": 7,
+            "any_event_contexts": 7,
+            "near_decision_event_contexts": 7,
+            "events": 7,
+            "near_decision_events": 7,
+            "full_2s_precontext": 6,
+            "full_precontext_any_event_contexts": 6,
+            "full_precontext_near_decision_event_contexts": 6
+          }
+        },
+        "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+      }
+    },
+    "B": {
+      "unavailable": null,
+      "test": {
+        "false_positive": {
+          "contexts": 64,
+          "any_event_contexts": 11,
+          "near_decision_event_contexts": 10,
+          "events": 11,
+          "near_decision_events": 10,
+          "full_2s_precontext": 62,
+          "full_precontext_any_event_contexts": 10,
+          "full_precontext_near_decision_event_contexts": 9
+        },
+        "correct": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "legacy": {
+        "quality": {
+          "positive": {
+            "files": 23,
+            "activated_files": 22,
+            "events": 22
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "continuous": {
+          "positive": {
+            "files": 23,
+            "activated_files": 22,
+            "events": 22
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "public": {
+          "seconds": 2100.0,
+          "events": 1
+        }
+      },
+      "max_context_score_delta": 0.04296875,
+      "context_event_stride_mismatch": 2,
+      "train_period_diagnostic": {
+        "false_positive": {
+          "contexts": 57,
+          "any_event_contexts": 2,
+          "near_decision_event_contexts": 2,
+          "events": 2,
+          "near_decision_events": 2,
+          "full_2s_precontext": 52,
+          "full_precontext_any_event_contexts": 0,
+          "full_precontext_near_decision_event_contexts": 0
+        },
+        "correct": {
+          "contexts": 4,
+          "any_event_contexts": 1,
+          "near_decision_event_contexts": 1,
+          "events": 1,
+          "near_decision_events": 1,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 1,
+          "full_precontext_near_decision_event_contexts": 1
+        }
+      },
+      "new_correct_all15_conditional": {
+        "contexts": 15,
+        "near_decision_detected": 11,
+        "any_context_detected": 11,
+        "by_split": {
+          "train": {
+            "contexts": 4,
+            "any_event_contexts": 1,
+            "near_decision_event_contexts": 1,
+            "events": 1,
+            "near_decision_events": 1,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 1,
+            "full_precontext_near_decision_event_contexts": 1
+          },
+          "validation": {
+            "contexts": 4,
+            "any_event_contexts": 3,
+            "near_decision_event_contexts": 3,
+            "events": 3,
+            "near_decision_events": 3,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 3,
+            "full_precontext_near_decision_event_contexts": 3
+          },
+          "final": {
+            "contexts": 7,
+            "any_event_contexts": 7,
+            "near_decision_event_contexts": 7,
+            "events": 7,
+            "near_decision_events": 7,
+            "full_2s_precontext": 6,
+            "full_precontext_any_event_contexts": 6,
+            "full_precontext_near_decision_event_contexts": 6
+          }
+        },
+        "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+      }
+    },
+    "C": {
+      "unavailable": null,
+      "test": {
+        "false_positive": {
+          "contexts": 64,
+          "any_event_contexts": 21,
+          "near_decision_event_contexts": 21,
+          "events": 21,
+          "near_decision_events": 21,
+          "full_2s_precontext": 62,
+          "full_precontext_any_event_contexts": 20,
+          "full_precontext_near_decision_event_contexts": 20
+        },
+        "correct": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "legacy": {
+        "quality": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "continuous": {
+          "positive": {
+            "files": 23,
+            "activated_files": 23,
+            "events": 23
+          },
+          "negative": {
+            "files": 8,
+            "activated_files": 1,
+            "events": 1
+          }
+        },
+        "public": {
+          "seconds": 2100.0,
+          "events": 2
+        }
+      },
+      "max_context_score_delta": 0.078125,
+      "context_event_stride_mismatch": 0,
+      "train_period_diagnostic": {
+        "false_positive": {
+          "contexts": 57,
+          "any_event_contexts": 13,
+          "near_decision_event_contexts": 13,
+          "events": 13,
+          "near_decision_events": 13,
+          "full_2s_precontext": 52,
+          "full_precontext_any_event_contexts": 9,
+          "full_precontext_near_decision_event_contexts": 9
+        },
+        "correct": {
+          "contexts": 4,
+          "any_event_contexts": 2,
+          "near_decision_event_contexts": 2,
+          "events": 2,
+          "near_decision_events": 2,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 2,
+          "full_precontext_near_decision_event_contexts": 2
+        }
+      },
+      "new_correct_all15_conditional": {
+        "contexts": 15,
+        "near_decision_detected": 12,
+        "any_context_detected": 12,
+        "by_split": {
+          "train": {
+            "contexts": 4,
+            "any_event_contexts": 2,
+            "near_decision_event_contexts": 2,
+            "events": 2,
+            "near_decision_events": 2,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 2,
+            "full_precontext_near_decision_event_contexts": 2
+          },
+          "validation": {
+            "contexts": 4,
+            "any_event_contexts": 3,
+            "near_decision_event_contexts": 3,
+            "events": 3,
+            "near_decision_events": 3,
+            "full_2s_precontext": 4,
+            "full_precontext_any_event_contexts": 3,
+            "full_precontext_near_decision_event_contexts": 3
+          },
+          "final": {
+            "contexts": 7,
+            "any_event_contexts": 7,
+            "near_decision_event_contexts": 7,
+            "events": 7,
+            "near_decision_events": 7,
+            "full_2s_precontext": 6,
+            "full_precontext_any_event_contexts": 6,
+            "full_precontext_near_decision_event_contexts": 6
+          }
+        },
+        "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+      }
+    }
+  },
+  "paired_test": {
+    "A": {
+      "detected_near_decision": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 9,
+        "suppressed_baseline_events": 49,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.8448275862068966,
+        "baseline_reproduced_subset_suppression": 0.8448275862068966,
+        "absolute_fraction_reduction": 0.765625,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.7021276595744681,
+          0.8800238095238092
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      },
+      "detected_any": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 9,
+        "suppressed_baseline_events": 49,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.8448275862068966,
+        "baseline_reproduced_subset_suppression": 0.8448275862068966,
+        "absolute_fraction_reduction": 0.765625,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.7021276595744681,
+          0.8800238095238092
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      }
+    },
+    "B": {
+      "detected_near_decision": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 8,
+        "suppressed_baseline_events": 50,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.8620689655172413,
+        "baseline_reproduced_subset_suppression": 0.8620689655172413,
+        "absolute_fraction_reduction": 0.78125,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.6938775510204082,
+          0.9347826086956522
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      },
+      "detected_any": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 9,
+        "suppressed_baseline_events": 49,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.8448275862068966,
+        "baseline_reproduced_subset_suppression": 0.8448275862068966,
+        "absolute_fraction_reduction": 0.765625,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.6716417910447762,
+          0.9210526315789473
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      }
+    },
+    "C": {
+      "detected_near_decision": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 21,
+        "suppressed_baseline_events": 37,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.6379310344827587,
+        "baseline_reproduced_subset_suppression": 0.6379310344827587,
+        "absolute_fraction_reduction": 0.578125,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.47619047619047616,
+          0.6923076923076923
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      },
+      "detected_any": {
+        "contexts": 64,
+        "baseline": 58,
+        "candidate": 21,
+        "suppressed_baseline_events": 37,
+        "newly_activated_contexts": 0,
+        "relative_net_reduction": 0.6379310344827587,
+        "baseline_reproduced_subset_suppression": 0.6379310344827587,
+        "absolute_fraction_reduction": 0.578125,
+        "cluster_bootstrap_95pct_interval_absolute_reduction": [
+          0.47619047619047616,
+          0.6923076923076923
+        ],
+        "bootstrap_sessions": 8,
+        "bootstrap_replicates": 10000,
+        "bootstrap_seed": 20261105,
+        "interval_limit": "Exploratory session-resampling interval; heuristically grouped, activation-selected captures, not prospective rate evidence."
+      }
+    }
+  },
+  "train_period_diagnostic": {
+    "baseline": {
+      "false_positive": {
+        "contexts": 57,
+        "any_event_contexts": 57,
+        "near_decision_event_contexts": 57,
+        "events": 60,
+        "near_decision_events": 57,
+        "full_2s_precontext": 52,
+        "full_precontext_any_event_contexts": 52,
+        "full_precontext_near_decision_event_contexts": 52
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 4,
+        "near_decision_event_contexts": 4,
+        "events": 5,
+        "near_decision_events": 4,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 4,
+        "full_precontext_near_decision_event_contexts": 4
+      }
+    },
+    "A": {
+      "false_positive": {
+        "contexts": 57,
+        "any_event_contexts": 6,
+        "near_decision_event_contexts": 6,
+        "events": 6,
+        "near_decision_events": 6,
+        "full_2s_precontext": 52,
+        "full_precontext_any_event_contexts": 4,
+        "full_precontext_near_decision_event_contexts": 4
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 1,
+        "near_decision_event_contexts": 1,
+        "events": 1,
+        "near_decision_events": 1,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 1,
+        "full_precontext_near_decision_event_contexts": 1
+      }
+    },
+    "B": {
+      "false_positive": {
+        "contexts": 57,
+        "any_event_contexts": 2,
+        "near_decision_event_contexts": 2,
+        "events": 2,
+        "near_decision_events": 2,
+        "full_2s_precontext": 52,
+        "full_precontext_any_event_contexts": 0,
+        "full_precontext_near_decision_event_contexts": 0
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 1,
+        "near_decision_event_contexts": 1,
+        "events": 1,
+        "near_decision_events": 1,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 1,
+        "full_precontext_near_decision_event_contexts": 1
+      }
+    },
+    "C": {
+      "false_positive": {
+        "contexts": 57,
+        "any_event_contexts": 13,
+        "near_decision_event_contexts": 13,
+        "events": 13,
+        "near_decision_events": 13,
+        "full_2s_precontext": 52,
+        "full_precontext_any_event_contexts": 9,
+        "full_precontext_near_decision_event_contexts": 9
+      },
+      "correct": {
+        "contexts": 4,
+        "any_event_contexts": 2,
+        "near_decision_event_contexts": 2,
+        "events": 2,
+        "near_decision_events": 2,
+        "full_2s_precontext": 4,
+        "full_precontext_any_event_contexts": 2,
+        "full_precontext_near_decision_event_contexts": 2
+      }
+    }
+  },
+  "new_correct_all15_conditional": {
+    "baseline": {
+      "contexts": 15,
+      "near_decision_detected": 15,
+      "any_context_detected": 15,
+      "by_split": {
+        "train": {
+          "contexts": 4,
+          "any_event_contexts": 4,
+          "near_decision_event_contexts": 4,
+          "events": 5,
+          "near_decision_events": 4,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 4,
+          "full_precontext_near_decision_event_contexts": 4
+        },
+        "validation": {
+          "contexts": 4,
+          "any_event_contexts": 4,
+          "near_decision_event_contexts": 4,
+          "events": 4,
+          "near_decision_events": 4,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 4,
+          "full_precontext_near_decision_event_contexts": 4
+        },
+        "final": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+    },
+    "A": {
+      "contexts": 15,
+      "near_decision_detected": 11,
+      "any_context_detected": 11,
+      "by_split": {
+        "train": {
+          "contexts": 4,
+          "any_event_contexts": 1,
+          "near_decision_event_contexts": 1,
+          "events": 1,
+          "near_decision_events": 1,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 1,
+          "full_precontext_near_decision_event_contexts": 1
+        },
+        "validation": {
+          "contexts": 4,
+          "any_event_contexts": 3,
+          "near_decision_event_contexts": 3,
+          "events": 3,
+          "near_decision_events": 3,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 3,
+          "full_precontext_near_decision_event_contexts": 3
+        },
+        "final": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+    },
+    "B": {
+      "contexts": 15,
+      "near_decision_detected": 11,
+      "any_context_detected": 11,
+      "by_split": {
+        "train": {
+          "contexts": 4,
+          "any_event_contexts": 1,
+          "near_decision_event_contexts": 1,
+          "events": 1,
+          "near_decision_events": 1,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 1,
+          "full_precontext_near_decision_event_contexts": 1
+        },
+        "validation": {
+          "contexts": 4,
+          "any_event_contexts": 3,
+          "near_decision_event_contexts": 3,
+          "events": 3,
+          "near_decision_events": 3,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 3,
+          "full_precontext_near_decision_event_contexts": 3
+        },
+        "final": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+    },
+    "C": {
+      "contexts": 15,
+      "near_decision_detected": 12,
+      "any_context_detected": 12,
+      "by_split": {
+        "train": {
+          "contexts": 4,
+          "any_event_contexts": 2,
+          "near_decision_event_contexts": 2,
+          "events": 2,
+          "near_decision_events": 2,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 2,
+          "full_precontext_near_decision_event_contexts": 2
+        },
+        "validation": {
+          "contexts": 4,
+          "any_event_contexts": 3,
+          "near_decision_event_contexts": 3,
+          "events": 3,
+          "near_decision_events": 3,
+          "full_2s_precontext": 4,
+          "full_precontext_any_event_contexts": 3,
+          "full_precontext_near_decision_event_contexts": 3
+        },
+        "final": {
+          "contexts": 7,
+          "any_event_contexts": 7,
+          "near_decision_event_contexts": 7,
+          "events": 7,
+          "near_decision_events": 7,
+          "full_2s_precontext": 6,
+          "full_precontext_any_event_contexts": 6,
+          "full_precontext_near_decision_event_contexts": 6
+        }
+      },
+      "interpretation": "All 15 activation-selected correct contexts, never used to fit. Pooled descriptive re-detection only: includes observed validation and training-period sessions; not independent generalization or population recall."
+    }
+  },
+  "feature_counts": {
+    "train": 468,
+    "validation": 69
+  },
+  "used_hard_events": {
+    "train": 52,
+    "validation": 23
+  },
+  "limits": [
+    "new correct contexts measure conditional re-detection, not population recall",
+    "only7correct finaltest, selection already observed4validation",
+    "train-period FP diagnostic reuses fitted source events; its 4 untrained positives share training sessions, and the all15 pool includes validation; neither is independent test evidence",
+    "original23+8/public35min consulted in prior architecture choice; regression only",
+    "no future conversational audio or exposure denominator; cannot infer FP/hour",
+    "same device and owner, three days; heuristic sessions; unknown environment persistence",
+    "local ASR lexical screen does not establish word absence or phonetic boundaries",
+    "host native replay is not Android ARM64 physical validation",
+    "no production files, model import allowlist, TTS, backend or conversational pipeline changed"
+  ]
+}

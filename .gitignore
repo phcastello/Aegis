@@ -13,6 +13,11 @@ Desktop.ini
 # Owner voice dataset and acoustic wakeword references stay local.
 /aegis-wakeword-poc.zip
 /aegis-wakeword-poc/
+# Human-labelled activation recordings and derived private training artefacts.
+/aegis-dataset-*.zip
+/aegis-dataset-*/
+*.tflite
+*.weights.h5
 # Private owner battery baseline transport and original captures.
 /aegis-battery-baseline-2026-10-25_30.zip
 /aegis-battery-baseline-2026-10-25_30/
