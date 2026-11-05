@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000014,
+  "highWaterMark": 8000015,
   "reservations": [
     {
       "schema": 2,
@@ -724,6 +724,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000014
+    },
+    {
+      "schema": 2,
+      "sha": "e90d9b4f2c7213a036a385f63eb3029d3ce4a86e",
+      "branch": "fix/v0.8.0-hands-free-waveform-freeze",
+      "number": 15,
+      "platform": "both",
+      "version": "0.8.0-unstable.15",
+      "kind": "normal",
+      "sourceCommit": "e90d9b4f2c7213a036a385f63eb3029d3ce4a86e",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "e90d9b4f2c7213a036a385f63eb3029d3ce4a86e",
+        "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "pwa": "6e4e233df12bbac1eed5e06eed1d0f50d803ff9e",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-05T23:08:13.066Z",
+      "repository": "phcastello/Aegis",
+      "runId": "42127213752",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000015
     }
   ],
   "recommended": {
