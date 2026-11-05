@@ -214,6 +214,14 @@ internal enum class HandsFreePanelState(val label:String,val animated:Boolean=fa
     }
 }
 
+/** Prevent display timeout only for the current visible conversation panel. */
+internal fun handsFreePanelKeepsScreenOn(state:HandsFreePanelState,visible:Boolean,hasSession:Boolean)=
+    visible && hasSession && when(state) {
+        HandsFreePanelState.CAPTURING,HandsFreePanelState.CONTINUATION,
+        HandsFreePanelState.PROCESSING,HandsFreePanelState.SPEAKING->true
+        else->false
+    }
+
 /** A terminal error survives a queued return-to-listening until dismissal or a new presentation. */
 internal class HandsFreePanelPresentation {
     class Snapshot internal constructor(val session:String?)

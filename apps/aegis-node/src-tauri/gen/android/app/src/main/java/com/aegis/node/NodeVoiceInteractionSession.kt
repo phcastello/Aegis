@@ -1,10 +1,7 @@
 package com.aegis.node
 
 import android.animation.ValueAnimator
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.database.ContentObserver
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -14,7 +11,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.service.voice.VoiceInteractionSession
@@ -37,8 +33,8 @@ class NodeVoiceInteractionSessionService:VoiceInteractionSessionService() {
 }
 
 /** The explicit system scale wins over ValueAnimator's asynchronously updated cache. */
-internal fun handsFreePanelMotionAllowed(scale:Float,powerSaver:Boolean,platformEnabled:Boolean)=
-    (if(scale.isFinite())scale>0f else platformEnabled) && !powerSaver
+internal fun handsFreePanelMotionAllowed(scale:Float,platformEnabled:Boolean)=
+    if(scale.isFinite())scale>0f else platformEnabled
 
 /** Disposable official assistant panel. Runtime capture and playback own their lifecycle. */
 class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(context) {
@@ -109,11 +105,12 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         val decision=boundSession?.let{NodeVoiceInteractionService.current?.presentationDecision(it,args?.getBoolean("wakeScreen")==true || runtime.activationNeedsWake(it))}
             ?: HandsFreePresentationPolicy.Decision(false,false)
         // AOSP creates MATCH_PARENT before onShow. Keep the real window at the bottom,
-        // including the lock screen, without dimming or keeping the display awake.
+        // including the lock screen, without dimming. The active-session display
+        // timeout policy is applied after status refresh below.
         window?.window?.apply {
             addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
             clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DIM_BEHIND or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
-            // Preserve the existing one-shot activation request; never hold the screen on.
+            // Preserve the existing one-shot wake separately from timeout prevention.
             if(decision.wakeScreen)addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
             setBackgroundDrawableResource(android.R.color.transparent)
             setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
@@ -122,6 +119,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         }
         visualizer?.show(this,boundSession)
         val state=runtime.state();refresh(state.optString("status"),state.optString("message"))
+        updateScreenPolicy()
     }
     override fun onComputeInsets(outInsets:Insets) {
         super.onComputeInsets(outInsets)
@@ -135,6 +133,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(displayedState!=state){partial?.text="";partial?.visibility=View.GONE;partialRequestId=null;HandsFreePanelSignal.reset(this)}
         displayedState=state
         label?.text=presentation.state.label;visualizer?.state(presentation.state)
+        updateScreenPolicy()
     }
     internal fun showPartial(token:String,requestId:String,text:String) {
         if(boundSession!=token || !visible || displayedState !in setOf("capturing","continuation"))return
@@ -143,13 +142,23 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         val value=text.take(HandsFreePartialDisplayLimiter.MAX_CHARACTERS)
         partial?.text=value;partial?.visibility=if(value.isEmpty())View.GONE else View.VISIBLE
     }
-    internal fun suppressScreenOn(){releaseWindowFlags()}
+    // A screen-off broadcast cancels the one-shot wake request, never re-wakes
+    // the device. KEEP_SCREEN_ON only prevents timeout while our window is visible.
+    internal fun suppressScreenOn(){window?.window?.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)}
+    private fun updateScreenPolicy() {
+        val keep=handsFreePanelKeepsScreenOn(presentation.state,visible,boundSession!=null)
+        window?.window?.let {
+            if(keep)it.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else it.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     private fun releaseWindowFlags(){window?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)}
     internal fun finishIfSession(token:String,immediate:Boolean=false,failed:Boolean=false) {
         if(boundSession!=token)return
         if(presentation.delayClose(immediate,failed)){
             partial?.text="";partial?.visibility=View.GONE;HandsFreePanelSignal.reset(this)
             label?.text=presentation.state.label;visualizer?.state(presentation.state)
+            updateScreenPolicy()
             main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
         } else finishQuietly()
     }
@@ -178,7 +187,6 @@ internal class HandsFreePanelView(context:Context):View(context) {
     private var session:String?=null
     @Volatile private var signalBound=false
     private var scaleObserved=false
-    private var powerObserved=false
     private var framePending=false
     private var state=HandsFreePanelState.IDLE
     private var reduceMotion=true
@@ -198,7 +206,6 @@ internal class HandsFreePanelView(context:Context):View(context) {
     }
     private val dataChanged:()->Unit={if(shown && signalBound && wakePosted.compareAndSet(false,true))post(wakeFrame)}
     private val scaleChanged=object:ContentObserver(main){override fun onChange(selfChange:Boolean){updateMotion()}}
-    private val powerChanged=object:BroadcastReceiver(){override fun onReceive(context:Context?,intent:Intent?){updateMotion()}}
     init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;lifecycleReady=true}
     internal fun show(observer:Any,token:String?) {
         hide()
@@ -239,12 +246,6 @@ internal class HandsFreePanelView(context:Context):View(context) {
             context.contentResolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),false,scaleChanged)
             scaleObserved=true
         }catch(_:RuntimeException){}
-        if(!powerObserved)try {
-            val filter=IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
-            if(Build.VERSION.SDK_INT>=33)context.registerReceiver(powerChanged,filter,Context.RECEIVER_NOT_EXPORTED)
-            else @Suppress("DEPRECATION") context.registerReceiver(powerChanged,filter)
-            powerObserved=true
-        }catch(_:RuntimeException){}
         updateMotion();invalidate()
     }
     private fun pauseVisibleResources() {
@@ -253,12 +254,13 @@ internal class HandsFreePanelView(context:Context):View(context) {
         owner?.let{HandsFreePanelSignal.setListener(it,null);HandsFreePanelSignal.detach(it)}
         signalBound=false;amplitudes.fill(0f)
         if(scaleObserved){context.contentResolver.unregisterContentObserver(scaleChanged);scaleObserved=false}
-        if(powerObserved){context.unregisterReceiver(powerChanged);powerObserved=false}
     }
     private fun updateMotion() {
         val scale=Settings.Global.getFloat(context.contentResolver,Settings.Global.ANIMATOR_DURATION_SCALE,Float.NaN)
         val platformEnabled=if(Build.VERSION.SDK_INT>=26)ValueAnimator.areAnimatorsEnabled() else true
-        val animations=handsFreePanelMotionAllowed(scale,context.getSystemService(PowerManager::class.java).isPowerSaveMode,platformEnabled)
+        // Battery saver is not the owner's explicit "Remove animations" choice.
+        // Do not turn useful live audio feedback into 200ms jumps because of it.
+        val animations=handsFreePanelMotionAllowed(scale,platformEnabled)
         reduceMotion=!animations
         removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
         if(canRender()) {

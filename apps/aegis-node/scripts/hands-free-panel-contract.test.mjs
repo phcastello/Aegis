@@ -4,14 +4,17 @@ import { test } from 'node:test';
 
 const android = name => readFileSync(new URL(`../src-tauri/gen/android/app/src/main/java/com/aegis/node/${name}.kt`, import.meta.url), 'utf8');
 
-test('the assistant stays a bottom, transparent, card-touch-only system window without holding the display on', () => {
+test('the assistant stays a bottom, transparent, card-touch-only window with scoped screen retention', () => {
   const panel = android('NodeVoiceInteractionSession');
   assert.match(panel, /:VoiceInteractionSession\(context\)/);
   assert.match(panel, /setGravity\(Gravity\.BOTTOM/);
   assert.match(panel, /setLayout\([^\n]*WindowManager\.LayoutParams\.WRAP_CONTENT\)/);
   assert.match(panel, /setBackgroundDrawableResource\(android\.R\.color\.transparent\)/);
   assert.match(panel, /clearFlags\([^\n]*FLAG_KEEP_SCREEN_ON[^\n]*FLAG_DIM_BEHIND/);
-  assert.doesNotMatch(panel, /addFlags\([^\n]*FLAG_KEEP_SCREEN_ON/);
+  const policy = panel.slice(panel.indexOf('private fun updateScreenPolicy('), panel.indexOf('private fun releaseWindowFlags('));
+  assert.match(policy, /handsFreePanelKeepsScreenOn\(presentation\.state,visible,boundSession!=null\)/);
+  assert.match(policy, /if\(keep\)it\.addFlags\(WindowManager\.LayoutParams\.FLAG_KEEP_SCREEN_ON\)/);
+  assert.match(policy, /else it\.clearFlags\(WindowManager\.LayoutParams\.FLAG_KEEP_SCREEN_ON\)/);
   assert.match(panel, /outInsets\.touchableInsets=Insets\.TOUCHABLE_INSETS_REGION/);
   assert.match(panel, /safe\.bottom/);
 });
@@ -41,9 +44,19 @@ test('display measurement reuses captured PCM without another audio source, netw
   assert.match(renderer, /ValueAnimator\.areAnimatorsEnabled\(\)/);
   assert.doesNotMatch(renderer, /accessibility\.isEnabled|AccessibilityManager/);
   assert.match(renderer, /Settings\.Global\.getUriFor\(Settings\.Global\.ANIMATOR_DURATION_SCALE\)/);
-  assert.match(renderer, /PowerManager\.ACTION_POWER_SAVE_MODE_CHANGED/);
+  assert.doesNotMatch(renderer, /isPowerSaveMode|ACTION_POWER_SAVE_MODE_CHANGED/);
   assert.match(renderer, /unregisterContentObserver\(scaleChanged\)/);
-  assert.match(renderer, /unregisterReceiver\(powerChanged\)/);
+});
+
+test('screen-off only cancels the one-shot wake and closing always releases display retention', () => {
+  const panel = android('NodeVoiceInteractionSession');
+  const suppress = panel.slice(panel.indexOf('internal fun suppressScreenOn('), panel.indexOf('private fun updateScreenPolicy('));
+  assert.match(suppress, /clearFlags\(WindowManager\.LayoutParams\.FLAG_TURN_SCREEN_ON\)/);
+  assert.doesNotMatch(suppress, /addFlags|FLAG_KEEP_SCREEN_ON/);
+  for (const method of ['onHide', 'onDestroy']) {
+    const body = panel.match(new RegExp(`override fun ${method}\\(\\)\\{([^\\n]+)\\}`))?.[1];
+    assert.match(body, /visible=false;stopVisuals\(\);releaseWindowFlags\(\)/);
+  }
 });
 
 test('waveform uses measured temporal amplitudes and a single vsync callback without fixed position weights', () => {
