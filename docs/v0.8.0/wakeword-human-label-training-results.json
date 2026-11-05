@@ -1,0 +1,4425 @@
+{
+  "schema": 1,
+  "experiment": "direct-owner-labelled-260",
+  "decision": "NO-GO",
+  "production_approved": false,
+  "selection": {
+    "selected_model_directory": "model-v2",
+    "selected_epoch": 1,
+    "eligible": true,
+    "decision": "VALIDATION-PASS",
+    "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567"
+  },
+  "split_counts": {
+    "train": {
+      "false_positive": 130,
+      "correct": 91
+    },
+    "validation": {
+      "correct": 11,
+      "false_positive": 15
+    },
+    "test": {
+      "correct": 5,
+      "false_positive": 8
+    }
+  },
+  "training": {
+    "plan": {
+      "seed": 20261105,
+      "epochs": 2,
+      "learning_rate": 3e-06,
+      "steps_per_epoch": 32,
+      "initializer": "immutable baseline checkpoint; fresh Adam",
+      "batch_normalization": "frozen",
+      "batch_sources": {
+        "synthetic_positive": 20,
+        "reference_positive": 4,
+        "real_positive": 8,
+        "synthetic_negative": 16,
+        "public_dev_negative": 8,
+        "real_negative": 8
+      },
+      "real_sampling": "Cycles of shuffled original event IDs within class; choose gain variant after ID. Every221TRAIN event in everyepoch.",
+      "checkpoint_order": "paired real validation positive losses across both runtimes, original validation recall deficit beyond2pp, validation negative contexts, original positive paired losses, original validation BCE",
+      "eligible": "zero paired real validation losses in both runtimes and original positive validation recall within2pp of baseline",
+      "test_policy": "checkpoint selection uses only provided validation and original corpus validation; test/known legacy opened after selection seal",
+      "threshold": 0.5,
+      "average_window": 5,
+      "release_below": 0.3,
+      "refractory_samples": 16000
+    },
+    "best_epoch": 1,
+    "best_key": [
+      0,
+      0,
+      26,
+      0,
+      0.0006634566816501319
+    ],
+    "eligible": true,
+    "params": 13057,
+    "frozen_batch_norm_layers": [
+      "batch_normalization",
+      "batch_normalization_1",
+      "batch_normalization_2",
+      "batch_normalization_3"
+    ],
+    "protocol_sha256": "d0d9d8be1c6f25a44458cfd6897dda8b7d58bbd3285233ddc7fdf5a9a47b5cd6",
+    "features_manifest_sha256": "08bb928612ef5a4abc01f52da361255490ddcd6aab35f6a9669f3d9887505842",
+    "training_script_sha256": "6d00eedcfb6b9ef35d3952785f10f24064194b4a98d4cd811d3f30ac0a53741a",
+    "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+    "elapsed_seconds": 34.170138960005715,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.2988726091571152,
+        "original_validation_bce": 0.0006634566816501319,
+        "original_validation_recall": 1.0,
+        "validation_negative_contexts_litert_native": [
+          13,
+          13
+        ],
+        "selection_key": [
+          0,
+          0,
+          26,
+          0,
+          0.0006634566816501319
+        ],
+        "eligible": true,
+        "exposure": {
+          "synthetic_positive": {
+            "presentations": 640,
+            "unique_windows": 640
+          },
+          "reference_positive": {
+            "presentations": 128,
+            "unique_windows": 128
+          },
+          "synthetic_negative": {
+            "presentations": 512,
+            "unique_windows": 512
+          },
+          "public_dev_negative": {
+            "presentations": 256,
+            "unique_windows": 256
+          }
+        },
+        "real_training_unique_events": 221,
+        "real_training_class_counts": {
+          "false_positive": 130,
+          "correct": 91
+        },
+        "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+        "validation_sha256": "173e4149cb4c4110bc7f8579ac992928ef2433960075c870fd2e3d75380fb313",
+        "real_validation_paired_loss_counts": {
+          "litert": 0,
+          "native_host": 0
+        },
+        "real_event_exposure": {
+          "real_positive": {
+            "original_events": 91,
+            "presentations": 256,
+            "minimum_per_event": 2,
+            "maximum_per_event": 3
+          },
+          "real_negative": {
+            "original_events": 130,
+            "presentations": 256,
+            "minimum_per_event": 1,
+            "maximum_per_event": 2
+          }
+        }
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.26212977059185505,
+        "original_validation_bce": 0.0011396617628633976,
+        "original_validation_recall": 1.0,
+        "validation_negative_contexts_litert_native": [
+          12,
+          12
+        ],
+        "selection_key": [
+          2,
+          0,
+          24,
+          0,
+          0.0011396617628633976
+        ],
+        "eligible": false,
+        "exposure": {
+          "synthetic_positive": {
+            "presentations": 640,
+            "unique_windows": 640
+          },
+          "reference_positive": {
+            "presentations": 128,
+            "unique_windows": 128
+          },
+          "synthetic_negative": {
+            "presentations": 512,
+            "unique_windows": 512
+          },
+          "public_dev_negative": {
+            "presentations": 256,
+            "unique_windows": 256
+          }
+        },
+        "real_training_unique_events": 221,
+        "real_training_class_counts": {
+          "false_positive": 130,
+          "correct": 91
+        },
+        "model_sha256": "a96f16db9462564148e4a26352f025ee58dadd0ccea47320ed2809a0b70cd460",
+        "validation_sha256": "375d49da8219bcc17286de8ddc616fefb91170c57f2a9d2abe77ec4dc27c57f4",
+        "real_validation_paired_loss_counts": {
+          "litert": 1,
+          "native_host": 1
+        },
+        "real_event_exposure": {
+          "real_positive": {
+            "original_events": 91,
+            "presentations": 256,
+            "minimum_per_event": 2,
+            "maximum_per_event": 3
+          },
+          "real_negative": {
+            "original_events": 130,
+            "presentations": 256,
+            "minimum_per_event": 1,
+            "maximum_per_event": 2
+          }
+        }
+      }
+    ]
+  },
+  "models": {
+    "baseline": {
+      "model_sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+      "model_bytes": 39552,
+      "runtimes": {
+        "litert": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 91,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 91,
+              "near_decision_events": 91,
+              "all_events": 92,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.5921875,
+                "median": 0.99609375,
+                "mean": 0.9789062500000001,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 91,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 1.3186813186813187,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 91,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 91,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 91,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 124,
+              "missed_near_decision": 6,
+              "contexts_with_any_event": 124,
+              "near_decision_events": 124,
+              "all_events": 126,
+              "additional_events_outside_near_decision": 2,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.3796875,
+                "median": 0.834375,
+                "mean": 0.8135817307692308,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 124,
+                "min": -60.0,
+                "median": 0.0,
+                "mean": -3.3870967741935485,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 124,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 124,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 124,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 6,
+              "rejected_in_entire_context": 6
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.66796875,
+                "median": 0.99609375,
+                "mean": 0.956534090909091,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 0.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 13,
+              "missed_near_decision": 2,
+              "contexts_with_any_event": 13,
+              "near_decision_events": 13,
+              "all_events": 13,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.36796875,
+                "median": 0.91953125,
+                "mean": 0.8310416666666668,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 13,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -2.3076923076923075,
+                "max": 0.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 13,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 2,
+              "rejected_in_entire_context": 2
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.784375,
+                "median": 0.99609375,
+                "mean": 0.9153125,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -6.0,
+                "max": 0.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 8,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 8,
+              "near_decision_events": 8,
+              "all_events": 9,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.63046875,
+                "median": 0.9453125,
+                "mean": 0.896875,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 8,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 3.75,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 0,
+              "rejected_in_entire_context": 0
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        },
+        "native_host": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 91,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 91,
+              "near_decision_events": 91,
+              "all_events": 92,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.5921875238418579,
+                "median": 0.99609375,
+                "mean": 0.9788976645731664,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 91,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 1.3186813186813187,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 91,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 91,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 91,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 124,
+              "missed_near_decision": 6,
+              "contexts_with_any_event": 124,
+              "near_decision_events": 124,
+              "all_events": 126,
+              "additional_events_outside_near_decision": 2,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.37890625,
+                "median": 0.8363281190395355,
+                "mean": 0.813088941344848,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 124,
+                "min": -60.0,
+                "median": 0.0,
+                "mean": -3.3870967741935485,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 124,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 124,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 124,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 6,
+              "rejected_in_entire_context": 6
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.668749988079071,
+                "median": 0.99609375,
+                "mean": 0.95703125,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -2.727272727272727,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 13,
+              "missed_near_decision": 2,
+              "contexts_with_any_event": 13,
+              "near_decision_events": 13,
+              "all_events": 13,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.3609375059604645,
+                "median": 0.914843738079071,
+                "mean": 0.8261979162693024,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 13,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -2.3076923076923075,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 13,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 2,
+              "rejected_in_entire_context": 2
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.7914062738418579,
+                "median": 0.99609375,
+                "mean": 0.9157812595367432,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -6.0,
+                "max": 0.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 8,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 8,
+              "near_decision_events": 8,
+              "all_events": 9,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.6304687261581421,
+                "median": 0.946093738079071,
+                "mean": 0.8965820223093033,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 8,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 3.75,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 0,
+              "rejected_in_entire_context": 0
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        }
+      },
+      "native_comparison": {
+        "contexts": 260,
+        "max_score_delta": 0.08203125,
+        "one_lsb_failures": 215,
+        "activated_context_mismatches": 0,
+        "event_stride_mismatches": 0,
+        "diagnostic_tolerance_lsb": 1,
+        "physical_arm64": "pending"
+      },
+      "native_host_loaded": true,
+      "controls": {
+        "litert": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.075,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.06796875,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.06796875,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.15836408408358693,
+            "wall_realtime_factor": 0.005278802802786231,
+            "process_call_ms": {
+              "median": 0.0244,
+              "p95": 0.11760404999999997,
+              "max": 0.217899,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 63444,
+            "current_rss_after_kib": 64748,
+            "process_lifetime_maxrss_kib": 64668,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 1.0,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 7,
+                "events": 8,
+                "near_decision_events": 7
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 90,
+                "near_decision_event_contexts": 90,
+                "events": 91,
+                "near_decision_events": 90
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 113,
+                "near_decision_event_contexts": 112,
+                "events": 115,
+                "near_decision_events": 112
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 12,
+                "near_decision_event_contexts": 12,
+                "events": 13,
+                "near_decision_events": 12
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 242,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_host": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.07500000298023224,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.06796874850988388,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.06796874850988388,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.1560721891000867,
+            "wall_realtime_factor": 0.005202406303336223,
+            "process_call_ms": {
+              "median": 0.0155,
+              "p95": 0.13420495,
+              "max": 0.250499,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 68832,
+            "current_rss_after_kib": 68916,
+            "process_lifetime_maxrss_kib": 68728,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 1.0,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 7,
+                "events": 8,
+                "near_decision_events": 7
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 90,
+                "near_decision_event_contexts": 90,
+                "events": 91,
+                "near_decision_events": 90
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 112,
+                "near_decision_event_contexts": 111,
+                "events": 114,
+                "near_decision_events": 111
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 12,
+                "near_decision_event_contexts": 12,
+                "events": 13,
+                "near_decision_events": 12
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 241,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_continuous_comparison": {
+          "max_score_delta": 0.08203125,
+          "event_stride_mismatches": 1,
+          "note": "Existing 1LSB diagnostic retained; event timing tolerance is one unchanged 30ms inference stride.",
+          "score_1lsb_failures": 218
+        }
+      },
+      "control_gates_advisory": {
+        "litert": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        },
+        "native_host": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        }
+      }
+    },
+    "previous": {
+      "model_sha256": "5b198451df030dbc2650cbfd20f9e29ed3ad88aecc52213d2dcf24e45f9594ff",
+      "model_bytes": 39552,
+      "runtimes": {
+        "litert": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 90,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 90,
+              "near_decision_events": 90,
+              "all_events": 91,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.3828125,
+                "median": 0.99609375,
+                "mean": 0.9680116758241758,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 90,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 1.3333333333333333,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 90,
+                  "min": -30.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": -0.26249999999999996,
+                  "median": 0.0,
+                  "mean": -0.010894574175824172,
+                  "max": 0.0
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 80,
+              "missed_near_decision": 50,
+              "contexts_with_any_event": 80,
+              "near_decision_events": 80,
+              "all_events": 80,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.1171875,
+                "median": 0.628125,
+                "mean": 0.6408954326923076,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 80,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 14.25,
+                "max": 60.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 80,
+                  "baseline_only": 44,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.3548387096774194,
+                  "baseline_reproduced_suppression_fraction": 0.3548387096774194,
+                  "baseline_fp_suppressed": 44,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 80,
+                  "baseline_only": 44,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.3548387096774194,
+                  "baseline_reproduced_suppression_fraction": 0.3548387096774194,
+                  "baseline_fp_suppressed": 44,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 80,
+                  "min": -30.0,
+                  "median": 15.0,
+                  "mean": 17.25,
+                  "max": 120.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": -0.3984375,
+                  "median": -0.18281250000000004,
+                  "mean": -0.17268629807692307,
+                  "max": 0.0015624999999999667
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 50,
+              "rejected_in_entire_context": 50
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 10,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 10,
+              "near_decision_events": 10,
+              "all_events": 10,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.3328125,
+                "median": 0.99609375,
+                "mean": 0.91484375,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 10,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 6.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 10,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.09090909090909091,
+                  "baseline_reproduced_suppression_fraction": 0.09090909090909091,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 10,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.09090909090909091,
+                  "baseline_reproduced_suppression_fraction": 0.09090909090909091,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 10,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 9.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": -0.33515625,
+                  "median": 0.0,
+                  "mean": -0.04169034090909093,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 4,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.26953125,
+                "median": 0.8578125,
+                "mean": 0.7205729166666667,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 5.454545454545454,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 11,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.15384615384615385,
+                  "baseline_reproduced_suppression_fraction": 0.15384615384615385,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 11,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.15384615384615385,
+                  "baseline_reproduced_suppression_fraction": 0.15384615384615385,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 8.181818181818182,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": -0.35624999999999996,
+                  "median": -0.06328125000000001,
+                  "mean": -0.11046874999999999,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 4,
+              "rejected_in_entire_context": 4
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.52890625,
+                "median": 0.99609375,
+                "mean": 0.8462499999999998,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 0.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 6.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": -0.25546875,
+                  "median": 0.0,
+                  "mean": -0.0690625,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 6,
+              "missed_near_decision": 2,
+              "contexts_with_any_event": 6,
+              "near_decision_events": 6,
+              "all_events": 6,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.359375,
+                "median": 0.82890625,
+                "mean": 0.76982421875,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 6,
+                "min": 0.0,
+                "median": 15.0,
+                "mean": 15.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 6,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.25,
+                  "baseline_reproduced_suppression_fraction": 0.25,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 6,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.25,
+                  "baseline_reproduced_suppression_fraction": 0.25,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 6,
+                  "min": 0.0,
+                  "median": 15.0,
+                  "mean": 15.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": -0.28671874999999997,
+                  "median": -0.11640624999999999,
+                  "mean": -0.12705078125,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 2,
+              "rejected_in_entire_context": 2
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        },
+        "native_host": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 90,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 90,
+              "near_decision_events": 90,
+              "all_events": 91,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.37031251192092896,
+                "median": 0.99609375,
+                "mean": 0.9678914848264757,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 90,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 1.3333333333333333,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 90,
+                  "min": -30.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": -0.27578121423721313,
+                  "median": 0.0,
+                  "mean": -0.011006179746690688,
+                  "max": 0.0234375
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 79,
+              "missed_near_decision": 51,
+              "contexts_with_any_event": 79,
+              "near_decision_events": 79,
+              "all_events": 79,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.1171875,
+                "median": 0.6402343809604645,
+                "mean": 0.6432451927891144,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 79,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 12.531645569620252,
+                "max": 60.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 79,
+                  "baseline_only": 45,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.3629032258064516,
+                  "baseline_reproduced_suppression_fraction": 0.3629032258064516,
+                  "baseline_fp_suppressed": 45,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 79,
+                  "baseline_only": 45,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.3629032258064516,
+                  "baseline_reproduced_suppression_fraction": 0.3629032258064516,
+                  "baseline_fp_suppressed": 45,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 79,
+                  "min": -30.0,
+                  "median": 0.0,
+                  "mean": 15.189873417721518,
+                  "max": 90.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": -0.41093748807907104,
+                  "median": -0.18320313096046448,
+                  "mean": -0.16984374855573361,
+                  "max": 0.0
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 51,
+              "rejected_in_entire_context": 51
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 10,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 10,
+              "near_decision_events": 10,
+              "all_events": 10,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.3382812440395355,
+                "median": 0.99609375,
+                "mean": 0.9167613630945032,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 10,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 6.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 10,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.09090909090909091,
+                  "baseline_reproduced_suppression_fraction": 0.09090909090909091,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 10,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.09090909090909091,
+                  "baseline_reproduced_suppression_fraction": 0.09090909090909091,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 10,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 12.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": -0.3304687440395355,
+                  "median": 0.0,
+                  "mean": -0.04026988690549677,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 4,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.26953125,
+                "median": 0.858593761920929,
+                "mean": 0.7228125035762787,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 2.727272727272727,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 11,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.15384615384615385,
+                  "baseline_reproduced_suppression_fraction": 0.15384615384615385,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 11,
+                  "baseline_only": 2,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.15384615384615385,
+                  "baseline_reproduced_suppression_fraction": 0.15384615384615385,
+                  "baseline_fp_suppressed": 2,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 8.181818181818182,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": -0.32890623807907104,
+                  "median": -0.06328123807907104,
+                  "mean": -0.10338541269302368,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 4,
+              "rejected_in_entire_context": 4
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.581250011920929,
+                "median": 0.99609375,
+                "mean": 0.8590625047683715,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": -6.0,
+                "max": 0.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 0.0,
+                  "max": 0.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": -0.21015626192092896,
+                  "median": 0.0,
+                  "mean": -0.056718754768371585,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 7,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 7,
+              "near_decision_events": 7,
+              "all_events": 7,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.33671873807907104,
+                "median": 0.825390636920929,
+                "mean": 0.7691406309604645,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 7,
+                "min": 0.0,
+                "median": 30.0,
+                "mean": 21.428571428571427,
+                "max": 60.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 7,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.125,
+                  "baseline_reproduced_suppression_fraction": 0.125,
+                  "baseline_fp_suppressed": 1,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 7,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.125,
+                  "baseline_reproduced_suppression_fraction": 0.125,
+                  "baseline_fp_suppressed": 1,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 7,
+                  "min": 0.0,
+                  "median": 30.0,
+                  "mean": 21.428571428571427,
+                  "max": 60.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": -0.29374998807907104,
+                  "median": -0.12070310115814209,
+                  "mean": -0.1274413913488388,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 1,
+              "rejected_in_entire_context": 1
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        }
+      },
+      "native_comparison": {
+        "contexts": 260,
+        "max_score_delta": 0.078125,
+        "one_lsb_failures": 222,
+        "activated_context_mismatches": 2,
+        "event_stride_mismatches": 2,
+        "diagnostic_tolerance_lsb": 1,
+        "physical_arm64": "pending"
+      },
+      "native_host_loaded": true,
+      "controls": {
+        "litert": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.0765625,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.0703125,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.07265625,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.13122273795306683,
+            "wall_realtime_factor": 0.004374091265102228,
+            "process_call_ms": {
+              "median": 0.0195,
+              "p95": 0.10190904999999995,
+              "max": 0.2838,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 70732,
+            "current_rss_after_kib": 70732,
+            "process_lifetime_maxrss_kib": 70544,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 0.8286142575345904,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 6,
+                "events": 7,
+                "near_decision_events": 6
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 89,
+                "near_decision_event_contexts": 89,
+                "events": 90,
+                "near_decision_events": 89
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 78,
+                "near_decision_event_contexts": 77,
+                "events": 79,
+                "near_decision_events": 77
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 11,
+                "near_decision_event_contexts": 11,
+                "events": 11,
+                "near_decision_events": 11
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 202,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_host": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.07656250149011612,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.0703125,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.07265625149011612,
+              "max_instantaneous_score": 0.24609375,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.1585231830831617,
+            "wall_realtime_factor": 0.005284106102772057,
+            "process_call_ms": {
+              "median": 0.0154,
+              "p95": 0.13309905,
+              "max": 1.032498,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 70748,
+            "current_rss_after_kib": 70748,
+            "process_lifetime_maxrss_kib": 70560,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 1.015704232747727,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 7,
+                "events": 8,
+                "near_decision_events": 7
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 89,
+                "near_decision_event_contexts": 89,
+                "events": 90,
+                "near_decision_events": 89
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 78,
+                "near_decision_event_contexts": 77,
+                "events": 79,
+                "near_decision_events": 77
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 11,
+                "near_decision_event_contexts": 11,
+                "events": 11,
+                "near_decision_events": 11
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 203,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_continuous_comparison": {
+          "max_score_delta": 0.078125,
+          "event_stride_mismatches": 3,
+          "note": "Existing 1LSB diagnostic retained; event timing tolerance is one unchanged 30ms inference stride.",
+          "score_1lsb_failures": 228
+        }
+      },
+      "control_gates_advisory": {
+        "litert": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        },
+        "native_host": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        }
+      }
+    },
+    "new": {
+      "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+      "model_bytes": 39552,
+      "runtimes": {
+        "litert": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 90,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 90,
+              "near_decision_events": 90,
+              "all_events": 91,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.4625,
+                "median": 0.99609375,
+                "mean": 0.9706816620879121,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 90,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 6.666666666666667,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 90,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 5.333333333333333,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": -0.12968749999999996,
+                  "median": 0.0,
+                  "mean": -0.008224587912087907,
+                  "max": 0.0
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 114,
+              "missed_near_decision": 16,
+              "contexts_with_any_event": 114,
+              "near_decision_events": 114,
+              "all_events": 116,
+              "additional_events_outside_near_decision": 2,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.221875,
+                "median": 0.7621093750000001,
+                "mean": 0.7567067307692308,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 114,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 8.421052631578947,
+                "max": 60.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 114,
+                  "baseline_only": 10,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.08064516129032258,
+                  "baseline_reproduced_suppression_fraction": 0.08064516129032258,
+                  "baseline_fp_suppressed": 10,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 114,
+                  "baseline_only": 10,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.08064516129032258,
+                  "baseline_reproduced_suppression_fraction": 0.08064516129032258,
+                  "baseline_fp_suppressed": 10,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 114,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 12.631578947368421,
+                  "max": 60.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": -0.184375,
+                  "median": -0.05117187500000003,
+                  "mean": -0.056875,
+                  "max": 0.021874999999999978
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 16,
+              "rejected_in_entire_context": 16
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.5890625,
+                "median": 0.99609375,
+                "mean": 0.9414772727272727,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 10.909090909090908,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 10.909090909090908,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": -0.07890624999999996,
+                  "median": 0.0,
+                  "mean": -0.015056818181818183,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 13,
+              "missed_near_decision": 2,
+              "contexts_with_any_event": 13,
+              "near_decision_events": 13,
+              "all_events": 13,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.2859375,
+                "median": 0.88515625,
+                "mean": 0.7841145833333333,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 13,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 4.615384615384615,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 13,
+                  "min": -30.0,
+                  "median": 0.0,
+                  "mean": 6.923076923076923,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": -0.16718750000000004,
+                  "median": -0.034375000000000044,
+                  "mean": -0.04692708333333335,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 2,
+              "rejected_in_entire_context": 2
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.6671875,
+                "median": 0.99609375,
+                "mean": 0.868125,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 6.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 12.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": -0.11875000000000002,
+                  "median": 0.0,
+                  "mean": -0.04718750000000001,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 8,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 8,
+              "near_decision_events": 8,
+              "all_events": 8,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.615625,
+                "median": 0.912890625,
+                "mean": 0.87021484375,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 8,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 11.25,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 7.5,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": -0.08359374999999991,
+                  "median": -0.014453125000000011,
+                  "mean": -0.026660156249999983,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 0,
+              "rejected_in_entire_context": 0
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        },
+        "native_host": {
+          "by_split_label": [
+            {
+              "contexts": 91,
+              "recognized_near_decision": 90,
+              "missed_near_decision": 1,
+              "contexts_with_any_event": 90,
+              "near_decision_events": 90,
+              "all_events": 91,
+              "additional_events_outside_near_decision": 1,
+              "max_averaged_score": {
+                "n": 91,
+                "min": 0.47734373807907104,
+                "median": 0.99609375,
+                "mean": 0.9703382568044977,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 90,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 6.666666666666667,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 91,
+                  "baseline": 91,
+                  "candidate": 90,
+                  "baseline_only": 1,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.01098901098901099,
+                  "baseline_reproduced_suppression_fraction": 0.01098901098901099,
+                  "baseline_calls_lost": 1,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 90,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 5.333333333333333,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 91,
+                  "min": -0.1265624761581421,
+                  "median": 0.0,
+                  "mean": -0.00855940776866871,
+                  "max": 0.0
+                }
+              },
+              "held_out": false
+            },
+            {
+              "contexts": 130,
+              "recognized_near_decision": 115,
+              "missed_near_decision": 15,
+              "contexts_with_any_event": 115,
+              "near_decision_events": 115,
+              "all_events": 117,
+              "additional_events_outside_near_decision": 2,
+              "max_averaged_score": {
+                "n": 130,
+                "min": 0.25078123807907104,
+                "median": 0.7632812559604645,
+                "mean": 0.7564062494498033,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 115,
+                "min": -30.0,
+                "median": 0.0,
+                "mean": 8.08695652173913,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "train",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 115,
+                  "baseline_only": 9,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.07258064516129033,
+                  "baseline_reproduced_suppression_fraction": 0.07258064516129033,
+                  "baseline_fp_suppressed": 9,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 130,
+                  "baseline": 124,
+                  "candidate": 115,
+                  "baseline_only": 9,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.07258064516129033,
+                  "baseline_reproduced_suppression_fraction": 0.07258064516129033,
+                  "baseline_fp_suppressed": 9,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 115,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 12.0,
+                  "max": 60.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 130,
+                  "min": -0.16718748211860657,
+                  "median": -0.04921874403953552,
+                  "mean": -0.05668269189504477,
+                  "max": 0.007031232118606567
+                }
+              },
+              "held_out": false,
+              "rejected_near_decision": 15,
+              "rejected_in_entire_context": 15
+            },
+            {
+              "contexts": 11,
+              "recognized_near_decision": 11,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 11,
+              "near_decision_events": 11,
+              "all_events": 11,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 11,
+                "min": 0.5726562738418579,
+                "median": 0.99609375,
+                "mean": 0.9419744339856234,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 11,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 10.909090909090908,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 11,
+                  "baseline": 11,
+                  "candidate": 11,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 11,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 13.636363636363637,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 11,
+                  "min": -0.09609371423721313,
+                  "median": 0.0,
+                  "mean": -0.015056816014376554,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 15,
+              "recognized_near_decision": 13,
+              "missed_near_decision": 2,
+              "contexts_with_any_event": 13,
+              "near_decision_events": 13,
+              "all_events": 13,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 15,
+                "min": 0.25312501192092896,
+                "median": 0.871874988079071,
+                "mean": 0.7809895833333333,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 13,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 9.23076923076923,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "validation",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 15,
+                  "baseline": 13,
+                  "candidate": 13,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 13,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 11.538461538461538,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 15,
+                  "min": -0.13749998807907104,
+                  "median": -0.04296875,
+                  "mean": -0.045208332935969035,
+                  "max": 0.0
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 2,
+              "rejected_in_entire_context": 2
+            },
+            {
+              "contexts": 5,
+              "recognized_near_decision": 5,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 5,
+              "near_decision_events": 5,
+              "all_events": 5,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 5,
+                "min": 0.66796875,
+                "median": 0.99609375,
+                "mean": 0.8706249952316284,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 5,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 6.0,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "correct",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "detected_any": {
+                  "contexts": 5,
+                  "baseline": 5,
+                  "candidate": 5,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_calls_lost": 0,
+                  "calls_gained": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 5,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 12.0,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 5,
+                  "min": -0.12343752384185791,
+                  "median": 0.0,
+                  "mean": -0.04515626430511475,
+                  "max": 0.0
+                }
+              },
+              "held_out": true
+            },
+            {
+              "contexts": 8,
+              "recognized_near_decision": 8,
+              "missed_near_decision": 0,
+              "contexts_with_any_event": 8,
+              "near_decision_events": 8,
+              "all_events": 8,
+              "additional_events_outside_near_decision": 0,
+              "max_averaged_score": {
+                "n": 8,
+                "min": 0.6312500238418579,
+                "median": 0.923828125,
+                "mean": 0.8762695342302322,
+                "max": 0.99609375
+              },
+              "first_near_event_relative_to_original_decision_ms": {
+                "n": 8,
+                "min": 0.0,
+                "median": 0.0,
+                "mean": 11.25,
+                "max": 30.0
+              },
+              "latency_note": "Relative to original detector decision, not verified phonetic keyword end.",
+              "split": "test",
+              "label": "false_positive",
+              "paired_to_baseline": {
+                "detected_near_decision": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "detected_any": {
+                  "contexts": 8,
+                  "baseline": 8,
+                  "candidate": 8,
+                  "baseline_only": 0,
+                  "candidate_only": 0,
+                  "relative_net_reduction": 0.0,
+                  "baseline_reproduced_suppression_fraction": 0.0,
+                  "baseline_fp_suppressed": 0,
+                  "new_fp_introduced": 0
+                },
+                "paired_common_detection_latency_delta_ms": {
+                  "n": 8,
+                  "min": 0.0,
+                  "median": 0.0,
+                  "mean": 7.5,
+                  "max": 30.0
+                },
+                "paired_max_averaged_score_delta": {
+                  "n": 8,
+                  "min": -0.0625,
+                  "median": -0.014843732118606567,
+                  "mean": -0.020312488079071045,
+                  "max": 0.0007812976837158203
+                }
+              },
+              "held_out": true,
+              "rejected_near_decision": 0,
+              "rejected_in_entire_context": 0
+            }
+          ],
+          "legacy": {
+            "quality": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "continuous": {
+              "positive": {
+                "files": 23,
+                "activated_files": 23,
+                "events": 23
+              },
+              "negative": {
+                "files": 8,
+                "activated_files": 1,
+                "events": 1
+              }
+            },
+            "public": {
+              "seconds": 2100.0,
+              "events": 4
+            },
+            "protocol": "Legacy independent: .5s silence tail; public: no tail; continuous: 30s public prefix then 31 trials with 3s silence, no reset. Previously consulted regression sets, not blind tests."
+          },
+          "legacy_paired_to_baseline": {
+            "quality_positive_losses": 0,
+            "quality_new_negative_contexts": 0,
+            "continuous_positive_losses": 0,
+            "continuous_new_negative_contexts": 0,
+            "public_events_no_increase": true
+          }
+        }
+      },
+      "native_comparison": {
+        "contexts": 260,
+        "max_score_delta": 0.0859375,
+        "one_lsb_failures": 220,
+        "activated_context_mismatches": 5,
+        "event_stride_mismatches": 5,
+        "diagnostic_tolerance_lsb": 1,
+        "physical_arm64": "pending"
+      },
+      "native_host_loaded": true,
+      "controls": {
+        "litert": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.071875,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.06796875,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.06875,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.12520614895038307,
+            "wall_realtime_factor": 0.004173538298346102,
+            "process_call_ms": {
+              "median": 0.0191,
+              "p95": 0.095499,
+              "max": 0.2552,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 71392,
+            "current_rss_after_kib": 71392,
+            "process_lifetime_maxrss_kib": 71204,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 0.7906221266957059,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 7,
+                "events": 8,
+                "near_decision_events": 7
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 89,
+                "near_decision_event_contexts": 89,
+                "events": 90,
+                "near_decision_events": 89
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 103,
+                "near_decision_event_contexts": 102,
+                "events": 104,
+                "near_decision_events": 102
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 12,
+                "near_decision_event_contexts": 12,
+                "events": 13,
+                "near_decision_events": 12
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 230,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_host": {
+          "controls": {
+            "silence": {
+              "max_averaged_score": 0.07187499850988388,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 0.0,
+              "events": 0
+            },
+            "seeded_white_noise_rms100": {
+              "max_averaged_score": 0.06796874850988388,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 99.43591344847863,
+              "events": 0
+            },
+            "seeded_white_noise_rms1000": {
+              "max_averaged_score": 0.06875000149011612,
+              "max_instantaneous_score": 0.23828125,
+              "score_samples": 3000,
+              "pcm_seconds": 30.0,
+              "pcm_rms": 1000.0207578897633,
+              "events": 0
+            }
+          },
+          "reset": {
+            "dirty_then_reset_equals_fresh_scores": true,
+            "dirty_then_reset_equals_fresh_events": true,
+            "repeated_reset_equals_fresh_scores": true,
+            "repeated_reset_equals_fresh_events": true,
+            "comparison": "Exact within each runtime; does not loosen cross-runtime tolerance."
+          },
+          "resource": {
+            "pcm_seconds": 30,
+            "wall_seconds": 0.36294737504795194,
+            "wall_realtime_factor": 0.012098245834931732,
+            "process_call_ms": {
+              "median": 0.0399,
+              "p95": 0.3393140499999999,
+              "max": 1.285097,
+              "calls": 3000
+            },
+            "current_rss_before_kib": 71400,
+            "current_rss_after_kib": 71400,
+            "process_lifetime_maxrss_kib": 71216,
+            "limits": "Host wall timing includes Python adapter/frontend/inference; calls are 10ms PCM, NN stride 30ms. Shared process RSS and lifetime maximum include earlier models/runtimes and allocator retention; cannot attribute memory delta or arena usage to one model. Not ARM64 measurements."
+          },
+          "wall_realtime_factor_ratio_to_baseline": 2.325509606424495,
+          "new_control_event_counts_vs_baseline": {
+            "silence": 0,
+            "seeded_white_noise_rms100": 0,
+            "seeded_white_noise_rms1000": 0
+          },
+          "continuous_merged": {
+            "by_origin_split_label": [
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "correct",
+                "contexts": 5,
+                "any_event_contexts": 5,
+                "near_decision_event_contexts": 5,
+                "events": 5,
+                "near_decision_events": 5
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "test",
+                "label": "false_positive",
+                "contexts": 8,
+                "any_event_contexts": 7,
+                "near_decision_event_contexts": 7,
+                "events": 8,
+                "near_decision_events": 7
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "correct",
+                "contexts": 91,
+                "any_event_contexts": 89,
+                "near_decision_event_contexts": 89,
+                "events": 90,
+                "near_decision_events": 89
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "train",
+                "label": "false_positive",
+                "contexts": 130,
+                "any_event_contexts": 105,
+                "near_decision_event_contexts": 104,
+                "events": 106,
+                "near_decision_events": 104
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "correct",
+                "contexts": 11,
+                "any_event_contexts": 10,
+                "near_decision_event_contexts": 10,
+                "events": 10,
+                "near_decision_events": 10
+              },
+              {
+                "origin": "owner-classified-260",
+                "split": "validation",
+                "label": "false_positive",
+                "contexts": 15,
+                "any_event_contexts": 12,
+                "near_decision_event_contexts": 12,
+                "events": 13,
+                "near_decision_events": 12
+              }
+            ],
+            "gap_events": 0,
+            "total_events": 232,
+            "positive_paired_losses_reserved": {},
+            "protocol": "One clean initial state. Audited raw trigger_context, chronological order; 3s artificial silence after every context; no intervening reset. Includes buffer events, reported separately. Original postdecision 200ms retained for evaluation only. Cross-split state is intentionally a post-selection stress test. Not reconstruction of original conversations; no FP/hour inference."
+          }
+        },
+        "native_continuous_comparison": {
+          "max_score_delta": 0.078125,
+          "event_stride_mismatches": 2,
+          "note": "Existing 1LSB diagnostic retained; event timing tolerance is one unchanged 30ms inference stride.",
+          "score_1lsb_failures": 222
+        }
+      },
+      "control_gates_advisory": {
+        "litert": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        },
+        "native_host": {
+          "exact_reset": true,
+          "no_new_silence_or_noise_events": true,
+          "continuous_merged_reserved_positive_preservation": true
+        }
+      }
+    }
+  },
+  "preparation": {
+    "training_original_events": 221,
+    "training_original_by_class": {
+      "correct": 91,
+      "false_positive": 130
+    },
+    "derived_training_windows": 663,
+    "excluded_training_events": 0,
+    "source_pool_windows": {
+      "synthetic_positive": 1032,
+      "reference_positive": 480,
+      "synthetic_negative": 6436,
+      "public_dev_negative": 921
+    },
+    "frontend": "Existing C frontend, raw predecision PCM only; last186frames, left padded if short; gains.85/1/1.15 train only; no word/quality filters.",
+    "corpus_policy": "Only original synthetic/reference/FLEURS-DEV arrays copied; old real hard-negative pool is not separately duplicated.",
+    "policy": "humanLabel and ZIP splits authoritative; no acoustic exclusions"
+  },
+  "technical_audit": {
+    "complete": true,
+    "zip_sha256": "740f5df69c1bb08e96ce83331a4a6e7418b9db77c3ccaa152e71c2be319d21d2",
+    "zip_bytes": 37701956,
+    "events": 260,
+    "wav_files": 520,
+    "counts": {
+      "train": {
+        "false_positive": 130,
+        "correct": 91
+      },
+      "validation": {
+        "correct": 11,
+        "false_positive": 15
+      },
+      "test": {
+        "correct": 5,
+        "false_positive": 8
+      }
+    },
+    "crc_ok": true,
+    "sha256sums_present_and_verified": true,
+    "csv_jsonl_verified": true,
+    "format": "PCM16LE mono16000Hz",
+    "exact_overlap_events": 260,
+    "training_events_included": 221,
+    "excluded_training_events": 0,
+    "cross_split_group_ids_count": 0,
+    "cross_split_session_ids_count": 0
+  },
+  "provenance": {
+    "zip_sha256": "740f5df69c1bb08e96ce83331a4a6e7418b9db77c3ccaa152e71c2be319d21d2",
+    "audit_sha256": "f172f87cf72fb38f79d27b8f43e5a64a34c056b9c6fe4dc63768a6e17ae3d41d",
+    "audit_summary_sha256": "1f3020f99099557805aca482998c21553f261473f0b8c636396825dd996aaf71",
+    "protocol_sha256": "d0d9d8be1c6f25a44458cfd6897dda8b7d58bbd3285233ddc7fdf5a9a47b5cd6",
+    "features_manifest_sha256": "08bb928612ef5a4abc01f52da361255490ddcd6aab35f6a9669f3d9887505842",
+    "training_sha256": "15bd9d2d13d211afd69ade92dc690ab657f6b698473bec20f0ed27d95fb901b9",
+    "selection_sha256": "6b8dbbb137b9515b7ccb023cddc21b8fe59689217e01239e1bebc98b87165fc3",
+    "summary_script_sha256": "a5a086b6b794d2911722d0bd2d9c55d46fbff016fbfeb92fbb686fd8d952f896",
+    "model-v1_training_sha256": "0c1c1d8ac7791974e65a2598cb12d035dbd064b1bd37958aa77b2746b8409634",
+    "model-v2_training_sha256": "15bd9d2d13d211afd69ade92dc690ab657f6b698473bec20f0ed27d95fb901b9",
+    "previous_training_manifest_sha256": "e46f4f3f993b1896b9c2fe8b2c3c3924c1f38988ad605d6e4fb5ee55af606066",
+    "baseline_final_sha256": "dc6d8ab1bc46f11b6bad6db71f5fdfe31591d2d96f306b7b2593510e71ef11b1",
+    "previous_final_sha256": "0b3d4c0bc90f68db5e1abb5aa00f60e736eb0c527d5f294f4dd0b1c9e33d32d7",
+    "new_final_sha256": "e14a562405e6107a959d20c6840b4d1a8a7a4a2fcd33c12b6f35cf65129d09f3",
+    "controls_sha256": "05ef84d17f3270189da82f1438f1a81f6e30bb6fb2988702540d83aff67496cd",
+    "preflight-v1.json_sha256": "e2fb29a2bcd690789ff58cd8db03fd43ab49512aa1533d1e0fc707912e920f43",
+    "followup-plan-v2.json_sha256": "9fa25117d677e295649f7a21a1cc454db4f17d0d63595e1f898f6ab03cf351b0",
+    "final-replay-launch-v1.json_sha256": "16453f8b01d4f53dd600299a05ccb33cb7bae3249cd107384019cc1d5e3f6a01",
+    "comparator-exposure-history-confirmation.json_sha256": "3a38cad8289b0b8e9fff80a6675e2d92bacfdc63db8521458335a262d20137d9",
+    "native_resource_diagnostic_sha256": "337304b90fc6b0f1a278e42adf29f0802ee07aac49d1d8818beaf61b3b02820f"
+  },
+  "limits": [
+    "The exact owner-provided splits were preserved, without redistributing adjacent recordings.",
+    "Events share short capture sessions; split assignment does not establish acoustic independence.",
+    "All260 events were inspected in earlier experiments; test13 is exploratory known data.",
+    "Training recognition is an adjustment diagnostic, not held-out performance.",
+    "Activation-selected positives measure conditional redetection, not population recall.",
+    "False-positive replay counts are not false activations/hour.",
+    "Human labels are the reference; no ASR, DTW or acoustic eligibility gates are used.",
+    "One-LSB numerical tolerance is unchanged; native loading is not numerical equality.",
+    "Host replay does not establish physical Android ARM64 approval."
+  ],
+  "training_runs": {
+    "model-v1": {
+      "plan": {
+        "seed": 20261105,
+        "epochs": 4,
+        "learning_rate": 1e-05,
+        "steps_per_epoch": 32,
+        "initializer": "immutable baseline checkpoint; fresh Adam",
+        "batch_normalization": "frozen",
+        "batch_sources": {
+          "synthetic_positive": 20,
+          "reference_positive": 4,
+          "real_positive": 8,
+          "synthetic_negative": 16,
+          "public_dev_negative": 8,
+          "real_negative": 8
+        },
+        "real_sampling": "Cycles of shuffled original event IDs within class; choose gain variant after ID. Every221TRAIN event in everyepoch.",
+        "checkpoint_order": "paired real validation positive losses across both runtimes, original validation recall deficit beyond2pp, validation negative contexts, original positive paired losses, original validation BCE",
+        "eligible": "zero paired real validation losses in both runtimes and original positive validation recall within2pp of baseline",
+        "test_policy": "checkpoint selection uses only provided validation and original corpus validation; test/known legacy opened after selection seal",
+        "threshold": 0.5,
+        "average_window": 5,
+        "release_below": 0.3,
+        "refractory_samples": 16000
+      },
+      "best_epoch": 2,
+      "best_key": [
+        2,
+        0,
+        14,
+        4,
+        0.00735198799520731
+      ],
+      "eligible": false,
+      "params": 13057,
+      "frozen_batch_norm_layers": [
+        "batch_normalization",
+        "batch_normalization_1",
+        "batch_normalization_2",
+        "batch_normalization_3"
+      ],
+      "protocol_sha256": "d0d9d8be1c6f25a44458cfd6897dda8b7d58bbd3285233ddc7fdf5a9a47b5cd6",
+      "features_manifest_sha256": "08bb928612ef5a4abc01f52da361255490ddcd6aab35f6a9669f3d9887505842",
+      "training_script_sha256": "5758a7abeb095e47f23216365ef29e05b5711badcbb03ccab7f7fc456df55d4b",
+      "model_sha256": "1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e",
+      "elapsed_seconds": 67.19036841695197,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.2596162804402411,
+          "original_validation_bce": 0.002269456395879388,
+          "original_validation_recall": 1.0,
+          "validation_negative_contexts_litert_native": [
+            10,
+            10
+          ],
+          "selection_key": [
+            2,
+            0,
+            20,
+            0,
+            0.002269456395879388
+          ],
+          "eligible": false,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "37416b3d965f43469f380ce7b3dedebde6181ae900739c27b1de35fd3b4c7d70",
+          "validation_sha256": "823d6135475a8c1665dd90b0184126ba939c0bce6a4a121d90cf6472ab47fa9d",
+          "real_validation_paired_loss_counts": {
+            "litert": 1,
+            "native_host": 1
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.1827054254245013,
+          "original_validation_bce": 0.00735198799520731,
+          "original_validation_recall": 0.9848484848484849,
+          "validation_negative_contexts_litert_native": [
+            7,
+            7
+          ],
+          "selection_key": [
+            2,
+            0,
+            14,
+            4,
+            0.00735198799520731
+          ],
+          "eligible": false,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e",
+          "validation_sha256": "550b40be6404a0e2c5f3e49fbe2d8794e9da82ef385e8ba3fb3d0843fb26e4b4",
+          "real_validation_paired_loss_counts": {
+            "litert": 1,
+            "native_host": 1
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        },
+        {
+          "epoch": 3,
+          "train_loss": 0.15710013266652822,
+          "original_validation_bce": 0.010568839497864246,
+          "original_validation_recall": 0.9621212121212122,
+          "validation_negative_contexts_litert_native": [
+            6,
+            7
+          ],
+          "selection_key": [
+            6,
+            1,
+            13,
+            10,
+            0.010568839497864246
+          ],
+          "eligible": false,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "4f5da2c2d3d379f2975aa9017b6bd9a3112d66fdc780ec2bb6dec52a9685ef5a",
+          "validation_sha256": "ba9955eb35c9f1babdab7b60eb46c8ffaa786eb6eb9ad1bd1625867406eb8d4e",
+          "real_validation_paired_loss_counts": {
+            "litert": 3,
+            "native_host": 3
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        },
+        {
+          "epoch": 4,
+          "train_loss": 0.14988665515556931,
+          "original_validation_bce": 0.01036185584962368,
+          "original_validation_recall": 0.9659090909090909,
+          "validation_negative_contexts_litert_native": [
+            6,
+            6
+          ],
+          "selection_key": [
+            6,
+            1,
+            12,
+            9,
+            0.01036185584962368
+          ],
+          "eligible": false,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "6333602a17a5a09cf99cc7c55447b547133ca3db1922c65156442e234ba135a4",
+          "validation_sha256": "57c023b080568bb4776db50a11860fca12dcec75918753582b2208e185a10947",
+          "real_validation_paired_loss_counts": {
+            "litert": 3,
+            "native_host": 3
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        }
+      ]
+    },
+    "model-v2": {
+      "plan": {
+        "seed": 20261105,
+        "epochs": 2,
+        "learning_rate": 3e-06,
+        "steps_per_epoch": 32,
+        "initializer": "immutable baseline checkpoint; fresh Adam",
+        "batch_normalization": "frozen",
+        "batch_sources": {
+          "synthetic_positive": 20,
+          "reference_positive": 4,
+          "real_positive": 8,
+          "synthetic_negative": 16,
+          "public_dev_negative": 8,
+          "real_negative": 8
+        },
+        "real_sampling": "Cycles of shuffled original event IDs within class; choose gain variant after ID. Every221TRAIN event in everyepoch.",
+        "checkpoint_order": "paired real validation positive losses across both runtimes, original validation recall deficit beyond2pp, validation negative contexts, original positive paired losses, original validation BCE",
+        "eligible": "zero paired real validation losses in both runtimes and original positive validation recall within2pp of baseline",
+        "test_policy": "checkpoint selection uses only provided validation and original corpus validation; test/known legacy opened after selection seal",
+        "threshold": 0.5,
+        "average_window": 5,
+        "release_below": 0.3,
+        "refractory_samples": 16000
+      },
+      "best_epoch": 1,
+      "best_key": [
+        0,
+        0,
+        26,
+        0,
+        0.0006634566816501319
+      ],
+      "eligible": true,
+      "params": 13057,
+      "frozen_batch_norm_layers": [
+        "batch_normalization",
+        "batch_normalization_1",
+        "batch_normalization_2",
+        "batch_normalization_3"
+      ],
+      "protocol_sha256": "d0d9d8be1c6f25a44458cfd6897dda8b7d58bbd3285233ddc7fdf5a9a47b5cd6",
+      "features_manifest_sha256": "08bb928612ef5a4abc01f52da361255490ddcd6aab35f6a9669f3d9887505842",
+      "training_script_sha256": "6d00eedcfb6b9ef35d3952785f10f24064194b4a98d4cd811d3f30ac0a53741a",
+      "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+      "elapsed_seconds": 34.170138960005715,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 0.2988726091571152,
+          "original_validation_bce": 0.0006634566816501319,
+          "original_validation_recall": 1.0,
+          "validation_negative_contexts_litert_native": [
+            13,
+            13
+          ],
+          "selection_key": [
+            0,
+            0,
+            26,
+            0,
+            0.0006634566816501319
+          ],
+          "eligible": true,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+          "validation_sha256": "173e4149cb4c4110bc7f8579ac992928ef2433960075c870fd2e3d75380fb313",
+          "real_validation_paired_loss_counts": {
+            "litert": 0,
+            "native_host": 0
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        },
+        {
+          "epoch": 2,
+          "train_loss": 0.26212977059185505,
+          "original_validation_bce": 0.0011396617628633976,
+          "original_validation_recall": 1.0,
+          "validation_negative_contexts_litert_native": [
+            12,
+            12
+          ],
+          "selection_key": [
+            2,
+            0,
+            24,
+            0,
+            0.0011396617628633976
+          ],
+          "eligible": false,
+          "exposure": {
+            "synthetic_positive": {
+              "presentations": 640,
+              "unique_windows": 640
+            },
+            "reference_positive": {
+              "presentations": 128,
+              "unique_windows": 128
+            },
+            "synthetic_negative": {
+              "presentations": 512,
+              "unique_windows": 512
+            },
+            "public_dev_negative": {
+              "presentations": 256,
+              "unique_windows": 256
+            }
+          },
+          "real_training_unique_events": 221,
+          "real_training_class_counts": {
+            "false_positive": 130,
+            "correct": 91
+          },
+          "model_sha256": "a96f16db9462564148e4a26352f025ee58dadd0ccea47320ed2809a0b70cd460",
+          "validation_sha256": "375d49da8219bcc17286de8ddc616fefb91170c57f2a9d2abe77ec4dc27c57f4",
+          "real_validation_paired_loss_counts": {
+            "litert": 1,
+            "native_host": 1
+          },
+          "real_event_exposure": {
+            "real_positive": {
+              "original_events": 91,
+              "presentations": 256,
+              "minimum_per_event": 2,
+              "maximum_per_event": 3
+            },
+            "real_negative": {
+              "original_events": 130,
+              "presentations": 256,
+              "minimum_per_event": 1,
+              "maximum_per_event": 2
+            }
+          }
+        }
+      ]
+    }
+  },
+  "previous_comparator_training_exposure": {
+    "checkpoint_epoch": 2,
+    "previous_real_source_events": {
+      "previous-real-positive": 6,
+      "previous-hard-negative": 52
+    },
+    "overlap_with_supplied_splits": [
+      {
+        "previous_training_role": "previous-hard-negative",
+        "split": "test",
+        "humanLabel": "false_positive",
+        "events": 5
+      },
+      {
+        "previous_training_role": "previous-hard-negative",
+        "split": "train",
+        "humanLabel": "false_positive",
+        "events": 43
+      },
+      {
+        "previous_training_role": "previous-hard-negative",
+        "split": "validation",
+        "humanLabel": "false_positive",
+        "events": 4
+      },
+      {
+        "previous_training_role": "previous-real-positive",
+        "split": "train",
+        "humanLabel": "correct",
+        "events": 6
+      }
+    ],
+    "interpretation": "The previous comparator may have fitted examples now assigned to validation/test. Splits remain unchanged; this is a known exploratory comparison."
+  },
+  "final_experimental_gates": {
+    "validation_eligible": true,
+    "per_runtime": {
+      "litert": {
+        "preserve_baseline_positive_calls_validation_and_test": true,
+        "test_fp_contexts_strictly_improve": false,
+        "test_no_new_fp_contexts_near_decision": true,
+        "test_fp_contexts_strictly_improve_anywhere": false,
+        "test_no_new_fp_contexts_anywhere": true,
+        "known_legacy23_preserved_isolated_and_continuous": true,
+        "native_compatible": true
+      },
+      "native_host": {
+        "preserve_baseline_positive_calls_validation_and_test": true,
+        "test_fp_contexts_strictly_improve": false,
+        "test_no_new_fp_contexts_near_decision": true,
+        "test_fp_contexts_strictly_improve_anywhere": false,
+        "test_no_new_fp_contexts_anywhere": true,
+        "known_legacy23_preserved_isolated_and_continuous": true,
+        "native_compatible": true
+      }
+    },
+    "all_passed": false
+  },
+  "decision_scope": "Exploratory comparison of the sealed validation checkpoint only. The13-event test does not establish production performance. No automatic promotion, installation or publication is authorized.",
+  "status": "COMPLETE",
+  "branch": "feat/v0.8.0-wakeword-human-label-training",
+  "base_commit": "9e0ca26fc01e048dfefdc0cf9513e6b5a223c205",
+  "private_root": "/home/phc/.cache/aegis-wakeword-human-label-training",
+  "actual_training": {
+    "unique_original_events": 221,
+    "correct": 91,
+    "false_positive": 130,
+    "excluded": 0,
+    "derived_windows": 663,
+    "completed_fits": 2,
+    "epochs_per_fit": [
+      4,
+      2
+    ],
+    "every_original_in_every_epoch_verified": true,
+    "selected_checkpoint_real_presentations": {
+      "correct": 256,
+      "false_positive": 256
+    },
+    "human_label_and_split_preserved": true,
+    "no_acoustic_filters": true
+  },
+  "verification": {
+    "unit_tests_passed": 33,
+    "audit_real_zip": "passed",
+    "all6_epoch_exports_native_validation": "passed",
+    "all3_final_dual_runtime_replays": "completed",
+    "reset_exact_and_silence_white_noise_controls": "passed",
+    "physical_arm64": "pending",
+    "production_changed": false,
+    "baseline_changed": false,
+    "new_tests": 14,
+    "earlier_helper_regressions": 19
+  },
+  "old15_known_regression": {
+    "baseline": 15,
+    "previous": 14,
+    "new": 15,
+    "total": 15,
+    "interpretation": "Known previously replayed calls; now distributed across supplied splits. New checkpoint recovers old-P14, while one different new TRAIN positive remains missed.",
+    "current_splits": {
+      "train": 12,
+      "validation": 2,
+      "test": 1
+    }
+  },
+  "selected_model": {
+    "path": "/home/phc/.cache/aegis-wakeword-human-label-training/model-v2/aegis.int8.tflite",
+    "sha256": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567",
+    "bytes": 39552,
+    "fit": "conservative",
+    "epoch": 1,
+    "learning_rate": 3e-06,
+    "params": 13057,
+    "input_shape": [
+      1,
+      3,
+      40
+    ],
+    "input_type": "INT8",
+    "output_shape": [
+      1,
+      1
+    ],
+    "output_type": "UINT8"
+  },
+  "decision_reason": "Selected checkpoint preserves11/11validation and5/5test positives but rejects no test negatives:8/8reactivations unchanged from baseline; validation FP13/15also unchanged. It still misses1TRAIN positive despite all221having participated. No improvement sufficient for replacement. Test total events9->8 (11.11%fewer), but all8negative contexts still activate; no rejected context gained.",
+  "native_resource_diagnostic": {
+    "reason": "Initial shared-host native timing was2.33xbaseline; diagnosticrepeat fixed models and input, alternating order. No model/checkpoint/threshold changes. Original measurement preserved.",
+    "model_sha256": {
+      "baseline": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+      "new": "c05d071f33465397d50216c6f1ab9af7a70b6f303ca689934239cae4be410567"
+    },
+    "seed": 20261105,
+    "rows": [
+      {
+        "repetition": 1,
+        "model": "baseline",
+        "seconds": 30,
+        "wall_seconds": 0.36378897400572896,
+        "cpu_seconds": 0.35821420000000015,
+        "wall_rtf": 0.0121262991335243,
+        "cpu_rtf": 0.011940473333333338,
+        "events": 0
+      },
+      {
+        "repetition": 1,
+        "model": "new",
+        "seconds": 30,
+        "wall_seconds": 0.25501469103619456,
+        "cpu_seconds": 0.25232959999999993,
+        "wall_rtf": 0.008500489701206485,
+        "cpu_rtf": 0.008410986666666665,
+        "events": 0
+      },
+      {
+        "repetition": 2,
+        "model": "new",
+        "seconds": 30,
+        "wall_seconds": 0.2452971099410206,
+        "cpu_seconds": 0.24284040000000018,
+        "wall_rtf": 0.008176570331367353,
+        "cpu_rtf": 0.008094680000000005,
+        "events": 0
+      },
+      {
+        "repetition": 2,
+        "model": "baseline",
+        "seconds": 30,
+        "wall_seconds": 0.20360559411346912,
+        "cpu_seconds": 0.20185269999999988,
+        "wall_rtf": 0.006786853137115637,
+        "cpu_rtf": 0.0067284233333333296,
+        "events": 0
+      },
+      {
+        "repetition": 3,
+        "model": "baseline",
+        "seconds": 30,
+        "wall_seconds": 0.20354669308289886,
+        "cpu_seconds": 0.2017692000000002,
+        "wall_rtf": 0.006784889769429962,
+        "cpu_rtf": 0.006725640000000007,
+        "events": 0
+      },
+      {
+        "repetition": 3,
+        "model": "new",
+        "seconds": 30,
+        "wall_seconds": 0.2055322891101241,
+        "cpu_seconds": 0.20384730000000006,
+        "wall_rtf": 0.006851076303670804,
+        "cpu_rtf": 0.006794910000000002,
+        "events": 0
+      }
+    ],
+    "scope": "Host process/frontend+inference wall/CPU; not ARM64 measurement"
+  }
+}

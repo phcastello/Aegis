@@ -132,14 +132,17 @@ def contexts(args, detector, runtime, scores_dir):
     sessions = defaultdict(set)
     for row in entries:
         sessions[row['session']].add(row['split'])
-    if any(len(s) > 1 for s in sessions.values()):
+    owner_splits = getattr(args, 'provided_splits', False)
+    cross_sessions = sum(len(s) > 1 for s in sessions.values())
+    if cross_sessions and not owner_splits:
         raise ValueError('Session leakage across splits')
     groups = defaultdict(set)
     for row in source_rows:
         if assignment[row['id']]['humanLabel'] != row['humanLabel']:
             raise ValueError('Human label changed in split manifest')
         groups[row['groupId']].add(assignment[row['id']]['split'])
-    if any(len(s) > 1 for s in groups.values()):
+    cross_groups = sum(len(s) > 1 for s in groups.values())
+    if cross_groups and not owner_splits:
         raise ValueError('groupId leakage across splits')
     rows = []
     for original in source_rows:
@@ -168,6 +171,9 @@ def contexts(args, detector, runtime, scores_dir):
                      'max_averaged_score': float(detector.max_score)})
     grouped = {key: counts([r for r in rows if r['session'] == key]) for key in sorted({r['session'] for r in rows})}
     return {'counts': counts(rows), 'by_session': grouped, 'events': rows,
+            'split_policy': 'exact owner-provided splits' if owner_splits else 'frozen grouped splits',
+            'cross_split_session_ids': cross_sessions,
+            'cross_split_group_ids': cross_groups,
             'scope': 'trigger_context only; raw PCM, no EOF silence; fresh state per context',
             'interpretation': 'Activation-selected contexts. Near-decision events are within -500/+200 ms of original decision. Correct re-detection is conditional, not population recall. False-positive context fraction is not false activations/hour.',
             'runtime': runtime}
@@ -218,6 +224,8 @@ def main():
     parser.add_argument('--audit', type=private_output)
     parser.add_argument('--split-manifest', type=private_output)
     parser.add_argument('--split', choices=('train', 'validation', 'test', 'all'), default='validation')
+    parser.add_argument('--provided-splits', action='store_true',
+                        help='Honor owner-provided splits; report cross-split groups without reassigning or excluding events')
     parser.add_argument('--output', type=private_output, required=True)
     parser.add_argument('--library', type=private_output, help='Optional unmodified native host library for second runtime')
     parser.add_argument('--legacy', action='store_true', help='Also replay old 23+8, public35min and continuous regression')
