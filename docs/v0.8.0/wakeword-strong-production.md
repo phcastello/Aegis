@@ -63,11 +63,12 @@ Arquivos preparados no servidor, em diretório 0700 e arquivos 0600:
 
 Ambos foram copiados dos snapshots privados congelados, conferindo os hashes
 da tabela. Antes de transferir, executar `sha256sum -c SHA256SUMS.txt` nesse
-diretório. Transferir somente pelo acesso privado habitual ao servidor, por
-exemplo SCP/SFTP para o computador e cabo/armazenamento privado para o telefone.
+diretório. Transferir os dois modelos para permitir rollback imediato no telefone,
+somente pelo acesso privado habitual ao servidor, por exemplo SCP/SFTP para o
+computador e cabo/armazenamento privado para o telefone.
 Não publicar esses arquivos como assets da release nem anexá-los a um PR.
 
-No telefone:
+No telefone, com os dois arquivos já copiados para armazenamento privado:
 
 1. Atualizar o Node pela distribuição oficial desta rodada, por cima da
    instalação existente, preservando pacote, certificado e dados.
@@ -76,7 +77,8 @@ No telefone:
 4. Confirmar **Modelo instalado: Strong — época 2**.
 5. Reabilitar **Escutar “Aegis”** e confirmar a captura/ativação.
 6. Com a coleta local já autorizada habilitada, fazer uma chamada nova e exportar
-   **métricas e ativações (ZIP)**. Conferir no evento novo o hash Strong e
+   **métricas e ativações (ZIP)**. Conferir em `manifest.jsonl`, na linha da
+   ativação nova após a importação, o hash Strong e
    `modelVersion=aegis-mww-strong-epoch-02-2026-11-05`. Os eventos anteriores
    devem continuar com a identidade original. Em `metrics.json`, a identidade
    corrente e seu período `byIdentity` devem corresponder ao Strong.
@@ -96,6 +98,16 @@ Desabilitar a escuta, importar `aegis-baseline-rollback.int8.tflite`, confirmar
 limpeza de dados ou mudança de pareamento. O aplicativo atualizado continua
 aceitando ambos os modelos.
 
+## Arquivos alterados
+
+- Android: `NodeHandsFreeModel.kt`, `NodeHandsFree.kt`, `NodeHandsFreeMetrics.kt`
+  e `NodeNotificationsPlugin.kt`.
+- Regressões Kotlin: `NodeHandsFreeModelTest.kt`, `NodeHandsFreeMetricsTest.kt`
+  e `NodeHandsFreeActivationCollectionTest.kt`.
+- Configurações e contrato Node: `HandsFreeSettings.vue`, `services/handsFree.ts`,
+  `handsFree.test.mjs` e `hands-free-settings-browser.mjs`.
+- Este relatório e seu registro estruturado de publicação em `docs/v0.8.0/`.
+
 ## Validação e distribuição
 
 | Verificação local | Resultado |
@@ -109,7 +121,7 @@ aceitando ambos os modelos.
 | Carga real Strong no núcleo original Linux | Create/reset/destroy aprovados, sem processar áudio; contrato INT8 conferido |
 
 O teste de transação JVM injeta somente o verificador de runtime para não
-depender de JNI Android no host; os bytes/hashs usados são os modelos privados
+depender de JNI Android no host; os bytes/hashes usados são os modelos privados
 reais, e a carga nativa é verificada separadamente. Os casos privados não foram
 ignorados na execução local. Isso não afirma importação ou retomada física do
 AudioRecord no telefone. A preparação local precisou copiar somente scaffolds
@@ -123,6 +135,53 @@ no lançamento do fluxo oficial; não se escolhe ou reutiliza manualmente um N.
 O fluxo existente publica os instaladores nativos assinados e o feed, preservando
 o isolamento das chaves oficiais. Não há release estável final da v0.8.0.
 
-O resultado final, versão, SHA de fonte, execução oficial, hash/certificado do
-APK e verificações serão acrescentados após a publicação. Não se confundem
-solicitação aceita, build concluído e distribuição efetivamente disponível.
+### Publicação concluída
+
+O plano final do commit `9f9a2949271f5e785eb5c0882cc6bde6a94c9196` confirmou
+`components=[native]` e `pending=[]`. A operação oficial
+`20261105T212455Z-e089beda` concluiu a preparação e solicitou uma única
+distribuição. O ledger reservou **0.8.0-unstable.13**, código **8000013**.
+O [run 42112457332](https://github.com/phcastello/Aegis/actions/runs/42112457332)
+terminou com sucesso: builds Android ARM64/Windows, verificações selecionadas,
+assinatura oficial isolada e publicação/recomendação dos mesmos artefatos.
+A matriz extensa de aceite de release estável foi ignorada pelo fluxo de
+preview; não foi apresentada como aprovada.
+
+- [Release oficial](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.13).
+- [APK Android ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.13/Aegis-Android-arm64.apk).
+- Feed recomendado: `https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json`.
+- SHA-256 do APK: `1669f6cc9950625f31df69af765db4d7c543c95c55792dddbc261881c07d2cfe`.
+- Certificado oficial: `df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31`.
+
+Uma verificação independente baixou o APK, manifesto e SHA256SUMS da release.
+Assinatura criptográfica/certificado, manifesto real do APK, pacote
+`com.aegis.node`, versão/código, flags de produção, somente `arm64-v8a`,
+alinhamento de 16 KB e guards de distribuição passaram. Os dois hashes e
+versões dos modelos constam no DEX; os pesos completos, WAVs, fixtures e keystores
+estão ausentes. Tag, `sourceCommit`, manifesto da release e feeds público/API
+coincidem com a fonte/versão esperadas. Os checks Firebase/BuildConfig pertencem
+à evidência do workflow oficial; não se alegou repetição local com configurações
+privadas ou fontes fabricadas.
+
+API, PWA, PostgreSQL, Qdrant, Neo4j e todos os containers previamente em execução
+mantiveram IDs, imagens e instantes de início antes/depois da operação. Não houve
+deploy, reinício ou alteração do TTS, backend, bancos ou PWA. Nenhuma migration
+foi executada. A versão é de desenvolvimento; a v0.8.0 não foi promovida a estável.
+
+**Pendente no aparelho:** atualizar o APK, importar o Strong com escuta desligada,
+reabilitar e conferir uma ativação nova com o hash Strong. A assinatura/build
+oficiais não demonstram instalação, importação ou captura física no telefone.
+Não havia aparelho conectado por ADB e nenhuma instalação foi realizada.
+
+Evidências privadas em
+`~/.cache/aegis-wakeword-strong-production/official-0.8.0-unstable.13/verification.json`,
+`local-validation-v1.json`, `native-load-v1.json` e os arquivos de comparação de
+serviços. A operação do publicador conserva seu journal em
+`~/.local/state/aegis/publish-dev/20261105T212455Z-e089beda/`.
+Resumo seguro versionado:
+[wakeword-strong-production-results.json](wakeword-strong-production-results.json).
+
+Commits de implementação: `5aea2a4` (interface) e `9f9a294` (catálogo, troca,
+atribuição e testes). O APK usa exatamente `9f9a294`; o registro pós-publicação
+acrescenta somente documentação. Branch enviada ao remoto, sem PR, merge na
+`main`, force push ou modificação dos experimentos anteriores.
