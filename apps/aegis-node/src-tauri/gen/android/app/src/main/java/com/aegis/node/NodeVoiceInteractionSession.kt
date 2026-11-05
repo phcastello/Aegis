@@ -1,7 +1,11 @@
 package com.aegis.node
 
 import android.animation.ValueAnimator
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.database.ContentObserver
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
@@ -10,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.service.voice.VoiceInteractionSession
@@ -18,19 +23,22 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import kotlin.math.abs
 import kotlin.math.sin
+import java.util.concurrent.atomic.AtomicBoolean
 
 class NodeVoiceInteractionSessionService:VoiceInteractionSessionService() {
     override fun onNewSession(args:Bundle?):VoiceInteractionSession=NodeVoiceInteractionSession(this)
 }
+
+/** The explicit system scale wins over ValueAnimator's asynchronously updated cache. */
+internal fun handsFreePanelMotionAllowed(scale:Float,powerSaver:Boolean,platformEnabled:Boolean)=
+    (if(scale.isFinite())scale>0f else platformEnabled) && !powerSaver
 
 /** Disposable official assistant panel. Runtime capture and playback own their lifecycle. */
 class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(context) {
@@ -50,7 +58,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         val root=FrameLayout(context).apply{setPadding(dp(12),dp(8),dp(12),dp(12))}
         val panel=LinearLayout(context).apply{
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(20),dp(8),dp(12),dp(20))
+            setPadding(dp(20),dp(4),dp(12),dp(16))
             background=GradientDrawable().apply{setColor(0xff172132.toInt());cornerRadius=dp(28).toFloat();setStroke(dp(1),0xff35435b.toInt())}
         }
         card=panel
@@ -69,7 +77,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             setOnClickListener{boundSession?.let{NodeHandsFree.runtime(context).cancelSession(it)};finishQuietly()}
         },LinearLayout.LayoutParams(dp(48),dp(48)))
         panel.addView(header)
-        visualizer=HandsFreePanelView(context).also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(60)))}
+        visualizer=HandsFreePanelView(context).also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(72)))}
         label=TextView(context).apply{
             text=presentation.state.label;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
             setPadding(0,dp(4),dp(8),0);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -112,7 +120,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             setLayout(minOf(context.resources.displayMetrics.widthPixels,dp(520)),WindowManager.LayoutParams.WRAP_CONTENT)
             decorView.post{clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)}
         }
-        HandsFreePanelSignal.attach(this,boundSession);visualizer?.show(this)
+        visualizer?.show(this,boundSession)
         val state=runtime.state();refresh(state.optString("status"),state.optString("message"))
     }
     override fun onComputeInsets(outInsets:Insets) {
@@ -156,90 +164,172 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}
 }
 
-/** 30fps at most, only while shown. Playback dots are a state animation, not an acoustic meter. */
+/** Vsync presentation of measured history; playback/processing are distinct state indicators. */
 internal class HandsFreePanelView(context:Context):View(context) {
+    private var lifecycleReady=false
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val bounds=RectF()
     private val density=resources.displayMetrics.density
-    private val accessibility=context.getSystemService(AccessibilityManager::class.java)
-    private var shown=false
+    private val main=Handler(Looper.getMainLooper())
+    private val amplitudes=FloatArray(HandsFreePanelSignal.BAR_COUNT)
+    private val wakePosted=AtomicBoolean(false)
+    @Volatile private var shown=false
     private var owner:Any?=null
+    private var session:String?=null
+    @Volatile private var signalBound=false
+    private var scaleObserved=false
+    private var powerObserved=false
+    private var framePending=false
     private var state=HandsFreePanelState.IDLE
-    private var level=0f
-    private var activatedAt=0L
     private var reduceMotion=true
-    private val motionChanged=AccessibilityManager.AccessibilityStateChangeListener{updateMotion()}
-    private val touchExplorationChanged=AccessibilityManager.TouchExplorationStateChangeListener{updateMotion()}
-    private val frame=Runnable{invalidate()}
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO}
-    internal fun show(observer:Any) {
-        if(shown)hide()
-        owner=observer;shown=true;activatedAt=SystemClock.elapsedRealtime();level=0f
-        accessibility.addAccessibilityStateChangeListener(motionChanged)
-        accessibility.addTouchExplorationStateChangeListener(touchExplorationChanged)
-        updateMotion();invalidate()
+    private val frame=Runnable{framePending=false;if(canRender())invalidate()}
+    private val staleFrame=Runnable{if(canRender() && inputState()){amplitudes.fill(0f);invalidate()}}
+    private val wakeFrame=Runnable{
+        wakePosted.set(false)
+        if(canRender() && inputState()) {
+            if(reduceMotion) {
+                // Real data still updates at capture cadence when the owner removes motion.
+                // A single expiry also clears a stalled producer; this is not a drawing loop.
+                removeCallbacks(staleFrame)
+                postDelayed(staleFrame,HandsFreePanelSignal.STALE_CLEAR_MS)
+                invalidate()
+            }else scheduleFrame()
+        }
+    }
+    private val dataChanged:()->Unit={if(shown && signalBound && wakePosted.compareAndSet(false,true))post(wakeFrame)}
+    private val scaleChanged=object:ContentObserver(main){override fun onChange(selfChange:Boolean){updateMotion()}}
+    private val powerChanged=object:BroadcastReceiver(){override fun onReceive(context:Context?,intent:Intent?){updateMotion()}}
+    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;lifecycleReady=true}
+    internal fun show(observer:Any,token:String?) {
+        hide()
+        owner=observer;session=token;shown=true
+        resumeVisibleResources()
     }
     internal fun hide() {
-        shown=false;level=0f;removeCallbacks(frame)
-        accessibility.removeAccessibilityStateChangeListener(motionChanged)
-        accessibility.removeTouchExplorationStateChangeListener(touchExplorationChanged)
+        shown=false
+        pauseVisibleResources()
+        owner=null;session=null
     }
-    internal fun state(next:HandsFreePanelState){if(state!=next)level=0f;state=next;removeCallbacks(frame);if(shown)invalidate()}
+    internal fun state(next:HandsFreePanelState) {
+        if(state!=next) {
+            owner?.let{HandsFreePanelSignal.reset(it,SystemClock.elapsedRealtime())}
+            amplitudes.fill(0f)
+        }
+        state=next
+        removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
+        if(canRender())invalidate()
+    }
+    private fun inputState()=state==HandsFreePanelState.CAPTURING || state==HandsFreePanelState.CONTINUATION
+    private fun canRender()=shown && isAttachedToWindow && isShown && windowVisibility==VISIBLE
+    private fun scheduleFrame() {
+        if(canRender() && !framePending) {
+            framePending=true
+            // View animation callbacks run with display vsync and coalesce late visual frames.
+            postOnAnimation(frame)
+        }
+    }
+    private fun resumeVisibleResources() {
+        if(!canRender())return
+        if(!signalBound)owner?.let {
+            HandsFreePanelSignal.attach(it,session)
+            HandsFreePanelSignal.setListener(it,dataChanged)
+            signalBound=true
+        }
+        if(!scaleObserved)try {
+            context.contentResolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),false,scaleChanged)
+            scaleObserved=true
+        }catch(_:RuntimeException){}
+        if(!powerObserved)try {
+            val filter=IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            if(Build.VERSION.SDK_INT>=33)context.registerReceiver(powerChanged,filter,Context.RECEIVER_NOT_EXPORTED)
+            else @Suppress("DEPRECATION") context.registerReceiver(powerChanged,filter)
+            powerObserved=true
+        }catch(_:RuntimeException){}
+        updateMotion();invalidate()
+    }
+    private fun pauseVisibleResources() {
+        removeCallbacks(frame);framePending=false
+        removeCallbacks(wakeFrame);wakePosted.set(false);removeCallbacks(staleFrame)
+        owner?.let{HandsFreePanelSignal.setListener(it,null);HandsFreePanelSignal.detach(it)}
+        signalBound=false;amplitudes.fill(0f)
+        if(scaleObserved){context.contentResolver.unregisterContentObserver(scaleChanged);scaleObserved=false}
+        if(powerObserved){context.unregisterReceiver(powerChanged);powerObserved=false}
+    }
     private fun updateMotion() {
-        val animations=if(Build.VERSION.SDK_INT>=26)ValueAnimator.areAnimatorsEnabled()
-            else Settings.Global.getFloat(context.contentResolver,Settings.Global.ANIMATOR_DURATION_SCALE,1f)>0f
-        reduceMotion=!animations || accessibility.isEnabled
-        if(shown)invalidate()
+        val scale=Settings.Global.getFloat(context.contentResolver,Settings.Global.ANIMATOR_DURATION_SCALE,Float.NaN)
+        val platformEnabled=if(Build.VERSION.SDK_INT>=26)ValueAnimator.areAnimatorsEnabled() else true
+        val animations=handsFreePanelMotionAllowed(scale,context.getSystemService(PowerManager::class.java).isPowerSaveMode,platformEnabled)
+        reduceMotion=!animations
+        removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
+        if(canRender()) {
+            if(reduceMotion && inputState())postDelayed(staleFrame,HandsFreePanelSignal.STALE_CLEAR_MS)
+            invalidate()
+        }
     }
-    override fun onAttachedToWindow(){super.onAttachedToWindow();if(shown)invalidate()}
+    override fun onAttachedToWindow(){super.onAttachedToWindow();resumeVisibleResources()}
     override fun onDetachedFromWindow(){hide();super.onDetachedFromWindow()}
-    override fun onWindowVisibilityChanged(visibility:Int){super.onWindowVisibilityChanged(visibility);if(visibility!=VISIBLE)removeCallbacks(frame) else if(shown)invalidate()}
+    override fun onWindowVisibilityChanged(visibility:Int){super.onWindowVisibilityChanged(visibility);if(!lifecycleReady)return;if(visibility!=VISIBLE)pauseVisibleResources() else resumeVisibleResources()}
+    override fun onVisibilityChanged(changedView:View,visibility:Int){super.onVisibilityChanged(changedView,visibility);if(!lifecycleReady)return;if(!isShown)pauseVisibleResources() else resumeVisibleResources()}
     override fun onDraw(canvas:Canvas) {
         super.onDraw(canvas)
-        removeCallbacks(frame)
-        if(!shown || windowVisibility!=VISIBLE)return
-        // Re-read animation scale each visible frame so a system reduce-motion change takes effect.
-        val animations=if(Build.VERSION.SDK_INT>=26)ValueAnimator.areAnimatorsEnabled() else !reduceMotion
-        val motion=!reduceMotion && animations
+        if(!canRender())return
         val now=SystemClock.elapsedRealtime()
-        paint.color=0xff91a9ee.toInt()
+        val motion=!reduceMotion
+        paint.color=0xff91a9ee.toInt();paint.style=Paint.Style.FILL;paint.alpha=255
         val centerX=width/2f;val centerY=height/2f
         when(state) {
             HandsFreePanelState.CAPTURING,HandsFreePanelState.CONTINUATION->{
-                val target=HandsFreePanelSignal.level(owner,now)
-                level=if(motion)level+(target-level)*if(target>level)0.48f else 0.2f else target
-                val gap=6f*density;val bar=5f*density
-                for(index in 0..8) {
-                    val weight=1f-abs(index-4)*0.14f
-                    val half=(3f+level*21f*weight)*density
-                    val x=centerX+(index-4)*(bar+gap)
+                val active=HandsFreePanelSignal.render(owner,now,amplitudes)
+                val left=width*.06f;val right=width*.94f
+                val slot=(right-left)/amplitudes.size
+                val bar=minOf(3.2f*density,slot*.46f)
+                var hasVoice=false
+                for(index in amplitudes.indices) {
+                    val amplitude=amplitudes[index]
+                    if(amplitude<=.002f)continue
+                    hasVoice=true
+                    val half=.65f*density+amplitude*(height*.40f)
+                    val x=left+(index+.5f)*slot
+                    paint.alpha=(36+219*amplitude).toInt().coerceIn(0,255)
                     bounds.set(x-bar/2,centerY-half,x+bar/2,centerY+half)
                     canvas.drawRoundRect(bounds,bar/2,bar/2,paint)
                 }
-            }
-            HandsFreePanelState.PROCESSING,HandsFreePanelState.SPEAKING->{
-                for(index in 0..2) {
-                    val phase=(now%1500)/1500f*6.283185f-index*0.9f
-                    val pulse=if(motion)(sin(phase)+1f)/2 else 0.5f
-                    paint.alpha=(110+pulse*145).toInt()
-                    canvas.drawCircle(centerX+(index-1)*18f*density,centerY,(3.5f+pulse)*density,paint)
+                if(!hasVoice) {
+                    paint.alpha=24;paint.strokeWidth=density
+                    canvas.drawLine(left,centerY,right,centerY,paint)
                 }
-                paint.alpha=255
+                if(motion && active)scheduleFrame()
+            }
+            HandsFreePanelState.PROCESSING->{
+                for(index in 0..2) {
+                    val phase=(now%1500)/1500f*6.283185f-index*.85f
+                    val pulse=if(motion)(sin(phase)+1f)/2 else 0.5f
+                    paint.alpha=(100+pulse*140).toInt()
+                    canvas.drawCircle(centerX+(index-1)*16f*density,centerY+if(motion)sin(phase)*2f*density else 0f,3.3f*density,paint)
+                }
+                if(motion)scheduleFrame()
+            }
+            HandsFreePanelState.SPEAKING->{
+                // Playback status, deliberately not a fabricated input waveform or TTS meter.
+                val pulse=if(motion)(sin((now%1800)/1800f*6.283185f)+1f)/2 else .5f
+                paint.alpha=(150+90*pulse).toInt();canvas.drawCircle(centerX,centerY,2.7f*density,paint)
+                paint.style=Paint.Style.STROKE;paint.strokeWidth=2f*density;paint.strokeCap=Paint.Cap.ROUND
+                for(index in 0..1) {
+                    val radius=(12f+index*9f+if(motion)pulse*1.5f else 0f)*density
+                    paint.alpha=(180-index*50+40*pulse).toInt()
+                    bounds.set(centerX-radius,centerY-radius,centerX+radius,centerY+radius)
+                    canvas.drawArc(bounds,-40f,80f,false,paint)
+                    canvas.drawArc(bounds,140f,80f,false,paint)
+                }
+                paint.style=Paint.Style.FILL;paint.strokeCap=Paint.Cap.BUTT
+                if(motion)scheduleFrame()
             }
             HandsFreePanelState.ERROR->{
                 paint.color=0xfff2b5b5.toInt();paint.textSize=27f*density;paint.textAlign=Paint.Align.CENTER
                 canvas.drawText("!",centerX,centerY+9f*density,paint)
             }
-            else->{canvas.drawCircle(centerX,centerY,5f*density,paint)}
+            else->Unit
         }
-        val activationAge=now-activatedAt
-        if(motion && activationAge<260 && state!=HandsFreePanelState.ERROR) {
-            paint.style=Paint.Style.STROKE;paint.strokeWidth=1.5f*density;paint.alpha=((1f-activationAge/260f)*150).toInt()
-            canvas.drawCircle(centerX,centerY,(12f+activationAge/260f*17f)*density,paint)
-            paint.style=Paint.Style.FILL;paint.alpha=255
-        }
-        // Captured amplitude still updates under reduced motion; only decorative/easing motion stops.
-        val interval=if(motion)34L else 200L
-        if(state.animated && (motion || state==HandsFreePanelState.CAPTURING || state==HandsFreePanelState.CONTINUATION))postDelayed(frame,interval)
+        paint.alpha=255
     }
 }
