@@ -83,6 +83,23 @@ class NodeHandsFreeActivationCollectionTest {
         return map
     }
     private fun hash(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it)}
+    @Test fun modelSwapMetadataAppliesOnlyToNewActivationsAndPreservesHistoricalRecords() {
+        val(store,dir)=store()
+        try {
+            val baseline=store.begin(HandsFreeModel.metadata(HandsFreeModel.BASELINE),shortArrayOf(1))!!
+            store.finish(baseline,"completed",null);store.awaitIdle()
+            val old=dir.walkTopDown().single{it.name=="event.json"}.readBytes()
+            val strong=store.begin(HandsFreeModel.metadata(HandsFreeModel.STRONG),shortArrayOf(2))!!
+            store.finish(strong,"completed",null);store.awaitIdle()
+            val original=dir.walkTopDown().filter{it.name=="event.json"}.single{JSONObject(it.readText()).getString("id")==baseline}
+            assertArrayEquals(old,original.readBytes())
+            val exported=archive(store).getValue("manifest.jsonl").decodeToString().lineSequence().filter{it.isNotBlank()}.map{JSONObject(it)}.associateBy{it.getString("id")}
+            assertEquals(HandsFreeModel.BASELINE.sha256,exported.getValue(baseline).getString("modelSha256"))
+            assertEquals(HandsFreeModel.BASELINE.version,exported.getValue(baseline).getString("modelVersion"))
+            assertEquals(HandsFreeModel.STRONG.sha256,exported.getValue(strong).getString("modelSha256"))
+            assertEquals(HandsFreeModel.STRONG.version,exported.getValue(strong).getString("modelVersion"))
+        }finally{dir.deleteRecursively()}
+    }
     @Test fun cancellationBeforeFirstPostSampleStillExportsTwoValidWavsAndUnknownHumanLabel() {
         val(store,dir)=store()
         try {

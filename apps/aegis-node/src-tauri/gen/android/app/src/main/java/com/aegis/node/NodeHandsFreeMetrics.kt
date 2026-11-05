@@ -179,14 +179,14 @@ internal class HandsFreeMetrics internal constructor(
         }
     }
     @Synchronized fun identity(version:String,build:String,modelReady:Boolean,role:Boolean,permission:Boolean,
-        modelVersion:String="aegis-mww-fleurs-dev-2026-10-31",modelSha256:String=HandsFreeModel.SHA256,
+        modelVersion:String?=null,modelSha256:String?=null,
         detectorConfig:JSONObject=detectorConfiguration()) {
         tick()
         if(root.has("assistantSelected") && (root.optBoolean("assistantSelected")!=role || root.optBoolean("permissionGranted")!=permission))event("prerequisites_changed",JSONObject().put("assistantSelected",role).put("permissionGranted",permission))
         val config=JSONObject(detectorConfig.toString()).put("turnLatencyDetails",detailedTurnLatency)
-        observedIdentity=JSONObject().put("appVersion",version).put("build",build).put("modelVersion",modelVersion)
-            .put("modelSha256",modelSha256).put("config",JSONObject(config.toString()))
-        root.put("appVersion",version).put("build",build).put("modelVersion",modelVersion).put("modelSha256",modelSha256)
+        observedIdentity=JSONObject().put("appVersion",version).put("build",build).put("modelVersion",modelVersion?:JSONObject.NULL)
+            .put("modelSha256",modelSha256?:JSONObject.NULL).put("config",JSONObject(config.toString()))
+        root.put("appVersion",version).put("build",build).put("modelVersion",modelVersion?:JSONObject.NULL).put("modelSha256",modelSha256?:JSONObject.NULL)
           .put("config",JSONObject(config.toString()))
           .put("modelReady",modelReady).put("assistantSelected",role).put("permissionGranted",permission)
         selectIdentity()

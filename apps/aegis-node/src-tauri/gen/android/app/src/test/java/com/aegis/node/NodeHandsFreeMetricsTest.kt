@@ -197,9 +197,11 @@ class NodeHandsFreeMetricsTest {
     @Test fun sameDayBuildModelAndModeChangesSplitCountersAndElapsedPeriods() {
         var elapsed=0L;var wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
         val metrics=HandsFreeMetrics(null,{},{elapsed},{wall},{zone});metrics.restoreRequested(true,false)
-        metrics.identity("0.8.0-unstable.3","8000003",true,true,true)
+        metrics.identity("0.8.0-unstable.3","8000003",true,true,true,
+            modelVersion=HandsFreeModel.BASELINE.version,modelSha256=HandsFreeModel.BASELINE.sha256)
         metrics.capture(200,200,true,true,false);elapsed+=1000;wall+=1000
-        metrics.identity("0.8.0-unstable.4","8000004",true,true,true)
+        metrics.identity("0.8.0-unstable.4","8000004",true,true,true,
+            modelVersion=HandsFreeModel.BASELINE.version,modelSha256=HandsFreeModel.BASELINE.sha256)
         metrics.capture(300,300,true,true,false);elapsed+=2000;wall+=2000
         metrics.configure(true,true)
         metrics.capture(400,400,true,false,true);elapsed+=3000;wall+=3000
@@ -222,6 +224,40 @@ class NodeHandsFreeMetricsTest {
         assertEquals(4,summary.getJSONArray("identityBoundaries").length())
         metrics.identity("0.8.0-unstable.4","8000004",true,true,true,modelVersion="future-model",modelSha256="test-model-hash")
         assertEquals(4,JSONObject(metrics.export()).getJSONArray("identityBoundaries").length())
+    }
+    @Test fun realModelSwapAndRollbackKeepEarlierMetricsAttributedToTheirOwnWeights() {
+        var elapsed=0L;var wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        var saved=""
+        val metrics=HandsFreeMetrics(null,{saved=it},{elapsed},{wall},{zone})
+        metrics.restoreRequested(true,false)
+        fun observe(model:HandsFreeModelIdentity)=metrics.identity("test","1",true,true,true,
+            modelVersion=model.version,modelSha256=model.sha256)
+        observe(HandsFreeModel.BASELINE);val old=metrics.identityToken()!!
+        metrics.capture(100,100,true,false,true);elapsed+=1000;wall+=1000
+        observe(HandsFreeModel.STRONG);val strong=metrics.identityToken()!!
+        metrics.capture(200,200,true,false,true);metrics.add("activations");elapsed+=2000;wall+=2000
+        observe(HandsFreeModel.BASELINE);metrics.capture(300,300,true,false,true)
+        assertEquals(old,metrics.identityToken());assertNotEquals(old,strong)
+        val summary=JSONObject(metrics.export());val day=summary.getJSONObject("days").getJSONObject("2026-11-01")
+        val periods=day.getJSONObject("byIdentity");val identities=summary.getJSONObject("identities")
+        assertEquals(400,periods.getJSONObject(old).getLong("captureConfirmedMs"))
+        assertEquals(200,periods.getJSONObject(strong).getLong("captureConfirmedMs"))
+        assertEquals(1,periods.getJSONObject(strong).getLong("activations"))
+        assertEquals(HandsFreeModel.BASELINE.sha256,identities.getJSONObject(old).getString("modelSha256"))
+        assertEquals(HandsFreeModel.STRONG.sha256,identities.getJSONObject(strong).getString("modelSha256"))
+        val historicalStrong=identities.getJSONObject(strong).toString()
+        val restored=HandsFreeMetrics(saved,{},{0L},{wall+1000},{zone})
+        restored.identity("test","1",true,true,true,modelVersion=HandsFreeModel.BASELINE.version,modelSha256=HandsFreeModel.BASELINE.sha256)
+        assertEquals(historicalStrong,JSONObject(restored.export()).getJSONObject("identities").getJSONObject(strong).toString())
+    }
+    @Test fun absentModelCannotBeMisreportedAsTheBaseline() {
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone})
+        metrics.identity("test","1",false,false,false)
+        val summary=JSONObject(metrics.export())
+        assertTrue(summary.isNull("modelVersion"));assertTrue(summary.isNull("modelSha256"))
+        val observed=summary.getJSONObject("identities").getJSONObject(summary.getString("currentIdentityId"))
+        assertTrue(observed.isNull("modelVersion"));assertTrue(observed.isNull("modelSha256"))
     }
     @Test fun excessiveDistinctBuildsAreBoundedAndOverflowStaysExplicitlyUnknown() {
         val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()

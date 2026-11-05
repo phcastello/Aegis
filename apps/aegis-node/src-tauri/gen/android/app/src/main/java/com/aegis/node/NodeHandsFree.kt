@@ -18,6 +18,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.service.voice.VoiceInteractionService
 import org.json.JSONObject
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -73,6 +74,8 @@ internal class HandsFreeRuntime(private val context:Context) {
     @Volatile private var enabled=prefs.getBoolean("enabled",false)
     @Volatile private var diagnostic=prefs.getBoolean("diagnostic",false)
     @Volatile private var modelReady=false
+    @Volatile private var installedModel:HandsFreeModelIdentity?=null
+    @Volatile private var modelChanging=false
     @Volatile private var captureConfirmed=false
     @Volatile private var lastAudioReadMs=0L
     @Volatile private var pendingActivation=false
@@ -163,7 +166,9 @@ internal class HandsFreeRuntime(private val context:Context) {
         conversationId=null;sessionId=null;backend=null;if(close)closePanel(token)
     }
     init {
-        modelReady=try{HandsFreeModel.read(context)!=null}catch(_:Throwable){false}
+        modelReady=try{HandsFreeModel.read(context)?.let{bytes->
+            try{installedModel=HandsFreeModel.identify(bytes);true}finally{bytes.fill(0)}
+        }?:false}catch(_:Throwable){false}
         metrics.restoreRequested(enabled,diagnostic)
     }
     internal fun attach(value:NodeVoiceInteractionService) {service=value;metrics.event("assistant_ready");recoverFromSystem()}
@@ -171,18 +176,23 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(service!==value)return
         service=null;stop("assistant_unavailable","Selecione a Aegis como assistente e retome o hands-free.");metrics.event("assistant_shutdown")
     }
-    private fun recordIdentity() {
+    private fun recordIdentity()=synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
         val info=context.packageManager.getPackageInfo(context.packageName,0)
-        metrics.identity(info.versionName?:"unknown",if(Build.VERSION.SDK_INT>=28)info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString(),modelReady,role,permission)
+        val model=installedModel
+        metrics.identity(info.versionName?:"unknown",if(Build.VERSION.SDK_INT>=28)info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString(),modelReady,role,permission,
+            modelVersion=model?.version,modelSha256=model?.sha256)
     }
-    fun state():JSONObject {
+    fun state():JSONObject=synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
         val info=context.packageManager.getPackageInfo(context.packageName,0)
-        metrics.identity(info.versionName?:"unknown",if(Build.VERSION.SDK_INT>=28)info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString(),modelReady,role,permission)
-        return JSONObject().put("enabled",enabled).put("diagnostic",diagnostic).put("assistantSelected",role).put("permissionGranted",permission)
+        val model=installedModel
+        metrics.identity(info.versionName?:"unknown",if(Build.VERSION.SDK_INT>=28)info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString(),modelReady,role,permission,
+            modelVersion=model?.version,modelSha256=model?.sha256)
+        JSONObject().put("enabled",enabled).put("diagnostic",diagnostic).put("assistantSelected",role).put("permissionGranted",permission)
             .put("modelReady",modelReady).put("status",status).put("message",message).put("captureConfirmed",captureConfirmed && SystemClock.elapsedRealtime()-lastAudioReadMs<=1500 && status in setOf("listening","capturing","continuation"))
-            .put("modelVersion","aegis-mww-fleurs-dev-2026-10-31")
+            .put("modelName",model?.name?:JSONObject.NULL).put("modelVersion",model?.version?:JSONObject.NULL)
+            .put("modelSha256",model?.sha256?:JSONObject.NULL)
             .put("collection",collection.state())
     }
     fun configure(value:Boolean,diagnosticValue:Boolean):JSONObject {
@@ -193,10 +203,34 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(!value)stop("disabled","Hands-free desligado.") else {stop("starting","Preparando escuta local.");reconcile()}
         return state()
     }
-    internal fun imported(){modelReady=true;metrics.event("model_imported");failures=0;retryNotBefore=0;retriesExhausted=false;stop("starting","Preparando escuta local.");reconcile()}
+    internal fun importModel(input:InputStream) {
+        var paused=false
+        try {
+            val identity=HandsFreeModel.import(context,input) {
+                // No activation can be accepted after this boundary. Wait for the old
+                // detector and its final metrics before attributing anything to new bytes.
+                val previous=synchronized(lock) {
+                    check(!modelChanging && manualLease==null && !pendingActivation && sessionId==null &&
+                        status !in setOf("capturing","processing","speaking","continuation")){"model_import_busy"}
+                    modelChanging=true;paused=true
+                    stop("starting","Preparando troca do modelo local.");worker
+                }
+                if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
+                check(previous?.isAlive!=true){"model_import_busy"}
+            }
+            synchronized(lock) {
+                installedModel=identity;modelReady=true
+                recordIdentity();metrics.event("model_imported",HandsFreeModel.metadata(identity))
+                failures=0;retryNotBefore=0;retriesExhausted=false
+            }
+        }finally {
+            if(paused){synchronized(lock){modelChanging=false};reconcile()}
+        }
+    }
     internal fun importFailed(){metrics.event("model_import_failed");if(!modelReady)setState("model_invalid","Modelo ausente, corrompido ou incompatível. Importe o arquivo privado selecionado na PoC.")}
     internal fun recoverFromSystem(){failures=0;retryNotBefore=0;retriesExhausted=false;reconcile()}
     internal fun reconcile() {
+        if(modelChanging)return
         recordIdentity()
         if(!enabled){stop("disabled","Hands-free desligado.");return}
         if(!NodeHandsFree.selected(context)){stop("assistant_unavailable","Selecione a Aegis como assistente padrão.");return}
@@ -205,13 +239,13 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(manualLease!=null){setState("manual_audio","Áudio em uso pelo chat.");return}
         val host=service?:run{setState("assistant_unavailable","Aguardando o serviço de assistente do Android. Se necessário, selecione novamente a Aegis.");return}
         synchronized(lock) {
-            if(worker?.isAlive==true || retriesExhausted || SystemClock.elapsedRealtime()<retryNotBefore)return
+            if(modelChanging || worker?.isAlive==true || retriesExhausted || SystemClock.elapsedRealtime()<retryNotBefore)return
             if(!host.ensureForeground()){setState("service_unavailable","O Android não permitiu iniciar a escuta. Abra a Aegis e retome o hands-free.");return}
             val generation=epochCounter.incrementAndGet()
             worker=Thread({run(generation)},"AegisHandsFreeAudio").apply{isDaemon=true;start()}
         }
     }
-    private fun current(generation:Int)=epoch==generation && enabled && service!=null && manualLease==null
+    private fun current(generation:Int)=epoch==generation && enabled && !modelChanging && service!=null && manualLease==null
     private fun setState(value:String,text:String) {
         status=value;message=text;metrics.state(value)
         val generation=epoch
@@ -233,7 +267,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
     fun manualAcquire(lease:String,kind:String):Boolean {
         synchronized(lock) {
-            if(manualLease!=null || pendingActivation || sessionId!=null || status in setOf("capturing","processing","speaking","continuation"))return false
+            if(modelChanging || manualLease!=null || pendingActivation || sessionId!=null || status in setOf("capturing","processing","speaking","continuation"))return false
             manualLease=lease;manualAudioKind=kind;metrics.event("manual_audio_acquired",JSONObject().put("kind",if(kind=="playback")"playback" else "capture"))
             epochCounter.incrementAndGet();try{recorder?.stop()}catch(_:Exception){}
         }
@@ -275,7 +309,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
     }
     internal fun activateFromAssistant():String? = synchronized(lock) {
-        if(!enabled || manualLease!=null || service==null)return null
+        if(!enabled || modelChanging || manualLease!=null || service==null)return null
         if(pendingActivation)return sessionId
         if(status=="listening") {
             val activatedAt=SystemClock.elapsedRealtime()
@@ -307,10 +341,9 @@ internal class HandsFreeRuntime(private val context:Context) {
     private fun activationMetadata(origin:String,position:Long?,offset:Int?,scores:FloatArray?,token:String):JSONObject {
         val info=context.packageManager.getPackageInfo(context.packageName,0)
         fun score(index:Int):Any=scores?.getOrNull(index)?.takeIf{it.isFinite()}?:JSONObject.NULL
-        return JSONObject().put("activatedAt",java.time.OffsetDateTime.now().toString())
+        return HandsFreeModel.metadata(installedModel).put("activatedAt",java.time.OffsetDateTime.now().toString())
             .put("appVersion",info.versionName?:JSONObject.NULL)
             .put("build",if(Build.VERSION.SDK_INT>=28)info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong())
-            .put("modelVersion","aegis-mww-fleurs-dev-2026-10-31").put("modelSha256",HandsFreeModel.SHA256)
             .put("detectorConfig",HandsFreeMetrics.detectorConfiguration())
             .put("instantaneousScore",score(0)).put("decisionScore",score(1))
             .put("detectorSample",position?:JSONObject.NULL).put("activationOffsetInBlock",offset?:JSONObject.NULL)
@@ -355,7 +388,11 @@ internal class HandsFreeRuntime(private val context:Context) {
         var detector=0L
         try {
             val bytes=HandsFreeModel.read(context)?:error("model_missing")
-            detector=MicroWakeWordNative.create(bytes);bytes.fill(0);check(detector!=0L){"model_runtime_incompatible"}
+            val loaded=try{
+                val identity=HandsFreeModel.identify(bytes)
+                detector=MicroWakeWordNative.create(bytes);check(detector!=0L){"model_runtime_incompatible"};identity
+            }finally{bytes.fill(0)}
+            synchronized(lock){if(!current(generation))return;installedModel=loaded;recordIdentity()}
             var continuation=false
             while(current(generation)) {
                 val command=capture(generation,detector,continuation)?:break

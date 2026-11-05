@@ -107,10 +107,9 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   if(result.resultCode!=Activity.RESULT_OK || uri==null){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
   handsFreeIo.execute{try{
     val runtime=NodeHandsFree.runtime(activity)
-    val state=runtime.state();require(state.optString("status") !in setOf("capturing","processing","speaking","continuation"))
-    activity.contentResolver.openInputStream(uri).use{input->require(input!=null);HandsFreeModel.import(activity,input)}
-    runtime.imported();invoke.resolve(JSObject(NodeHandsFree.state(activity)))
-  }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Arquivo incompatível. Importe o modelo privado Aegis de 39.552 bytes selecionado na PoC.")}}
+    activity.contentResolver.openInputStream(uri).use{input->require(input!=null);runtime.importModel(input)}
+    invoke.resolve(JSObject(NodeHandsFree.state(activity)))
+  }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Não foi possível trocar o modelo. Desligue temporariamente o hands-free e importe o arquivo privado Baseline ou Strong — época 2 de 39.552 bytes.")}}
  }
  @Command fun exportHandsFreeMetrics(invoke:Invoke) {
   startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,HandsFreeActivationCollection.exportName()),"handsFreeExportCallback")
