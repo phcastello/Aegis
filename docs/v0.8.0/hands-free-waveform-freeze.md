@@ -118,7 +118,53 @@ dependências Robolectric ao aplicativo ou ao APK: elas existem apenas no projet
 de teste separado. JARs, logs e resultados ficam em armazenamento de evidências,
 sem pesos privados ou áudio pessoal.
 
-A correção será distribuída pela próxima preview oficial calculada pelo ledger,
-após os testes. O publicador deve confirmar escopo somente `native`, sem
-migrations ou deploy/reinício de backend, TTS ou bancos. O TTS desativado para
-pesquisas permanece desativado.
+## Publicação concluída
+
+O plano de `publish-dev` confirmou `components=["native"]`, `pending=[]` e
+fonte `e90d9b4f2c7213a036a385f63eb3029d3ce4a86e`. O publicador escolheu a próxima
+numeração no ledger: **`0.8.0-unstable.15`**, código Android **`8000015`**.
+Não houve reserva manual ou mudança da versão estável.
+
+O [workflow oficial](https://github.com/phcastello/Aegis/actions/runs/42127213752)
+terminou com sucesso: builds Android ARM64/Windows e assinatura oficial.
+O fluxo padrão publica ambos os aplicativos; as alterações de produção desta
+rodada estão restritas ao Android. Não foram modificados workflows ou chaves.
+
+- [APK oficial ARM64](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.15/Aegis-Android-arm64.apk)
+- SHA-256: `1f139b673c3f9fe7f966b9eac24fa31bda196f285b2a92169c23d09c853e9e50`
+- Tamanho: 27.852.221 bytes.
+- Certificado oficial SHA-256: `df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31`.
+- [Feed recomendado](https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json)
+  conferido pela API e pelo endereço público; ambos apontam para os mesmos bytes.
+
+O APK baixado passou por `apksigner`, verificação do manifesto real com versão,
+código e identidade, `zipalign` de 16 KB, inspeção do arquivo e ABI ARM64.
+O hash do APK coincide com o feed e com `SHA256SUMS`; a tag corresponde à fonte.
+As identidades autorizadas Strong/baseline continuam no DEX. Não há pesos privados,
+áudios ou keystore no instalador; foi verificada também a ausência dos bytes dos
+dois modelos privados, independentemente do nome de arquivo.
+
+Evidência da preparação:
+`/home/phc/.local/state/aegis/publish-dev/20261105T230747Z-47d756a0/`.
+Verificação do artefato e cópia oficial privada:
+`/home/phc/.cache/aegis-hands-free-waveform-freeze/official-0.8.0-unstable.15/`.
+
+Uma revisão independente comparou os dez containers em execução antes e depois:
+IDs, imagens e horários de início permaneceram idênticos. Não houve migrations,
+deploy ou reinício de backend, TTS ou bancos. O TTS desativado para pesquisas
+permanece desativado. Outras worktrees e pesquisas foram preservadas.
+
+## Instalação e limite de homologação
+
+No telefone, usar **Configurações → Atualizações** para instalar a `.15` pelo
+fluxo normal, ou abrir o APK oficial. A atualização é sobre a instalação existente;
+não exige desinstalar, limpar dados, refazer o pareamento ou importar novamente
+o modelo. Strong, baseline e registros anteriores continuam com seus contratos
+existentes.
+
+Não havia aparelho conectado ao ADB. A atualização não foi instalada ou observada
+fisicamente nesta rodada. Permanecem pendentes a observação da waveform com
+economia de bateria e a permanência da tela durante fala real no telefone.
+Os testes de estados de reprodução não reproduziram áudio nem reativaram TTS.
+Não se declara correção fisicamente homologada: a evidência local reproduz a falha
+e valida a correção no framework Android; a CI valida a distribuição oficial.
