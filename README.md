@@ -80,3 +80,40 @@ O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.
 - [Histórico técnico da implementação](docs/v0.7.0-completion.md)
 
 O [registro técnico da v0.7.2](docs/v0.7.2-implementation.md) preserva as etapas de desenvolvimento e suas evidências. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).
+
+## Licença e autoria
+
+**Aegis — criada originalmente por Pedro Hasson Castello.**
+Copyright (C) 2026 Pedro Hasson Castello, quanto às suas contribuições originais.
+
+O código original da Aegis é disponibilizado sob a GNU Affero General Public
+License **versão 3 exclusivamente** (`AGPL-3.0-only`), com os termos adicionais
+de atribuição razoável da seção 7(b) nos arquivos que os indicam. Consulte
+[`LICENSE`](LICENSE), [`ADDITIONAL_TERMS.md`](ADDITIONAL_TERMS.md),
+[`AUTHORS.md`](AUTHORS.md) e [`NOTICE.md`](NOTICE.md). O texto da AGPLv3 em
+`LICENSE` é integral e inalterado; os termos adicionais ficam separados.
+
+É permitido usar, modificar e redistribuir o material licenciado, inclusive
+comercialmente, cumprindo as condições aplicáveis. Forks que contenham esse
+material devem preservar a atribuição correta à criação original nos avisos
+legais, inclusive nos avisos das interfaces abrangidas pela AGPLv3. Uma seção
+Sobre/Legal acessível é suficiente; a apresentação pode ser adaptada, sem
+exigência de branding permanente na tela principal. Na aplicação original,
+esses avisos estão em **Configurações → Sobre**.
+
+`AGPL-3.0-only` autoriza exclusivamente a versão 3 da licença. A alternativa
+`AGPL-3.0-or-later` permitiria ao destinatário optar também por versões futuras
+publicadas pela FSF. Este projeto escolhe **-only**; o exemplo “or any later
+version” no apêndice da licença é um modelo de aplicação, não a escolha feita
+pelo projeto.
+
+Ao distribuir, forneça o Código-Fonte Correspondente conforme as seções 4 a 6;
+ao oferecer uma versão modificada para interação remota, observe também a
+seção 13. Isso não exige enviar melhorias ao repositório original nem publicar
+toda alteração de uso privado. Fornecido SEM GARANTIA, nos limites legais e
+conforme as seções 15 a 17 da licença.
+
+Dependências e outros materiais de terceiros conservam seus próprios termos.
+**Há pendências antes de uma nova distribuição**, especialmente SDKs Android e
+procedência de recursos visuais; veja a [análise de licenciamento](docs/licenciamento.md).
+A cláusula adicional de atribuição pode merecer revisão jurídica.

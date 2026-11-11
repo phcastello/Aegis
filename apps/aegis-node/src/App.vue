@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Pedro Hasson Castello.
+     GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md. -->
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -6,6 +8,7 @@ import { dismissKeyboard, hasNavigationLayer } from '@aegis/client/services/navi
 import ChatView from '@aegis/client/views/ChatView.vue';
 import SettingsShell, { type SettingsSection } from '@aegis/client/components/SettingsShell.vue';
 import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
+import LegalNotices from '@aegis/client/components/LegalNotices.vue';
 import AegisMark from '@aegis/client/components/AegisMark.vue';
 import { getReleaseIdentity } from '@aegis/client/services/releaseIdentity';
 import { openClientLink } from '@aegis/client/services/clientEnvironment';
@@ -103,6 +106,7 @@ onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNav
       <p class="settings-muted">Aegis é sua assistente pessoal baseada em IA, com conversa por texto e voz, memória persistente e integrações. Usa modelos acessados por API e recursos contextuais dos dispositivos pareados para ajudar nas tarefas do dia a dia.</p>
       <dl><div><dt>Aplicativo</dt><dd>{{ runtime.platform === 'android' ? 'Android' : runtime.platform === 'windows' ? 'Windows' : 'Plataforma não suportada' }}</dd></div><div><dt>Identidade do dispositivo</dt><dd>{{ identity?.state === 'paired' ? 'Pareada' : 'Verificar em Dispositivos' }}</dd></div></dl>
       <details><summary>Diagnóstico técnico</summary><ReminderActionSync :settings="actionSettings" /><DiagnosticsPanel /></details>
+      <LegalNotices />
     </section>
   </SettingsShell>
 </template>

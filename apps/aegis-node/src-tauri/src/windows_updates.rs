@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 // Preserve the official updater's signature/version verification, then bind the
 // same downloaded bytes to the shared distribution hash before native install.
 use crate::updates;

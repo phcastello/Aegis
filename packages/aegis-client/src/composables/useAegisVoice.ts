@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { cancelSpeech, getVoiceStatus, streamSpeech } from '../services/aegisApi';
 import { VoicePlaybackService, type VoicePlaybackState } from '../services/voicePlaybackService';

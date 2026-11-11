@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { ref } from 'vue';
 import type { IdentityStatus, NodeServices, NodeView, PairingCode } from '../services/nodes.js';
 export function useNodes(services: NodeServices) {

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { invoke } from '@tauri-apps/api/core';
 export interface RecurrenceRule { frequency: 'daily' | 'weekly' | 'monthly'; interval: number; localTime: string; startDate: string; weekdays?: number[]; monthDay?: number; lastDay?: boolean; untilDate?: string; count?: number }
 export type DeliveryPolicy = 'allEligible' | 'bestAvailable';

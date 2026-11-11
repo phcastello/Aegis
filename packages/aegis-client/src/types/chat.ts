@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 export type ChatRole = 'user' | 'assistant' | 'system' | string;
 
 export type MemoryActivityKind = 'used' | 'consulted' | 'created' | 'updated' | 'deleted';

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { invoke } from '@tauri-apps/api/core';
 export type NodeState = 'unpaired' | 'pairing' | 'paired' | 'disabled' | 'revoked' | 'pairingError';
 export interface NodeView {

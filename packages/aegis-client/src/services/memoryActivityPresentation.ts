@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import type { MemoryActivityKind, MemoryActivitySection } from '../types/chat';
 
 export const memoryActivityLabels: Record<MemoryActivityKind, { title: string; section: string }> = {

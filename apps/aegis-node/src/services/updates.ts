@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { Channel, invoke, Resource } from '@tauri-apps/api/core';
 import { validateWindowsUpdate, type DistributionDetails } from './updateMetadata.js';
 import type { RuntimeInfo } from './runtime.js';

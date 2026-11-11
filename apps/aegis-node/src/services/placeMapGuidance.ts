@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 // Confidence in a position is distinct from the saved geometry and Android registration.
 // This guidance mirrors the native uncertainty disk; it does not classify presence.
 export function placeAccuracyGuidance(accuracyMeters: number | null | undefined) {

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 export const CURRENT_CONVERSATION_KEY = 'aegis.currentConversationId';
 const PROCESS_KEY = 'aegis.conversationProcessSession';
 // A Rust process UUID survives Activity/WebView recreation, but never a process restart.

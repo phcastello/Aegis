@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 use serde::{Deserialize, Serialize};
 
 // A single recommended distribution, updated by an atomic Git ref move after verification.

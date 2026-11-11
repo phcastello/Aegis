@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { invoke } from '@tauri-apps/api/core';
 import { createApp } from 'vue';
 import { openUrl } from '@tauri-apps/plugin-opener';

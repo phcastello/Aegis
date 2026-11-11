@@ -1,1 +1,3 @@
+<!-- Copyright (C) 2026 Pedro Hasson Castello.
+     GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md. -->
 <template><button type="button" class="global-settings-trigger" aria-label="Configurações da Aegis" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.6 2.4-2 .9L4.2 6 2.7 8.6 4.5 10l-.2 2 .2 2-1.8 1.4L4.2 18l2.2-.3 2 .9L9 21h6l.6-2.4 2-.9 2.2.3 1.5-2.6-1.8-1.4.2-2-.2-2 1.8-1.4L19.8 6l-2.2.3-2-.9L15 3H9Z"/><circle cx="12" cy="12" r="3" /></svg><span>Configurações</span></button></template>

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Native control plane only. Never expose credentials, URLs with secrets or library errors.
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};

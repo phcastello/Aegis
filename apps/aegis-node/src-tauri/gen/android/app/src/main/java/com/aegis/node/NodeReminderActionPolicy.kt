@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 package com.aegis.node
 
 /** Statistical-free bounded delivery policy; 401 waits for the existing Node identity. */

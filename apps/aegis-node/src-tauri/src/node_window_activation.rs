@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Windows notification actions start quietly; only a resolved body-open shows the UI.
 
 pub fn background_launch(args: &[String]) -> bool {

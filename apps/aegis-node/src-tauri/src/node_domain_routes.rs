@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Closed domain routes shared by portable tests and native IPC.
 use serde_json::{json, Value};
 fn id(value: Option<String>) -> Result<String, String> {

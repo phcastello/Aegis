@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 using Aegis.Application.Nodes;
 using Aegis.Application.Observability;
 using Aegis.Domain.Entities;

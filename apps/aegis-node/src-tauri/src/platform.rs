@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {

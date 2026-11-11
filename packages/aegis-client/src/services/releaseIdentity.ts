@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 /** Editorial identity belongs to a release family; the caller owns its runtime/build version. */
 export function getReleaseIdentity(value?: string | null) {
   const version = value?.trim().replace(/^v/, '') ?? '';

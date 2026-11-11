@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 // Read the current layout, never an IntersectionObserver snapshot from an older
 // conversation. Checking the final strip also works for messages taller than the
 // viewport and avoids exact intersection ratios on fractional WebView pixels.

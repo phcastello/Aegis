@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 
@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 // ConversationSidebar -> AegisIdentityCard. Only external API/IPC are fixtures.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const requireNative = createRequire(join(root, 'apps/aegis-node/package.json'));
-const { createServer } = await import(requireNative.resolve('vite'));
+const { createServer } = await import(pathToFileURL(requireNative.resolve('vite')).href);
 const phase = process.argv.includes('--before') ? 'before' : 'after';
 const output = resolve(process.env.IDENTITY_SCREENSHOT_DIR ?? join(root, '.artifacts/release-identity', phase));
 mkdirSync(output, { recursive: true });
@@ -87,7 +87,11 @@ async function nativeFixture(context, version, platform = 'android') {
       if (command === 'plugin:updater|check') return { rid: 1, currentVersion: version, version: window.__identityAvailableVersion, rawJson: { platforms: { 'windows-x86_64': { url: `https://github.com/phcastello/Aegis/releases/download/node-v${window.__identityAvailableVersion}/Aegis-Windows-x86_64-Setup.exe` } } } };
       if (command === 'plugin:resources|close') return;
       if (command === 'node_list') return [];
-      if (command === 'plugin:opener|open_url') return;
+      if (command === 'plugin:opener|open_url') {
+        if (window.__legalOpenFailure) throw new Error('Synthetic browser opening failure');
+        window.__legalOpenedUrl = args.url;
+        return;
+      }
       // Native event registration needs a real Tauri callback bridge; App catches
       // its absence. No event system behavior is under test in this UI patch.
       throw new Error(`Unavailable in isolated identity IPC fixture: ${command}`);
@@ -173,6 +177,7 @@ try {
       try {
         await page.goto(url);
         await page.locator('.composer textarea').waitFor();
+        check(await page.locator('.legal-notices').count() === 0, 'legal attribution must be confined to About');
         await page.evaluate(font => document.documentElement.style.fontSize = `${font}%`, profile.font);
         await page.evaluate(() => document.fonts.ready);
         const sidebar = await openSidebar(page);
@@ -231,6 +236,38 @@ try {
         check((await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).count()) === 0, 'About must not duplicate update check');
         check((await about.innerText()).includes(installed), 'About omits installed/build version');
         check(!(await about.innerText()).includes('0.8.0'), 'available updater version substituted for installed identity');
+        if (phase === 'after') {
+          const legal = about.getByRole('region', { name: 'Autoria e informações legais', exact: true });
+          check(await legal.getByText('Pedro Hasson Castello', { exact: true }).isVisible(), 'original creator attribution inaccessible');
+          check((await legal.innerText()).includes('SEM GARANTIA'), 'no-warranty notice missing');
+          check((await legal.innerText()).includes('redistribuir'), 'copying rights notice missing');
+          const sourceLink = legal.getByRole('link', { name: 'Código-fonte do projeto', exact: true });
+          check(await sourceLink.getAttribute('href') === 'https://github.com/phcastello/Aegis', 'source link missing');
+          await context.setOffline(true);
+          for (const [summary, file] of [
+            ['Ler a licença GNU AGPLv3 integral', 'LICENSE'],
+            ['Ler os termos adicionais de atribuição', 'ADDITIONAL_TERMS.md'],
+            ['Autores', 'AUTHORS.md'], ['Avisos e material de terceiros', 'NOTICE.md'],
+          ]) {
+            const details = legal.locator('details').filter({ has: page.getByText(summary, { exact: true }) });
+            await details.locator('summary').click();
+            check(await details.locator('pre').isVisible(), `${file} inaccessible offline`);
+            check((await details.locator('pre').textContent()).replace(/\r\n/g, '\n') === readFileSync(join(root, file), 'utf8').replace(/\r\n/g, '\n'), `${file} differs from full repository text`);
+            await details.locator('summary').click();
+          }
+          await context.setOffline(false);
+          if (host.startsWith('native')) {
+            await page.evaluate(() => { window.__legalOpenFailure = true; });
+            await sourceLink.click();
+            await legal.getByRole('alert').waitFor();
+            await page.evaluate(() => { window.__legalOpenFailure = false; });
+            await sourceLink.click();
+            await legal.getByRole('alert').waitFor({ state: 'hidden' });
+            check(await page.evaluate(() => window.__legalOpenedUrl) === 'https://github.com/phcastello/Aegis', 'native source link did not use system browser');
+          }
+          await legal.scrollIntoViewIfNeeded();
+          await save('legal');
+        }
         entry.about = await about.evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
         check(entry.about.scrollWidth <= entry.about.clientWidth + 1, 'About horizontal overflow');
         await save('about');

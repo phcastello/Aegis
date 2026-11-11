@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 export type UpdatePhase = 'discovery' | 'download' | 'verification' | 'install_permission' | 'installer_launch';
 
 const messages: Record<string, [UpdatePhase, string]> = {

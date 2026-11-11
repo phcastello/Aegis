@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 export function isGoogleAuthorizationLink(href: string | null): boolean {
   if (!href) return false;
   try {
