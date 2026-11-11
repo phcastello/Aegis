@@ -5,6 +5,7 @@ ARG VITE_AEGIS_API_BASE_URL
 ENV VITE_AEGIS_API_BASE_URL=$VITE_AEGIS_API_BASE_URL
 
 COPY packages/aegis-client /workspace/packages/aegis-client
+COPY LICENSE ADDITIONAL_TERMS.md AUTHORS.md NOTICE.md /workspace/
 RUN npm ci --prefix /workspace/packages/aegis-client
 COPY frontend/aegis-pwa/package*.json ./
 RUN npm ci

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 use crate::node_identity::{HttpApi, Identity, IdentityStatus, NodeView, PairingCode};
 use crate::node_vault::OsVault;
 type NativeIdentity = Identity<OsVault, HttpApi>;

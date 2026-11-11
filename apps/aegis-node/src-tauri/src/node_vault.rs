@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 use super::node_identity::{Record, Vault};
 // Names are part of the persisted identity contract; preserve them across releases.
 const SERVICE: &str = "com.aegis.node.identity.v1";

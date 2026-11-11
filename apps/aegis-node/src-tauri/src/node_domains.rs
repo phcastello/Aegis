@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Fixed domain IPC. The WebView cannot choose an origin, route, method, or credential.
 use crate::node_commands::NodeRuntime;
 use crate::node_domain_routes::route;

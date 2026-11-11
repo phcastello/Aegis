@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Build support for existing foreground interactive audio, not permission or remote delivery.
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

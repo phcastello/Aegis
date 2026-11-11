@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { clientEnvironment, onAuthorizationOpened } from './clientEnvironment';
 
 export function observeGoogleConnection(callbacks: { started?(): void; connected(): void; failed(code: string | null): void }): () => void {

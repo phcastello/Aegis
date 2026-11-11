@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Pedro Hasson Castello.
+     GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md. -->
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue';
 import { placesApi, locationApi, dateLabel, type Place, type Circle, type MapConfig, type SearchResult, type LocationPermissions, type LocationObservation } from '../services/domains';

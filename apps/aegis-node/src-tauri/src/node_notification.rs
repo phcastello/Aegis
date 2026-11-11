@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! The only remotely executable operation. No credential or arbitrary OS error is public.
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, future::Future, pin::Pin};

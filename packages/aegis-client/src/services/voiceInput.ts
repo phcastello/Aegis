@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 // Device IDs stay on this installation and are never sent with transcription metadata.
 const PREFERENCE_KEY = 'aegis.voice.input.v1';
 

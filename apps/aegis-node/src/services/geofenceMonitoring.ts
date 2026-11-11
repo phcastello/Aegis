@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { dateLabel, type Geofence, type GeofenceDiagnosticEvent, type GeofencePresenceDiagnostic } from './domains.js';
 
 const observationReasons = new Set(['confirmed', 'awaiting_confirmation', 'accuracy_insufficient', 'near_boundary', 'outside_initial', 'inside_initial']);

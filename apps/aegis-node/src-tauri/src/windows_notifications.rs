@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 //! Real Windows toast actions use a registered URI activation and a native durable outbox.
 //! URIs contain an opaque local ActionId only. Credentials and interaction tokens stay native.
 use crate::node_notification::{

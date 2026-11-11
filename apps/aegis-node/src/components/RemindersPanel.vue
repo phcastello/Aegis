@@ -1,3 +1,5 @@
+<!-- Copyright (C) 2026 Pedro Hasson Castello.
+     GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md. -->
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { remindersApi, geofencesApi, placesApi, locationApi, domainError, dateLabel, localInput, recurrenceLabel, type Reminder, type ReminderPage, type ReminderDelivery, type ReminderSeries, type RecurrenceRule, type Place, type Geofence, type GeofenceDiagnostics, type LocationSettings, type LocationPermissions, type DeliveryPolicy } from '../services/domains';

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue';
 
 /** Touch-only drawer drag. Native vertical and nested horizontal scrolling keep priority. */

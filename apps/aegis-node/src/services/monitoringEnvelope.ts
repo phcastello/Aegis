@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Pedro Hasson Castello.
+// GNU AGPL v3 only; attribution terms: /ADDITIONAL_TERMS.md.
 import type { Circle, Place } from './domains.js';
 
 // Uniform padding around every member of the real union, matching the backend.
