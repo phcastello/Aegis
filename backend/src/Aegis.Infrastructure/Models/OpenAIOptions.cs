@@ -16,6 +16,8 @@ public sealed class OpenAIOptions
 
     public bool StoreResponses { get; set; }
 
+    public bool PreferHttp2 { get; set; }
+
     public string ServiceTier { get; set; } = "auto";
 
     public int MaxOutputTokens { get; set; } = 4000;

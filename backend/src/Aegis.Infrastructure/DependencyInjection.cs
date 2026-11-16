@@ -52,6 +52,7 @@ public static class DependencyInjection
             options.ChatModel = Read(configuration, "AEGIS_CHAT_MODEL", options.ChatModel);
             options.ChatReasoningEffort = Read(configuration, "AEGIS_CHAT_REASONING_EFFORT", options.ChatReasoningEffort);
             options.ServiceTier = Read(configuration, "AEGIS_OPENAI_SERVICE_TIER", options.ServiceTier);
+            options.PreferHttp2 = ReadBool(configuration, "AEGIS_OPENAI_HTTP2", options.PreferHttp2);
             options.StoreResponses = ReadBool(
                 configuration,
                 "AEGIS_OPENAI_STORE_RESPONSES",

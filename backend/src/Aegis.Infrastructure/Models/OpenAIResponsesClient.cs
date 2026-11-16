@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -61,6 +62,7 @@ public sealed class OpenAIResponsesClient(
             using var requestMessage = CreateHttpRequest(realPayloadJson);
             using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             httpStatusCode = (int)response.StatusCode;
+            RecordProviderProtocol(response.Version);
             responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             TurnLatencyProfile.Mark("model.response_complete");
 
@@ -162,6 +164,7 @@ public sealed class OpenAIResponsesClient(
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
             httpStatusCode = (int)response.StatusCode;
+            RecordProviderProtocol(response.Version);
             RecordProviderHeaders(response);
 
             if (!response.IsSuccessStatusCode)
@@ -427,9 +430,22 @@ public sealed class OpenAIResponsesClient(
         {
             Content = new StringContent(requestPayloadJson, Encoding.UTF8, "application/json")
         };
+        if (options.Value.PreferHttp2)
+        {
+            request.Version = HttpVersion.Version20;
+            request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+        }
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         return request;
+    }
+
+    private static void RecordProviderProtocol(Version version)
+    {
+        if (!TurnLatencyProfile.IsActive ||
+            !(version == HttpVersion.Version11 || version == HttpVersion.Version20 || version == HttpVersion.Version30)) return;
+        TurnLatencyProfile.Mark("model.http_version_major", version.Major);
+        TurnLatencyProfile.Mark("model.http_version_minor", version.Minor);
     }
 
     private static void RecordProviderHeaders(HttpResponseMessage response)
