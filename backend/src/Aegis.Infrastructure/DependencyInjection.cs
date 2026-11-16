@@ -55,6 +55,9 @@ public static class DependencyInjection
             options.PreferHttp2 = ReadBool(configuration, "AEGIS_OPENAI_HTTP2", options.PreferHttp2);
             options.DeferTools = ReadBool(configuration, "AEGIS_OPENAI_DEFER_TOOLS", options.DeferTools);
             options.ToolNamespaces = ReadBool(configuration, "AEGIS_OPENAI_TOOL_NAMESPACES", options.ToolNamespaces);
+            // Test-only control: never accept section-based overrides or enable outside the isolated Development harness.
+            options.LatencyNoPromptCache = string.Equals(configuration["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase) &&
+                ReadBool(configuration, "AEGIS_MEMORY_EVAL_ISOLATED", false) && ReadBool(configuration, "AEGIS_LATENCY_NO_PROMPT_CACHE", false);
             options.StoreResponses = ReadBool(
                 configuration,
                 "AEGIS_OPENAI_STORE_RESPONSES",

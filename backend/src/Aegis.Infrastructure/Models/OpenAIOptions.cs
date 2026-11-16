@@ -22,6 +22,8 @@ public sealed class OpenAIOptions
 
     public bool ToolNamespaces { get; set; }
 
+    public bool LatencyNoPromptCache { get; set; }
+
     public string ServiceTier { get; set; } = "auto";
 
     public int MaxOutputTokens { get; set; } = 4000;

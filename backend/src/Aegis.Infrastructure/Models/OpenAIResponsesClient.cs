@@ -52,6 +52,7 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
+        TurnLatencyProfile.Mark("model.isolated_no_prompt_cache", options.Value.LatencyNoPromptCache && IsHandsFreeChat(request.Request) ? 1 : 0);
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -138,6 +139,7 @@ public sealed class OpenAIResponsesClient(
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
+        TurnLatencyProfile.Mark("model.isolated_no_prompt_cache", options.Value.LatencyNoPromptCache && IsHandsFreeChat(request.Request) ? 1 : 0);
         metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
@@ -547,8 +549,10 @@ public sealed class OpenAIResponsesClient(
             ? request.InputItems
             : request.Input;
 
-        var deferTools = openAIOptions.DeferTools && request.Purpose == ModelPurpose.Chat &&
-            request.Metadata is { } requestMetadata && requestMetadata.TryGetValue("origin", out var origin) && origin == HandsFreeReply.Origin;
+        var handsFree = IsHandsFreeChat(request);
+        var noPromptCache = openAIOptions.LatencyNoPromptCache && handsFree;
+        if (noPromptCache) input = WithoutPromptCacheBreakpoints(input);
+        var deferTools = openAIOptions.DeferTools && handsFree;
         var useNamespaces = deferTools && openAIOptions.ToolNamespaces;
         bool IsDeferredFunction(ModelToolDefinition tool) =>
             tool.Name != HandsFreeReply.ToolName && tool.Name != FinalSpeechSegments.ToolName &&
@@ -588,7 +592,7 @@ public sealed class OpenAIResponsesClient(
             model,
             input,
             reasoning = new { effort = openAIOptions.ChatReasoningEffort },
-            prompt_cache_options = new { mode = "implicit" },
+            prompt_cache_options = new { mode = noPromptCache ? "explicit" : "implicit" },
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
             store = openAIOptions.StoreResponses,
@@ -601,6 +605,43 @@ public sealed class OpenAIResponsesClient(
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null
         };
+    }
+
+    private static bool IsHandsFreeChat(ModelRequest request) => request.Purpose == ModelPurpose.Chat &&
+        request.Metadata is { } metadata && metadata.TryGetValue("origin", out var origin) && origin == HandsFreeReply.Origin;
+
+    private static JsonElement WithoutPromptCacheBreakpoints(object input)
+    {
+        // Clone only the JSON structure. String contents (including JSON-looking user/tool text) stay untouched.
+        var original = JsonSerializer.SerializeToElement(input, JsonOptions);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            static void Write(JsonElement value, Utf8JsonWriter writer)
+            {
+                if (value.ValueKind == JsonValueKind.Object)
+                {
+                    writer.WriteStartObject();
+                    foreach (var property in value.EnumerateObject())
+                    {
+                        if (property.NameEquals("prompt_cache_breakpoint")) continue;
+                        writer.WritePropertyName(property.Name);
+                        Write(property.Value, writer);
+                    }
+                    writer.WriteEndObject();
+                }
+                else if (value.ValueKind == JsonValueKind.Array)
+                {
+                    writer.WriteStartArray();
+                    foreach (var item in value.EnumerateArray()) Write(item, writer);
+                    writer.WriteEndArray();
+                }
+                else value.WriteTo(writer);
+            }
+            Write(original, writer);
+        }
+        using var clone = JsonDocument.Parse(buffer.ToArray());
+        return clone.RootElement.Clone();
     }
 
     private static string NamespaceDescription(string prefix) => prefix switch
