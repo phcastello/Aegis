@@ -11,12 +11,19 @@ impl HandsFreeError {
     }
 }
 
+fn battery_start_payload(mode: Option<&str>) -> Result<Value, HandsFreeError> {
+    let mode = mode.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
+    if !matches!(mode, "off" | "capture_only" | "detection") { return Err(HandsFreeError::new("invalid_request")); }
+    Ok(json!({"mode": mode}))
+}
+
 #[tauri::command]
 pub async fn node_hands_free(
     app: tauri::AppHandle,
     operation: String,
     enabled: Option<bool>,
     diagnostic: Option<bool>,
+    battery_mode: Option<String>,
     collection_enabled: Option<bool>,
     collection_limit_mi_b: Option<u32>,
     lease_id: Option<String>,
@@ -32,6 +39,8 @@ pub async fn node_hands_free(
             "handsFreeConfigure",
             json!({"enabled": enabled.ok_or_else(|| HandsFreeError::new("invalid_request"))?, "diagnostic": diagnostic.unwrap_or(false)}),
         ),
+        "batteryStart" => ("handsFreeBatteryStart", battery_start_payload(battery_mode.as_deref())?),
+        "batteryFinish" => ("handsFreeBatteryFinish", json!({})),
         "cancel" => ("handsFreeCancel", json!({})),
         "collectionConfigure" => {
             let limit = collection_limit_mi_b.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
@@ -82,7 +91,7 @@ pub async fn node_hands_free(
             #[cfg(not(target_os = "android"))]
             { let _ = payload; return Err(HandsFreeError::new("unsupported")); }
         }
-        "permission" | "assistant" | "import" | "export" => {
+        "permission" | "assistant" | "import" | "export" | "batteryExport" => {
             #[cfg(target_os = "android")]
             {
                 use tauri::Manager;
@@ -90,7 +99,8 @@ pub async fn node_hands_free(
                     "permission" => "requestHandsFreePermission",
                     "assistant" => "selectHandsFreeAssistant",
                     "import" => "importHandsFreeModel",
-                    _ => "exportHandsFreeMetrics",
+                    "export" => "exportHandsFreeMetrics",
+                    _ => "exportHandsFreeBatteryMetrics",
                 };
                 let bridge = app
                     .try_state::<crate::native_notifications::AndroidBridge>()
@@ -122,5 +132,22 @@ pub async fn node_hands_free(
     {
         let _ = (app, method, payload);
         Err(HandsFreeError::new("unsupported"))
+    }
+}
+
+#[cfg(test)]
+mod battery_tests {
+    use super::*;
+    #[test]
+    fn only_explicit_battery_modes_cross_the_native_boundary() {
+        for mode in ["off", "capture_only", "detection"] {
+            assert_eq!(battery_start_payload(Some(mode)).unwrap(), json!({"mode":mode}));
+        }
+    }
+    #[test]
+    fn missing_unknown_or_unbounded_battery_modes_are_rejected() {
+        for mode in [None, Some(""), Some("diagnostic"), Some("off\n"), Some("/private/audio")] {
+            assert_eq!(battery_start_payload(mode).unwrap_err().code, "invalid_request");
+        }
     }
 }

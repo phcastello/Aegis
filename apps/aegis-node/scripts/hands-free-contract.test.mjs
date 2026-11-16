@@ -44,7 +44,7 @@ test('activation collection controls retain their closed Rust JNI Activity and R
   const bridge = source('src/hands_free.rs');
   const signature = bridge.match(/pub async fn node_hands_free\(([\s\S]*?)\)\s*->\s*Result/)[1];
   const names = [...signature.matchAll(/^\s*(\w+)\s*:/gm)].map(match => match[1]);
-  assert.deepEqual(names, ['app', 'operation', 'enabled', 'diagnostic', 'collection_enabled', 'collection_limit_mi_b', 'lease_id', 'audio_kind', 'turn_id', 'assistant_message_id', 'speech_request_id']);
+  assert.deepEqual(names, ['app', 'operation', 'enabled', 'diagnostic', 'battery_mode', 'collection_enabled', 'collection_limit_mi_b', 'lease_id', 'audio_kind', 'turn_id', 'assistant_message_id', 'speech_request_id']);
   assert.match(signature, /collection_enabled:\s*Option<bool>/);
   assert.match(signature, /collection_limit_mi_b:\s*Option<u32>/);
   const configure = bridge.slice(bridge.indexOf('"collectionConfigure" =>'), bridge.indexOf('"collectionDelete" =>'));
@@ -63,7 +63,7 @@ test('activation collection controls retain their closed Rust JNI Activity and R
 
 test('export asks Android SAF for a ZIP and returns state without exposing private recording paths', () => {
   const bridge = source('src/hands_free.rs');
-  const exportBranch = bridge.slice(bridge.indexOf('"permission" | "assistant" | "import" | "export" =>'), bridge.indexOf('_ => return Err', bridge.indexOf('"permission" | "assistant" | "import" | "export" =>')));
+  const exportBranch = bridge.slice(bridge.indexOf('"permission" | "assistant" | "import" | "export" | "batteryExport" =>'), bridge.indexOf('_ => return Err', bridge.indexOf('"permission" | "assistant" | "import" | "export" | "batteryExport" =>')));
   assert.match(exportBranch, /"exportHandsFreeMetrics"/);
   assert.match(exportBranch, /run_mobile_plugin_async\(method,\s*\(\)\)/);
   const plugin = androidSource('NodeNotificationsPlugin');
@@ -72,8 +72,9 @@ test('export asks Android SAF for a ZIP and returns state without exposing priva
   assert.match(exportFlow, /setType\("application\/zip"\)/);
   assert.match(exportFlow, /Intent\.EXTRA_TITLE,\s*HandsFreeActivationCollection\.exportName\(\)/);
   assert.match(exportFlow, /contentResolver\.openOutputStream\(uri,"wt"\)/);
-  assert.match(exportFlow, /runtime\.collection\.export\(output\)\s*\{runtime\.metrics\.export\(\)\}/);
+  assert.match(exportFlow, /runtime\.collection\.export\(output\)\s*\{runtime\.exportMetrics\(\)\}/);
   assert.match(exportFlow, /invoke\.resolve\(JSObject\(NodeHandsFree\.state\(activity\)\)\)/);
+  assert.match(androidSource('NodeHandsFree'), /fun exportMetrics\(\):String\s*=\s*JSONObject\(metrics\.export\(\)\)[\s\S]*?\.put\("batteryDiagnostics",batteryDiagnostics\.export\(\)/);
   assert.doesNotMatch(exportFlow, /\.absolutePath|file:\/\/|evaluateJavascript|loadUrl|toDataURL|Base64/);
 });
 
@@ -119,7 +120,8 @@ test('native first-event score observations survive JNI and R8 without exposing 
 test('cancellation after endpoint closes the persistent event before creating or sending a backend turn', () => {
   const runtime=androidSource('NodeHandsFree');
   const run=runtime.slice(runtime.indexOf('private fun run(generation:'),runtime.indexOf('private fun capture('));
-  const captured=run.slice(run.indexOf('val command=capture('));
+  assert.ok(run.includes('val command='), 'capture still produces the command before any backend turn');
+  const captured=run.slice(run.indexOf('val command='));
   const cancelled=captured.match(/if\(sessionCancelled\)\{command\.fill\(0\);[\s\S]*?continue\}/)?.[0];
   assert.ok(cancelled,'completed PCM still needs the cancellation gate before backend execution');
   assert.match(cancelled,/finishEvent\("cancelled",endReason\?:"operation_cancelled"\)/);
@@ -140,4 +142,177 @@ test('conversation replay validates authority under the same monitor as persiste
   assert.match(backend, /synchronized\(NodeConversationChanges\) \{\s*checkCurrent\(\)\s*onConversationChanged/);
   assert.match(journal, /@Synchronized fun snapshot\(session:/);
   assert.match(journal, /@Synchronized fun changed\(session:/);
+});
+
+
+test('battery study exposes only closed modes and retains both JNI controls after R8', () => {
+  const bridge = source('src/hands_free.rs');
+  const start = bridge.slice(bridge.indexOf('"batteryStart" =>'), bridge.indexOf('"batteryFinish" =>'));
+  assert.match(start, /battery_start_payload\(battery_mode\.as_deref\(\)\)/);
+  assert.match(bridge, /matches!\(mode, "off" \| "capture_only" \| "detection"\)/);
+  assert.match(bridge, /HandsFreeError::new\("invalid_request"\)/);
+  assert.match(start, /"handsFreeBatteryStart"/);
+  assert.match(bridge, /Ok\(json!\(\{"mode": mode\}\)\)/);
+  assert.match(bridge, /"batteryFinish" => \("handsFreeBatteryFinish", json!\(\{\}\)\)/);
+  const activity = androidSource('MainActivity');
+  const r8 = source('gen/android/app/proguard-rules.pro');
+  for (const [method, target, payload] of [['handsFreeBatteryStart', 'batteryStart', ',payload'], ['handsFreeBatteryFinish', 'batteryFinish', '']]) {
+    assert.ok(activity.includes(`fun ${method}(payload:String):String=NodeHandsFree.${target}(this${payload})`));
+    assert.ok(r8.includes(`public java.lang.String ${method}(java.lang.String);`));
+  }
+});
+
+
+const runtimeSection = (runtime, begin, end) => {
+  const from = runtime.indexOf(begin), to = runtime.indexOf(end, from + begin.length);
+  assert.ok(from >= 0 && to > from, `Missing runtime boundary: ${begin}`);
+  return runtime.slice(from, to);
+};
+
+test('capture-only study retains the normal microphone source without requiring model or inference runtimes', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const reconcile = runtimeSection(runtime, 'internal fun reconcile()', 'private fun batteryBlocksNormal');
+  assert.match(reconcile, /if\(!modelReady && batteryDiagnostics\.activeMode\(\)!="capture_only"\)/);
+  const run = runtimeSection(runtime, 'private fun run(generation:', 'private fun captureOnly(');
+  const loadGuard = run.indexOf('if(batteryMode!="capture_only")');
+  assert.ok(loadGuard >= 0 && loadGuard < run.indexOf('HandsFreeModel.readPackage(context)'));
+  assert.match(run, /val command=if\(batteryMode=="capture_only"\)captureOnly\(generation\)/);
+  const capture = runtimeSection(runtime, 'private fun captureOnly(', 'private fun capture(');
+  assert.match(capture, /val audio=openRecorder\(\)/);
+  assert.match(capture, /ShortArray\(3200\)/);
+  assert.match(capture, /audio\.read\(buffer,0,buffer\.size,AudioRecord\.READ_BLOCKING\)/);
+  assert.match(capture, /metrics\.capture\([^\n]*,false,screenLocked,screenInteractive\)/);
+  assert.match(capture, /audio\.release\(\);buffer\.fill\(0\)/);
+  assert.doesNotMatch(capture, /MicroWakeWordNative|HandsFreeWakeVerifier|collection\.|newBackend\(|beep\(|holdSessionPower\(/);
+  const recorder = runtimeSection(runtime, 'private fun openRecorder()', 'private fun run(');
+  assert.match(recorder, /AudioRecord\(MediaRecorder\.AudioSource\.MIC,16000,AudioFormat\.CHANNEL_IN_MONO,AudioFormat\.ENCODING_PCM_16BIT/);
+});
+
+test('controlled detection exits before activation collection, cue, session power and backend effects', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const capture = runtime.slice(runtime.indexOf('private fun capture('));
+  const activation = capture.indexOf('if(event>=0 || pendingActivation)');
+  const boundary = capture.lastIndexOf('if(batteryStudy)', activation);
+  assert.ok(boundary >= 0 && activation > boundary);
+  const gate = capture.slice(boundary, activation);
+  assert.match(gate, /verifiedPending\?\.close\(\)/);
+  assert.match(gate, /command\.fill\(0,0,verifiedCommandLength\)/);
+  assert.match(gate, /continue/);
+  assert.doesNotMatch(gate, /collection\.|beep\(|holdSessionPower\(|showSession\(|newBackend\(/);
+  const assistant = runtimeSection(runtime, 'internal fun activateFromAssistant()', '/** Explicit study controls');
+  const blocked = assistant.indexOf('if(batteryBlocksNormal())');
+  assert.ok(blocked >= 0 && blocked < assistant.indexOf('collection.begin'));
+  assert.match(assistant.slice(0, assistant.indexOf('if(!enabled')), /interruptBatteryStudy\("manual_activation"\);return null/);
+});
+
+test('durable battery suspension survives start failure and clears only after explicit stopped-worker finish', () => {
+  const runtime = androidSource('NodeHandsFree');
+  assert.match(runtime, /batterySuspended=prefs\.getBoolean\("batteryStudySuspended",false\)/);
+  assert.match(runtime, /batteryBlocksNormal\(\)=batterySuspended \|\| batteryDiagnostics\.blocksNormal\(\)/);
+  assert.match(runtime, /if\(batterySuspended && it\.isNull\("active"\)\)it\.put\("requiresResume",true\)/);
+  assert.match(runtime, /else->enabled && !batteryBlocksNormal\(\)/);
+  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  const persist = start.indexOf('putBoolean("batteryStudySuspended",true).commit()');
+  assert.ok(persist >= 0 && persist < start.indexOf('batteryDiagnostics.start('));
+  assert.match(start, /if\(batteryDiagnostics\.activeMode\(\)!=null\)\{alreadyActive=true;return@synchronized null\}/);
+  assert.match(start, /\}\s*if\(alreadyActive\)return state\(\)/);
+  const failure = start.slice(start.indexOf('catch(error:Throwable)'));
+  assert.match(failure, /stop\("battery_interrupted"/);
+  assert.doesNotMatch(failure, /putBoolean\("batteryStudySuspended",false\)|batterySuspended=false|batteryDiagnostics\.finish\(\)/);
+  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  const clear = finish.indexOf('putBoolean("batteryStudySuspended",false).commit()');
+  assert.ok(finish.indexOf('previous.join(1500)') >= 0 && finish.indexOf('previous.join(1500)') < clear);
+  assert.match(finish, /if\(previous\?\.isAlive==true\)batteryDiagnostics\.interrupt\("capture_shutdown_timeout"\)\s*else\s*\{/);
+  assert.ok(finish.indexOf('batteryDiagnostics.finish()') < clear && clear < finish.indexOf('batterySuspended=false'));
+  assert.equal([...runtime.matchAll(/putBoolean\("batteryStudySuspended",false\)/g)].length, 1);
+  assert.doesNotMatch(start + finish, /putBoolean\("(?:enabled|diagnostic)"/);
+});
+
+test('authorized shell profiling retains non-debuggable distribution guards and bounded study-only trace names', () => {
+  const manifest = source('gen/android/app/src/main/AndroidManifest.xml');
+  assert.match(manifest, /<profileable\s+android:shell="true"\s*\/>/);
+  assert.doesNotMatch(manifest, /android:debuggable="true"|android:testOnly="true"/);
+  const guard = readFileSync(new URL('./verify-android-distribution.py', import.meta.url), 'utf8');
+  assert.match(guard, /for name in \("debuggable", "testOnly"\)/);
+  assert.match(guard, /app\.attrib\.get\(ANDROID \+ name, "false"\) == "false"/);
+  const runtime = androidSource('NodeHandsFree');
+  assert.match(runtime, /val studyProfile=batteryStudy/);
+  assert.match(runtime, /val traced=studyProfile && Build\.VERSION\.SDK_INT>=29 && android\.os\.Trace\.isEnabled\(\)/);
+  assert.match(runtime, /val traced=batteryStudy && Build\.VERSION\.SDK_INT>=29 && android\.os\.Trace\.isEnabled\(\)/);
+  assert.deepEqual([...runtime.matchAll(/Trace\.beginSection\("([^"]+)"\)/g)].map(m => m[1]).sort(), ['AegisWakeDetector', 'AegisWakeVerifier']);
+  assert.equal([...runtime.matchAll(/if\(traced\)android\.os\.Trace\.endSection\(\)/g)].length, 2);
+});
+
+
+test('battery-only report uses the mobile document plugin without new JNI methods or audio arguments', () => {
+  const bridge = source('src/hands_free.rs');
+  const route = bridge.slice(bridge.indexOf('"permission" | "assistant" | "import" | "export" | "batteryExport" =>'), bridge.indexOf('_ => return Err', bridge.indexOf('"permission" | "assistant" | "import" | "export" | "batteryExport" =>')));
+  assert.match(route, /"export" => "exportHandsFreeMetrics"/);
+  assert.match(route, /_ => "exportHandsFreeBatteryMetrics"/);
+  assert.match(route, /run_mobile_plugin_async\(method,\s*\(\)\)/);
+  assert.doesNotMatch(route, /audio|pcm|recording|path|url/i);
+  assert.doesNotMatch(androidSource('MainActivity'), /fun handsFreeBatteryExport/);
+  const plugin = androidSource('NodeNotificationsPlugin');
+  const report = runtimeSection(plugin, '@Command fun exportHandsFreeBatteryMetrics', '@Command fun exportHandsFreeMetrics');
+  assert.match(report, /Intent\.ACTION_CREATE_DOCUMENT/);
+  assert.match(report, /setType\("application\/json"\)/);
+  assert.match(report, /handsFreeIo\.execute/);
+  assert.match(report, /val report=runtime\.exportMetrics\(\)/);
+  assert.match(report, /openOutputStream\(uri,"wt"\)/);
+  assert.match(report, /output\.write\(report\.toByteArray\(Charsets\.UTF_8\)\)/);
+  assert.doesNotMatch(report, /collection\.|ZipOutputStream|application\/zip|\.absolutePath|file:\/\//);
+
+});
+
+
+test('battery status probes and idempotent controls never query platform snapshots under the runtime lock', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const state = runtimeSection(runtime, 'fun state():JSONObject', 'fun configure(');
+  assert.ok(state.indexOf('val batteryView=batteryState()') >= 0 && state.indexOf('val batteryView=batteryState()') < state.indexOf('return synchronized(lock)'));
+  assert.match(state, /\.put\("batteryDiagnostics",batteryView\)/);
+  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  assert.match(start, /alreadyActive=true;return@synchronized null/);
+  assert.match(start, /\}\s*if\(alreadyActive\)return state\(\)/);
+  assert.match(finish, /alreadyFinished=true;return@synchronized null/);
+  assert.match(finish, /\}\s*if\(alreadyFinished\)return state\(\)/);
+  assert.doesNotMatch(start + finish, /synchronized\(lock\)\s*\{[^}]*return state\(\)/);
+});
+
+test('stale study timeout posts cannot interrupt a newer study and verifier drain releases the microphone first', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  const interrupt = runtimeSection(runtime, 'internal fun interruptBatteryStudy(', 'internal fun observeBattery(');
+  for (const transition of [start, finish, interrupt]) assert.match(transition, /batteryStudyGeneration\.incrementAndGet\(\)/);
+  const observation = runtimeSection(runtime, 'internal fun observeBattery(', 'internal fun exportMetrics()');
+  assert.match(observation, /val generation=batteryStudyGeneration\.get\(\)/);
+  assert.match(observation, /main\.post\{if\(batteryStudyGeneration\.get\(\)==generation && batteryDeadlineMs==deadline\)interruptBatteryStudy\("time_limit"\)\}/);
+  const capture = runtime.slice(runtime.indexOf('private fun capture('));
+  const shutdown = capture.indexOf('verificationExecutor?.shutdownNow()');
+  const release = capture.indexOf('audio.release()', shutdown);
+  const drain = capture.indexOf('verificationExecutor.awaitTermination(', release);
+  assert.ok(shutdown >= 0 && release > shutdown && drain > release, 'release AudioRecord before waiting for cancelled native verifier work');
+  assert.match(capture.slice(release), /if\(batteryStudy && verificationExecutor!=null\)/);
+  assert.match(capture.slice(release), /catch\(_:[ ]*InterruptedException\)\{interrupted=true\}/);
+  assert.match(capture.slice(release), /if\(interrupted\)Thread\.currentThread\(\)\.interrupt\(\)/);
+});
+
+
+test('battery interruption gates and stops microphone capture before any potentially blocking platform probe', () => {
+  const runtime = androidSource('NodeHandsFree');
+  const interrupt = runtimeSection(runtime, 'internal fun interruptBatteryStudy(', 'internal fun observeBattery(');
+  const gate = interrupt.indexOf('batteryStopRequested=true');
+  const stop = interrupt.indexOf('stop("battery_interrupted"');
+  const probe = interrupt.indexOf('batteryDiagnostics.interrupt(reason)');
+  assert.ok(gate >= 0 && stop > gate && probe > stop);
+  const capturePolicy = runtimeSection(runtime, 'private fun wantsCapture()', 'private fun current(');
+  assert.ok(capturePolicy.indexOf('if(batteryStopRequested)return false') < capturePolicy.indexOf('batteryDiagnostics.activeMode()'));
+  const stopCapture = runtimeSection(runtime, 'private fun stop(', 'fun manualAcquire(');
+  assert.match(stopCapture, /recorder\?\.stop\(\)/);
+  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  assert.ok(finish.indexOf('putBoolean("batteryStudySuspended",false).commit()') < finish.indexOf('batteryStopRequested=false'));
+  assert.doesNotMatch(interrupt, /batteryStopRequested=false/);
+  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  assert.ok(start.indexOf('check(!batteryBlocksNormal())') < start.indexOf('batteryStopRequested=false'), 'a fresh start cannot clear a prior interrupted trial gate');
 });

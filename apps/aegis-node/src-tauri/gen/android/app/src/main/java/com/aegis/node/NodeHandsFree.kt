@@ -39,12 +39,15 @@ object NodeHandsFree {
     fun cancel(context:Context):String {runtime(context).cancelSession();return state(context)}
     fun configureCollection(context:Context,payload:String):String {
         val args=JSONObject(payload);val runtime=runtime(context)
+        runtime.interruptBatteryStudy("collection_changed")
         runtime.collection.configure(args.getBoolean("enabled"),args.getInt("limitMiB"))
         return runtime.state().toString()
     }
     fun deleteCollection(context:Context):String {
-        val runtime=runtime(context);runtime.collection.deleteAll();return runtime.state().toString()
+        val runtime=runtime(context);runtime.interruptBatteryStudy("collection_changed");runtime.collection.deleteAll();return runtime.state().toString()
     }
+    fun batteryStart(context:Context,payload:String):String = runtime(context).startBatteryStudy(JSONObject(payload).getString("mode")).toString()
+    fun batteryFinish(context:Context):String = runtime(context).finishBatteryStudy().toString()
     internal fun permission(context:Context)=context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
     internal fun selected(context:Context)=VoiceInteractionService.isActiveService(context,ComponentName(context,NodeVoiceInteractionService::class.java))
 }
@@ -53,6 +56,15 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val prefs=context.getSharedPreferences("aegis-hands-free-v1",Context.MODE_PRIVATE)
     internal val metrics=HandsFreeMetrics(context)
     internal val collection=HandsFreeActivationCollection(context)
+    private val batteryDiagnostics=HandsFreeBatteryDiagnostics(context)
+    private val powerMonitors=HandsFreePowerMonitors(context)
+    @Volatile private var batteryChanging=false
+    @Volatile private var batteryStopRequested=false
+    @Volatile private var batterySuspended=prefs.getBoolean("batteryStudySuspended",false)
+    @Volatile private var batteryDeadlineMs=0L
+    @Volatile private var batteryNextObservationMs=0L
+    private val batteryObservationPending=java.util.concurrent.atomic.AtomicBoolean(false)
+    private val batteryStudyGeneration=java.util.concurrent.atomic.AtomicInteger(0)
     private val main=Handler(Looper.getMainLooper())
     private val cleanup=Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeCancel").apply{isDaemon=true}}
     private val lock=Any()
@@ -175,6 +187,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     internal fun attach(value:NodeVoiceInteractionService) {service=value;metrics.event("assistant_ready");recoverFromSystem()}
     internal fun detach(value:NodeVoiceInteractionService) {
         if(service!==value)return
+        interruptBatteryStudy("assistant_unavailable")
         service=null;stop("assistant_unavailable","Selecione a Aegis como assistente e retome o hands-free.");metrics.event("assistant_shutdown")
     }
     private fun recordIdentity()=synchronized(lock) {
@@ -184,7 +197,10 @@ internal class HandsFreeRuntime(private val context:Context) {
         metrics.identity(info.versionName?:"unknown",if(Build.VERSION.SDK_INT>=28)info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString(),modelReady,role,permission,
             modelVersion=model?.version,modelSha256=model?.sha256)
     }
-    fun state():JSONObject=synchronized(lock) {
+    fun state():JSONObject {
+        // Never hold the audio/control lock while a platform snapshot is in flight.
+        val batteryView=batteryState()
+        return synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
         val info=context.packageManager.getPackageInfo(context.packageName,0)
         val model=installedModel
@@ -195,8 +211,11 @@ internal class HandsFreeRuntime(private val context:Context) {
             .put("modelName",model?.name?:JSONObject.NULL).put("modelVersion",model?.version?:JSONObject.NULL)
             .put("modelSha256",model?.sha256?:JSONObject.NULL)
             .put("collection",collection.state())
+            .put("batteryDiagnostics",batteryView)
+        }
     }
     fun configure(value:Boolean,diagnosticValue:Boolean):JSONObject {
+        interruptBatteryStudy("configuration_changed")
         val changed=enabled!=value || diagnostic!=diagnosticValue
         if(!changed){if(value)recoverFromSystem();return state()}
         enabled=value;diagnostic=diagnosticValue;check(prefs.edit().putBoolean("enabled",value).putBoolean("diagnostic",diagnosticValue).commit())
@@ -205,6 +224,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         return state()
     }
     internal fun importModel(input:InputStream) {
+        check(!batteryBlocksNormal()){"battery_study_active"}
         var paused=false
         try {
             val identity=HandsFreeModel.import(context,input) {
@@ -231,22 +251,40 @@ internal class HandsFreeRuntime(private val context:Context) {
     internal fun importFailed(){metrics.event("model_import_failed");if(!modelReady)setState("model_invalid","Modelo ausente, corrompido ou incompatível. Importe o arquivo privado selecionado na PoC.")}
     internal fun recoverFromSystem(){failures=0;retryNotBefore=0;retriesExhausted=false;reconcile()}
     internal fun reconcile() {
-        if(modelChanging)return
+        if(modelChanging || batteryChanging)return
         recordIdentity()
-        if(!enabled){stop("disabled","Hands-free desligado.");return}
+        if(!wantsCapture()) {
+            if(batteryBlocksNormal())stop("battery_paused",if(batteryDiagnostics.activeMode()=="off")
+                "Medição: escuta desligada. Encerre o teste nas configurações." else "Medição interrompida. Encerre o teste nas configurações para retomar.")
+            else stop("disabled","Hands-free desligado.")
+            return
+        }
         if(!NodeHandsFree.selected(context)){stop("assistant_unavailable","Selecione a Aegis como assistente padrão.");return}
         if(!NodeHandsFree.permission(context)){stop("permission_missing","Permita o microfone para habilitar a escuta.");return}
-        if(!modelReady){stop("model_missing","Importe o modelo privado Aegis selecionado na PoC.");return}
+        if(!modelReady && batteryDiagnostics.activeMode()!="capture_only"){stop("model_missing","Importe o modelo privado Aegis selecionado na PoC.");return}
         if(manualLease!=null){setState("manual_audio","Áudio em uso pelo chat.");return}
         val host=service?:run{setState("assistant_unavailable","Aguardando o serviço de assistente do Android. Se necessário, selecione novamente a Aegis.");return}
         synchronized(lock) {
-            if(modelChanging || worker?.isAlive==true || retriesExhausted || SystemClock.elapsedRealtime()<retryNotBefore)return
+            if(modelChanging || batteryChanging || worker?.isAlive==true || retriesExhausted || SystemClock.elapsedRealtime()<retryNotBefore)return
             if(!host.ensureForeground()){setState("service_unavailable","O Android não permitiu iniciar a escuta. Abra a Aegis e retome o hands-free.");return}
             val generation=epochCounter.incrementAndGet()
             worker=Thread({run(generation)},"AegisHandsFreeAudio").apply{isDaemon=true;start()}
         }
     }
-    private fun current(generation:Int)=epoch==generation && enabled && !modelChanging && service!=null && manualLease==null
+    private fun batteryBlocksNormal()=batterySuspended || batteryDiagnostics.blocksNormal()
+    private fun batteryState():JSONObject = batteryDiagnostics.state().also {
+        if(batterySuspended && it.isNull("active"))it.put("requiresResume",true)
+        it.put("powerMonitors",powerMonitors.state())
+    }
+    private fun wantsCapture():Boolean {
+        if(batteryStopRequested)return false
+        return when(batteryDiagnostics.activeMode()) {
+            "capture_only","detection"->true
+            "off"->false
+            else->enabled && !batteryBlocksNormal()
+        }
+    }
+    private fun current(generation:Int)=epoch==generation && wantsCapture() && !batteryChanging && !modelChanging && service!=null && manualLease==null
     private fun setState(value:String,text:String) {
         status=value;message=text;metrics.state(value)
         val generation=epoch
@@ -267,6 +305,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         main.post{if(epoch==stoppedEpoch){service?.stopHandsFreeForeground();NodeVoiceInteractionSession.current?.finishQuietly()}}
     }
     fun manualAcquire(lease:String,kind:String):Boolean {
+        interruptBatteryStudy("manual_audio")
         synchronized(lock) {
             if(modelChanging || manualLease!=null || pendingActivation || sessionId!=null || status in setOf("capturing","processing","speaking","continuation"))return false
             manualLease=lease;manualAudioKind=kind;metrics.event("manual_audio_acquired",JSONObject().put("kind",if(kind=="playback")"playback" else "capture"))
@@ -310,6 +349,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
     }
     internal fun activateFromAssistant():String? = synchronized(lock) {
+        if(batteryBlocksNormal()){interruptBatteryStudy("manual_activation");return null}
         if(!enabled || modelChanging || manualLease!=null || service==null)return null
         if(pendingActivation)return sessionId
         if(status=="listening") {
@@ -329,6 +369,94 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(!enabled)setState("disabled","Habilite o hands-free nas configurações da Aegis.")
         return null
     }
+    /** Explicit study controls never overwrite the owner's normal listening preferences. */
+    internal fun startBatteryStudy(mode:String):JSONObject {
+        require(mode in setOf("off","capture_only","detection")){"battery_mode"}
+        var alreadyActive=false
+        val previous=synchronized(lock) {
+            if(batteryDiagnostics.activeMode()!=null){alreadyActive=true;return@synchronized null}
+            check(!batteryBlocksNormal()){"battery_resume_required"}
+            check(!batteryChanging && !modelChanging && manualLease==null && !pendingActivation && sessionId==null &&
+                status !in setOf("capturing","processing","speaking","continuation")){"battery_audio_busy"}
+            check(NodeHandsFree.selected(context) && service!=null){"battery_assistant_required"}
+            if(mode!="off")check(NodeHandsFree.permission(context)){"battery_permission_required"}
+            if(mode=="detection")check(modelReady){"battery_model_required"}
+            // This second durable gate precedes the study's own storage boundary.
+            // A failure in that storage cannot restore an old enabled=true preference.
+            check(prefs.edit().putBoolean("batteryStudySuspended",true).commit()){"battery_storage"}
+            batterySuspended=true;batteryChanging=true;batteryStopRequested=false
+            batteryStudyGeneration.incrementAndGet()
+            try {
+                val info=context.packageManager.getPackageInfo(context.packageName,0)
+                batteryDiagnostics.start(mode,HandsFreeModel.metadata(installedModel)
+                    .put("appVersion",info.versionName?:"unknown").put("build",if(Build.VERSION.SDK_INT>=28)info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong())
+                    .put("requestedEnabled",enabled).put("requestedDiagnostic",diagnostic)
+                    .put("audioSource","MIC").put("sampleRate",16000).put("readSamples",3200)
+                    .put("commandsSuppressed",true).put("audioCollectionSuppressed",true))
+                batteryDeadlineMs=SystemClock.elapsedRealtime()+60*60000L
+                batteryNextObservationMs=SystemClock.elapsedRealtime()+60000L
+                stop("battery_preparing","Preparando comparação de bateria.")
+                worker
+            } catch(error:Throwable){
+                stop("battery_interrupted","Não foi possível iniciar a medição. Encerre o teste nas configurações para retomar.")
+                batteryChanging=false;throw error
+            }
+        }
+        if(alreadyActive)return state()
+        try {
+            if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
+            if(previous?.isAlive==true)batteryDiagnostics.interrupt("capture_shutdown_timeout")
+            metrics.event("battery_study_started",JSONObject().put("mode",mode));powerMonitors.request()
+        }finally{batteryChanging=false}
+        reconcile();return state()
+    }
+    internal fun finishBatteryStudy():JSONObject {
+        var alreadyFinished=false
+        val previous=synchronized(lock) {
+            if(!batteryBlocksNormal() || batteryChanging){alreadyFinished=true;return@synchronized null}
+            batteryChanging=true;batteryStudyGeneration.incrementAndGet()
+            stop("battery_finishing","Encerrando medição de bateria.")
+            worker
+        }
+        if(alreadyFinished)return state()
+        try {
+            if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
+            if(previous?.isAlive==true)batteryDiagnostics.interrupt("capture_shutdown_timeout")
+            else {
+                batteryDiagnostics.finish()
+                check(prefs.edit().putBoolean("batteryStudySuspended",false).commit()){"battery_storage"}
+                batterySuspended=false;batteryStopRequested=false;batteryDeadlineMs=0L;powerMonitors.request()
+            }
+            metrics.event("battery_study_finished")
+        }finally{batteryChanging=false}
+        reconcile();return state()
+    }
+    internal fun interruptBatteryStudy(reason:String) {
+        if(batteryDiagnostics.activeMode()==null)return
+        batteryStudyGeneration.incrementAndGet()
+        // Yield the microphone before any platform IPC or persistence in interrupt().
+        batteryStopRequested=true;batteryDeadlineMs=0L
+        stop("battery_interrupted","Medição interrompida. Encerre o teste nas configurações para retomar.")
+        batteryDiagnostics.interrupt(reason)
+    }
+    internal fun observeBattery(force:Boolean=false) {
+        if(batteryDiagnostics.activeMode()==null)return
+        val now=SystemClock.elapsedRealtime()
+        val deadline=batteryDeadlineMs
+        if(deadline>0 && now>=deadline){
+            val generation=batteryStudyGeneration.get()
+            main.post{if(batteryStudyGeneration.get()==generation && batteryDeadlineMs==deadline)interruptBatteryStudy("time_limit")}
+            return
+        }
+        if(!force && now<batteryNextObservationMs)return
+        if(!batteryObservationPending.compareAndSet(false,true))return
+        batteryNextObservationMs=now+60000L
+        cleanup.execute{try{batteryDiagnostics.observe(force);powerMonitors.request()}finally{batteryObservationPending.set(false)}}
+    }
+    internal fun exportMetrics():String = JSONObject(metrics.export())
+        .put("batteryDiagnostics",batteryDiagnostics.export().put("suspensionPersisted",batterySuspended)
+            .put("powerMonitors",powerMonitors.state())).toString()
+
     private fun showSession() {
         val token=sessionId?:return
         val generation=epoch
@@ -390,7 +518,21 @@ internal class HandsFreeRuntime(private val context:Context) {
         var detector=0L
         var modelPackage:HandsFreeModelPackage?=null
         var wakeVerifier:HandsFreeWakeVerifier?=null
+        val batteryMode=batteryDiagnostics.activeMode()
+        var profileAt=SystemClock.elapsedRealtime()
+        var profileWall=SystemClock.elapsedRealtimeNanos()
+        var profileCpu=Debug.threadCpuTimeNanos()
+        fun profileWorker(force:Boolean=false) {
+            if(batteryMode==null)return
+            val now=SystemClock.elapsedRealtime()
+            if(!force && now-profileAt<5000)return
+            val wall=SystemClock.elapsedRealtimeNanos();val cpu=Debug.threadCpuTimeNanos()
+            batteryDiagnostics.component("capture_thread",0,wall-profileWall,if(profileCpu>=0 && cpu>=profileCpu)cpu-profileCpu else -1L)
+            profileAt=now;profileWall=wall;profileCpu=cpu
+            if(!force)observeBattery()
+        }
         try {
+            if(batteryMode!="capture_only") {
             val loadedPackage=HandsFreeModel.readPackage(context)?:error("model_missing")
             modelPackage=loadedPackage
             detector=MicroWakeWordNative.create(loadedPackage.wakeModel);check(detector!=0L){"model_runtime_incompatible"}
@@ -400,9 +542,12 @@ internal class HandsFreeRuntime(private val context:Context) {
             }
             val loaded=loadedPackage.identity
             synchronized(lock){if(!current(generation))return;installedModel=loaded;recordIdentity()}
+            }
             var continuation=false
             while(current(generation)) {
-                val command=capture(generation,detector,continuation,wakeVerifier)?:break
+                val command=if(batteryMode=="capture_only")captureOnly(generation){profileWorker()}
+                    else capture(generation,detector,continuation,wakeVerifier,batteryMode=="detection"){profileWorker()}
+                if(command==null)break
                 if(!current(generation)){command.fill(0);break}
                 if(command.isEmpty()){synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 if(sessionCancelled){command.fill(0);synchronized(lock){finishEvent("cancelled",endReason?:"operation_cancelled")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
@@ -453,6 +598,10 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(!MicroWakeWordNative.reset(detector))error("detector_reset")
             }
         }catch(error:Throwable) {
+            if(batteryMode!=null && current(generation)) {
+                metrics.add("battery_study_capture_failures")
+                interruptBatteryStudy(if(error is MicrophoneUnavailable)"microphone_unavailable" else "capture_failure")
+            } else {
             if(current(generation)) {
                 synchronized(lock){finishEvent("failed",if(error is MicrophoneUnavailable)"microphone_unavailable" else if(detector==0L)"model_runtime_unavailable" else "capture_or_detector_failure")}
                 metrics.add("capture_failures");main.post{if(epoch==generation)service?.stopHandsFreeForeground()}
@@ -464,7 +613,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                     }else retriesExhausted=true}
 
             }
+            }
         }finally {
+            profileWorker(force=true)
             recorder=null
             val token=synchronized(lock){val token=sessionId;finishEvent(if(sessionCancelled)"cancelled" else "interrupted",endReason?:"audio_worker_ended");cancelBackend();endConversationSession(token,false);token}
             closePanel(token)
@@ -474,11 +625,56 @@ internal class HandsFreeRuntime(private val context:Context) {
             synchronized(lock){if(worker===Thread.currentThread())worker=null}
             metrics.persist()
             // A configuration change may arrive during the previous capture thread's teardown.
-            if(epoch!=generation && enabled && manualLease==null && service!=null)main.post{reconcile()}
+            if(epoch!=generation && wantsCapture() && !batteryChanging && manualLease==null && service!=null)main.post{reconcile()}
         }
     }
 
-    private fun capture(generation:Int,detector:Long,continuation:Boolean,wakeVerifier:HandsFreeWakeVerifier?):ByteArray? {
+    /** Same source, format and reads, with no detector/runtime/activation work. */
+    @Suppress("MissingPermission")
+    private fun captureOnly(generation:Int,onHeartbeat:()->Unit):ByteArray? {
+        val audio=openRecorder();recorder=audio
+        val buffer=ShortArray(3200)
+        val silenced=java.util.concurrent.atomic.AtomicBoolean(false)
+        var callback:AudioManager.AudioRecordingCallback?=null
+        var registered=false
+        var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
+        try {
+            if(Build.VERSION.SDK_INT>=29) {
+                callback=object:AudioManager.AudioRecordingCallback(){override fun onRecordingConfigChanged(configs:MutableList<AudioRecordingConfiguration>){silenced.set(configs.any{it.isClientSilenced})}}
+                audio.registerAudioRecordingCallback(context.mainExecutor,callback);registered=true
+            }
+            synchronized(lock) {
+                if(!current(generation))return null
+                check(NodeHandsFree.permission(context) && NodeHandsFree.selected(context))
+                if(microphoneBlocked())throw MicrophoneUnavailable()
+                audio.startRecording();check(audio.recordingState==AudioRecord.RECORDSTATE_RECORDING)
+                setState("listening","Medição: somente microfone. Aegis não responderá.")
+            }
+            while(current(generation)) {
+                val count=audio.read(buffer,0,buffer.size,AudioRecord.READ_BLOCKING)
+                if(!current(generation))return null
+                val now=SystemClock.elapsedRealtime()
+                if(count<=0 || silenced.get())throw MicrophoneUnavailable()
+                captureConfirmed=true;lastAudioReadMs=now
+                if(now-checkedAt>=5000) {
+                    checkedAt=now
+                    if(!NodeHandsFree.permission(context) || !NodeHandsFree.selected(context) || microphoneBlocked())throw MicrophoneUnavailable()
+                }
+                val duration=count*1000L/16000
+                metrics.capture(duration,minOf(duration,(now-receivedAt).coerceAtLeast(0)),false,screenLocked,screenInteractive)
+                batteryDiagnostics.capture(count,false)
+                if(now-receivedAt>duration+1000)metrics.add("captureUnknownGapMs",now-receivedAt-duration)
+                receivedAt=now;metrics.maybeTick();onHeartbeat()
+            }
+            return null
+        }finally {
+            captureConfirmed=false;recorder=null
+            if(Build.VERSION.SDK_INT>=29 && registered && callback!=null)try{audio.unregisterAudioRecordingCallback(callback)}catch(_:Exception){}
+            try{audio.stop()}catch(_:Exception){};audio.release();buffer.fill(0)
+        }
+    }
+
+    private fun capture(generation:Int,detector:Long,continuation:Boolean,wakeVerifier:HandsFreeWakeVerifier?,batteryStudy:Boolean=false,onHeartbeat:()->Unit={}):ByteArray? {
         capturedTurnLatency=null
         val audio=openRecorder();recorder=audio
         val buffer=ShortArray(3200) // One 200ms microphone read, shared by all local consumers.
@@ -536,7 +732,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 check(NodeHandsFree.permission(context) && NodeHandsFree.selected(context))
                 if(microphoneBlocked())throw MicrophoneUnavailable()
                 audio.startRecording();check(audio.recordingState==AudioRecord.RECORDSTATE_RECORDING)
-                setState(if(continuation)"continuation" else "listening",if(continuation)"Pode continuar…" else if(diagnostic)"Diagnóstico: detecção local sem comandos." else "Aguardando Aegis.")
+                setState(if(continuation)"continuation" else "listening",if(continuation)"Pode continuar…" else if(batteryStudy)"Medição: detecção local sem comandos ou gravações." else if(diagnostic)"Diagnóstico: detecção local sem comandos." else "Aguardando Aegis.")
                 if(continuation)showSession()
             }
             while(current(generation)) {
@@ -556,6 +752,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 metrics.capture(duration,minOf(duration,(now-receivedAt).coerceAtLeast(0)),!captured && !continuation,screenLocked,screenInteractive)
                 if(now-receivedAt>duration+1000)metrics.add("captureUnknownGapMs",now-receivedAt-duration)
                 receivedAt=now;metrics.maybeTick()
+                if(batteryStudy){batteryDiagnostics.capture(count,true);onHeartbeat()}
                 if(sessionCancelled && (captured || continuation)) {
                     retainCancellationPrefix(count,readReturnedAtMs)
                     return ByteArray(0)
@@ -626,13 +823,18 @@ internal class HandsFreeRuntime(private val context:Context) {
                     // Sample one unchanged block every5s; this is capture-thread work,
                     // not device energy or CPU attributed to the platform audio service.
                     val profile=detectorProfiler.sampleDue(now)
-                    val wallStart=if(profile)SystemClock.elapsedRealtimeNanos() else 0L
-                    val cpuStart=if(profile)Debug.threadCpuTimeNanos() else 0L
-                    val result=MicroWakeWordNative.process(detector,buffer,count)
-                    if(profile) {
-                        val cpuNanos=Debug.threadCpuTimeNanos()-cpuStart
+                    val studyProfile=batteryStudy
+                    val wallStart=if(profile || studyProfile)SystemClock.elapsedRealtimeNanos() else 0L
+                    val cpuStart=if(profile || studyProfile)Debug.threadCpuTimeNanos() else 0L
+                    val traced=studyProfile && Build.VERSION.SDK_INT>=29 && android.os.Trace.isEnabled()
+                    if(traced)android.os.Trace.beginSection("AegisWakeDetector")
+                    val result=try{MicroWakeWordNative.process(detector,buffer,count)}finally{if(traced)android.os.Trace.endSection()}
+                    if(profile || studyProfile) {
+                        val cpuEnd=Debug.threadCpuTimeNanos()
+                        val cpuNanos=if(cpuStart>=0 && cpuEnd>=cpuStart)cpuEnd-cpuStart else -1L
                         val wallNanos=SystemClock.elapsedRealtimeNanos()-wallStart
-                        metrics.detectorProfile(count,wallNanos,cpuNanos)
+                        if(profile)metrics.detectorProfile(count,wallNanos,cpuNanos)
+                        if(studyProfile)batteryDiagnostics.component("detector",count,wallNanos,cpuNanos)
                     }
                     detectorSamples+=count;result
                 }
@@ -653,7 +855,19 @@ internal class HandsFreeRuntime(private val context:Context) {
                         verificationStartedAt=SystemClock.elapsedRealtime()
                         pendingVerification=HandsFreePendingWakeVerification(candidate,ring,streamSamples,
                             checkNotNull(verificationExecutor),verificationStartedAt,{SystemClock.elapsedRealtime()},
-                            {window,cancelled->wakeVerifier.score(window.samples,window.samples.size,window.candidateSample){cancelled() || !current(generation)}})
+                            {window,cancelled->
+                                val wall=if(batteryStudy)SystemClock.elapsedRealtimeNanos() else 0L
+                                val cpu=if(batteryStudy)Debug.threadCpuTimeNanos() else 0L
+                                val traced=batteryStudy && Build.VERSION.SDK_INT>=29 && android.os.Trace.isEnabled()
+                                if(traced)android.os.Trace.beginSection("AegisWakeVerifier")
+                                try{wakeVerifier.score(window.samples,window.samples.size,window.candidateSample){cancelled() || !current(generation)}}
+                                finally{
+                                    if(traced)android.os.Trace.endSection()
+                                    if(batteryStudy) {
+                                    val end=Debug.threadCpuTimeNanos()
+                                    batteryDiagnostics.component("verifier",window.samples.size,SystemClock.elapsedRealtimeNanos()-wall,if(cpu>=0 && end>=cpu)end-cpu else -1L)
+                                }}
+                            })
                         wakeCandidate=null
                     }
                     val pending=pendingVerification
@@ -680,6 +894,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                     }
                 } else if(pendingVerification!=null || wakeCandidate!=null) {
                     pendingVerification?.close();pendingVerification=null;wakeCandidate=null
+                }
+                if(batteryStudy) {
+                    // Suppress all activation side effects during the controlled comparison.
+                    verifiedPending?.close();if(verifiedPending!=null)pendingVerification=null
+                    if(event>=0)metrics.add("battery_study_confirmed_candidates")
+                    command.fill(0,0,verifiedCommandLength)
+                    continue
                 }
                 if(event>=0 || pendingActivation) {
                     synchronized(lock) {
@@ -791,6 +1012,17 @@ internal class HandsFreeRuntime(private val context:Context) {
             classifier?.close()
             buffer.fill(0);command.fill(0);ring.clear()
             if(recordingGroupId==recordingGroup)recordingGroupId=null
+            if(batteryStudy && verificationExecutor!=null) {
+                // Future.cancel does not prove that the native callback/finally ended.
+                // Release the microphone first, then keep this worker alive until every
+                // verifier CPU update is complete. Explicit finish refuses a live worker.
+                var interrupted=false
+                while(true) {
+                    try{if(verificationExecutor.awaitTermination(60,java.util.concurrent.TimeUnit.SECONDS))break}
+                    catch(_:InterruptedException){interrupted=true}
+                }
+                if(interrupted)Thread.currentThread().interrupt()
+            }
         }
     }
 }

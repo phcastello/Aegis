@@ -111,6 +111,20 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
     invoke.resolve(JSObject(NodeHandsFree.state(activity)))
   }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Não foi possível trocar o modelo. Desligue temporariamente o hands-free e selecione um modelo ou pacote privado válido.")}}
  }
+ @Command fun exportHandsFreeBatteryMetrics(invoke:Invoke) {
+  val stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
+  startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,"aegis-battery-"+stamp+".json"),"handsFreeBatteryExportCallback")
+ }
+ @ActivityCallback private fun handsFreeBatteryExportCallback(invoke:Invoke,result:ActivityResult) {
+  val uri=result.data?.data
+  if(result.resultCode!=Activity.RESULT_OK || uri==null){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
+  handsFreeIo.execute{try{
+   val runtime=NodeHandsFree.runtime(activity)
+   val report=runtime.exportMetrics()
+   activity.contentResolver.openOutputStream(uri,"wt").use{output->require(output!=null);output.write(report.toByteArray(Charsets.UTF_8))}
+   invoke.resolve(JSObject(NodeHandsFree.state(activity)))
+  }catch(_:Exception){invoke.reject("Não foi possível exportar o relatório de bateria. Escolha outro destino.")}}
+ }
  @Command fun exportHandsFreeMetrics(invoke:Invoke) {
   startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,HandsFreeActivationCollection.exportName()),"handsFreeExportCallback")
  }
@@ -119,7 +133,7 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   if(result.resultCode!=Activity.RESULT_OK || uri==null){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
   handsFreeIo.execute{try{
     val runtime=NodeHandsFree.runtime(activity)
-    activity.contentResolver.openOutputStream(uri,"wt").use{output->require(output!=null);runtime.collection.export(output){runtime.metrics.export()}}
+    activity.contentResolver.openOutputStream(uri,"wt").use{output->require(output!=null);runtime.collection.export(output){runtime.exportMetrics()}}
     invoke.resolve(JSObject(NodeHandsFree.state(activity)))
   }catch(_:Exception){invoke.reject("Não foi possível exportar o ZIP. Escolha outro destino.")}}
  }

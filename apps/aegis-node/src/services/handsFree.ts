@@ -12,8 +12,139 @@ export interface HandsFreeState {
   status: string;
   message: string;
   captureConfirmed?: boolean;
+  batteryDiagnostics?: HandsFreeBatteryDiagnostics;
   collection?: { enabled: boolean; limitMiB: number; bytes: number; ready: boolean; status: string; skippedEvents: number };
 }
+export type HandsFreeBatteryMode = 'off' | 'capture_only' | 'detection';
+export interface HandsFreeBatterySummary {
+  phoneChargeMah: number | null;
+  phoneEnergyMwh?: number | null;
+  phoneDischargeMahPerHour?: number | null;
+  batteryPercentPoints?: number | null;
+  processCpuMs?: number | null;
+  captureThreadCpuMs?: number | null;
+  detectorCpuMs?: number | null;
+  verifierCpuMs?: number | null;
+  awakeMs?: number | null;
+  screenOnMs?: number | null;
+  captureAudioMs?: number | null;
+  verifierCandidates?: number | null;
+  uidUserCpuMs?: number | null;
+  uidSystemCpuMs?: number | null;
+  uidAudioTimerMs?: number | null;
+}
+export interface HandsFreeBatteryRun {
+  id: string;
+  comparisonKey?: string;
+  mode: HandsFreeBatteryMode;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number;
+  eligible: boolean;
+  issues: string[];
+  summary: HandsFreeBatterySummary;
+}
+export interface HandsFreeBatterySnapshot {
+  at: string | null;
+  elapsedMs: number | null;
+  uptimeMs: number | null;
+  processId: string;
+  processCpuMs: number | null;
+  batteryPercent: number | null;
+  chargeMicroAh: number | null;
+  energyNanoWh: number | null;
+  currentMicroA: number | null;
+  currentAverageMicroA?: number | null;
+  powerSaveMode?: boolean | null;
+  deviceIdleMode?: boolean | null;
+  charging?: boolean | null;
+  thermalStatus?: number | null;
+  sdkInt?: number | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  androidVersion?: string | null;
+  plugged: number | null;
+  batteryStatus: number | null;
+  temperatureDeciC: number | null;
+  voltageMv: number | null;
+  screenInteractive: boolean | null;
+  locked: boolean | null;
+  uidHealth: { status: 'ok' | 'unavailable'; scope?: string; userCpuMs: number | null; systemCpuMs: number | null; audioTimerMs: number | null };
+}
+export interface HandsFreeBatteryDiagnostics {
+  schema: 1;
+  active: { id: string; mode: HandsFreeBatteryMode; startedAt: string; elapsedMs: number } | null;
+  requiresResume: boolean;
+  latest: HandsFreeBatterySnapshot | null;
+  runs: HandsFreeBatteryRun[];
+}
+const batteryModes: readonly string[] = ['off', 'capture_only', 'detection'];
+const batteryCode = (value: unknown): value is string => typeof value === 'string' && /^[a-z_]{1,64}$/.test(value);
+const batteryId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+const batteryTime = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
+const batteryNumber = (value: unknown, signed = false): value is number => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER && (signed || value >= 0);
+const batteryRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+function batterySnapshot(value: unknown): value is HandsFreeBatterySnapshot {
+  if (!batteryRecord(value) || !batteryId(value.processId) || !(value.at === null || batteryTime(value.at))) return false;
+  const unsigned = ['elapsedMs', 'uptimeMs', 'processCpuMs', 'batteryPercent', 'chargeMicroAh', 'energyNanoWh', 'plugged', 'batteryStatus', 'voltageMv'];
+  const signed = ['currentMicroA', 'temperatureDeciC'];
+  const optionalNumbers = ['currentAverageMicroA', 'thermalStatus', 'sdkInt'];
+  const optionalFlags = ['powerSaveMode', 'deviceIdleMode', 'charging'];
+  const optionalStrings = ['manufacturer', 'model', 'androidVersion'];
+  // New observations may extend the report; only fields used by this version are interpreted.
+  if (
+      !optionalNumbers.every(key => value[key] === undefined || value[key] === null || batteryNumber(value[key], key === 'currentAverageMicroA')) ||
+      !optionalFlags.every(key => value[key] === undefined || value[key] === null || typeof value[key] === 'boolean') ||
+      !optionalStrings.every(key => value[key] === undefined || value[key] === null || (typeof value[key] === 'string' && value[key].length <= 100)) ||
+      !unsigned.every(key => value[key] === null || batteryNumber(value[key])) ||
+      !signed.every(key => value[key] === null || batteryNumber(value[key], true)) ||
+      !['screenInteractive', 'locked'].every(key => value[key] === null || typeof value[key] === 'boolean') ||
+      (typeof value.batteryPercent === 'number' && value.batteryPercent > 100)) return false;
+  const health = value.uidHealth;
+  return batteryRecord(health) && ['ok', 'unavailable'].includes(String(health.status)) &&
+    (health.scope === undefined || batteryCode(health.scope)) &&
+    ['userCpuMs', 'systemCpuMs', 'audioTimerMs'].every(key => health[key] === null || batteryNumber(health[key]));
+}
+function batteryDiagnostics(value: unknown): value is HandsFreeBatteryDiagnostics {
+  if (!batteryRecord(value) || value.schema !== 1 || typeof value.requiresResume !== 'boolean' || !Array.isArray(value.runs) || value.runs.length > 8) return false;
+  if (value.active !== null) {
+    const active = value.active;
+    if (!batteryRecord(active) || !batteryId(active.id) || !batteryModes.includes(String(active.mode)) || !batteryTime(active.startedAt) || !batteryNumber(active.elapsedMs)) return false;
+  }
+  if (value.latest !== null && !batterySnapshot(value.latest)) return false;
+  const summaryKeys = ['phoneChargeMah', 'phoneEnergyMwh', 'phoneDischargeMahPerHour', 'batteryPercentPoints', 'processCpuMs', 'captureThreadCpuMs', 'detectorCpuMs', 'verifierCpuMs', 'awakeMs', 'screenOnMs', 'captureAudioMs', 'verifierCandidates', 'uidUserCpuMs', 'uidSystemCpuMs', 'uidAudioTimerMs'];
+  const signedKeys = ['phoneChargeMah', 'phoneEnergyMwh', 'phoneDischargeMahPerHour', 'batteryPercentPoints'];
+  const ids = new Set<string>();
+  return value.runs.every((run: unknown) => {
+    if (!batteryRecord(run) || !batteryId(run.id) || ids.has(run.id) ||
+        (run.comparisonKey !== undefined && (typeof run.comparisonKey !== 'string' || !/^[a-f0-9]{64}$/.test(run.comparisonKey))) || !batteryModes.includes(String(run.mode)) || !['active', 'completed', 'interrupted'].includes(String(run.status)) || !batteryTime(run.startedAt) ||
+        !(run.endedAt === null || batteryTime(run.endedAt)) || !batteryNumber(run.durationMs) || typeof run.eligible !== 'boolean' ||
+        !Array.isArray(run.issues) || run.issues.length > 32 || !run.issues.every(batteryCode) || !batteryRecord(run.summary) || !Object.prototype.hasOwnProperty.call(run.summary, 'phoneChargeMah')) return false;
+    ids.add(run.id);
+    return Object.entries(run.summary).every(([key, number]) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && (number === null || batteryNumber(number, signedKeys.includes(key) || !summaryKeys.includes(key))));
+  });
+}
+/** Compare only the most recent eligible group. Legacy reports remain readable without inferring compatibility. */
+export function latestBatteryRuns(runs: readonly HandsFreeBatteryRun[]): Partial<Record<HandsFreeBatteryMode, HandsFreeBatteryRun>> {
+  const eligible = runs.filter(run => run.eligible && run.status === 'completed' && run.endedAt !== null);
+  const newest = eligible.reduce<HandsFreeBatteryRun | undefined>((latest, run) =>
+    !latest || Date.parse(run.endedAt!) >= Date.parse(latest.endedAt!) ? run : latest, undefined);
+  if (!newest) return {};
+  const group = newest.comparisonKey ? eligible.filter(run => run.comparisonKey === newest.comparisonKey) : [newest];
+  const latest: Partial<Record<HandsFreeBatteryMode, HandsFreeBatteryRun>> = {};
+  for (const run of group) {
+    const prior = latest[run.mode];
+    if (!prior || Date.parse(run.endedAt!) >= Date.parse(prior.endedAt!)) latest[run.mode] = run;
+  }
+  return latest;
+}
+export function batteryRateDifference(after?: HandsFreeBatteryRun, before?: HandsFreeBatteryRun): number | null {
+  if (!after?.comparisonKey || !before?.comparisonKey || after.comparisonKey !== before.comparisonKey) return null;
+  const a = after.summary.phoneDischargeMahPerHour, b = before.summary.phoneDischargeMahPerHour;
+  return typeof a === 'number' && typeof b === 'number' ? a - b : null;
+}
+
 export type HandsFreeDiagnosticCode = 'command_not_authorized' | 'bridge_unavailable' | 'timeout' | 'invalid_response' | 'native_failure' | 'unsupported' | 'invalid_request' | 'audio_busy';
 const diagnosticMessages: Record<HandsFreeDiagnosticCode, string> = {
   command_not_authorized: 'A autorização interna da escuta está indisponível nesta versão.',
@@ -52,6 +183,7 @@ function stateResponse(value: unknown): HandsFreeState {
   }
   if (row.modelSha256 !== undefined && row.modelSha256 !== null && (typeof row.modelSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.modelSha256)))
     throw new HandsFreeError('invalid_response');
+  if (row.batteryDiagnostics !== undefined && !batteryDiagnostics(row.batteryDiagnostics)) throw new HandsFreeError('invalid_response');
   if (row.collection !== undefined) {
     const c = row.collection as Record<string, unknown>;
     if (!c || typeof c !== 'object' || typeof c.enabled !== 'boolean' || typeof c.ready !== 'boolean' ||
@@ -66,8 +198,8 @@ async function invokeControl(args: Record<string, unknown>): Promise<unknown> {
   try { return await invoke<unknown>('node_hands_free', args); }
   catch (reason) { throw handsFreeError(reason); }
 }
-export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete';
-export interface HandsFreeOptions { enabled?: boolean; diagnostic?: boolean; collectionEnabled?: boolean; collectionLimitMiB?: number }
+export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete' | 'batteryStart' | 'batteryFinish' | 'batteryExport';
+export interface HandsFreeOptions { enabled?: boolean; diagnostic?: boolean; collectionEnabled?: boolean; collectionLimitMiB?: number; batteryMode?: HandsFreeBatteryMode }
 export async function handsFree(operation: HandsFreeOperation, options?: HandsFreeOptions): Promise<HandsFreeState> {
   return stateResponse(await invokeControl({ operation, ...options }));
 }

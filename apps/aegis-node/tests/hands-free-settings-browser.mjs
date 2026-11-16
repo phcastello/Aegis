@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 
 // UI integration only. This IPC fixture cannot prove Tauri ACL or Android execution.
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -27,6 +27,8 @@ try {
         try {
           if (f.hold) { f.hold = false; return await new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; }); }
           if (f.fail) throw { code: f.fail, message: 'private exception must never be rendered' };
+          if (args.operation === 'batteryStart') f.initial.batteryDiagnostics.active = { id: 'study_1', mode: args.batteryMode, startedAt: '2026-11-16T10:00:00-03:00', elapsedMs: 60000 };
+          if (args.operation === 'batteryFinish') { f.initial.batteryDiagnostics.active = null; f.initial.batteryDiagnostics.requiresResume = false; }
           return JSON.parse(JSON.stringify(f.initial));
         } finally { f.active--; }
       }
@@ -105,6 +107,81 @@ try {
   await hf.getByText('Estado mais recente.', { exact: true }).waitFor();
   assert.equal(await hf.getByText('Resultado desmontado.', { exact: true }).count(), 0);
   assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), false);
+  // Battery study uses the real Vue controls with a fixture of the closed native contract.
+  await page.evaluate(() => {
+    window.hfFixture.initial.batteryDiagnostics = { schema: 1, active: null, requiresResume: false, latest: null, runs: [] };
+    Object.assign(window.hfFixture.initial, { assistantSelected: false, permissionGranted: false, modelReady: false });
+  });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  const battery = hf.locator('.battery-settings');
+  for (const name of ['A · Escuta desligada', 'B · Somente microfone', 'C · Detecção local (sem comandos)']) assert.equal(await battery.getByRole('button', { name, exact: true }).isEnabled(), false);
+  await battery.getByText('Selecione a Aegis como assistente no Android antes de iniciar os testes.', { exact: true }).waitFor();
+  await page.evaluate(() => { window.hfFixture.initial.assistantSelected = true; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  assert.equal(await battery.getByRole('button', { name: 'A · Escuta desligada', exact: true }).isEnabled(), true);
+  assert.equal(await battery.getByRole('button', { name: 'B · Somente microfone', exact: true }).isEnabled(), false);
+  await page.evaluate(() => { window.hfFixture.initial.permissionGranted = true; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  assert.equal(await battery.getByRole('button', { name: 'B · Somente microfone', exact: true }).isEnabled(), true);
+  assert.equal(await battery.getByRole('button', { name: 'C · Detecção local (sem comandos)', exact: true }).isEnabled(), false);
+  await page.evaluate(() => { window.hfFixture.initial.modelReady = true; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  assert.equal(await battery.getByRole('button', { name: 'C · Detecção local (sem comandos)', exact: true }).isEnabled(), true);
+  await battery.getByRole('button', { name: 'B · Somente microfone', exact: true }).click();
+  await battery.getByText('Em teste: B · Somente microfone · 1 min decorridos.', { exact: true }).waitFor();
+  assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isEnabled(), false);
+  assert.equal(await hf.getByRole('button', { name: 'Importar modelo novamente', exact: true }).isEnabled(), false);
+  assert.equal(await hf.getByRole('button', { name: 'Exportar métricas e ativações (ZIP)', exact: true }).isEnabled(), false);
+  assert.match(await battery.innerText(), /nenhum áudio é salvo ou enviado/);
+  assert.match(await battery.innerText(), /término é manual, sem alarme/);
+  assert.match(await battery.innerText(), /Aegis não responde/);
+  assert.equal(await battery.getByRole('button', { name: 'Exportar relatório de bateria (sem áudio)', exact: true }).isEnabled(), false);
+  const startCall = await page.evaluate(() => window.hfFixture.calls.find(c => c.operation === 'batteryStart'));
+  assert.deepEqual(startCall, { operation: 'batteryStart', batteryMode: 'capture_only' });
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); });
+  const hiddenCalls = await page.evaluate(() => window.hfFixture.calls.length);
+  await page.waitForTimeout(5500);
+  assert.equal(await page.evaluate(() => window.hfFixture.calls.length), hiddenCalls, 'hidden study UI performs no polling');
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); });
+  await page.waitForTimeout(5500);
+  assert((await page.evaluate(() => window.hfFixture.calls.length)) > hiddenCalls, 'visible active study reuses the five-second poll');
+  const evidence = process.env.AEGIS_BATTERY_UI_EVIDENCE;
+  if (evidence) { mkdirSync(evidence, { recursive: true }); await battery.locator('legend').scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-active-mobile.png` }); }
+  await battery.getByRole('button', { name: 'Encerrar teste e voltar às configurações anteriores', exact: true }).click();
+  await battery.getByRole('button', { name: 'A · Escuta desligada', exact: true }).waitFor();
+  assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isEnabled(), true);
+  await page.evaluate(() => {
+    window.hfFixture.initial.batteryDiagnostics.runs = ['off', 'capture_only', 'detection'].map((mode, i) => ({
+      id: `result_${i}`, comparisonKey: 'a'.repeat(64), mode, status: 'completed', startedAt: '2026-11-16T10:00:00-03:00', endedAt: '2026-11-16T10:30:00-03:00', durationMs: 1800000,
+      eligible: true, issues: [], summary: { phoneChargeMah: [15, 10, 12][i], phoneDischargeMahPerHour: [30, 20, 24][i], phoneEnergyMwh: 50, batteryPercentPoints: 2, awakeMs: 120000, screenOnMs: 0, processCpuMs: 400,
+        captureThreadCpuMs: i ? 300 : 0, detectorCpuMs: i === 2 ? 200 : 0, verifierCpuMs: i === 2 ? 30 : 0 }
+    }));
+  });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  await battery.getByText('-10 mAh/h', { exact: true }).waitFor();
+  await battery.getByText('+4 mAh/h', { exact: true }).waitFor();
+  assert.match(await battery.innerText(), /aparelho inteiro/);
+  await battery.locator('summary').click();
+  assert.match(await battery.innerText(), /CPU é tempo de trabalho medido/);
+  assert.equal(await battery.getByText('50 mWh', { exact: true }).count(), 3);
+  assert.equal(await battery.getByText('2 p.p.', { exact: true }).count(), 3);
+  assert.equal(await battery.getByText('120.000 ms', { exact: true }).count(), 3);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'mobile page retains its viewport');
+  if (evidence) {
+    await battery.locator('caption').scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-results-mobile.png` });
+    await battery.locator('.battery-result').first().scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-cpu-mobile.png` });
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await battery.locator('caption').scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-results-desktop.png` });
+  }
+  await page.evaluate(() => { window.hfFixture.initial.batteryDiagnostics.requiresResume = true; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  await battery.getByText('O teste foi interrompido. Encerre para voltar às configurações anteriores.', { exact: true }).waitFor();
+  await battery.getByRole('button', { name: 'Exportar relatório de bateria (sem áudio)', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.hfFixture.calls.at(-1).operation), 'batteryExport');
+  assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isEnabled(), false);
+  await battery.getByRole('button', { name: 'Encerrar teste e voltar às configurações anteriores', exact: true }).click();
+  await battery.getByRole('button', { name: 'A · Escuta desligada', exact: true }).waitFor();
+  console.log('Battery UI: three modes, explicit silent study, active/recovery controls, manual finish, visible-only polling and signed device comparisons PASS (mock IPC)');
   console.log('Hands-free UI: initial failure, accessible retry, setup without prerequisites/backend, stale state, recovery, serialized events and unmount PASS (mock IPC; no native ACL claim)');
   await context.close();
 } finally { await browser.close(); await server.close(); }

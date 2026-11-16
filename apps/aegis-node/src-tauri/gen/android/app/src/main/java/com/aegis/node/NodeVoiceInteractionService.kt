@@ -38,8 +38,12 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
             // honor every screen-off transition for the rest of this activation.
             presentation.screenOff();NodeVoiceInteractionSession.current?.suppressScreenOn()
         }
+        if(intent.action==Intent.ACTION_POWER_CONNECTED)runtime.interruptBatteryStudy("charging")
+        if(intent.action==android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)runtime.interruptBatteryStudy("power_mode_changed")
         snapshot(intent)
-        if(intent.action=="android.media.action.MICROPHONE_MUTE_CHANGED")runtime.recoverFromSystem()
+        if(intent.action=="android.media.action.MICROPHONE_MUTE_CHANGED"){
+            runtime.interruptBatteryStudy("microphone_changed");runtime.recoverFromSystem()
+        }
         else if(intent.action!="android.intent.action.BATTERY_CHANGED")runtime.reconcile()
     }}
     private var externalRecording:Boolean?=null
@@ -50,6 +54,7 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
         val external=configs.any{!runtime.isOwnAudioSession(it.clientAudioSessionId)}
         val externalEnded=externalRecording==true && !external
         externalRecording=external
+        if(external)runtime.interruptBatteryStudy("external_recording")
         if(!tornDown){
             main.removeCallbacks(recovery)
             if(externalEnded)runtime.recoverFromSystem() else main.postDelayed(recovery,2000)
@@ -58,9 +63,10 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
     private val devices=object:AudioDeviceCallback(){
         override fun onAudioDevicesAdded(addedDevices:Array<out AudioDeviceInfo>){changed()}
         override fun onAudioDevicesRemoved(removedDevices:Array<out AudioDeviceInfo>){changed()}
-        private fun changed(){runtime.metrics.event("audio_route_changed");if(!tornDown)runtime.recoverFromSystem()}
+        private fun changed(){runtime.metrics.event("audio_route_changed");if(!tornDown){runtime.interruptBatteryStudy("audio_route_changed");runtime.recoverFromSystem()}}
     }
     private var modeListener:Any?=null
+    private var thermalListener:Any?=null
     override fun onReady() {
         super.onReady();if(tornDown || registered)return
         ready=true;registered=true;current=this
@@ -69,10 +75,17 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
         ContextCompat.registerReceiver(this,receiver,IntentFilter().apply{
             addAction(ACTION_STOP);addAction(Intent.ACTION_SCREEN_ON);addAction(Intent.ACTION_SCREEN_OFF);addAction(Intent.ACTION_USER_PRESENT)
             addAction(Intent.ACTION_BATTERY_CHANGED);addAction("android.media.action.MICROPHONE_MUTE_CHANGED")
+            addAction(Intent.ACTION_POWER_CONNECTED);addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            if(Build.VERSION.SDK_INT>=23)addAction(android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
         },ContextCompat.RECEIVER_NOT_EXPORTED)
         val manager=getSystemService(AudioManager::class.java)
         manager.registerAudioDeviceCallback(devices,main);manager.registerAudioRecordingCallback(recording,main)
-        if(Build.VERSION.SDK_INT>=31){val listener=AudioManager.OnModeChangedListener{runtime.metrics.event("audio_mode_changed");runtime.recoverFromSystem()};modeListener=listener;manager.addOnModeChangedListener(mainExecutor,listener)}
+        if(Build.VERSION.SDK_INT>=31){val listener=AudioManager.OnModeChangedListener{runtime.metrics.event("audio_mode_changed");runtime.interruptBatteryStudy("audio_mode_changed");runtime.recoverFromSystem()};modeListener=listener;manager.addOnModeChangedListener(mainExecutor,listener)}
+        if(Build.VERSION.SDK_INT>=29){
+            val listener=android.os.PowerManager.OnThermalStatusChangedListener{runtime.observeBattery(force=true)}
+            thermalListener=listener;getSystemService(android.os.PowerManager::class.java).addThermalStatusListener(mainExecutor,listener)
+        }
         snapshot(null);runtime.attach(this)
     }
     private fun snapshot(intent:Intent?) {
@@ -84,6 +97,7 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
         val percent=if(level>=0 && scale>0)level*100/scale else null
         val status=battery?.getIntExtra("status",-1)
         runtime.metrics.device(runtime.screenLocked,runtime.screenInteractive,percent,status?.let{it==android.os.BatteryManager.BATTERY_STATUS_CHARGING || it==android.os.BatteryManager.BATTERY_STATUS_FULL})
+        runtime.observeBattery(force=intent?.action!=Intent.ACTION_BATTERY_CHANGED)
     }
     internal fun ensureForeground():Boolean {
         if(tornDown || !ready)return false
@@ -118,6 +132,7 @@ class NodeVoiceInteractionService:VoiceInteractionService() {
         if(registered){registered=false;try{unregisterReceiver(receiver)}catch(_:IllegalArgumentException){}
             val manager=getSystemService(AudioManager::class.java);manager.unregisterAudioDeviceCallback(devices);manager.unregisterAudioRecordingCallback(recording)
             if(Build.VERSION.SDK_INT>=31)modeListener?.let{manager.removeOnModeChangedListener(it as AudioManager.OnModeChangedListener)}
+            if(Build.VERSION.SDK_INT>=29)thermalListener?.let{getSystemService(android.os.PowerManager::class.java).removeThermalStatusListener(it as android.os.PowerManager.OnThermalStatusChangedListener)}
         }
         main.removeCallbacks(recovery);runtime.detach(this);stopHandsFreeForeground()
     }

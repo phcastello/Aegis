@@ -28,6 +28,7 @@
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <!-- Local inference only: suppress dependency auto-initialization of telemetry. -->
         <provider android:name="ai.onnxruntime.TelemetryInitializer" tools:node="remove" />
+        <profileable android:shell="true" />
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

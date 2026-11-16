@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { handsFree, handsFreeError, acquireNativeAudio } from '../.test-build/services/handsFree.js';
+import { handsFree, handsFreeError, acquireNativeAudio, latestBatteryRuns, batteryRateDifference } from '../.test-build/services/handsFree.js';
 import { useHandsFreeSettings } from '../.test-build/composables/useHandsFreeSettings.js';
 
 afterEach(() => clearMocks());
@@ -163,4 +163,163 @@ test('collection configuration requires fresh state and keeps explicit consent s
   await settings.refresh(); await settings.configureCollection(true,250);
   assert.deepEqual(calls[1],{ operation:'collectionConfigure',options:{collectionEnabled:true,collectionLimitMiB:250} });
   assert.equal(settings.state.value.diagnostic,false);
+});
+
+
+const batteryStudy = (overrides = {}) => ({ schema: 1, active: null, requiresResume: false, latest: null, runs: [], ...overrides });
+const batteryRun = (mode = 'off', overrides = {}) => ({ id: `run_${mode}`, comparisonKey: 'a'.repeat(64), mode, status: 'completed', startedAt: '2026-11-16T10:00:00-03:00', endedAt: '2026-11-16T10:30:00-03:00', durationMs: 1800000, eligible: true, issues: [], summary: { phoneChargeMah: 15, phoneDischargeMahPerHour: 30, processCpuMs: 120 }, ...overrides });
+
+test('battery controls preserve closed native mode arguments and backward compatible state', async () => {
+  globalThis.window = {}; const calls = [];
+  const diagnostics = batteryStudy();
+  mockIPC((command, args) => { calls.push({ command, args }); return { ...initial, batteryDiagnostics: diagnostics }; });
+  await handsFree('batteryStart', { batteryMode: 'capture_only' }); await handsFree('batteryFinish'); await handsFree('batteryExport');
+  assert.deepEqual(calls, [
+    { command: 'node_hands_free', args: { operation: 'batteryStart', batteryMode: 'capture_only' } },
+    { command: 'node_hands_free', args: { operation: 'batteryFinish' } },
+    { command: 'node_hands_free', args: { operation: 'batteryExport' } }
+  ]);
+  mockIPC(() => initial); assert.deepEqual(await handsFree('state'), initial);
+});
+
+test('battery reports preserve unavailable sensors and signed device deltas', async () => {
+  globalThis.window = {};
+  const summary = { phoneChargeMah: -3.25, phoneEnergyMwh: -12.5, phoneDischargeMahPerHour: -6.5, batteryPercentPoints: -1, detectorCpuMs: null, uidUserCpuMs: 12, uidSystemCpuMs: null, uidAudioTimerMs: 500, futureNumericMetric: -0.5 };
+  const diagnostics = batteryStudy({ runs: [batteryRun('detection', { summary })] });
+  mockIPC(() => ({ ...initial, batteryDiagnostics: diagnostics }));
+  assert.deepEqual((await handsFree('state')).batteryDiagnostics, diagnostics);
+});
+
+test('battery boundary rejects malformed histories, active owners and impossible CPU values', async () => {
+  globalThis.window = {};
+  const valid = batteryRun();
+  const invalid = [null, {}, batteryStudy({ schema: 2 }), batteryStudy({ requiresResume: 'false' }),
+    batteryStudy({ active: { id: 'x', mode: 'other', startedAt: valid.startedAt, elapsedMs: 0 } }),
+    batteryStudy({ active: { id: 'x', mode: 'off', startedAt: 'local time', elapsedMs: 0 } }),
+    batteryStudy({ runs: Array.from({ length: 9 }, (_, i) => ({ ...valid, id: `run_${i}` })) }),
+    batteryStudy({ runs: [valid, valid] }), batteryStudy({ runs: [{ ...valid, comparisonKey: 'unknown' }] }),
+    batteryStudy({ runs: [{ ...valid, comparisonKey: 'A'.repeat(64) }] }), batteryStudy({ runs: [{ ...valid, status: 'error/private/path' }] }),
+    batteryStudy({ runs: [{ ...valid, issues: ['private/path'] }] }),
+    batteryStudy({ runs: [{ ...valid, summary: { phoneChargeMah: 1, processCpuMs: -1 } }] }),
+    batteryStudy({ runs: [{ ...valid, summary: { phoneChargeMah: Infinity } }] }),
+    batteryStudy({ runs: [{ ...valid, summary: { phoneChargeMah: 1, transcript: 'private text' } }] }),
+    batteryStudy({ latest: { privatePath: '/private/audio' } })];
+  for (const batteryDiagnostics of invalid) {
+    mockIPC(() => ({ ...initial, batteryDiagnostics }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
+test('battery snapshots validate available and unsupported public sensor observations', async () => {
+  globalThis.window = {};
+  const latest = { at: '2026-11-16T10:00:00-03:00', elapsedMs: 2000, uptimeMs: 1500, processId: 'process_1', processCpuMs: 300,
+    batteryPercent: 70, chargeMicroAh: null, energyNanoWh: null, currentMicroA: -250000, plugged: 0, batteryStatus: 3,
+    temperatureDeciC: 320, voltageMv: 3800, screenInteractive: false, locked: true,
+    currentAverageMicroA: -230000, powerSaveMode: false, deviceIdleMode: true, charging: false, thermalStatus: 0, sdkInt: 33, manufacturer: 'samsung', model: 'SM-G781B', androidVersion: '13',
+    uidHealth: { status: 'unavailable', scope: 'own_uid_os_accounting', userCpuMs: null, systemCpuMs: null, audioTimerMs: null }, futureObservation: { status: 'not_interpreted' } };
+  mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ latest }) }));
+  assert.deepEqual((await handsFree('state')).batteryDiagnostics.latest, latest);
+  for (const change of [{ batteryPercent: 101 }, { processCpuMs: -1 }, { uidHealth: { ...latest.uidHealth, status: 'private error' } }, { screenInteractive: 'false' }]) {
+    mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ latest: { ...latest, ...change } }) }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
+test('latest eligible scenario comparison uses device rates and preserves negative differences', () => {
+  const runs = [batteryRun('off'), batteryRun('capture_only', { summary: { phoneChargeMah: 10, phoneDischargeMahPerHour: 20 } }),
+    batteryRun('detection', { summary: { phoneChargeMah: 12, phoneDischargeMahPerHour: 24 } }),
+    batteryRun('off', { id: 'invalid_later', eligible: false, endedAt: '2026-11-16T12:00:00-03:00' }),
+    batteryRun('off', { id: 'older', endedAt: '2026-11-16T09:30:00-03:00' })];
+  const latest = latestBatteryRuns(runs);
+  assert.equal(latest.off.id, 'run_off');
+  assert.equal(batteryRateDifference(latest.capture_only, latest.off), -10);
+  assert.equal(batteryRateDifference(latest.detection, latest.capture_only), 4);
+  assert.equal(batteryRateDifference(undefined, latest.off), null);
+  assert.equal(batteryRateDifference(batteryRun('off', { summary: { phoneChargeMah: null } }), latest.off), null);
+});
+
+test('active or interrupted battery study blocks normal mutations until explicit finish', async () => {
+  for (const diagnostics of [batteryStudy({ active: { id: 'active', mode: 'off', startedAt: '2026-11-16T10:00:00Z', elapsedMs: 0 } }), batteryStudy({ requiresResume: true })]) {
+    const calls = [];
+    const settings = useHandsFreeSettings(async (operation, options) => { calls.push({ operation, options }); return { ...initial, batteryDiagnostics: diagnostics }; });
+    await settings.refresh(); assert.equal(settings.batteryLocked.value, true); assert.equal(settings.canConfigure.value, false);
+    await settings.run('configure', true); await settings.run('import'); await settings.run('export'); await settings.configureCollection(true, 100); await settings.startBattery('detection');
+    assert.deepEqual(calls.map(c => c.operation), ['state']);
+    await settings.finishBattery(); assert.equal(calls.at(-1).operation, 'batteryFinish');
+  }
+});
+
+test('lost start reply queries native ownership before allowing another study', async () => {
+  const recovery = deferred(); const calls = [];
+  const available = { ...initial, assistantSelected: true, permissionGranted: true, modelReady: true, batteryDiagnostics: batteryStudy() };
+  const active = { ...initial, batteryDiagnostics: batteryStudy({ active: { id: 'active', mode: 'capture_only', startedAt: '2026-11-16T10:00:00Z', elapsedMs: 1000 } }) };
+  const settings = useHandsFreeSettings(async operation => {
+    calls.push(operation);
+    if (calls.length === 1) return available;
+    if (operation === 'batteryStart') throw { code: 'timeout' };
+    return recovery.promise;
+  });
+  await settings.refresh(); await settings.startBattery('capture_only'); await flush();
+  await settings.startBattery('detection');
+  assert.deepEqual(calls, ['state', 'batteryStart', 'state']);
+  assert.equal(settings.canAct.value, false);
+  recovery.resolve(active); await flush();
+  assert.equal(settings.batteryLocked.value, true); assert.equal(settings.canConfigure.value, false);
+  await settings.startBattery('off'); assert.equal(calls.length, 3);
+});
+
+
+test('lost finish reply restores state from native before unlocking normal controls', async () => {
+  const recovery = deferred(); const calls = [];
+  const active = { ...initial, batteryDiagnostics: batteryStudy({ requiresResume: true }) };
+  const settings = useHandsFreeSettings(async operation => {
+    calls.push(operation);
+    if (calls.length === 1) return active;
+    if (operation === 'batteryFinish') throw { code: 'timeout' };
+    return recovery.promise;
+  });
+  await settings.refresh(); await settings.finishBattery(); await flush();
+  assert.deepEqual(calls, ['state', 'batteryFinish', 'state']);
+  await settings.run('configure', true); assert.equal(calls.length, 3);
+  recovery.resolve({ ...initial, batteryDiagnostics: batteryStudy() }); await flush();
+  assert.equal(settings.canConfigure.value, true);
+});
+
+
+test('battery JSON export is blocked during capture but allowed for interrupted recovery and completed results', async () => {
+  for (const diagnostics of [batteryStudy({ active: { id: 'active', mode: 'off', startedAt: '2026-11-16T10:00:00Z', elapsedMs: 0 } }), batteryStudy({ requiresResume: true }), batteryStudy({ runs: [batteryRun()] })]) {
+    const calls = [];
+    const settings = useHandsFreeSettings(async operation => { calls.push(operation); return { ...initial, batteryDiagnostics: diagnostics }; });
+    await settings.exportBattery(); assert.equal(calls.length, 0, 'export needs fresh native state');
+    await settings.refresh(); await settings.exportBattery();
+    assert.deepEqual(calls, diagnostics.active ? ['state'] : ['state', 'batteryExport']);
+  }
+});
+
+
+test('device/app/model comparison groups never produce mixed or unproven battery differences', () => {
+  const old = batteryRun('off');
+  const newer = batteryRun('capture_only', { id: 'new_phone', comparisonKey: 'b'.repeat(64), endedAt: '2026-11-16T12:00:00-03:00' });
+  const oldDetection = batteryRun('detection', { id: 'old_detector', endedAt: '2026-11-16T11:00:00-03:00' });
+  assert.deepEqual(Object.keys(latestBatteryRuns([old, oldDetection, newer])), ['capture_only']);
+  assert.equal(batteryRateDifference(newer, old), null, 'different phone/build/model groups cannot be subtracted');
+  const legacy = batteryRun('off', { comparisonKey: undefined });
+  const legacyCapture = batteryRun('capture_only', { comparisonKey: undefined, endedAt: '2026-11-16T12:00:00-03:00' });
+  assert.deepEqual(Object.keys(latestBatteryRuns([legacy, legacyCapture])), ['capture_only']);
+  assert.equal(batteryRateDifference(legacyCapture, legacy), null, 'old reports have no proven common identity');
+  assert.deepEqual(latestBatteryRuns([]), {});
+});
+
+
+test('study prerequisites are explicit and allow capture-only without a detector model', async () => {
+  let response = { ...initial, batteryDiagnostics: batteryStudy() }; const calls = [];
+  const settings = useHandsFreeSettings(async operation => { calls.push(operation); return response; });
+  await settings.refresh();
+  for (const mode of ['off', 'capture_only', 'detection']) { assert.equal(settings.canStartBattery(mode), false); await settings.startBattery(mode); }
+  assert.deepEqual(calls, ['state']);
+  response = { ...response, assistantSelected: true }; await settings.refresh();
+  assert.equal(settings.canStartBattery('off'), true); assert.equal(settings.canStartBattery('capture_only'), false);
+  response = { ...response, permissionGranted: true }; await settings.refresh();
+  assert.equal(settings.canStartBattery('capture_only'), true); assert.equal(settings.canStartBattery('detection'), false);
+  response = { ...response, modelReady: true }; await settings.refresh(); assert.equal(settings.canStartBattery('detection'), true);
 });
