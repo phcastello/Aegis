@@ -109,7 +109,7 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
     val runtime=NodeHandsFree.runtime(activity)
     activity.contentResolver.openInputStream(uri).use{input->require(input!=null);runtime.importModel(input)}
     invoke.resolve(JSObject(NodeHandsFree.state(activity)))
-  }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Não foi possível trocar o modelo. Desligue temporariamente o hands-free e importe o arquivo privado Baseline ou Strong — época 2 de 39.552 bytes.")}}
+  }catch(_:Throwable){NodeHandsFree.runtime(activity).importFailed();invoke.reject("Não foi possível trocar o modelo. Desligue temporariamente o hands-free e selecione um modelo ou pacote privado válido.")}}
  }
  @Command fun exportHandsFreeMetrics(invoke:Invoke) {
   startActivityForResult(invoke,Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,HandsFreeActivationCollection.exportName()),"handsFreeExportCallback")

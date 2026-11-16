@@ -101,6 +101,9 @@ rust {
 dependencies {
     // Cancellable native PCM streaming; other Node HTTP paths retain their current transport.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Candidate-only verification; no ONNX work runs during passive listening.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.31.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")

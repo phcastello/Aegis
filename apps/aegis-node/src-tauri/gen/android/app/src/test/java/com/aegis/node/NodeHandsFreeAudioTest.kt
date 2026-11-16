@@ -13,6 +13,34 @@ class NodeHandsFreeAudioTest {
     private val voice=HandsFreeSpeechClassifier{frame->frame.any{it.toInt()>30 || it.toInt() < -30}}
     private fun speech(count:Int,level:Int=1500)=ShortArray(count){if(it%30<15)level.toShort() else (-level).toShort()}
 
+    @Test fun ringRetainsTheExactSuffixAcrossPartialWrappedAndOversizedBlocks() {
+        for(capacity in listOf(1,17,160,40000)) {
+            val ring=HandsFreeRing(capacity)
+            var expected=shortArrayOf()
+            val sizes=listOf(0,1,159,3200,capacity,capacity+1,capacity*2+19,17,0,89)
+            for((step,length) in sizes.withIndex()) {
+                // Padding is deliberately outside length and must never enter the ring.
+                val source=ShortArray(length+3){(step*701+it).toShort()}
+                ring.append(source,length)
+                expected=(expected+source.copyOf(length)).takeLast(capacity).toShortArray()
+                val actual=ShortArray(capacity+3){Short.MIN_VALUE}
+                assertEquals(expected.size,ring.copyTo(actual))
+                assertArrayEquals(expected,actual.copyOf(expected.size))
+                assertTrue(actual.drop(expected.size).all{it==Short.MIN_VALUE})
+                if(expected.isNotEmpty()) {
+                    val tail=ShortArray(expected.size+2){Short.MAX_VALUE}
+                    val from=expected.size/2
+                    assertEquals(expected.size-from,ring.copyRangeTo(tail,from,expected.size-from,1))
+                    assertArrayEquals(expected.copyOfRange(from,expected.size),tail.copyOfRange(1,1+expected.size-from))
+                    assertEquals(Short.MAX_VALUE,tail[0])
+                }
+            }
+            ring.clear();assertEquals(0,ring.size)
+            ring.append(shortArrayOf(42),1)
+            val fresh=ShortArray(1);assertEquals(1,ring.copyTo(fresh));assertArrayEquals(shortArrayOf(42),fresh)
+        }
+    }
+
     @Test fun activationPreservesKeywordAndUnpausedCommandAcrossRingWrap() {
         val ring=HandsFreeRing(40000)
         val stream=ShortArray(64000){(it%30000).toShort()}

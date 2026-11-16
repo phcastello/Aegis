@@ -63,3 +63,6 @@
 -keepclassmembers class com.aegis.node.NodeNotificationsPlugin {
  @app.tauri.annotation.ActivityCallback <methods>;
 }
+
+# ONNX JNI reflects Java names and members; preserve them in the minified APK.
+-keep class ai.onnxruntime.** { *; }

@@ -3,10 +3,26 @@ package com.aegis.node
 import android.content.Context
 import java.io.File
 import java.io.InputStream
-import java.security.MessageDigest
 import org.json.JSONObject
 
 internal data class HandsFreeModelIdentity(val sha256:String,val version:String,val name:String)
+
+internal class HandsFreeVerifierAssets(
+    val melModel:ByteArray,
+    val embeddingModel:ByteArray,
+    val keywordModel:ByteArray,
+    val seedEmbedding:ByteArray
+):AutoCloseable {
+    override fun close(){melModel.fill(0);embeddingModel.fill(0);keywordModel.fill(0);seedEmbedding.fill(0)}
+}
+
+internal class HandsFreeModelPackage(
+    val identity:HandsFreeModelIdentity,
+    val wakeModel:ByteArray,
+    val verifier:HandsFreeVerifierAssets?=null
+):AutoCloseable {
+    override fun close(){wakeModel.fill(0);verifier?.close()}
+}
 
 internal object HandsFreeModel {
     const val SHA256="f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514"
@@ -19,10 +35,14 @@ internal object HandsFreeModel {
         require(size==BYTES){"model_size"}
         return when(hash){SHA256->BASELINE;STRONG_SHA256->STRONG;else->throw IllegalArgumentException("model_integrity")}
     }
-    internal fun identify(bytes:ByteArray):HandsFreeModelIdentity {
-        val hash=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it)}
-        return authorizedIdentity(hash,bytes.size)
+    internal fun decode(bytes:ByteArray):HandsFreeModelPackage {
+        if(bytes.size==BYTES) {
+            val identity=authorizedIdentity(handsFreeModelSha256(bytes),bytes.size)
+            return HandsFreeModelPackage(identity,bytes.copyOf())
+        }
+        return HandsFreeModelBundle.decode(bytes)
     }
+    internal fun identify(bytes:ByteArray):HandsFreeModelIdentity=decode(bytes).use{it.identity}
     internal fun metadata(identity:HandsFreeModelIdentity?):JSONObject=JSONObject()
         .put("modelName",identity?.name?:JSONObject.NULL)
         .put("modelVersion",identity?.version?:JSONObject.NULL)
@@ -31,33 +51,46 @@ internal object HandsFreeModel {
         val test=MicroWakeWordNative.create(bytes);require(test!=0L){"model_runtime_incompatible"}
         MicroWakeWordNative.destroy(test)
     }
-    fun read(context:Context):ByteArray? {
-        return read(file(context))
+    private fun validateVerifierRuntime(assets:HandsFreeVerifierAssets) {
+        HandsFreeWakeVerifier(assets.melModel,assets.embeddingModel,assets.keywordModel,assets.seedEmbedding).use{it.validate()}
     }
-    @Synchronized internal fun read(path:File):ByteArray? {
+    fun readPackage(context:Context):HandsFreeModelPackage?=readPackage(file(context))
+    @Synchronized internal fun readPackage(path:File):HandsFreeModelPackage? {
         if(!path.exists())return null
-        val bytes=path.inputStream().use{it.readBytesBounded(BYTES)}
-        try{identify(bytes);return bytes}catch(error:Throwable){bytes.fill(0);throw error}
+        val bytes=path.inputStream().use{it.readBytesBounded(HandsFreeModelBundle.MAX_BYTES)}
+        return try{decode(bytes)}finally{bytes.fill(0)}
     }
+    /** Legacy callers receive only primary wake weights; package identity uses readPackage. */
+    fun read(context:Context):ByteArray?=read(file(context))
+    @Synchronized internal fun read(path:File):ByteArray?=readPackage(path)?.use{it.wakeModel.copyOf()}
     fun import(context:Context,input:InputStream,beforeInstall:()->Unit={}):HandsFreeModelIdentity =
-        install(file(context),input,beforeInstall=beforeInstall)
-    /** Validation precedes both pausing capture and replacing the installed file. */
+        installPackage(file(context),input,beforeInstall=beforeInstall)
+    /** Preserve the raw import hook and trailing-lambda contract used by existing callers. */
     internal fun install(target:File,input:InputStream,runtimeValidator:(ByteArray)->Unit=::validateRuntime,
+        beforeInstall:()->Unit={}):HandsFreeModelIdentity =
+        installPackage(target,input,wakeRuntimeValidator=runtimeValidator,beforeInstall=beforeInstall)
+    /** Validate both engines before pausing; one synced rename installs or rolls back the whole package. */
+    internal fun installPackage(target:File,input:InputStream,
+        wakeRuntimeValidator:(ByteArray)->Unit=::validateRuntime,
+        verifierRuntimeValidator:(HandsFreeVerifierAssets)->Unit=::validateVerifierRuntime,
         beforeInstall:()->Unit={}):HandsFreeModelIdentity {
-        val bytes=input.use{it.readBytesBounded(BYTES)}
+        val bytes=input.use{it.readBytesBounded(HandsFreeModelBundle.MAX_BYTES)}
         try {
-            val identity=identify(bytes);runtimeValidator(bytes);beforeInstall()
-            synchronized(this) {
-                val parent=checkNotNull(target.parentFile)
-                check(parent.isDirectory || parent.mkdirs()){"model_storage"}
-                val staging=File.createTempFile("model-import-",".tmp",parent)
-                try {
-                    staging.outputStream().use{it.write(bytes);it.flush();it.fd.sync()}
-                    // Same-directory rename replaces only after the complete file is synced.
-                    check(staging.renameTo(target)){"model_storage"}
-                }finally{staging.delete()}
+            return decode(bytes).use { model->
+                wakeRuntimeValidator(model.wakeModel)
+                model.verifier?.let{verifierRuntimeValidator(it)}
+                beforeInstall()
+                synchronized(this) {
+                    val parent=checkNotNull(target.parentFile)
+                    check(parent.isDirectory || parent.mkdirs()){"model_storage"}
+                    val staging=File.createTempFile("model-import-",".tmp",parent)
+                    try {
+                        staging.outputStream().use{it.write(bytes);it.flush();it.fd.sync()}
+                        check(staging.renameTo(target)){"model_storage"}
+                    }finally{staging.delete()}
+                }
+                model.identity
             }
-            return identity
         }finally{bytes.fill(0)}
     }
 }

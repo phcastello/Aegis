@@ -79,11 +79,28 @@ internal class HandsFreeMetrics internal constructor(
     private fun addAt(key:String,value:Long,wall:Long) {
         val d=day(wall);increment(d,key,value);increment(attributed(d),key,value)
     }
+    private fun incrementCapture(total:JSONObject,identity:JSONObject,key:String,value:Long) {
+        increment(total,key,value);increment(identity,key,value)
+    }
     @Synchronized fun capture(audioMs:Long,confirmedMs:Long,detecting:Boolean,locked:Boolean,interactive:Boolean) {
-        add("captureAudioMs",audioMs);add("captureConfirmedMs",confirmedMs)
-        if(detecting)add("detectionConfirmedMs",confirmedMs)
-        if(locked)add("captureLockedConfirmedMs",confirmedMs)
-        if(!interactive)add("captureScreenOffConfirmedMs",confirmedMs)
+        // One observation has one timestamp and identity. Resolve the same JSON
+        // buckets once instead of repeating clocks/lookups for every counter.
+        val total=day();val identity=attributed(total)
+        incrementCapture(total,identity,"captureAudioMs",audioMs)
+        incrementCapture(total,identity,"captureConfirmedMs",confirmedMs)
+        if(detecting)incrementCapture(total,identity,"detectionConfirmedMs",confirmedMs)
+        if(locked)incrementCapture(total,identity,"captureLockedConfirmedMs",confirmedMs)
+        if(!interactive)incrementCapture(total,identity,"captureScreenOffConfirmedMs",confirmedMs)
+    }
+    /** Sampled work on the capture thread, not total device CPU or an energy estimate. */
+    @Synchronized fun detectorProfile(inputSamples:Int,wallNanos:Long,threadCpuNanos:Long) {
+        // Optional diagnostics must not disrupt capture when a clock is unavailable.
+        if(inputSamples<=0 || wallNanos<0 || threadCpuNanos<0)return
+        val total=day();val identity=attributed(total)
+        incrementCapture(total,identity,"detectorProfileSamples",1)
+        incrementCapture(total,identity,"detectorProfileInputSamples",inputSamples.toLong())
+        incrementCapture(total,identity,"detectorProfileWallNanos",wallNanos)
+        incrementCapture(total,identity,"detectorProfileThreadCpuNanos",threadCpuNanos)
     }
     @Synchronized fun maybeTick(){if(elapsedClock()-lastTick>=10000){tick();lastTick=elapsedClock()}}
     @Synchronized fun add(key:String,value:Long=1) {addAt(key,value,wallClock())}
@@ -216,8 +233,11 @@ internal class HandsFreeMetrics internal constructor(
         event("identity_boundary",JSONObject().put("identityId",selected));persist()
     }
     companion object {
+        const val DETECTOR_PROFILE_INTERVAL_MS=5000L
         internal fun detectorConfiguration()=JSONObject().put("sampleRate",16000).put("featureStepMs",10).put("stride",3)
             .put("threshold",.5).put("scoreWindow",5).put("hysteresisFraction",.6).put("refractoryMs",1000)
+            .put("detectorProfiling","thread-cpu-sample-5s-v1")
+            .put("detectorProfileIntervalMs",DETECTOR_PROFILE_INTERVAL_MS)
             .put("endpointing",JSONObject().put("version",HandsFreeVad.VERSION).put("frameSamples",HandsFreeVad.FRAME_SAMPLES)
                 .put("onsetSamples",HandsFreeVad.ONSET_SAMPLES).put("noSpeechSamples",HandsFreeVad.NO_SPEECH_SAMPLES))
             .put("stt","realtime_manual_commit_batch_fallback")

@@ -35,3 +35,5 @@ OkHttp includes the Public Suffix List under MPL 2.0; its original notice and
 license are preserved in OkHttp-PublicSuffix-NOTICE.txt and Mozilla-Public-License-2.0.txt.
 Artifacts: https://repo.maven.apache.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/
 https://repo.maven.apache.org/maven2/com/squareup/okio/okio-jvm/3.6.0/
+
+Candidate-only wake verification adapts openWakeWord preprocessing and streaming conventions (dscripka/openWakeWord, Apache-2.0). The Java ONNX Runtime1.31.1 dependency is Copyright (c) Microsoft Corporation, MIT. Full licenses and third-party notices are included alongside this notice. Personal wake weights and reference feature models are imported privately and are not APK assets.

@@ -97,6 +97,84 @@ class NodeHandsFreeMetricsTest {
         for(key in days.keys())requested+=days.getJSONObject(key).optLong("requestedMs")
         assertEquals(1000,requested)
     }
+    @Test fun captureUsesOneObservationAcrossMidnightAndKeepsIdentityAttribution() {
+        var wall=ZonedDateTime.parse("2026-10-31T23:59:59.999-03:00").toInstant().toEpochMilli()
+        var clockReads=0
+        val metrics=HandsFreeMetrics(null,{},{0L},{clockReads++;wall},{zone})
+        metrics.identity("test","1",true,true,true)
+        val firstIdentity=metrics.identityToken()!!
+        clockReads=0
+        metrics.capture(200,190,true,true,false)
+        assertEquals(1,clockReads)
+        wall+=1
+        metrics.identity("test","2",true,true,true)
+        val secondIdentity=metrics.identityToken()!!
+        clockReads=0
+        metrics.capture(300,280,false,false,true)
+        assertEquals(1,clockReads)
+        val days=JSONObject(metrics.export()).getJSONObject("days")
+        val before=days.getJSONObject("2026-10-31")
+        val after=days.getJSONObject("2026-11-01")
+        for(bucket in listOf(before,before.getJSONObject("byIdentity").getJSONObject(firstIdentity))) {
+            assertEquals(200,bucket.getLong("captureAudioMs"))
+            for(key in listOf("captureConfirmedMs","detectionConfirmedMs","captureLockedConfirmedMs","captureScreenOffConfirmedMs"))
+                assertEquals(190,bucket.getLong(key))
+        }
+        for(bucket in listOf(after,after.getJSONObject("byIdentity").getJSONObject(secondIdentity))) {
+            assertEquals(300,bucket.getLong("captureAudioMs"));assertEquals(280,bucket.getLong("captureConfirmedMs"))
+            assertFalse(bucket.has("detectionConfirmedMs"));assertFalse(bucket.has("captureLockedConfirmedMs"))
+            assertFalse(bucket.has("captureScreenOffConfirmedMs"))
+        }
+        assertFalse(before.getJSONObject("byIdentity").has(secondIdentity))
+        assertFalse(after.getJSONObject("byIdentity").has(firstIdentity))
+    }
+
+    @Test fun sampledDetectorWorkSurvivesPersistenceAndDoesNotMoveBetweenIdentities() {
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        var saved=""
+        val metrics=HandsFreeMetrics(null,{saved=it},{0L},{wall},{zone})
+        metrics.identity("test","1",true,true,true)
+        val first=metrics.identityToken()!!
+        metrics.detectorProfile(3200,4_000_000,3_000_000)
+        metrics.identity("test","2",true,true,true)
+        val second=metrics.identityToken()!!
+        metrics.detectorProfile(1600,2_500_000,2_000_000)
+        val report=JSONObject(metrics.export())
+        val total=report.getJSONObject("days").getJSONObject("2026-11-01")
+        assertEquals(2,total.getLong("detectorProfileSamples"))
+        assertEquals(4800,total.getLong("detectorProfileInputSamples"))
+        assertEquals(6_500_000,total.getLong("detectorProfileWallNanos"))
+        assertEquals(5_000_000,total.getLong("detectorProfileThreadCpuNanos"))
+        val by=total.getJSONObject("byIdentity")
+        assertEquals(3200,by.getJSONObject(first).getLong("detectorProfileInputSamples"))
+        assertEquals(3_000_000,by.getJSONObject(first).getLong("detectorProfileThreadCpuNanos"))
+        assertEquals(1600,by.getJSONObject(second).getLong("detectorProfileInputSamples"))
+        assertEquals(2_000_000,by.getJSONObject(second).getLong("detectorProfileThreadCpuNanos"))
+        for(id in listOf(first,second)) {
+            val config=report.getJSONObject("identities").getJSONObject(id).getJSONObject("config")
+            assertEquals("thread-cpu-sample-5s-v1",config.getString("detectorProfiling"))
+            assertEquals(5000,config.getLong("detectorProfileIntervalMs"))
+        }
+        val restored=JSONObject(HandsFreeMetrics(saved,{},{0L},{wall},{zone}).export())
+        val restoredDay=restored.getJSONObject("days").getJSONObject("2026-11-01")
+        for(key in listOf("detectorProfileSamples","detectorProfileInputSamples","detectorProfileWallNanos","detectorProfileThreadCpuNanos"))
+            assertEquals(total.getLong(key),restoredDay.getLong(key))
+        assertEquals(3_000_000,restoredDay.getJSONObject("byIdentity").getJSONObject(first).getLong("detectorProfileThreadCpuNanos"))
+    }
+    @Test fun unavailableDetectorClocksAndEmptyInputDoNotInventMeasurements() {
+        val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
+        val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone})
+        metrics.detectorProfile(0,10,10);metrics.detectorProfile(-1,10,10)
+        metrics.detectorProfile(3200,-1,10);metrics.detectorProfile(3200,10,-1)
+        val day=JSONObject(metrics.export()).getJSONObject("days").optJSONObject("2026-11-01")
+        assertTrue(day==null || !day.has("detectorProfileSamples"))
+        // A valid measured zero is distinct from an unavailable clock.
+        metrics.detectorProfile(3200,0,0)
+        val valid=JSONObject(metrics.export()).getJSONObject("days").getJSONObject("2026-11-01")
+        assertEquals(1,valid.getLong("detectorProfileSamples"))
+        assertEquals(0,valid.getLong("detectorProfileThreadCpuNanos"))
+    }
+
     @Test fun receivedAudioWhileProcessingIsNotReportedAsDetection() {
         val wall=ZonedDateTime.parse("2026-11-01T12:00:00-03:00").toInstant().toEpochMilli()
         val metrics=HandsFreeMetrics(null,{},{0L},{wall},{zone});metrics.enabled(true)

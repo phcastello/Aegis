@@ -15,7 +15,19 @@ internal class HandsFreeRing(private val capacity:Int=40000) {
     init {require(capacity>0)}
     fun append(source:ShortArray,length:Int) {
         require(length in 0..source.size)
-        for(i in 0 until length){samples[head]=source[i];head=(head+1)%capacity;count=minOf(capacity,count+1)}
+        if(length==0)return
+        // Only the last capacity samples survive an oversized append. Canonicalize
+        // that full ring; ordinary microphone blocks need at most two bulk copies.
+        if(length>=capacity) {
+            source.copyInto(samples,0,length-capacity,length)
+            head=0;count=capacity
+            return
+        }
+        val first=minOf(length,capacity-head)
+        source.copyInto(samples,head,0,first)
+        if(first<length)source.copyInto(samples,0,first,length)
+        head=if(first==capacity-head)length-first else head+length
+        count+=minOf(length,capacity-count)
     }
     fun copyTo(destination:ShortArray):Int {
         return copyRangeTo(destination,0,count)

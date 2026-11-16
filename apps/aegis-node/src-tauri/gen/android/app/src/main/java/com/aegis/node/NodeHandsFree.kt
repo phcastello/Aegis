@@ -12,6 +12,7 @@ import android.media.AudioRecord
 import android.media.AudioRecordingConfiguration
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Debug
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -166,8 +167,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         conversationId=null;sessionId=null;backend=null;if(close)closePanel(token)
     }
     init {
-        modelReady=try{HandsFreeModel.read(context)?.let{bytes->
-            try{installedModel=HandsFreeModel.identify(bytes);true}finally{bytes.fill(0)}
+        modelReady=try{HandsFreeModel.readPackage(context)?.use { model->
+            installedModel=model.identity;true
         }?:false}catch(_:Throwable){false}
         metrics.restoreRequested(enabled,diagnostic)
     }
@@ -365,6 +366,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     private fun beep(){activationCue.play()}
 
     private class MicrophoneUnavailable:Exception()
+    private class WakeVerificationUnavailable(cause:Throwable):Exception(cause)
     private fun microphoneBlocked():Boolean {
         val manager=context.getSystemService(AudioManager::class.java)
         if(manager.mode!=AudioManager.MODE_NORMAL || manager.isMicrophoneMute)return true
@@ -386,16 +388,21 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
     private fun run(generation:Int) {
         var detector=0L
+        var modelPackage:HandsFreeModelPackage?=null
+        var wakeVerifier:HandsFreeWakeVerifier?=null
         try {
-            val bytes=HandsFreeModel.read(context)?:error("model_missing")
-            val loaded=try{
-                val identity=HandsFreeModel.identify(bytes)
-                detector=MicroWakeWordNative.create(bytes);check(detector!=0L){"model_runtime_incompatible"};identity
-            }finally{bytes.fill(0)}
+            val loadedPackage=HandsFreeModel.readPackage(context)?:error("model_missing")
+            modelPackage=loadedPackage
+            detector=MicroWakeWordNative.create(loadedPackage.wakeModel);check(detector!=0L){"model_runtime_incompatible"}
+            wakeVerifier=loadedPackage.verifier?.let {
+                try { HandsFreeWakeVerifier(it.melModel,it.embeddingModel,it.keywordModel,it.seedEmbedding) }
+                catch(error:Exception) { throw WakeVerificationUnavailable(error) }
+            }
+            val loaded=loadedPackage.identity
             synchronized(lock){if(!current(generation))return;installedModel=loaded;recordIdentity()}
             var continuation=false
             while(current(generation)) {
-                val command=capture(generation,detector,continuation)?:break
+                val command=capture(generation,detector,continuation,wakeVerifier)?:break
                 if(!current(generation)){command.fill(0);break}
                 if(command.isEmpty()){synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 if(sessionCancelled){command.fill(0);synchronized(lock){finishEvent("cancelled",endReason?:"operation_cancelled")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
@@ -449,7 +456,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             if(current(generation)) {
                 synchronized(lock){finishEvent("failed",if(error is MicrophoneUnavailable)"microphone_unavailable" else if(detector==0L)"model_runtime_unavailable" else "capture_or_detector_failure")}
                 metrics.add("capture_failures");main.post{if(epoch==generation)service?.stopHandsFreeForeground()}
-                if(detector==0L){modelReady=false;setState("model_incompatible","Falha de integridade ou compatibilidade do detector. Importe novamente o modelo privado.")}
+                if(detector==0L || error is WakeVerificationUnavailable){modelReady=false;setState("model_incompatible","Falha de integridade ou compatibilidade do detector. Importe novamente o modelo privado.")}
                 else {setState("microphone_unavailable","Escuta indisponível: confira o microfone, chamadas, permissões e o assistente padrão.")
                     if(++failures<=3) {
                         val delay=longArrayOf(5000,30000,120000)[failures-1];retryNotBefore=SystemClock.elapsedRealtime()+delay
@@ -461,6 +468,8 @@ internal class HandsFreeRuntime(private val context:Context) {
             recorder=null
             val token=synchronized(lock){val token=sessionId;finishEvent(if(sessionCancelled)"cancelled" else "interrupted",endReason?:"audio_worker_ended");cancelBackend();endConversationSession(token,false);token}
             closePanel(token)
+            try{wakeVerifier?.close()}catch(_:Exception){metrics.add("wake_verifier_close_failures")}
+            modelPackage?.close()
             if(detector!=0L)MicroWakeWordNative.destroy(detector)
             synchronized(lock){if(worker===Thread.currentThread())worker=null}
             metrics.persist()
@@ -469,11 +478,17 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
     }
 
-    private fun capture(generation:Int,detector:Long,continuation:Boolean):ByteArray? {
+    private fun capture(generation:Int,detector:Long,continuation:Boolean,wakeVerifier:HandsFreeWakeVerifier?):ByteArray? {
         capturedTurnLatency=null
         val audio=openRecorder();recorder=audio
         val buffer=ShortArray(3200) // One 200ms microphone read, shared by all local consumers.
-        val ring=HandsFreeRing()
+        val ring=HandsFreeRing(if(wakeVerifier==null)40000 else HandsFreeWakeCandidate.RING_CAPACITY)
+        var wakeCandidate:HandsFreeWakeCandidate?=null
+        var pendingVerification:HandsFreePendingWakeVerification?=null
+        var verificationStartedAt=0L
+        val verificationExecutor=if(wakeVerifier!=null)java.util.concurrent.ThreadPoolExecutor(
+            0,1,30,java.util.concurrent.TimeUnit.SECONDS,java.util.concurrent.LinkedBlockingQueue<Runnable>(1)
+        ) else null
         val command=ShortArray(320000) // At most 20s, exclusively at/after activation.
         var detectorSamples=0L;var streamSamples=0L
         val recordingGroup=UUID.randomUUID().toString()
@@ -495,6 +510,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         var diagnosticCancelGeneration=diagnosticCancelEpoch.get()
         var captureExit="capture_interrupted"
         var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
+        val detectorProfiler=HandsFreeDetectorProfileSampler(HandsFreeMetrics.DETECTOR_PROFILE_INTERVAL_MS)
         var recordingCallback:AudioManager.AudioRecordingCallback?=null
         val silenced=java.util.concurrent.atomic.AtomicBoolean(false)
         var recordingCallbackRegistered=false
@@ -548,6 +564,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                 val cancellationGeneration=diagnosticCancelEpoch.get()
                 val diagnosticCancelled=diagnosticCancelGeneration!=cancellationGeneration
                 diagnosticCancelGeneration=cancellationGeneration
+                if(diagnosticCancelled) {
+                    pendingVerification?.close();pendingVerification=null;wakeCandidate=null
+                }
                 while(pendingDiagnostics.hasNext()) {
                     val item=pendingDiagnostics.next()
                     val n=minOf(if(diagnosticCancelled)handsFreeSamplesBeforeCancellation(count,readReturnedAtMs,cancelledAt) else count,item.remaining)
@@ -591,9 +610,12 @@ internal class HandsFreeRuntime(private val context:Context) {
                     }
                     continue
                 }
+                // Keep draining AudioRecord while the candidate verifier runs elsewhere.
+                // The pending owner retains all command PCM, even after the ring advances.
+                pendingVerification?.append(buffer,count)
                 streamSamples+=count
                 ring.append(buffer,count)
-                val event=if(continuation) {
+                var event=if(continuation) {
                     val beforeDeadline=(count-((now-continuationDeadline).coerceAtLeast(0)*16)).coerceIn(0,count.toLong()).toInt()
                     when(continuationGate.process(buffer,count,beforeDeadline,now>=continuationDeadline)) {
                         HandsFreeContinuationGate.Decision.STARTED->1L
@@ -601,10 +623,64 @@ internal class HandsFreeRuntime(private val context:Context) {
                         HandsFreeContinuationGate.Decision.TIMED_OUT->{captureExit="continuation_timeout";metrics.add("continuation_no_speech");return ByteArray(0)}
                     }
                 } else {
+                    // Sample one unchanged block every5s; this is capture-thread work,
+                    // not device energy or CPU attributed to the platform audio service.
+                    val profile=detectorProfiler.sampleDue(now)
+                    val wallStart=if(profile)SystemClock.elapsedRealtimeNanos() else 0L
+                    val cpuStart=if(profile)Debug.threadCpuTimeNanos() else 0L
                     val result=MicroWakeWordNative.process(detector,buffer,count)
+                    if(profile) {
+                        val cpuNanos=Debug.threadCpuTimeNanos()-cpuStart
+                        val wallNanos=SystemClock.elapsedRealtimeNanos()-wallStart
+                        metrics.detectorProfile(count,wallNanos,cpuNanos)
+                    }
                     detectorSamples+=count;result
                 }
                 if(event == -2L)error("detector_inference")
+                // This read may contain a decision preceding an explicit diagnostic cancellation.
+                if(diagnostic && diagnosticCancelled)event=-1L
+                var verifiedCandidate:HandsFreeWakeCandidate?=null
+                var verifiedPending:HandsFreePendingWakeVerification?=null
+                var verifiedCommandLength=0
+                if(wakeVerifier!=null && !continuation && !pendingActivation) {
+                    if(event>=0 && wakeCandidate==null && pendingVerification==null) {
+                        wakeCandidate=HandsFreeWakeCandidate(event,(event-(detectorSamples-count)).toInt(),MicroWakeWordNative.activationScores(detector))
+                        metrics.add("wake_verifier_candidates")
+                    }
+                    event=-1L
+                    val candidate=wakeCandidate
+                    if(candidate!=null && candidate.ready(streamSamples)) {
+                        verificationStartedAt=SystemClock.elapsedRealtime()
+                        pendingVerification=HandsFreePendingWakeVerification(candidate,ring,streamSamples,
+                            checkNotNull(verificationExecutor),verificationStartedAt,{SystemClock.elapsedRealtime()},
+                            {window,cancelled->wakeVerifier.score(window.samples,window.samples.size,window.candidateSample){cancelled() || !current(generation)}})
+                        wakeCandidate=null
+                    }
+                    val pending=pendingVerification
+                    if(pending!=null) {
+                        val outcome=pending.poll(SystemClock.elapsedRealtime())
+                        if(outcome.status!=HandsFreePendingWakeVerification.Status.WAITING) {
+                            metrics.timing("wake_verifier_wait",SystemClock.elapsedRealtime()-verificationStartedAt,metrics.identityToken())
+                            when(outcome.status) {
+                                HandsFreePendingWakeVerification.Status.ACCEPTED -> {
+                                    pending.candidate.verifierScore=outcome.score
+                                    verifiedCandidate=pending.candidate;verifiedPending=pending
+                                    verifiedCommandLength=pending.copyCommandTo(command)
+                                    event=pending.candidate.decisionSample
+                                    metrics.add("wake_verifier_accepted")
+                                }
+                                HandsFreePendingWakeVerification.Status.FAILED ->
+                                    throw WakeVerificationUnavailable(IllegalStateException("verifier_failed"))
+                                else -> {
+                                    metrics.add("wake_verifier_${outcome.status.name.lowercase()}")
+                                    pending.close();pendingVerification=null
+                                }
+                            }
+                        }
+                    }
+                } else if(pendingVerification!=null || wakeCandidate!=null) {
+                    pendingVerification?.close();pendingVerification=null;wakeCandidate=null
+                }
                 if(event>=0 || pendingActivation) {
                     synchronized(lock) {
                         if(!current(generation))return null
@@ -616,14 +692,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                             continuityActivation=conversationContinuity.activate(currentIdentity(),activatedAt)
                             conversationId=continuityActivation?.conversationId
                         }
-                        val boundary=if(!continuation && !assistantActivation)
+                        val acceptedCandidate=if(assistantActivation)null else verifiedCandidate
+                        val boundary=if(!continuation && !assistantActivation && acceptedCandidate==null)
                             HandsFreeActivationBoundary(detectorSamples-count,count,event) else null
-                        val offset=boundary?.offset ?: if(assistantActivation)
+                        val offset=acceptedCandidate?.blockOffset ?: boundary?.offset ?: if(assistantActivation)
                             (count-(readReturnedAtMs-pendingActivationAt).coerceAtLeast(0)*16).coerceIn(0,count.toLong()).toInt() else 0
                         if(!continuation) {
                             if(!assistantActivation){sessionCancelled=false;endReason=null;snapshotActivationScreen();transcriptionStatus="not_started"}
                             val token=if(assistantActivation)checkNotNull(sessionId) else UUID.randomUUID().toString()
-                            val contextPcm=boundary?.context(ring) ?: ShortArray(minOf(ring.size,32000+count-offset)).also{ring.copyRangeTo(it,ring.size-it.size,it.size)}
+                            val contextPcm=verifiedPending?.context() ?: boundary?.context(ring) ?: ShortArray(minOf(ring.size,32000+count-offset)).also{ring.copyRangeTo(it,ring.size-it.size,it.size)}
                             try {
                                 if(assistantActivation)collection.setTriggerContext(activeEvent,contextPcm)
                                 else {
@@ -632,7 +709,12 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     // Map the sample boundary to capture read return; buffering remains an explicit uncertainty.
                                     val observedAt=java.time.OffsetDateTime.now()
                                     val inferenceDelay=(HandsFreeTurnLatency.now()-readReturnedAtMs).coerceAtLeast(0)*1_000_000L
-                                    metadata.put("activatedAt",observedAt.minusNanos(inferenceDelay+(count-offset)*1_000_000_000L/16000).toString())
+                                    val postSamples=acceptedCandidate?.let{streamSamples-it.decisionSample} ?: (count-offset).toLong()
+                                    metadata.put("activatedAt",observedAt.minusNanos(inferenceDelay+postSamples*1_000_000_000L/16000).toString())
+                                    acceptedCandidate?.let {
+                                        metadata.put("instantaneousScore",it.scores.getOrNull(0)).put("decisionScore",it.scores.getOrNull(1))
+                                            .put("verifierScore",it.verifierScore).put("verifierLookaheadSamples",HandsFreeWakeCandidate.LOOKAHEAD_SAMPLES)
+                                    }
                                     metadata.put("timestampBasis","sample_boundary_mapped_from_capture_read_return")
                                     val id=collection.begin(metadata,contextPcm)
                                     if(diagnostic)captureEvent=id else {sessionId=token;activeEvent=id;service?.acceptedHandsFreeActivation(token);holdSessionPower(token)}
@@ -641,11 +723,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                             if(diagnostic) {
                                 val id=if(assistantActivation)activeEvent.also{activeEvent=null;sessionId=null} else captureEvent
                                 if(assistantActivation)closePanel(token)
-                                collection.appendPost(id,buffer,offset,count-offset)
-                                diagnosticCaptures.add(DiagnosticCapture(id,HandsFreeVad.NO_SPEECH_SAMPLES-(count-offset),3200-(count-offset)))
-                                captureEvent=null;beep();metrics.event("diagnostic_activation");continue
+                                val post=if(acceptedCandidate==null)buffer.copyOfRange(offset,count) else command.copyOf(verifiedCommandLength)
+                                try { collection.appendPost(id,post,0,post.size) }finally{post.fill(0)}
+                                val postCount=acceptedCandidate?.let{(streamSamples-it.decisionSample).toInt()} ?: count-offset
+                                diagnosticCaptures.add(DiagnosticCapture(id,(HandsFreeVad.NO_SPEECH_SAMPLES-postCount).coerceAtLeast(0),(3200-postCount).coerceAtLeast(0)))
+                                captureEvent=null
+                                verifiedPending?.close();if(verifiedPending!=null)pendingVerification=null
+                                beep();metrics.event("diagnostic_activation");continue
                             }
-                            captureEvent=activeEvent;contextMarginRemaining=3200-(count-offset)
+                            captureEvent=activeEvent;contextMarginRemaining=(3200-(acceptedCandidate?.let{(streamSamples-it.decisionSample).toInt()} ?: count-offset)).coerceAtLeast(0)
                         }
                         // A continuation uses only its qualified onset; a wake command starts exactly
                         // at the native decision boundary, including the suffix in this same read.
@@ -654,9 +740,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                             val retainedStart=streamSamples-ring.size
                             val local=(start-retainedStart).coerceIn(0,ring.size.toLong()).toInt()
                             ring.copyRangeTo(command,local,ring.size-local)
+                        } else if(acceptedCandidate!=null) {
+                            verifiedCommandLength
                         } else {
                             buffer.copyInto(command,0,offset,count);count-offset
                         }
+                        verifiedPending?.close();if(verifiedPending!=null)pendingVerification=null
+                        wakeCandidate=null
                         captured=true;commandStarted=now
                         HandsFreePanelSignal.capture(sessionId,buffer,count,now)
                         if(!continuation)collection.appendPost(captureEvent,command,0,length)
@@ -692,6 +782,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                 realtime?.close();backend?.abortCapture()
                 synchronized(lock){finishEvent(if(sessionCancelled)if(endReason=="explicit_cancel")"cancelled" else "interrupted" else if(captureExit=="no_speech" || captureExit=="continuation_timeout")"empty" else "failed",endReason?:captureExit)}
             }
+            pendingVerification?.close()
+            verificationExecutor?.shutdownNow()
             trace=null
             captureConfirmed=false;recorder=null
             if(Build.VERSION.SDK_INT>=29 && recordingCallbackRegistered && recordingCallback!=null)try{audio.unregisterAudioRecordingCallback(recordingCallback)}catch(_:Exception){}
