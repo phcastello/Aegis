@@ -95,7 +95,8 @@ def load_inputs(directory, label):
 def selected_configuration(container):
     # Docker prints only these named non-secret settings, never the full Env list.
     names = ["AEGIS_CHAT_MODEL", "AEGIS_CHAT_REASONING_EFFORT", "AEGIS_MAX_OUTPUT_TOKENS",
-        "AEGIS_OPENAI_SERVICE_TIER", "AEGIS_LATENCY_PROFILE", "AEGIS_OPENAI_HTTP2"]
+        "AEGIS_OPENAI_SERVICE_TIER", "AEGIS_LATENCY_PROFILE", "AEGIS_OPENAI_HTTP2", "AEGIS_OPENAI_DEFER_TOOLS", "AEGIS_OPENAI_TOOL_NAMESPACES",
+        "AEGIS_LATENCY_NO_PROMPT_CACHE", "ASPNETCORE_ENVIRONMENT", "AEGIS_MEMORY_EVAL_ISOLATED"]
     template = ""
     for name in names:
         prefix = name + "="
@@ -109,6 +110,11 @@ def selected_configuration(container):
     tokens = values.get("AEGIS_MAX_OUTPUT_TOKENS", "")
     tier = values.get("AEGIS_OPENAI_SERVICE_TIER")
     prefer_http2 = values.get("AEGIS_OPENAI_HTTP2", "").strip().lower()
+    defer_tools = values.get("AEGIS_OPENAI_DEFER_TOOLS", "").strip().lower()
+    namespaces = values.get("AEGIS_OPENAI_TOOL_NAMESPACES", "").strip().lower()
+    no_cache = values.get("AEGIS_LATENCY_NO_PROMPT_CACHE", "").strip().lower()
+    environment = values.get("ASPNETCORE_ENVIRONMENT")
+    isolated = values.get("AEGIS_MEMORY_EVAL_ISOLATED", "").strip().lower()
     return {
         "model": model if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}", model) else None,
         "reasoningEffort": effort if effort in {"none", "minimal", "low", "medium", "high", "xhigh"} else None,
@@ -116,6 +122,11 @@ def selected_configuration(container):
         "requestedServiceTier": tier if tier in TIERS else None,
         "profilingEnabled": values.get("AEGIS_LATENCY_PROFILE") == "1",
         "preferHttp2": True if prefer_http2 in {"true", "1"} else False if prefer_http2 in {"false", "0"} else None,
+        "deferTools": True if defer_tools in {"true", "1"} else False if defer_tools in {"false", "0"} else None,
+        "toolNamespaces": True if namespaces in {"true", "1"} else False if namespaces in {"false", "0"} else None,
+        "latencyNoPromptCache": True if no_cache == "true" else False if no_cache == "false" else None,
+        "noPromptCacheDevelopmentGuard": environment.lower() == "development" if environment is not None else None,
+        "noPromptCacheIsolatedGuard": True if isolated == "true" else False if isolated == "false" else None,
         "scope": "Explicit container environment; null settings may use image defaults.",
     }
 
@@ -292,6 +303,8 @@ def analyze_sample(sample, rows):
             "round": index+1, "reportedIteration": count(round_completed),
             "requestStartElapsedMs": start["elapsedMs"],
             "requestCharacters": count(characters),
+            "hostedToolSearchCalls": count(first(group, "model.tool_search_calls")),
+            "isolatedNoPromptCache": count(first(group, "model.isolated_no_prompt_cache")),
             "httpStatus": count(header), "serviceTier": tiers[0] if tiers else None,
             "httpProtocol": {"major": http_major, "minor": http_minor, "version": http_version},
             "providerReportedProcessingMs": processing["durationMs"] if processing is not None else None,
@@ -338,6 +351,11 @@ def public_source(source):
             "requestedServiceTier": tier if tier in TIERS else None,
             "profilingEnabled": configuration.get("profilingEnabled") is True,
             "preferHttp2": configuration.get("preferHttp2") if type(configuration.get("preferHttp2")) is bool else None,
+            "deferTools": configuration.get("deferTools") if type(configuration.get("deferTools")) is bool else None,
+            "toolNamespaces": configuration.get("toolNamespaces") if type(configuration.get("toolNamespaces")) is bool else None,
+            "latencyNoPromptCache": configuration.get("latencyNoPromptCache") if type(configuration.get("latencyNoPromptCache")) is bool else None,
+            "noPromptCacheDevelopmentGuard": configuration.get("noPromptCacheDevelopmentGuard") if type(configuration.get("noPromptCacheDevelopmentGuard")) is bool else None,
+            "noPromptCacheIsolatedGuard": configuration.get("noPromptCacheIsolatedGuard") if type(configuration.get("noPromptCacheIsolatedGuard")) is bool else None,
         }})
     return result
 

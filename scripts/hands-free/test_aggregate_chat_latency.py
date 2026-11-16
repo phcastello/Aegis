@@ -39,6 +39,7 @@ class AggregateTests(unittest.TestCase):
                 "contextStages": [{"stage": "context.prompt", "durationMs": 7}],
                 "rounds": [{"serviceTier": "default", "httpProtocol": {"version": "1.1"},
                     "tokens": {"input": 100, "cachedInput": 90, "reasoning": 0},
+                    "hostedToolSearchCalls": 0, "isolatedNoPromptCache": 1, "requestCharacters": 12000,
                     "intervalsMs": {"requestToResponseHeaders": 500, "requestToFirstFinalSegment": 900},
                     "milestonesFromRequestStartMs": {"firstArgumentDelta": 800},
                     "toolsAfterRound": []}],
@@ -71,6 +72,9 @@ class AggregateTests(unittest.TestCase):
             self.assertIs(current["configuration"]["configuration"]["preferHttp2"], True)
             self.assertEqual(current["profile"]["provider"]["httpProtocolsObserved"], {"1.1": 1})
             self.assertEqual(current["profile"]["tokensPerRound"]["reasoning"]["observedTotal"], 0)
+            self.assertEqual(current["profile"]["provider"]["hostedToolSearchCallsPerRound"]["observedTotal"], 0)
+            self.assertEqual(current["profile"]["provider"]["requestCharactersPerRound"]["avg"], 12000)
+            self.assertEqual(current["profile"]["provider"]["isolatedNoPromptCachePerRound"]["observedTotal"], 1)
             self.assertEqual(current["profileByCohort"]["firstInHarness"]["samples"], 1)
             self.assertEqual(report["profiledByCohort"]["subsequent"]["samples"], 0)
             self.assertIsNone(current["profile"]["tokensPerRound"]["output"]["avg"])
@@ -80,7 +84,8 @@ class AggregateTests(unittest.TestCase):
             self.assertTrue(report["userConstraints"]["premiumFastPriorityProhibited"])
             self.assertFalse(report["userConstraints"]["premiumFastPriorityAllowed"])
             self.assertFalse(report["qualitativeReview"]["allSamplesApproved"])
-            self.assertEqual(report["qualitativeReview"]["reviewedSamples"], 2)
+            self.assertIsNone(report["qualitativeReview"]["reviewedSamples"])
+            self.assertIsNone(report["runClosure"]["temporaryResources"]["cleanupCompleted"])
 
             self.assertNotIn("PRIVATE", json.dumps(report))
 
@@ -149,6 +154,69 @@ class AggregateTests(unittest.TestCase):
                     side_effect=AssertionError("inference guard must not run during offline analysis")):
                 result = aggregate.build_report(root, ["current-recheck"])
             self.assertEqual(result["datasets"][0]["configuration"]["configuration"]["requestedServiceTier"], "priority")
+
+    def test_original_archive_and_new_deferred_cohort_keep_lifecycle_and_reviews_separate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "latency-20261116-isolated"
+            original.mkdir()
+            self.fixture(original)
+            report = aggregate.build_report(original, ["current-recheck"])
+            self.assertEqual(report["runClosure"]["referenceExperimentRequests"], 48)
+            self.assertTrue(report["runClosure"]["temporaryResources"]["cleanupCompleted"])
+            self.assertEqual(report["qualitativeReview"]["reviewedSamples"], 2)
+            with self.assertRaises(ValueError):
+                aggregate.build_report(original, ["deferred-control"])
+            deferred = Path(temp) / "latency-20261116-deferred"
+            deferred.mkdir()
+            self.fixture(deferred, "deferred-control")
+            labels = aggregate.default_labels(deferred)
+            self.assertEqual(labels, ["deferred-control", "eager-control"])
+            report = aggregate.build_report(deferred, labels)
+            self.assertEqual(report["reportType"], "deferred_tool_schema_default_tier_control")
+            self.assertEqual(report["runClosure"]["referenceExperimentRequests"], 16)
+            self.assertIsNone(report["runClosure"]["temporaryResources"]["cleanupCompleted"])
+            self.assertIsNone(report["qualitativeReview"]["reviewedSamples"])
+            self.assertEqual(report["productionRestoration"]["status"], "not_claimed_for_this_experiment")
+            self.assertEqual(report["totals"]["syntheticChatRequests"], 2)
+
+    def test_namespaces_cohort_uses_18_reference_requests_and_numeric_reminder_verification(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "latency-20261116-namespaces"
+            root.mkdir()
+            self.fixture(root, "namespace-control")
+            path = root / "namespace-control-chat-segments.json"
+            data = json.loads(path.read_text())
+            data["samples"].append({"sample": "sample-003", "case": "create_reminder",
+                "firstCallInHarness": False, "firstFinalSegmentMs": 1500, "generationDoneMs": 1600,
+                "toolStatusStarted": 1, "reminderVerificationMs": 25,
+                "reminderVerification": {"exactlyOneCreated": True, "dueAtMatches": True,
+                    "timeZoneMatches": True, "scheduled": True, "privateReminderId": "PRIVATE UUID"}})
+            path.write_text(json.dumps(data))
+            labels = aggregate.default_labels(root)
+            self.assertEqual(labels, ["namespace-control", "eager-control"])
+            report = aggregate.build_report(root, labels)
+            self.assertEqual(report["runClosure"]["referenceExperimentRequests"], 18)
+            self.assertEqual(report["reportType"], "namespaced_tool_schema_default_tier_control")
+            check = report["datasets"][0]["effectChecks"]["createReminder"]
+            self.assertEqual(check["cases"], 1)
+            self.assertEqual(check["verified"], 1)
+            self.assertEqual(check["verificationMs"]["avg"], 25)
+            self.assertNotIn("PRIVATE UUID", json.dumps(report))
+
+    def test_forced_uncached_control_has_8_reference_requests_and_keeps_first_call_separate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "latency-20261116-cold-control"
+            root.mkdir()
+            self.fixture(root, "namespace-control")
+            labels = aggregate.default_labels(root)
+            self.assertEqual(labels, ["namespace-control", "eager-control"])
+            report = aggregate.build_report(root, labels)
+            self.assertEqual(report["reportType"], "forced_uncached_control")
+            self.assertEqual(report["runClosure"]["referenceExperimentRequests"], 8)
+            self.assertEqual(report["datasets"][0]["firstFinalSegmentMs"]["firstInHarness"]["n"], 1)
+            self.assertEqual(report["datasets"][0]["firstFinalSegmentMs"]["subsequent"]["n"], 1)
+            self.assertIsNone(report["runClosure"]["temporaryResources"]["cleanupCompleted"])
+            self.assertIn("not hardware coldness", report["interpretation"]["forcedUncachedControl"])
 
     def test_dataset_identity_and_label_duplicates_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

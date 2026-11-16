@@ -109,8 +109,11 @@ class HarnessTests(unittest.TestCase):
             for tier in ("priority", "fast", "ultrafast", "auto", "flex", "scale", "", None):
                 with self.subTest(tier=tier), patch.object(segments.bench, "http") as http:
                     state = self.configured_state(root, tier)
-                    with self.assertRaises(RuntimeError):
-                        segments.run(state, root, "blocked", 1, ["math"])
+                    with patch.object(segments.bench, "command") as sql:
+                        for cases in (["math"], ["create_reminder"]):
+                            with self.assertRaises(RuntimeError):
+                                segments.run(state, root, "blocked", 1, cases)
+                        sql.assert_not_called()
                     http.assert_not_called()
     def test_private_path_is_checked_before_opening_or_http(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside:
@@ -193,6 +196,92 @@ class HarnessTests(unittest.TestCase):
             private_file = Path(temp) / "offline-chat-segments.private.json"
             self.assertEqual(private_file.stat().st_mode & 0o777, 0o600)
             self.assertTrue(all("/voice/" not in path for path, _, _ in calls))
+
+
+    def test_optional_reminder_date_uses_sao_paulo_day_and_exact_utc(self):
+        self.assertEqual(len(segments.CORPUS), 8)
+        self.assertNotIn("create_reminder", [case for case, _ in segments.CORPUS])
+        question, due = segments.reminder_request(segments.datetime(2026, 11, 17, 1, tzinfo=segments.timezone.utc))
+        self.assertIn("2026-11-18", question)
+        self.assertEqual(due, "2026-11-18T13:00:00+00:00")
+
+    def test_reminder_verifier_rejects_wrong_due_missing_or_duplicate_creation(self):
+        identifier = str(uuid.uuid4())
+        reminder = {"reminderId": identifier, "text": "PRIVATE TASK", "dueAt": "2026-11-18T13:00:00Z",
+            "timeZoneId": "America/Sao_Paulo", "status": "Scheduled"}
+        due = "2026-11-18T13:00:00+00:00"
+        result = segments.verify_created_reminder([], [reminder], due)
+        self.assertTrue(result["exactlyOneCreated"])
+        self.assertTrue(all(type(value) in (int, bool) for value in result.values()))
+        self.assertNotIn(identifier, json.dumps(result))
+        for after in ([], [dict(reminder, dueAt="2026-11-18T10:00:00Z")],
+                [reminder, dict(reminder, reminderId=str(uuid.uuid4()))]):
+            with self.assertRaises(segments.ProtocolError):
+                segments.verify_created_reminder([], after, due)
+
+    def test_optional_reminder_uses_authenticated_reads_and_private_effect_details(self):
+        calls, secrets = [], []
+        identifier = str(uuid.uuid4())
+        due = "2026-11-18T13:00:00+00:00"
+        reminders = []
+        conversation, message = str(uuid.uuid4()), str(uuid.uuid4())
+        def fake_http(base, path, body=None, method=None, headers=None):
+            calls.append((path, method))
+            if path == "/api/memory/diagnostics/environment":
+                return Response(data={"isolated": True, "database": "aegis_memory_v060_0123456789",
+                    "qdrantCollection": "aegis_memory_v060_0123456789"})
+            if path == "/api/nodes/reminders":
+                self.assertTrue(headers["Authorization"].startswith("AegisNode aegis-node-v1."))
+                secrets.append(headers["Authorization"])
+                return Response(data={"reminders": list(reminders), "hasMore": False})
+            if method == "DELETE":
+                return Response(data={})
+            self.assertEqual(path, "/api/chat/messages/stream")
+            reminders.append({"reminderId": identifier, "text": "PRIVATE TASK", "dueAt": due,
+                "timeZoneId": "America/Sao_Paulo", "status": "Scheduled"})
+            return Response(events=[
+                {"type": "final_segment", "turnId": body["turnId"], "conversationId": conversation,
+                    "assistantMessageId": message, "segmentId": str(uuid.uuid4()), "sequence": 0, "content": "Lembrete criado."},
+                {"type": "done", "turnId": body["turnId"], "conversationId": conversation,
+                    "assistantMessageId": message, "voiceContinuation": "close"}])
+        with tempfile.TemporaryDirectory() as temp, patch.object(segments.bench, "http", side_effect=fake_http), \
+                patch.object(segments.bench, "command", return_value=b"") as sql, \
+                patch.object(segments, "reminder_request", return_value=("Crie o lembrete sintético.", due)):
+            root = Path(temp)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                public, private = segments.run(self.configured_state(root), root, "reminder", 1, ["create_reminder"])
+            sample = public["samples"][0]
+            self.assertTrue(sample["reminderVerification"]["dueAtMatches"])
+            self.assertIn("firstFinalSegmentMs", sample)
+            self.assertIn("reminderVerificationMs", sample)
+            self.assertEqual(sum(path == "/api/nodes/reminders" for path, _ in calls), 3)
+            self.assertEqual(sql.call_count, 2)
+            self.assertIn("INSERT INTO", sql.call_args_list[0].kwargs["input"].decode())
+            self.assertIn("DELETE FROM", sql.call_args_list[1].kwargs["input"].decode())
+            self.assertNotIn(identifier, json.dumps(public) + output.getvalue())
+            self.assertIn(identifier, json.dumps(private))
+            for secret in secrets:
+                self.assertNotIn(secret, json.dumps(private) + json.dumps(public))
+            self.assertTrue(all("/voice/" not in path for path, _ in calls))
+
+    def test_reminder_read_failure_stops_before_any_paid_chat_and_removes_fixture(self):
+        paths = []
+        def fake_http(base, path, *args, **kwargs):
+            paths.append(path)
+            if path == "/api/memory/diagnostics/environment":
+                return Response(data={"isolated": True, "database": "aegis_memory_v060_0123456789",
+                    "qdrantCollection": "aegis_memory_v060_0123456789"})
+            if path == "/api/nodes/reminders":
+                raise RuntimeError("readiness failed")
+            self.fail("a paid chat was attempted")
+        with tempfile.TemporaryDirectory() as temp, patch.object(segments.bench, "http", side_effect=fake_http), \
+                patch.object(segments.bench, "command", return_value=b"") as sql:
+            root = Path(temp)
+            with self.assertRaises(RuntimeError):
+                segments.run(self.configured_state(root), root, "readiness", 1, ["create_reminder"])
+            self.assertEqual(sql.call_count, 2)
+            self.assertNotIn("/api/chat/messages/stream", paths)
 
 
 if __name__ == "__main__":

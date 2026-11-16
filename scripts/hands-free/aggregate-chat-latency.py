@@ -79,6 +79,9 @@ def summarize_profiles(samples):
     rounds = [r for sample in samples for r in sample.get("rounds", [])]
     result["provider"] = {
         "rounds": len(rounds),
+        "requestCharactersPerRound": stats(r.get("requestCharacters") for r in rounds),
+        "hostedToolSearchCallsPerRound": token_stats(r.get("hostedToolSearchCalls") for r in rounds),
+        "isolatedNoPromptCachePerRound": token_stats(r.get("isolatedNoPromptCache") for r in rounds),
         "requestToHeadersMs": stats(r.get("intervalsMs", {}).get("requestToResponseHeaders") for r in rounds),
         "requestToFirstSseMs": stats(r.get("milestonesFromRequestStartMs", {}).get("firstSse") for r in rounds),
         "requestToFirstArgumentMs": stats(r.get("milestonesFromRequestStartMs", {}).get("firstArgumentDelta") for r in rounds),
@@ -153,6 +156,15 @@ def dataset(directory, label, expected_database):
             "subsequentWithoutToolEvents": metric(without_tools, "firstFinalSegmentMs"),
             "bySyntheticCase": {case: stats(values) for case, values in sorted(by_case.items())},
         },
+        "effectChecks": {"createReminder": {
+            "cases": sum(sample.get("case") == "create_reminder" for sample in samples),
+            "verified": sum(sample.get("case") == "create_reminder" and all(
+                sample.get("reminderVerification", {}).get(key) is True for key in
+                ("exactlyOneCreated", "dueAtMatches", "timeZoneMatches", "scheduled")) for sample in samples),
+            "verificationMs": stats(sample.get("reminderVerificationMs") for sample in samples
+                if sample.get("case") == "create_reminder"),
+            "verificationTiming": "Before/after authenticated reads and postcondition checks are outside first-final-segment timing.",
+        }},
         "generationDoneMs": metric(completed, "generationDoneMs"),
         "transportEndMs": metric(completed, "transportEndMs"),
         "profile": summarize_profiles(profiled),
@@ -334,6 +346,56 @@ def network_control(path):
     }
 
 
+
+def default_labels(directory):
+    if directory.name.endswith(("-namespaces", "-cold-control")):
+        return ["namespace-control", "eager-control"]
+    return ["deferred-control", "eager-control"] if directory.name.endswith("-deferred") else DEFAULT_LABELS
+
+
+def experiment_context(directory, labels, datasets, recorded_requests):
+    original = directory.name == "latency-20261116-isolated"
+    forced_uncached = directory.name.endswith("-cold-control")
+    namespaces = directory.name.endswith("-namespaces") or "namespace-control" in labels
+    deferred = not namespaces and set(labels).issubset({"deferred-control", "eager-control"})
+    if original and not set(labels).issubset(DEFAULT_LABELS):
+        raise ValueError("the archived 48-request report must not include a new experiment")
+    if original:
+        return {
+            "reportType": "synthetic_server_chat_latency_control",
+            "runClosure": {"status": "closed", "referenceExperimentRequests": 48,
+                "recordedRequests": recorded_requests,
+                "temporaryResources": {"cleanupCompleted": True, "containersRemaining": 0,
+                    "privateComposeRemoved": True,
+                    "verificationSource": "Coordinator's completed original-project cleanup; aggregator performs no Docker/API operations."}},
+            "qualitativeReview": {
+                "reviewedSamples": sum(d.get("chatRequests", 0) for d in datasets if d["label"] in
+                    {"current-profile", "current-recheck", "priority-profile", "priority-recheck"}),
+                "blockedSamples": sum(d.get("chatRequests", 0) for d in datasets if d["label"] in
+                    {"http2-control", "http1-control"}),
+                "allSamplesApproved": False, "status": "partial_review_only",
+                "evidenceSource": "Coordinator review of the original 48-request cohort only; blocked means content review unavailable."},
+            "productionRestoration": {"baselineApiRevision": BASELINE_REVISION,
+                "profilerEnabled": False, "http2OptInEnabled": False,
+                "f5Variant": "C", "f5Profile": "20261113-h-stream-pronunciation",
+                "synthesisRequestsFromExperiment": 0,
+                "verificationSource": "Coordinator's original restoration checks; not a new production-state check."},
+        }
+    return {
+        "reportType": "forced_uncached_control" if forced_uncached else "namespaced_tool_schema_default_tier_control" if namespaces else "deferred_tool_schema_default_tier_control" if deferred else "synthetic_server_chat_latency_control",
+        "runClosure": {"status": "not_recorded", "referenceExperimentRequests": 8 if forced_uncached else 18 if namespaces else 16 if deferred else None,
+            "recordedRequests": recorded_requests,
+            "temporaryResources": {"cleanupCompleted": None, "containersRemaining": None,
+                "privateComposeRemoved": None,
+                "verificationSource": "No cleanup-completion statement is supplied for this new experiment."}},
+        "qualitativeReview": {"reviewedSamples": None, "blockedSamples": None,
+            "allSamplesApproved": False, "status": "not_recorded",
+            "evidenceSource": "The original 32-reviewed/16-blocked counts do not apply to this new cohort."},
+        "productionRestoration": {"status": "not_claimed_for_this_experiment",
+            "verificationSource": "This file-only report makes no new production-state or promotion claim."},
+    }
+
+
 def build_report(directory, labels):
     state = json.loads((directory / "state.json").read_text())
     if (not str(state.get("project", "")).startswith("aegis_latency_") or
@@ -347,9 +409,10 @@ def build_report(directory, labels):
         datasets.append(result)
         all_samples.extend(samples)
         all_profiles.extend(profiles)
+    context = experiment_context(directory, labels, datasets, len(all_samples))
     return {
         "schema": 1, "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
-        "reportType": "synthetic_server_chat_latency_control",
+        "reportType": context["reportType"],
         "software": {
             "productionApiBaselineRevision": BASELINE_REVISION,
             "historicalPhoneAppVersion": "0.8.0-unstable.15",
@@ -370,30 +433,17 @@ def build_report(directory, labels):
         "userConstraints": {"normalOpenAIRequestsAllowed": True,
             "premiumFastPriorityProhibited": True, "premiumFastPriorityAllowed": False,
             "newBenchmarkCallsPerformedByAggregation": 0, "premiumModeSuggested": False},
-        "runClosure": {"status": "closed", "referenceExperimentRequests": 48,
-            "recordedRequests": len(all_samples),
-            "temporaryResources": {"cleanupCompleted": True, "containersRemaining": 0,
-                "privateComposeRemoved": True,
-                "verificationSource": "Coordinator's completed project cleanup; aggregator performs no Docker/API operations."}},
-        "qualitativeReview": {
-            "reviewedSamples": sum(d.get("chatRequests", 0) for d in datasets if d["label"] in
-                {"current-profile", "current-recheck", "priority-profile", "priority-recheck"}),
-            "blockedSamples": sum(d.get("chatRequests", 0) for d in datasets if d["label"] in
-                {"http2-control", "http1-control"}),
-            "allSamplesApproved": False, "status": "partial_review_only",
-            "evidenceSource": "Coordinator review record; blocked means content review unavailable, not a demonstrated quality failure."},
-        "productionRestoration": {"baselineApiRevision": BASELINE_REVISION,
-            "profilerEnabled": False, "http2OptInEnabled": False,
-            "f5Variant": "C", "f5Profile": "20261113-h-stream-pronunciation",
-            "synthesisRequestsFromExperiment": 0,
-            "verificationSource": "Coordinator's completed restoration checks; not rechecked by this file-only report."},
+        "runClosure": context["runClosure"],
+        "qualitativeReview": context["qualitativeReview"],
+        "productionRestoration": context["productionRestoration"],
         "phoneValidation": {
             "status": "pending", "samplesIncluded": 0,
             "metricRequested": "Last actual spoken speech to actual audible response.",
             "speakerAcousticsMeasured": False,
         },
         "interpretation": {
-            "firstInHarness": "First observed call of this run; not proof of a cold provider.",
+            "firstInHarness": "First observed call of this run, recorded separately to expose process/connection startup; not proof of hardware or provider coldness.",
+            "forcedUncachedControl": "Isolated Development-only explicit-no-breakpoint cache control. It is not hardware coldness or a production cache recommendation; inspect per-round effective markers and observed cache tokens.",
             "subsequent": "All completed calls after the first, including the read-only tool case.",
             "subsequentWithoutToolEvents": "Completed subsequent calls with zero observed started tool-status events.",
             "providerWaits": "Communication, provider queueing and processing are combined; these are not pure inference times.",
@@ -401,6 +451,8 @@ def build_report(directory, labels):
             "flush": "Authorized segment marker to successful HTTP flush; distinct from preceding persistence/authorization.",
             "residual": "Client first segment duration minus API first-flush elapsed; includes early DI/auth/binding and client/transport work.",
             "httpPreference": "PreferHttp2 is a request preference with fallback; compare it with the protocol actually observed per round.",
+            "hostedToolSearch": "Counts hosted tool_search_call output items per provider round; separate from executed application tools.",
+            "requestCharacters": "Serialized request characters are not network bytes or prompt tokens; deferred schemas can change prompt loading without shrinking serialized JSON.",
             "context": "Nested context stages and chat.prepare overlap and must not be added together.",
             "missing": "Missing measurements remain null; n reports observed values.",
         },
@@ -413,7 +465,7 @@ def build_report(directory, labels):
             "Historical attribution is partially recovered from persisted numeric timestamps; provider network/processing and individual first-flush timings remain unavailable.",
             "Token counts are observations; this report does not verify provider charges or compute dollar costs.",
         ],
-        "decision": {"productionPromotionPerformed": False, "status": "measurement_only",
+        "decision": {"productionPromotionPerformedByReport": False, "status": "measurement_only",
             "reason": "No automatic promotion decision is made from these variable small samples."},
         "datasets": datasets,
         "profiledAggregate": summarize_profiles(all_profiles),
@@ -430,9 +482,9 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--labels", nargs="+", default=DEFAULT_LABELS)
+    parser.add_argument("--labels", nargs="+", help="dataset labels; deferred/namespaces directories select their respective two controls")
     args = parser.parse_args()
-    report = build_report(args.directory, args.labels)
+    report = build_report(args.directory, args.labels or default_labels(args.directory))
     destination = args.directory / "latency-report.json"
     destination.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     destination.chmod(0o600)

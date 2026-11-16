@@ -8,14 +8,19 @@ Compose file; this client never accepts or exports a provider credential.
 """
 import argparse
 from collections import Counter
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, time as datetime_time, timedelta, timezone
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import time
 import urllib.parse
 import uuid
+from zoneinfo import ZoneInfo
 
 spec = importlib.util.spec_from_file_location("latency", Path(__file__).with_name("benchmark-latency.py"))
 bench = importlib.util.module_from_spec(spec)
@@ -31,6 +36,92 @@ CORPUS = [
     ("continuation", "Estou em dúvida entre chá e café para tomar à noite. Me faça uma pergunta para ajudar a escolher."),
     ("continuation_reply", "Prefiro algo sem cafeína e quero dormir cedo. Qual opção faz mais sentido?"),
 ]
+
+OPTIONAL_CASES = [("create_reminder", None)]
+ALL_CASES = CORPUS + OPTIONAL_CASES
+
+
+def reminder_request(now=None):
+    now = now or datetime.now(timezone.utc)
+    local_day = now.astimezone(ZoneInfo("America/Sao_Paulo")).date() + timedelta(days=2)
+    due = datetime.combine(local_day, datetime_time(10), ZoneInfo("America/Sao_Paulo"))
+    question = (f"Crie um lembrete para eu revisar o relatório no dia {local_day.isoformat()}, "
+        "às dez horas da manhã, no horário de São Paulo.")
+    return question, due.astimezone(timezone.utc).isoformat()
+
+
+def read_reminders(state, credential):
+    headers = {"Authorization": "AegisNode " + credential, "Content-Type": "application/json"}
+    with bench.http(state["base"], "/api/nodes/reminders", headers=headers) as response:
+        snapshot = json.load(response)
+    rows = snapshot.get("reminders") if isinstance(snapshot, dict) else None
+    if not isinstance(rows, list) or len(rows) > 200 or snapshot.get("hasMore") is not False:
+        raise ProtocolError("reminder snapshot is incomplete")
+    ids = set()
+    for row in rows:
+        reminder = require_uuid(row.get("reminderId"))
+        if reminder in ids:
+            raise ProtocolError("duplicate reminder identity")
+        ids.add(reminder)
+    return rows
+
+
+def verify_created_reminder(before, after, expected_due):
+    before_ids = {row["reminderId"] for row in before}
+    after_ids = {row["reminderId"] for row in after}
+    created = [row for row in after if row["reminderId"] not in before_ids]
+    if len(created) != 1 or len(after) != len(before) + 1 or not before_ids.issubset(after_ids):
+        raise ProtocolError("expected exactly one new reminder")
+    reminder = created[0]
+    try:
+        actual = datetime.fromisoformat(reminder["dueAt"].replace("Z", "+00:00"))
+        expected = datetime.fromisoformat(expected_due)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ProtocolError("invalid reminder timestamp") from None
+    due_matches = actual.tzinfo is not None and actual.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+    zone_matches = reminder.get("timeZoneId") == "America/Sao_Paulo"
+    scheduled = reminder.get("status") == "Scheduled"
+    if not due_matches or not zone_matches or not scheduled:
+        raise ProtocolError("created reminder does not match the requested schedule")
+    return {"beforeCount": len(before), "afterCount": len(after), "newCount": 1,
+        "exactlyOneCreated": True, "dueAtMatches": True, "timeZoneMatches": True, "scheduled": True}
+
+
+@contextmanager
+def reminder_fixture(state, directory):
+    # Deliberately fixed SQL for one disposable fixture, never a general SQL runner.
+    verify_default_configuration(state, directory)
+    node = str(uuid.uuid4())
+    credential = "aegis-node-v1." + uuid.UUID(node).hex + "." + secrets.token_urlsafe(32)
+    digest = hashlib.sha256(credential.encode()).hexdigest()
+    created = False
+    command = ("docker", "compose", "-p", state["project"], "-f", state["compose"],
+        "exec", "-T", "postgres", "psql", "-qAt", "-v", "ON_ERROR_STOP=1",
+        "-U", "aegis_eval", "-d", state["database"])
+    try:
+        query = f"""BEGIN;
+INSERT INTO "aegis_nodes" ("Id","Name","Platform","AppVersion","ProtocolVersion","Enabled",
+"ReceiveReminders","TargetPriority","PairedAt","CreatedAt","UpdatedAt")
+VALUES ('{node}','Disposable reminder benchmark','Android','0.8.0',1,true,false,0,now(),now(),now());
+INSERT INTO "node_credentials" ("NodeId","SecretHash","CreatedAt")
+VALUES ('{node}',decode('{digest}','hex'),now());
+INSERT INTO "node_capabilities" ("NodeId","Name","Version") VALUES ('{node}','notification.show',1);
+COMMIT;"""
+        bench.command(*command, input=query.encode())
+        created = True
+        # Authentication/readiness is proven before ANY paid chat in this run.
+        read_reminders(state, credential)
+        yield credential
+    finally:
+        if created:
+            query = f"""BEGIN;
+DELETE FROM "node_capabilities" WHERE "NodeId"='{node}';
+DELETE FROM "node_credentials" WHERE "NodeId"='{node}';
+DELETE FROM "aegis_nodes" WHERE "Id"='{node}';
+COMMIT;"""
+            bench.command(*command, input=query.encode())
+
+
 ALLOWED_EVENTS = {"conversation", "token", "tool_status", "memory_activity", "final_segment", "done"}
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
@@ -186,7 +277,7 @@ def run(state, directory, label, repetitions, selected):
         raise ValueError("invalid label")
     if not 1 <= repetitions <= 3:
         raise ValueError("require 1-3 repetitions")
-    cases = [(case, text) for case, text in CORPUS if case in selected]
+    cases = [(case, text) for case, text in ALL_CASES if case in selected]
     if not cases or len(cases) != len(selected) or len(selected) != len(set(selected)):
         raise ValueError("invalid cases")
     if "continuation_reply" in selected and "continuation" not in selected:
@@ -212,59 +303,75 @@ def run(state, directory, label, repetitions, selected):
     }
     private = []
     save(directory, label, public, private)
-    for rep in range(repetitions):
-        previous_conversation = None
-        session = str(uuid.uuid4())
-        for case, question in cases:
-            number = len(public["samples"]) + 1
-            sample_id = f"sample-{number:03d}"
-            is_reply = case == "continuation_reply"
-            turn = str(uuid.uuid4())
-            voice_session = session if case in ("continuation", "continuation_reply") else str(uuid.uuid4())
-            payload = {"turnId": turn, "content": question, "origin": "hands_free",
-                "voiceSessionId": voice_session, "voiceSegments": True}
-            if is_reply:
-                if previous_conversation is None:
-                    raise RuntimeError("continuation predecessor failed")
-                payload["conversationId"] = previous_conversation
-            sample = {"sample": sample_id, "case": case, "rep": rep,
-                "ordinal": number, "firstCallInHarness": number == 1,
-                "continuesPreviousConversation": is_reply}
-            detail = {"sample": sample_id, "request": payload}
-            started = time.perf_counter()
-            try:
-                headers = {"Content-Type": "application/json", "X-Aegis-Turn-Id": turn}
-                with bench.http(state["base"], "/api/chat/messages/stream", payload, headers=headers) as response:
-                    sample["responseHeadersMs"] = (time.perf_counter() - started) * 1000
-                    metrics, data = read_stream(response, turn, started,
-                        conversation=payload.get("conversationId"))
-                sample.update(metrics)
-                detail.update(data)
-                if case == "continuation":
-                    previous_conversation = data["conversationId"]
-                if case == "read_tool":
-                    # Stream categories do not prove which tool ran. Correlate
-                    # the private turn ID with profiler tool.place_list afterward.
-                    sample["expectedTool"] = "place_list"
-                    sample["toolExecutionRequiresProfileConfirmation"] = True
-            except Exception as error:
-                sample["errorType"] = type(error).__name__
-                sample["elapsedMs"] = (time.perf_counter() - started) * 1000
-            finally:
-                # No synthesis was claimed. Cancel only after transport EOF/failure,
-                # outside the measured interval, to release the synthetic turn.
+    fixture = reminder_fixture(state, directory) if "create_reminder" in selected else nullcontext(None)
+    with fixture as reminder_credential:
+        for rep in range(repetitions):
+            previous_conversation = None
+            session = str(uuid.uuid4())
+            for case, question in cases:
+                number = len(public["samples"]) + 1
+                sample_id = f"sample-{number:03d}"
+                is_reply = case == "continuation_reply"
+                turn = str(uuid.uuid4())
+                voice_session = session if case in ("continuation", "continuation_reply") else str(uuid.uuid4())
+                reminder_before = None
+                expected_due = None
+                if case == "create_reminder":
+                    question, expected_due = reminder_request()
+                    reminder_before = read_reminders(state, reminder_credential)
+                payload = {"turnId": turn, "content": question, "origin": "hands_free",
+                    "voiceSessionId": voice_session, "voiceSegments": True}
+                if is_reply:
+                    if previous_conversation is None:
+                        raise RuntimeError("continuation predecessor failed")
+                    payload["conversationId"] = previous_conversation
+                sample = {"sample": sample_id, "case": case, "rep": rep,
+                    "ordinal": number, "firstCallInHarness": number == 1,
+                    "continuesPreviousConversation": is_reply}
+                detail = {"sample": sample_id, "request": payload}
+                if case == "create_reminder":
+                    detail["reminderVerification"] = {"expectedDueAtUtc": expected_due,
+                        "expectedTimeZone": "America/Sao_Paulo", "before": reminder_before}
+                started = time.perf_counter()
                 try:
-                    with bench.http(state["base"], "/api/chat/turns/" + turn, method="DELETE") as response:
-                        json.load(response)
-                    sample["cleanup"] = "cancelled_without_synthesis"
+                    headers = {"Content-Type": "application/json", "X-Aegis-Turn-Id": turn}
+                    with bench.http(state["base"], "/api/chat/messages/stream", payload, headers=headers) as response:
+                        sample["responseHeadersMs"] = (time.perf_counter() - started) * 1000
+                        metrics, data = read_stream(response, turn, started,
+                            conversation=payload.get("conversationId"))
+                    sample.update(metrics)
+                    detail.update(data)
+                    if case == "create_reminder":
+                        verification_started = time.perf_counter()
+                        after = read_reminders(state, reminder_credential)
+                        detail["reminderVerification"]["after"] = after
+                        sample["reminderVerification"] = verify_created_reminder(reminder_before, after, expected_due)
+                        sample["reminderVerificationMs"] = (time.perf_counter() - verification_started) * 1000
+                    if case == "continuation":
+                        previous_conversation = data["conversationId"]
+                    if case == "read_tool":
+                        # Stream categories do not prove which tool ran. Correlate
+                        # the private turn ID with profiler tool.place_list afterward.
+                        sample["expectedTool"] = "place_list"
+                        sample["toolExecutionRequiresProfileConfirmation"] = True
                 except Exception as error:
-                    sample["cleanupErrorType"] = type(error).__name__
-            public["samples"].append(sample)
-            private.append(detail)
-            save(directory, label, public, private)
-            print(json.dumps(sample, ensure_ascii=False), flush=True)
-            if "errorType" in sample or "cleanupErrorType" in sample:
-                raise RuntimeError("bounded probe stopped after failure")
+                    sample["errorType"] = type(error).__name__
+                    sample["elapsedMs"] = (time.perf_counter() - started) * 1000
+                finally:
+                    # No synthesis was claimed. Cancel only after transport EOF/failure,
+                    # outside the measured interval, to release the synthetic turn.
+                    try:
+                        with bench.http(state["base"], "/api/chat/turns/" + turn, method="DELETE") as response:
+                            json.load(response)
+                        sample["cleanup"] = "cancelled_without_synthesis"
+                    except Exception as error:
+                        sample["cleanupErrorType"] = type(error).__name__
+                public["samples"].append(sample)
+                private.append(detail)
+                save(directory, label, public, private)
+                print(json.dumps(sample, ensure_ascii=False), flush=True)
+                if "errorType" in sample or "cleanupErrorType" in sample:
+                    raise RuntimeError("bounded probe stopped after failure")
     return public, private
 
 
@@ -275,7 +382,7 @@ def main():
         help="existing private benchmark-latency prepare/start directory")
     parser.add_argument("--label", required=True)
     parser.add_argument("--repetitions", type=int, default=1)
-    parser.add_argument("--cases", nargs="+", choices=[case for case, _ in CORPUS],
+    parser.add_argument("--cases", nargs="+", choices=[case for case, _ in ALL_CASES],
         default=[case for case, _ in CORPUS])
     args = parser.parse_args()
     state = json.loads((args.directory / "state.json").read_text())
