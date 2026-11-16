@@ -1,5 +1,7 @@
 # Correções de wake word e consumo — v0.8.0, 16/11/2026
 
+[Publicação oficial: 0.8.0-unstable.16](wakeword-battery-publication-unstable16.md).
+
 Esta entrega trata as correções da etapa 1. A confirmação adicional da wake word
 fica disponível ao importar o pacote privado `Strong + verificador`.
 
@@ -61,10 +63,11 @@ representam energia de todo o aparelho.
 
 1. Atualizar o aplicativo para a versão de desenvolvimento que contém esta
    correção, em Configurações → Atualizações.
-2. Copiar o arquivo privado `aegis-strong-verifier-20261116.zip` para o telefone
-   e selecioná-lo no fluxo existente de importação do modelo hands-free.
-3. Confirmar a identidade `Strong + verificador` e testar chamadas completas,
-   inclusive começando o pedido imediatamente após dizer Aegis.
+2. Copiar o arquivo privado `aegis-strong-verifier-20261116.zip` para o telefone.
+   Desativar a escuta para liberar o botão de importação e selecionar esse ZIP
+   no fluxo existente de importação do modelo hands-free.
+3. Confirmar a identidade `Strong + verificador`, reativar a escuta e testar
+   chamadas completas, inclusive começando o pedido imediatamente após dizer Aegis.
 4. Comparar o comportamento em conversas, música, vídeos e silêncio. Registrar
    os rótulos humanos dos disparos e exportar métricas após uso normal.
 5. Para retornar ao Strong anterior, importar o arquivo privado
