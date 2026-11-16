@@ -19,6 +19,127 @@ namespace Aegis.Application.Tests;
 [Collection("LatencyProfileEnvironment")]
 public sealed class DeferredToolSearchTests
 {
+    [Theory]
+    [InlineData(false, "hands_free")]
+    [InlineData(true, null)]
+    [InlineData(true, "ordinary")]
+    public async Task NamespaceFlagAloneOrOrdinaryChatCannotChangeWire(bool defer, string? origin)
+    {
+        foreach (var streaming in new[] { false, true })
+            Assert.Equal(await Payload(defer, streaming, origin, [EchoDefinition]),
+                await Payload(defer, streaming, origin, [EchoDefinition], namespaces: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NamespacesPreserveOriginalFunctionsWhileRemindersAndTerminalsStayEager(bool streaming)
+    {
+        ModelToolDefinition Definition(string name) => new(name, "Original description: " + name,
+            JsonSerializer.SerializeToElement(new { type = "object", properties = new { id = new { type = "integer" } } }));
+        var definitions = new[] { Definition("email_search"), Definition("memory_search"), Definition("email_read"),
+            Definition("reminder_create"), Definition("reminder_series_list"), HandsFreeReply.Definition, FinalSpeechSegments.Definition };
+        using var before = JsonDocument.Parse(await Payload(false, streaming, "hands_free", definitions));
+        using var after = JsonDocument.Parse(await Payload(true, streaming, "hands_free", definitions, namespaces: true));
+        var top = after.RootElement.GetProperty("tools").EnumerateArray().ToArray();
+        var namespaces = top.Where(item => item.GetProperty("type").GetString() == "namespace").ToArray();
+        Assert.Equal(new[] { "aegis_email", "aegis_memory" }, namespaces.Select(item => item.GetProperty("name").GetString()));
+        var flattened = top.Where(item => item.GetProperty("type").GetString() == "function")
+            .Concat(namespaces.SelectMany(item => item.GetProperty("tools").EnumerateArray())).ToArray();
+        Assert.Equal(definitions.Length, flattened.Length);
+        foreach (var original in before.RootElement.GetProperty("tools").EnumerateArray())
+        {
+            var name = original.GetProperty("name").GetString()!;
+            var function = Assert.Single(flattened, item => item.GetProperty("name").GetString() == name);
+            foreach (var property in new[] { "name", "description", "parameters", "strict" })
+                Assert.Equal(original.GetProperty(property).GetRawText(), function.GetProperty(property).GetRawText());
+            var eager = name.StartsWith("reminder_") || name == HandsFreeReply.ToolName || name == FinalSpeechSegments.ToolName;
+            Assert.Equal(!eager, function.TryGetProperty("defer_loading", out var loading));
+            if (!eager) Assert.True(loading.GetBoolean());
+            Assert.Equal(eager, top.Any(item => item.TryGetProperty("name", out var n) && n.GetString() == name));
+        }
+        foreach (var group in namespaces)
+        {
+            Assert.False(group.TryGetProperty("defer_loading", out _));
+            foreach (var function in group.GetProperty("tools").EnumerateArray())
+                Assert.Contains(function.GetProperty("name").GetString()!, group.GetProperty("description").GetString()!);
+        }
+        Assert.Equal("server", Assert.Single(top, item => item.GetProperty("type").GetString() == "tool_search").GetProperty("execution").GetString());
+        Assert.Equal("default", after.RootElement.GetProperty("service_tier").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NamespaceCallbackUsesOriginalGlobalNameAndPreservesQualifierBetweenRounds(bool streaming)
+    {
+        var result = await Loop(true, streaming, namespaces: true);
+        Assert.Equal("Resposta final preservada.", result.Speech);
+        Assert.Equal(1, result.ToolAttempts);
+        Assert.Equal(1, result.ToolEffects);
+        using var second = JsonDocument.Parse(result.Requests[1]);
+        var items = second.RootElement.GetProperty("input").EnumerateArray().ToArray();
+        var loaded = Assert.Single(items, item => item.TryGetProperty("type", out var type) && type.GetString() == "tool_search_output");
+        Assert.Equal("aegis_echo", loaded.GetProperty("tools")[0].GetProperty("name").GetString());
+        Assert.Equal("namespace", loaded.GetProperty("tools")[0].GetProperty("type").GetString());
+        Assert.Equal("echo", loaded.GetProperty("tools")[0].GetProperty("tools")[0].GetProperty("name").GetString());
+        var call = Assert.Single(items, item => item.TryGetProperty("type", out var type) && type.GetString() == "function_call");
+        Assert.Equal("echo", call.GetProperty("name").GetString());
+        Assert.Equal("aegis_echo", call.GetProperty("namespace").GetString());
+        var output = Assert.Single(items, item => item.TryGetProperty("type", out var type) && type.GetString() == "function_call_output");
+        Assert.Equal(call.GetProperty("call_id").GetString(), output.GetProperty("call_id").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NamespacedDiscoveryDoesNotBypassGuardsOrCreateQualifiedAliases(bool streaming)
+    {
+        var denied = await Loop(true, streaming, authorized: false, namespaces: true);
+        Assert.Equal(1, denied.ToolAttempts);
+        Assert.Equal(0, denied.ToolEffects);
+        var alias = await Loop(true, streaming, unknown: true, namespaces: true);
+        Assert.Equal(0, alias.ToolAttempts);
+        Assert.Equal(0, alias.ToolEffects);
+        using var next = JsonDocument.Parse(alias.Requests[1]);
+        Assert.Contains(next.RootElement.GetProperty("input").EnumerateArray(), item =>
+            item.TryGetProperty("type", out var type) && type.GetString() == "function_call_output" &&
+            item.GetProperty("output").GetString()!.Contains("unknown_tool"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EagerRemindersAndTerminalOnlyRoundDoesNotAddSearch(bool streaming)
+    {
+        var reminder = new ModelToolDefinition("reminder_create", "Create reminder", EchoDefinition.ParametersSchema);
+        using var document = JsonDocument.Parse(await Payload(true, streaming, "hands_free", [reminder, HandsFreeReply.Definition], namespaces: true));
+        var tools = document.RootElement.GetProperty("tools").EnumerateArray().ToArray();
+        Assert.Equal(2, tools.Length);
+        Assert.All(tools, tool =>
+        {
+            Assert.Equal("function", tool.GetProperty("type").GetString());
+            Assert.False(tool.TryGetProperty("defer_loading", out _));
+        });
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    [InlineData("invalid", false)]
+    public void ToolNamespacesUsesExistingBooleanConfigurationAndDefaultsOff(string? value, bool expected)
+    {
+        var values = new Dictionary<string, string?> { ["ConnectionStrings:AegisDatabase"] = "Host=unused;Database=unused",
+            ["AEGIS_OPENAI_DEFER_TOOLS"] = "true", ["AEGIS_OPENAI_TOOL_NAMESPACES"] = value,
+            ["AEGIS_OPENAI_SERVICE_TIER"] = "default" };
+        using var services = new ServiceCollection().AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(values).Build()).BuildServiceProvider();
+        var options = services.GetRequiredService<IOptions<OpenAIOptions>>().Value;
+        Assert.Equal(expected, options.ToolNamespaces);
+        Assert.True(options.DeferTools);
+        Assert.Equal("default", options.ServiceTier);
+    }
+
     [Fact]
     public async Task DefaultOffKeepsOriginalWireBytes()
     {
@@ -150,14 +271,14 @@ public sealed class DeferredToolSearchTests
 
     private static readonly ModelToolDefinition EchoDefinition = new("echo", "Echo", JsonSerializer.SerializeToElement(new { type = "object" }));
     private static ModelRequest Request(string? origin) => new("policy", "pedido", Metadata: origin is null ? null : new Dictionary<string, string> { ["origin"] = origin });
-    private static OpenAIOptions Settings(bool defer) => new() { ApiKey = "fake-key", DeferTools = defer, ServiceTier = "default" };
+    private static OpenAIOptions Settings(bool defer, bool namespaces = false) => new() { ApiKey = "fake-key", DeferTools = defer, ToolNamespaces = namespaces, ServiceTier = "default" };
 
-    private static async Task<string> Payload(bool defer, bool streaming, string? origin, ModelToolDefinition[] tools)
+    private static async Task<string> Payload(bool defer, bool streaming, string? origin, ModelToolDefinition[] tools, bool namespaces = false)
     {
         var handler = new PayloadHandler();
         using var http = new HttpClient(handler) { BaseAddress = new("https://example.invalid/") };
         using var metrics = new AegisMetrics();
-        var model = new OpenAIResponsesClient(http, Options.Create(Settings(defer)), metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var model = new OpenAIResponsesClient(http, Options.Create(Settings(defer, namespaces)), metrics, NullLogger<OpenAIResponsesClient>.Instance);
         var request = new ModelToolRequest(Request(origin), tools);
         if (streaming) { await foreach (var chunk in model.RespondWithToolsStreamAsync(request)) { } }
         else await model.RespondWithToolsAsync(request);
@@ -165,18 +286,18 @@ public sealed class DeferredToolSearchTests
     }
 
     private static async Task<(string Speech, string? Continuation, List<string> Requests, int ToolAttempts, int ToolEffects, List<long?> SearchCounts)> Loop(
-        bool defer, bool streaming, bool authorized = true, bool unknown = false, bool profile = true)
+        bool defer, bool streaming, bool authorized = true, bool unknown = false, bool profile = true, bool namespaces = false)
     {
         var previous = Environment.GetEnvironmentVariable("AEGIS_LATENCY_PROFILE");
         Environment.SetEnvironmentVariable("AEGIS_LATENCY_PROFILE", profile ? "1" : null);
         try
         {
             var tool = new EchoTool(authorized);
-            var handler = new LoopHandler(defer, streaming, unknown);
+            var handler = new LoopHandler(defer, streaming, unknown, namespaces);
             using var http = new HttpClient(handler) { BaseAddress = new("https://example.invalid/") };
             using var metrics = new AegisMetrics();
             var logger = new Logger();
-            var model = new OpenAIResponsesClient(http, Options.Create(Settings(defer)), metrics, logger);
+            var model = new OpenAIResponsesClient(http, Options.Create(Settings(defer, namespaces)), metrics, logger);
             var loop = new AegisToolLoop(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, metrics);
             var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "pedido", "hands_free", Guid.NewGuid(), streaming);
             var speech = new StringBuilder();
@@ -225,7 +346,7 @@ public sealed class DeferredToolSearchTests
         }
     }
 
-    private sealed class LoopHandler(bool search, bool streaming, bool unknown) : HttpMessageHandler
+    private sealed class LoopHandler(bool search, bool streaming, bool unknown, bool namespaces) : HttpMessageHandler
     {
         public readonly List<string> Requests = [];
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -233,15 +354,18 @@ public sealed class DeferredToolSearchTests
             Requests.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
             if (Requests.Count == 1)
             {
-                var name = unknown ? "not_registered" : "echo";
+                var name = unknown ? (namespaces ? "aegis_echo.echo" : "not_registered") : "echo";
                 var output = new List<object>();
                 if (search)
                 {
                     output.Add(new { type = "tool_search_call", id = "search-1", execution = "server", call_id = (string?)null, status = "completed", arguments = new { paths = new[] { name } } });
-                    output.Add(new { type = "tool_search_output", id = "loaded-1", execution = "server", call_id = (string?)null, status = "completed",
-                        tools = new[] { new { type = "function", name, description = "Echo", parameters = EchoDefinition.ParametersSchema, strict = false, defer_loading = true } } });
+                    var loadedFunction = new { type = "function", name, description = "Echo", parameters = EchoDefinition.ParametersSchema, strict = false, defer_loading = true };
+                    object loaded = namespaces ? new { type = "namespace", name = "aegis_echo", description = "Echo. Funções: echo.", tools = new[] { loadedFunction } } : loadedFunction;
+                    output.Add(new { type = "tool_search_output", id = "loaded-1", execution = "server", call_id = (string?)null, status = "completed", tools = new[] { loaded } });
                 }
-                output.Add(new { type = "function_call", id = "function-1", call_id = "call-1", name, arguments = "{}" });
+                var call = new Dictionary<string, object?> { ["type"] = "function_call", ["id"] = "function-1", ["call_id"] = "call-1", ["name"] = name, ["arguments"] = "{}" };
+                if (namespaces) call["namespace"] = "aegis_echo";
+                output.Add(call);
                 return Response(streaming, new { id = "response-1", model = "gpt-6-luna", output, usage = new { input_tokens = 100, output_tokens = 10 } },
                     output.Select(item => (object)new { type = "response.output_item.added", item }));
             }

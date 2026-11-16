@@ -20,6 +20,8 @@ public sealed class OpenAIOptions
 
     public bool DeferTools { get; set; }
 
+    public bool ToolNamespaces { get; set; }
+
     public string ServiceTier { get; set; } = "auto";
 
     public int MaxOutputTokens { get; set; } = 4000;

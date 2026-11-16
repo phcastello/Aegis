@@ -549,9 +549,11 @@ public sealed class OpenAIResponsesClient(
 
         var deferTools = openAIOptions.DeferTools && request.Purpose == ModelPurpose.Chat &&
             request.Metadata is { } requestMetadata && requestMetadata.TryGetValue("origin", out var origin) && origin == HandsFreeReply.Origin;
-        static bool IsDeferredFunction(ModelToolDefinition tool) =>
-            tool.Name != HandsFreeReply.ToolName && tool.Name != FinalSpeechSegments.ToolName;
-        var toolDefinitions = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => (object)new
+        var useNamespaces = deferTools && openAIOptions.ToolNamespaces;
+        bool IsDeferredFunction(ModelToolDefinition tool) =>
+            tool.Name != HandsFreeReply.ToolName && tool.Name != FinalSpeechSegments.ToolName &&
+            !(useNamespaces && tool.Name.StartsWith("reminder_", StringComparison.Ordinal));
+        object FunctionDefinition(ModelToolDefinition tool) => new
         {
             type = "function",
             name = tool.Name,
@@ -559,10 +561,26 @@ public sealed class OpenAIResponsesClient(
             parameters = tool.ParametersSchema,
             strict = tool.Name == FinalSpeechSegments.ToolName,
             defer_loading = deferTools && IsDeferredFunction(tool) ? (bool?)true : null
-        }).ToList();
+        };
+        var orderedTools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToArray();
+        List<object>? toolDefinitions;
+        if (useNamespaces && orderedTools is not null)
+        {
+            toolDefinitions = orderedTools.Where(tool => !IsDeferredFunction(tool)).Select(FunctionDefinition).ToList();
+            foreach (var group in orderedTools.Where(IsDeferredFunction).GroupBy(tool => tool.Name.Split('_', 2)[0])
+                         .OrderBy(group => group.Key, StringComparer.Ordinal))
+                toolDefinitions.Add(new
+                {
+                    type = "namespace",
+                    name = "aegis_" + group.Key,
+                    description = NamespaceDescription(group.Key) + " Funções: " + string.Join(", ", group.Select(tool => tool.Name)) + ".",
+                    tools = group.Select(FunctionDefinition).ToList()
+                });
+        }
+        else toolDefinitions = orderedTools?.Select(FunctionDefinition).ToList();
         // Hosted discovery never replaces the application registry or its execution checks.
-        // Terminal-only fallback rounds have nothing to discover.
-        if (deferTools && tools?.Any(IsDeferredFunction) == true)
+        // Eager-only fallback rounds have nothing to discover.
+        if (deferTools && orderedTools?.Any(IsDeferredFunction) == true)
             toolDefinitions!.Add(new { type = "tool_search", execution = "server" });
 
         return new
@@ -584,6 +602,17 @@ public sealed class OpenAIResponsesClient(
             tool_choice = tools is { Count: > 0 } ? "auto" : null
         };
     }
+
+    private static string NamespaceDescription(string prefix) => prefix switch
+    {
+        "email" => "Consultar e gerenciar e-mails, conexão e ações pendentes.",
+        "calendar" => "Consultar e gerenciar agenda, calendários e ações pendentes.",
+        "memory" => "Buscar, registrar, corrigir e esquecer memórias.",
+        "place" => "Consultar e resolver lugares cadastrados.",
+        "location" => "Consultar o estado da localização.",
+        "geographic" => "Gerenciar lembretes por localização.",
+        _ => "Ferramentas da categoria " + prefix + "."
+    };
 
     private string ChooseModel()
     {

@@ -54,6 +54,7 @@ public static class DependencyInjection
             options.ServiceTier = Read(configuration, "AEGIS_OPENAI_SERVICE_TIER", options.ServiceTier);
             options.PreferHttp2 = ReadBool(configuration, "AEGIS_OPENAI_HTTP2", options.PreferHttp2);
             options.DeferTools = ReadBool(configuration, "AEGIS_OPENAI_DEFER_TOOLS", options.DeferTools);
+            options.ToolNamespaces = ReadBool(configuration, "AEGIS_OPENAI_TOOL_NAMESPACES", options.ToolNamespaces);
             options.StoreResponses = ReadBool(
                 configuration,
                 "AEGIS_OPENAI_STORE_RESPONSES",
