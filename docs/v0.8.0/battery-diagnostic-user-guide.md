@@ -1,5 +1,7 @@
 # Como comparar o consumo da escuta no Android
 
+[Entrega oficial: 0.8.0-unstable.17](battery-diagnostic-publication-unstable17.md).
+
 O diagnóstico fica em **Configurações → Áudio e voz → Investigar consumo de bateria**.
 As três janelas usam o mesmo telefone, configuração e versão. Nenhuma gravação
 é guardada ou enviada por esses testes. A Aegis não responde a chamadas durante
