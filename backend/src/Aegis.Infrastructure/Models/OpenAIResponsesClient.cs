@@ -462,6 +462,10 @@ public sealed class OpenAIResponsesClient(
 
     private void RecordUsage(JsonElement response)
     {
+        if (TurnLatencyProfile.IsActive && response.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
+            TurnLatencyProfile.Mark("model.tool_search_calls", output.EnumerateArray().LongCount(item =>
+                item.ValueKind == JsonValueKind.Object && item.TryGetProperty("type", out var type) &&
+                type.ValueKind == JsonValueKind.String && type.GetString() == "tool_search_call"));
         if (TurnLatencyProfile.IsActive && response.TryGetProperty("service_tier", out var tier) &&
             tier.ValueKind == JsonValueKind.String && tier.GetString() is { } effectiveTier &&
             effectiveTier is "default" or "auto" or "priority" or "fast" or "flex" or "scale")
@@ -543,6 +547,24 @@ public sealed class OpenAIResponsesClient(
             ? request.InputItems
             : request.Input;
 
+        var deferTools = openAIOptions.DeferTools && request.Purpose == ModelPurpose.Chat &&
+            request.Metadata is { } requestMetadata && requestMetadata.TryGetValue("origin", out var origin) && origin == HandsFreeReply.Origin;
+        static bool IsDeferredFunction(ModelToolDefinition tool) =>
+            tool.Name != HandsFreeReply.ToolName && tool.Name != FinalSpeechSegments.ToolName;
+        var toolDefinitions = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => (object)new
+        {
+            type = "function",
+            name = tool.Name,
+            description = tool.Description,
+            parameters = tool.ParametersSchema,
+            strict = tool.Name == FinalSpeechSegments.ToolName,
+            defer_loading = deferTools && IsDeferredFunction(tool) ? (bool?)true : null
+        }).ToList();
+        // Hosted discovery never replaces the application registry or its execution checks.
+        // Terminal-only fallback rounds have nothing to discover.
+        if (deferTools && tools?.Any(IsDeferredFunction) == true)
+            toolDefinitions!.Add(new { type = "tool_search", execution = "server" });
+
         return new
         {
             model,
@@ -557,14 +579,7 @@ public sealed class OpenAIResponsesClient(
                 ? null
                 : openAIOptions.ServiceTier,
             metadata,
-            tools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => new
-            {
-                type = "function",
-                name = tool.Name,
-                description = tool.Description,
-                parameters = tool.ParametersSchema,
-                strict = tool.Name == FinalSpeechSegments.ToolName
-            }),
+            tools = toolDefinitions,
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null
         };

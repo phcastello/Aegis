@@ -18,6 +18,8 @@ public sealed class OpenAIOptions
 
     public bool PreferHttp2 { get; set; }
 
+    public bool DeferTools { get; set; }
+
     public string ServiceTier { get; set; } = "auto";
 
     public int MaxOutputTokens { get; set; } = 4000;
