@@ -59,6 +59,11 @@ def prepare(directory):
     # notification credentials, owner database or data-protection mounts are copied.
     env = {k: v for k, v in env.items() if k == "OPENAI_API_KEY" or
         k.startswith(("AEGIS_CHAT_", "AEGIS_MAX_OUTPUT_", "AEGIS_OPENAI_", "AEGIS_MEMORY_", "AEGIS_TTS_", "AEGIS_STT_", "AEGIS_TITLE_"))}
+    requested_source_tier = env.get("AEGIS_OPENAI_SERVICE_TIER")
+    if requested_source_tier not in {"default", "auto", "priority", "fast", "ultrafast", "flex", "scale"}:
+        requested_source_tier = None
+    # This experiment cannot inherit a premium/automatic project setting.
+    env["AEGIS_OPENAI_SERVICE_TIER"] = "default"
     run = secrets.token_hex(5)
     project = "aegis_latency_" + run
     db_name = "aegis_memory_v060_" + run
@@ -94,6 +99,8 @@ def prepare(directory):
     state = {"project": project, "database": db_name, "compose": str(private_compose),
         "base": f"http://127.0.0.1:{port}", "sourceImage": live["Image"],
         "sourceCommit": live["Config"]["Labels"].get("org.opencontainers.image.revision"),
+        "requestedSourceTier": requested_source_tier,
+        "experimentServiceTier": "default", "forcedDefaultServiceTier": True,
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     (directory / "state.json").write_text(json.dumps(state, indent=2))
     print(json.dumps({"prepared": True, "database": db_name, "sourceCommit": state["sourceCommit"]}))
