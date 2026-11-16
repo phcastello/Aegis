@@ -50,10 +50,12 @@ public static class TurnLatencyProfile
         await operation();
     }
 
-    public static void Mark(string stage, long? count = null)
+    public static bool IsActive => Current.Value is not null;
+
+    public static void Mark(string stage, long? count = null, double durationMilliseconds = 0)
     {
-        if (Current.Value is { } context)
-            Write(context, stage, 0, count);
+        if (Current.Value is { } context && double.IsFinite(durationMilliseconds) && durationMilliseconds >= 0)
+            Write(context, stage, durationMilliseconds, count);
     }
 
     private static void Write(Context context, string stage, double duration, long? count = null) =>

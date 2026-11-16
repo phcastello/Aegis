@@ -5,6 +5,7 @@ using Aegis.Application.Voice;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -146,6 +147,7 @@ public sealed class OpenAIResponsesClient(
         string responseModel = model;
         var firstText = false;
         var firstArguments = false;
+        var firstSse = false;
         var segmentParser = request.Tools.Any(t => t.Name == FinalSpeechSegments.ToolName) ? new FinalSpeechSegmentParser() : null;
         string? terminalItemId = null;
         var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
@@ -160,6 +162,7 @@ public sealed class OpenAIResponsesClient(
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
             httpStatusCode = (int)response.StatusCode;
+            RecordProviderHeaders(response);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -252,6 +255,11 @@ public sealed class OpenAIResponsesClient(
                         break;
                     }
 
+                    if (!firstSse && data.Length > 0)
+                    {
+                        firstSse = true;
+                        TurnLatencyProfile.Mark("model.first_sse");
+                    }
                     responseBody.AppendLine(data);
                     JsonDocument document;
                     try
@@ -424,8 +432,24 @@ public sealed class OpenAIResponsesClient(
         return request;
     }
 
+    private static void RecordProviderHeaders(HttpResponseMessage response)
+    {
+        if (!TurnLatencyProfile.IsActive) return;
+        TurnLatencyProfile.Mark("model.response_headers", (int)response.StatusCode);
+        // Accept only one finite, non-negative numeric duration. Never log raw headers.
+        if (!response.Headers.TryGetValues("openai-processing-ms", out var values)) return;
+        var durations = values.Take(2).ToArray();
+        if (durations.Length == 1 && double.TryParse(durations[0], NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var milliseconds) && double.IsFinite(milliseconds) && milliseconds >= 0)
+            TurnLatencyProfile.Mark("model.provider_processing", durationMilliseconds: milliseconds);
+    }
+
     private void RecordUsage(JsonElement response)
     {
+        if (TurnLatencyProfile.IsActive && response.TryGetProperty("service_tier", out var tier) &&
+            tier.ValueKind == JsonValueKind.String && tier.GetString() is { } effectiveTier &&
+            effectiveTier is "default" or "auto" or "priority" or "fast" or "flex" or "scale")
+            TurnLatencyProfile.Mark("model.service_tier." + effectiveTier, 1);
         if (!response.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return;
         static long Read(JsonElement parent, string name) =>
             parent.TryGetProperty(name, out var value) && value.TryGetInt64(out var count) ? count : 0;
@@ -442,6 +466,24 @@ public sealed class OpenAIResponsesClient(
             cacheWriteTokens = Read(details, "cache_write_tokens");
             metrics.LlmCachedInputTokens.Add(cachedTokens);
             metrics.LlmCacheWriteTokens.Add(cacheWriteTokens);
+        }
+        if (TurnLatencyProfile.IsActive)
+        {
+            static void MarkTokens(JsonElement parent, string property, string stage)
+            {
+                if (parent.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number &&
+                    value.TryGetInt64(out var count) && count >= 0)
+                    TurnLatencyProfile.Mark(stage, count);
+            }
+            MarkTokens(usage, "input_tokens", "model.input_tokens");
+            MarkTokens(usage, "output_tokens", "model.output_tokens");
+            if (usage.TryGetProperty("input_tokens_details", out var inputDetails) && inputDetails.ValueKind == JsonValueKind.Object)
+            {
+                MarkTokens(inputDetails, "cached_tokens", "model.cached_input_tokens");
+                MarkTokens(inputDetails, "cache_write_tokens", "model.cache_write_tokens");
+            }
+            if (usage.TryGetProperty("output_tokens_details", out var outputDetails) && outputDetails.ValueKind == JsonValueKind.Object)
+                MarkTokens(outputDetails, "reasoning_tokens", "model.reasoning_tokens");
         }
         var responseModel = response.TryGetProperty("model", out var model) ? model.GetString() : null;
         logger.LogInformation("OpenAI usage {Model}: {InputTokens} input, {CachedInputTokens} cached, {CacheWriteTokens} cache write, {OutputTokens} output tokens.",

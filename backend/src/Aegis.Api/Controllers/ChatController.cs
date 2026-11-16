@@ -94,9 +94,15 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
 
         try
         {
+            var firstFinalSegmentFlushed = false;
             await foreach (var streamEvent in chatService.StreamMessageAsync(request, cancellationToken))
             {
                 await WriteStreamEventAsync(streamEvent, cancellationToken);
+                if (TurnLatencyProfile.IsActive && !firstFinalSegmentFlushed && streamEvent.Type == "final_segment")
+                {
+                    firstFinalSegmentFlushed = true;
+                    TurnLatencyProfile.Mark("chat.first_final_segment_flushed", streamEvent.Sequence);
+                }
             }
         }
         catch (OperationCanceledException)
