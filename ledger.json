@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000017,
+  "highWaterMark": 8000018,
   "reservations": [
     {
       "schema": 2,
@@ -814,6 +814,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000017
+    },
+    {
+      "schema": 2,
+      "sha": "0ca5b99bb2fe4e7b168c5af638ccc5698f279a6b",
+      "branch": "feat/v0.8.0-bateria-automatica",
+      "number": 18,
+      "platform": "both",
+      "version": "0.8.0-unstable.18",
+      "kind": "normal",
+      "sourceCommit": "0ca5b99bb2fe4e7b168c5af638ccc5698f279a6b",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "0ca5b99bb2fe4e7b168c5af638ccc5698f279a6b",
+        "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "pwa": "6e4e233df12bbac1eed5e06eed1d0f50d803ff9e",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-17T00:39:45.466Z",
+      "repository": "phcastello/Aegis",
+      "runId": "43989387955",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000018
     }
   ],
   "recommended": {
