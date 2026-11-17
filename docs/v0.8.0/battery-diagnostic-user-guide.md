@@ -1,6 +1,8 @@
 # Como comparar o consumo da escuta no Android
 
-[Entrega oficial: 0.8.0-unstable.17](battery-diagnostic-publication-unstable17.md).
+[Entrega atual: 0.8.0-unstable.18](battery-automation-publication-unstable18.md).
+A comparação automática foi acrescentada nesta versão; a entrega anterior
+[unstable.17](battery-diagnostic-publication-unstable17.md) oferece os controles individuais.
 
 O diagnóstico fica em **Configurações → Áudio e voz → Investigar consumo de bateria**.
 As três janelas usam o mesmo telefone, configuração e versão. Nenhuma gravação

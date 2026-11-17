@@ -1,5 +1,7 @@
 # Comparação automática A → B → C
 
+[Publicação e verificação física: unstable.18](battery-automation-publication-unstable18.md).
+
 A sequência nativa aguarda a tela apagar e executa escuta desligada, microfone
 sem detector e detecção local sem comandos, com 30 minutos por etapa. O
 WebView pode ficar suspenso; não controla os prazos. A configuração normal
