@@ -169,6 +169,25 @@ const runtimeSection = (runtime, begin, end) => {
   return runtime.slice(from, to);
 };
 
+// Kotlin wrappers can add adjacent functions without changing this function's contract.
+const runtimeFunction = (runtime, begin) => {
+  const start = runtime.indexOf(begin), body = runtime.indexOf('{', start);
+  assert.ok(start >= 0 && body > start, `Missing runtime function: ${begin}`);
+  let depth = 0, quote = '', lineComment = false, blockComment = false;
+  for (let i = body; i < runtime.length; i++) {
+    const c = runtime[i], next = runtime[i + 1];
+    if (lineComment) { if (c === '\n') lineComment = false; continue; }
+    if (blockComment) { if (c === '*' && next === '/') { blockComment = false; i++; } continue; }
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+    if (c === '/' && next === '/') { lineComment = true; i++; continue; }
+    if (c === '/' && next === '*') { blockComment = true; i++; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '{') depth++;
+    if (c === '}' && --depth === 0) return runtime.slice(start, i + 1);
+  }
+  assert.fail(`Unclosed runtime function: ${begin}`);
+};
+
 test('capture-only study retains the normal microphone source without requiring model or inference runtimes', () => {
   const runtime = androidSource('NodeHandsFree');
   const reconcile = runtimeSection(runtime, 'internal fun reconcile()', 'private fun batteryBlocksNormal');
@@ -205,26 +224,33 @@ test('controlled detection exits before activation collection, cue, session powe
   assert.match(assistant.slice(0, assistant.indexOf('if(!enabled')), /interruptBatteryStudy\("manual_activation"\);return null/);
 });
 
-test('durable battery suspension survives start failure and clears only after explicit stopped-worker finish', () => {
+test('durable battery suspension survives failures and clears only after stopped-worker finish or sequence completion', () => {
   const runtime = androidSource('NodeHandsFree');
   assert.match(runtime, /batterySuspended=prefs\.getBoolean\("batteryStudySuspended",false\)/);
   assert.match(runtime, /batteryBlocksNormal\(\)=batterySuspended \|\| batteryDiagnostics\.blocksNormal\(\)/);
-  assert.match(runtime, /if\(batterySuspended && it\.isNull\("active"\)\)it\.put\("requiresResume",true\)/);
+  const stateGate=runtimeFunction(runtime,'private fun batteryState()').replace(/\s+/g,'');
+  assert.ok(stateGate.includes('if((batterySuspended||batteryAutomation.blocksNormal())&&it.isNull("active"))it.put("requiresResume",true)'));
   assert.match(runtime, /else->enabled && !batteryBlocksNormal\(\)/);
-  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  const start = runtimeFunction(runtime, 'internal fun startBatteryStudy(');
   const persist = start.indexOf('putBoolean("batteryStudySuspended",true).commit()');
   assert.ok(persist >= 0 && persist < start.indexOf('batteryDiagnostics.start('));
   assert.match(start, /if\(batteryDiagnostics\.activeMode\(\)!=null\)\{alreadyActive=true;return@synchronized null\}/);
-  assert.match(start, /\}\s*if\(alreadyActive\)return state\(\)/);
+  assert.match(start, /\}\s*if\(alreadyActive\)return(?:@synchronized)? state\(\)/);
   const failure = start.slice(start.indexOf('catch(error:Throwable)'));
   assert.match(failure, /stop\("battery_interrupted"/);
   assert.doesNotMatch(failure, /putBoolean\("batteryStudySuspended",false\)|batterySuspended=false|batteryDiagnostics\.finish\(\)/);
-  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  const finish = runtimeFunction(runtime, 'internal fun finishBatteryStudy()');
   const clear = finish.indexOf('putBoolean("batteryStudySuspended",false).commit()');
   assert.ok(finish.indexOf('previous.join(1500)') >= 0 && finish.indexOf('previous.join(1500)') < clear);
-  assert.match(finish, /if\(previous\?\.isAlive==true\)batteryDiagnostics\.interrupt\("capture_shutdown_timeout"\)\s*else\s*\{/);
+  assert.match(finish, /if\(previous\?\.isAlive==true\)\s*\{[^}]*batteryDiagnostics\.interrupt\("capture_shutdown_timeout"\)[^}]*\}\s*else\s*\{/);
   assert.ok(finish.indexOf('batteryDiagnostics.finish()') < clear && clear < finish.indexOf('batterySuspended=false'));
-  assert.equal([...runtime.matchAll(/putBoolean\("batteryStudySuspended",false\)/g)].length, 1);
+  const advance=runtimeFunction(runtime,'private fun advanceBatteryAutomation(');
+  const completion=advance.indexOf('if(step.mode==null)');
+  const commit=advance.indexOf('putBoolean("batteryStudySuspended",false).commit()');
+  assert.ok(advance.indexOf('previous.join(1500)') < completion && completion < commit);
+  assert.ok(commit < advance.indexOf('batteryAutomation.complete(step)') && advance.indexOf('batteryAutomation.complete(step)') < advance.indexOf('batterySuspended=false'));
+  assert.ok(clear < finish.indexOf('batteryAutomation.cancel()') && finish.indexOf('batteryAutomation.cancel()') < finish.indexOf('batterySuspended=false'));
+  assert.equal([...runtime.matchAll(/putBoolean\("batteryStudySuspended",false\)/g)].length, 2);
   assert.doesNotMatch(start + finish, /putBoolean\("(?:enabled|diagnostic)"/);
 });
 
@@ -270,20 +296,21 @@ test('battery status probes and idempotent controls never query platform snapsho
   const state = runtimeSection(runtime, 'fun state():JSONObject', 'fun configure(');
   assert.ok(state.indexOf('val batteryView=batteryState()') >= 0 && state.indexOf('val batteryView=batteryState()') < state.indexOf('return synchronized(lock)'));
   assert.match(state, /\.put\("batteryDiagnostics",batteryView\)/);
-  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
-  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  const start = runtimeFunction(runtime, 'internal fun startBatteryStudy(');
+  const finish = runtimeFunction(runtime, 'internal fun finishBatteryStudy()');
   assert.match(start, /alreadyActive=true;return@synchronized null/);
-  assert.match(start, /\}\s*if\(alreadyActive\)return state\(\)/);
-  assert.match(finish, /alreadyFinished=true;return@synchronized null/);
-  assert.match(finish, /\}\s*if\(alreadyFinished\)return state\(\)/);
+  assert.match(start, /\}\s*if\(alreadyActive\)return(?:@synchronized)? state\(\)/);
+  assert.match(finish, /= synchronized\(batteryControl\)/);
+  assert.match(finish, /if\(!batteryBlocksNormal\(\) \|\| batteryChanging\)return@synchronized state\(\)/);
+  assert.doesNotMatch(finish, /synchronized\(lock\)/);
   assert.doesNotMatch(start + finish, /synchronized\(lock\)\s*\{[^}]*return state\(\)/);
 });
 
 test('stale study timeout posts cannot interrupt a newer study and verifier drain releases the microphone first', () => {
   const runtime = androidSource('NodeHandsFree');
-  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
-  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
-  const interrupt = runtimeSection(runtime, 'internal fun interruptBatteryStudy(', 'internal fun observeBattery(');
+  const start = runtimeFunction(runtime, 'internal fun startBatteryStudy(');
+  const finish = runtimeFunction(runtime, 'internal fun finishBatteryStudy()');
+  const interrupt = runtimeFunction(runtime, 'internal fun interruptBatteryStudy(');
   for (const transition of [start, finish, interrupt]) assert.match(transition, /batteryStudyGeneration\.incrementAndGet\(\)/);
   const observation = runtimeSection(runtime, 'internal fun observeBattery(', 'internal fun exportMetrics()');
   assert.match(observation, /val generation=batteryStudyGeneration\.get\(\)/);
@@ -301,7 +328,7 @@ test('stale study timeout posts cannot interrupt a newer study and verifier drai
 
 test('battery interruption gates and stops microphone capture before any potentially blocking platform probe', () => {
   const runtime = androidSource('NodeHandsFree');
-  const interrupt = runtimeSection(runtime, 'internal fun interruptBatteryStudy(', 'internal fun observeBattery(');
+  const interrupt = runtimeFunction(runtime, 'internal fun interruptBatteryStudy(');
   const gate = interrupt.indexOf('batteryStopRequested=true');
   const stop = interrupt.indexOf('stop("battery_interrupted"');
   const probe = interrupt.indexOf('batteryDiagnostics.interrupt(reason)');
@@ -310,9 +337,24 @@ test('battery interruption gates and stops microphone capture before any potenti
   assert.ok(capturePolicy.indexOf('if(batteryStopRequested)return false') < capturePolicy.indexOf('batteryDiagnostics.activeMode()'));
   const stopCapture = runtimeSection(runtime, 'private fun stop(', 'fun manualAcquire(');
   assert.match(stopCapture, /recorder\?\.stop\(\)/);
-  const finish = runtimeSection(runtime, 'internal fun finishBatteryStudy()', 'internal fun interruptBatteryStudy(');
+  const finish = runtimeFunction(runtime, 'internal fun finishBatteryStudy()');
   assert.ok(finish.indexOf('putBoolean("batteryStudySuspended",false).commit()') < finish.indexOf('batteryStopRequested=false'));
   assert.doesNotMatch(interrupt, /batteryStopRequested=false/);
-  const start = runtimeSection(runtime, 'internal fun startBatteryStudy(', 'internal fun finishBatteryStudy()');
+  const start = runtimeFunction(runtime, 'internal fun startBatteryStudy(');
   assert.ok(start.indexOf('check(!batteryBlocksNormal())') < start.indexOf('batteryStopRequested=false'), 'a fresh start cannot clear a prior interrupted trial gate');
+});
+
+
+test('automatic battery operations use two preserved JNI methods and validation is bound to its own closed request', () => {
+  const bridge=source('src/hands_free.rs');
+  assert.match(bridge,/"batteryAutoStart" \| "batteryAutoValidate" \| "batteryAutoCancel" => battery_auto_control\(operation\.as_str\(\)\)\?/);
+  const compact=bridge.replace(/\s+/g,'');
+  for(const expected of ['"batteryAutoStart"=>Ok(("handsFreeBatteryAutoStart",json!({"validation":false})))', '"batteryAutoValidate"=>Ok(("handsFreeBatteryAutoStart",json!({"validation":true})))', '"batteryAutoCancel"=>Ok(("handsFreeBatteryAutoCancel",json!({})))'])assert.ok(compact.includes(expected));
+  const signature=bridge.match(/pub async fn node_hands_free\(([\s\S]*?)\)\s*->\s*Result/)[1];
+  assert.doesNotMatch(signature,/duration|validation|alarm|deadline|interval/);
+  const activity=androidSource('MainActivity'),r8=source('gen/android/app/proguard-rules.pro');
+  for(const [method,target,payload] of [['handsFreeBatteryAutoStart','batteryAutoStart',',payload'],['handsFreeBatteryAutoCancel','batteryAutoCancel','']]){
+    assert.ok(activity.includes(`fun ${method}(payload:String):String=NodeHandsFree.${target}(this${payload})`));
+    assert.ok(r8.includes(`public java.lang.String ${method}(java.lang.String);`));
+  }
 });

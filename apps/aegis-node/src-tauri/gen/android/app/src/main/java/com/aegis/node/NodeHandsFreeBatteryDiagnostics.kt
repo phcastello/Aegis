@@ -89,6 +89,7 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
     private val runs=root.optJSONArray("runs")?:JSONArray().also{root.put("runs",it)}
     private var active:JSONObject?=null
     @Volatile private var publishedMode:String?=null
+    @Volatile private var publishedStartElapsedMs:Long?=null
     // The audio/verifier threads never acquire the JSON/IO monitor of this class.
     // This separate monitor protects only primitive counters and bounded issue codes.
     private class RunCounters(val id:String,val mode:String) {
@@ -120,22 +121,33 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
         } else if(saved!=null && requiresResume)persist()
     }
     fun activeMode():String?=publishedMode
+    fun activeRunId():String?=activeCounters?.id
+    fun activeStartElapsedMs():Long?=publishedStartElapsedMs
     fun blocksNormal():Boolean=publishedMode!=null || requiresResume
 
-    @Synchronized fun start(mode:String,identity:JSONObject):JSONObject {
+    @Synchronized fun start(mode:String,identity:JSONObject,automationId:String?=null,validation:Boolean=false):JSONObject {
         active?.let{return state()}
         require(mode in modes){"battery_mode"}
-        check(!requiresResume){"battery_resume_required"}
+        require(automationId==null || automationId.matches(Regex("[A-Za-z0-9_-]{1,128}"))){"battery_automation_id"}
+        require(!validation || automationId!=null){"battery_validation_requires_automation"}
+        if(requiresResume) {
+            val previous=if(runs.length()>0)runs.optJSONObject(runs.length()-1) else null
+            check(automationId!=null && previous!=null && !previous.isNull("automationId") &&
+                previous.optString("automationId")==automationId && previous.optString("status")=="completed" &&
+                previous.optBoolean("validation",false)==validation){"battery_resume_required"}
+        }
         val snapshot=takeSnapshot()
         val row=JSONObject().put("id",newId()).put("mode",mode).put("status","active")
             .put("comparisonKey",comparisonKey(identity,snapshot))
+            .put("automationId",automationId?:JSONObject.NULL).put("validation",validation)
             .put("identity",JSONObject(identity.toString())).put("startedAt",snapshot.opt("at")?:JSONObject.NULL)
             .put("endedAt",JSONObject.NULL).put("durationMs",JSONObject.NULL)
             .put("eligible",false).put("issues",JSONArray()).put("samples",JSONArray())
             .put("captureInputSamples",0L).put("detectionInputSamples",0L)
             .put("components",JSONObject())
         runs.put(row);while(runs.length()>MAX_RUNS){runs.remove(0);root.put("runsDropped",root.optLong("runsDropped")+1)}
-        active=row;activeCounters=RunCounters(row.getString("id"),mode);publishedMode=mode;requiresResume=false
+        active=row;activeCounters=RunCounters(row.getString("id"),mode);publishedStartElapsedMs=snapshot.number("elapsedMs");publishedMode=mode;requiresResume=false
+        if(validation)issue(row,"validation_only")
         appendSnapshot(row,snapshot);updateSummary(row)
         try{persist(strict=true)}catch(error:Exception){
             requiresResume=true;closeRun("interrupted","storage_failure",snapshot);throw error
@@ -149,6 +161,14 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
         if(active!=null)closeRun("completed",null,takeSnapshot())
         persist(strict=true,resumeValue=false)
         requiresResume=false
+        return state()
+    }
+    /** Automation-only boundary: complete this row but keep normal listening blocked. */
+    @Synchronized fun finishPhase():JSONObject {
+        if(active==null)return state()
+        requiresResume=true
+        closeRun("completed",null,takeSnapshot())
+        persist(strict=true)
         return state()
     }
     @Synchronized fun interrupt(reason:String) {
@@ -284,7 +304,7 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
             row.optLong("detectionInputSamples")>0 && !components.has("detector"))issue(row,"observation_incomplete")
         if(status!="completed")issue(row,"observation_incomplete")
         row.put("eligible",status=="completed" && row.getJSONArray("issues").length()==0)
-        active=null;activeCounters=null;publishedMode=null
+        active=null;activeCounters=null;publishedMode=null;publishedStartElapsedMs=null
     }
     private fun updateSummary(row:JSONObject) {
         flushCounters(row)

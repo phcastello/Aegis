@@ -300,4 +300,37 @@ class NodeHandsFreeBatteryDiagnosticsTest {
             JSONObject(device.toString()).put("androidBuildFingerprint","firmware-update-same-android13")
         ))assertNotEquals(baseline,key(identity,changed))
     }
+
+    @Test fun automationPhasesKeepGateAndRequireTheSameCompletedSequence() {
+        val f=Fixture();val d=f.store()
+        d.start("off",identity(),"seq-a");assertNotNull(d.activeRunId());assertEquals(1000L,d.activeStartElapsedMs())
+        f.advance(1200000);d.finishPhase()
+        assertTrue(d.blocksNormal());assertNull(d.activeMode());assertNull(d.activeRunId());assertNull(d.activeStartElapsedMs())
+        assertThrows(IllegalStateException::class.java){d.start("capture_only",identity())}
+        assertThrows(IllegalStateException::class.java){d.start("capture_only",identity(),"seq-b")}
+        d.start("capture_only",identity(),"seq-a");d.capture(19_200_000,false);d.component("capture_thread",0,1,1)
+        f.advance(1200000);d.finishPhase();assertTrue(d.blocksNormal())
+        d.start("detection",identity(),"seq-a");d.capture(19_200_000,true);d.component("capture_thread",0,1,1);d.component("detector",3200,1,1)
+        f.advance(1200000);d.finishPhase();assertTrue(d.blocksNormal());d.finish();assertFalse(d.blocksNormal())
+        val rows=d.export().getJSONArray("runs");assertEquals(3,rows.length())
+        val key=rows.getJSONObject(0).getString("comparisonKey")
+        for(i in 0..2){assertEquals("seq-a",rows.getJSONObject(i).getString("automationId"));assertEquals(key,rows.getJSONObject(i).getString("comparisonKey"))}
+    }
+    @Test fun validationMetadataNeverMakesAnEnergyComparisonEligible() {
+        val f=Fixture();val d=f.store();d.start("off",identity(),"seq-validation",true)
+        f.advance(1800000);d.finishPhase()
+        val row=last(d);assertEquals("completed",row.getString("status"));assertFalse(row.getBoolean("eligible"))
+        assertTrue(row.getBoolean("validation"));assertTrue(issues(row).contains("validation_only"))
+        assertThrows(IllegalStateException::class.java){d.start("capture_only",identity(),"seq-validation",false)}
+        d.start("capture_only",identity(),"seq-validation",true)
+        d.interrupt("charging")
+        assertThrows(IllegalStateException::class.java){d.start("detection",identity(),"seq-validation",true)}
+        d.finish()
+    }
+    @Test fun restartedAutomationPhaseCannotUseTheInternalGateContinuation() {
+        val f=Fixture();val d=f.store();d.start("off",identity(),"seq-a");f.advance(60000)
+        val restored=f.store();assertTrue(restored.blocksNormal())
+        assertThrows(IllegalStateException::class.java){restored.start("capture_only",identity(),"seq-a")}
+        restored.finish();assertFalse(restored.blocksNormal())
+    }
 }

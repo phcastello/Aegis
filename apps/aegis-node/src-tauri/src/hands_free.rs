@@ -17,6 +17,15 @@ fn battery_start_payload(mode: Option<&str>) -> Result<Value, HandsFreeError> {
     Ok(json!({"mode": mode}))
 }
 
+fn battery_auto_control(operation: &str) -> Result<(&'static str, Value), HandsFreeError> {
+    match operation {
+        "batteryAutoStart" => Ok(("handsFreeBatteryAutoStart", json!({"validation":false}))),
+        "batteryAutoValidate" => Ok(("handsFreeBatteryAutoStart", json!({"validation":true}))),
+        "batteryAutoCancel" => Ok(("handsFreeBatteryAutoCancel", json!({}))),
+        _ => Err(HandsFreeError::new("invalid_request")),
+    }
+}
+
 #[tauri::command]
 pub async fn node_hands_free(
     app: tauri::AppHandle,
@@ -41,6 +50,7 @@ pub async fn node_hands_free(
         ),
         "batteryStart" => ("handsFreeBatteryStart", battery_start_payload(battery_mode.as_deref())?),
         "batteryFinish" => ("handsFreeBatteryFinish", json!({})),
+        "batteryAutoStart" | "batteryAutoValidate" | "batteryAutoCancel" => battery_auto_control(operation.as_str())?,
         "cancel" => ("handsFreeCancel", json!({})),
         "collectionConfigure" => {
             let limit = collection_limit_mi_b.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
@@ -148,6 +158,23 @@ mod battery_tests {
     fn missing_unknown_or_unbounded_battery_modes_are_rejected() {
         for mode in [None, Some(""), Some("diagnostic"), Some("off\n"), Some("/private/audio")] {
             assert_eq!(battery_start_payload(mode).unwrap_err().code, "invalid_request");
+        }
+    }
+}
+
+#[cfg(test)]
+mod battery_auto_tests {
+    use super::*;
+    #[test]
+    fn automatic_controls_bind_validation_to_the_closed_operation_only() {
+        assert_eq!(battery_auto_control("batteryAutoStart").unwrap(), ("handsFreeBatteryAutoStart",json!({"validation":false})));
+        assert_eq!(battery_auto_control("batteryAutoValidate").unwrap(), ("handsFreeBatteryAutoStart",json!({"validation":true})));
+        assert_eq!(battery_auto_control("batteryAutoCancel").unwrap(), ("handsFreeBatteryAutoCancel",json!({})));
+    }
+    #[test]
+    fn arbitrary_automation_names_and_durations_are_not_native_controls() {
+        for operation in ["autoStart", "batteryAutoStart?duration=1", "batteryAutoValidate\n", "setAlarm", "batteryAutoFinish"] {
+            assert_eq!(battery_auto_control(operation).unwrap_err().code,"invalid_request");
         }
     }
 }

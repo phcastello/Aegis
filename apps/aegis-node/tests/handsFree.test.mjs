@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { handsFree, handsFreeError, acquireNativeAudio, latestBatteryRuns, batteryRateDifference } from '../.test-build/services/handsFree.js';
+import { handsFree, handsFreeError, acquireNativeAudio, latestBatteryRuns, batteryRateDifference, isBatteryAutomationLive, batteryRunsForComparison } from '../.test-build/services/handsFree.js';
 import { useHandsFreeSettings } from '../.test-build/composables/useHandsFreeSettings.js';
 
 afterEach(() => clearMocks());
@@ -322,4 +322,86 @@ test('study prerequisites are explicit and allow capture-only without a detector
   response = { ...response, permissionGranted: true }; await settings.refresh();
   assert.equal(settings.canStartBattery('capture_only'), true); assert.equal(settings.canStartBattery('detection'), false);
   response = { ...response, modelReady: true }; await settings.refresh(); assert.equal(settings.canStartBattery('detection'), true);
+});
+
+
+const batteryAutomation = (overrides = {}) => ({ id: 'sequence_1', status: 'waiting_screen_off', mode: 'off', stageDurationMs: 1800000, validation: false, remainingEstimateMs: 5400000, runIds: [], alarmPrecision: 'inexact', delayMs: 0, issue: null, ...overrides });
+const automaticState = (automation = null) => ({ ...initial, assistantSelected: true, permissionGranted: true, modelReady: true, batteryDiagnostics: batteryStudy({ automation }) });
+
+test('automatic operations are closed argument-free requests and preserve older native state', async () => {
+  globalThis.window = {}; const calls = [];
+  mockIPC((command, args) => { calls.push({ command, args }); return automaticState(); });
+  for (const operation of ['batteryAutoStart', 'batteryAutoValidate', 'batteryAutoCancel']) await handsFree(operation);
+  assert.deepEqual(calls, ['batteryAutoStart', 'batteryAutoValidate', 'batteryAutoCancel'].map(operation => ({ command: 'node_hands_free', args: { operation } })));
+  mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy() }));
+  assert.equal((await handsFree('state')).batteryDiagnostics.automation, undefined);
+});
+
+test('automatic state validates all native lifecycle stages and bounded schedule observations', async () => {
+  globalThis.window = {};
+  for (const status of ['waiting_screen_off', 'transitioning', 'running', 'completed', 'cancelled', 'interrupted']) {
+    const automation = batteryAutomation({ status, mode: status === 'completed' ? null : 'off' });
+    mockIPC(() => automaticState(automation)); assert.deepEqual((await handsFree('state')).batteryDiagnostics.automation, automation);
+    assert.equal(isBatteryAutomationLive(automation), ['waiting_screen_off', 'transitioning', 'running'].includes(status));
+  }
+  const invalid = [{ id: '' }, { status: 'private/error' }, { mode: 'other' }, { validation: 'true' }, { stageDurationMs: 0 },
+    { stageDurationMs: -1 }, { remainingEstimateMs: -1 }, { runIds: ['a','a'] }, { runIds: ['a','b','c','d'] }, { runIds: ['private/path'] },
+    { alarmPrecision: 'always_exact' }, { delayMs: -1 }, { issue: '/private/error' }];
+  for (const fields of invalid) {
+    mockIPC(() => automaticState(batteryAutomation(fields))); await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
+test('armed and transitioning sequences block manual actions even before an audio run exists', async () => {
+  for (const status of ['waiting_screen_off','transitioning','running']) {
+    const calls = []; const response = automaticState(batteryAutomation({ status }));
+    const settings = useHandsFreeSettings(async operation => { calls.push(operation); return response; });
+    await settings.refresh(); assert.equal(settings.state.value.batteryDiagnostics.active, null);
+    assert.equal(settings.automationLive.value, true); assert.equal(settings.batteryLocked.value, true);
+    await settings.run('configure',true); await settings.startBattery('off'); await settings.finishBattery(); await settings.exportBattery(); await settings.startAuto();
+    assert.deepEqual(calls,['state']);
+    await settings.cancelAuto(); assert.deepEqual(calls,['state','batteryAutoCancel']);
+  }
+});
+
+test('automatic comparison requires all future stages prerequisites and exposes quick validation as a separate operation', async () => {
+  let response = automaticState(); const calls = [];
+  const settings = useHandsFreeSettings(async (operation, options) => { calls.push({operation,options}); return response; });
+  await settings.startAuto(); assert.equal(calls.length,0);
+  for (const missing of ['assistantSelected','permissionGranted','modelReady']) {
+    response={...automaticState(),[missing]:false}; await settings.refresh(); assert.equal(settings.canStartAuto(),false); await settings.startAuto();
+  }
+  assert.equal(calls.length,3);
+  response=automaticState(); await settings.refresh(); await settings.startAuto(); await settings.startAuto(true);
+  assert.deepEqual(calls.slice(-2),[{operation:'batteryAutoStart',options:undefined},{operation:'batteryAutoValidate',options:undefined}]);
+  response={...initial,batteryDiagnostics:batteryStudy()}; await settings.refresh(); assert.equal(settings.automationSupported.value,false); assert.equal(settings.canStartAuto(),false);
+});
+
+test('lost automatic start validate or cancel replies query durable native ownership without repeating the mutation', async () => {
+  for (const operation of ['batteryAutoStart','batteryAutoValidate','batteryAutoCancel']) {
+    const recovery=deferred(), calls=[];
+    const settings=useHandsFreeSettings(async requested => {
+      calls.push(requested);
+      if(calls.length===1)return automaticState(operation==='batteryAutoCancel'?batteryAutomation():null);
+      if(requested===operation)throw {code:'timeout'};
+      return recovery.promise;
+    });
+    await settings.refresh();
+    if(operation==='batteryAutoCancel')await settings.cancelAuto(); else await settings.startAuto(operation==='batteryAutoValidate');
+    await flush(); await settings.startAuto();
+    assert.deepEqual(calls,['state',operation,'state']); assert.equal(settings.canAct.value,false);
+    recovery.resolve(automaticState(batteryAutomation({status:operation==='batteryAutoCancel'?'cancelled':'waiting_screen_off'}))); await flush();
+    assert.deepEqual(calls,['state',operation,'state'],'recovery is a state read, never an automatic retry');
+  }
+});
+
+test('automatic results cannot borrow an earlier sequence stage or turn the functional check into energy evidence', () => {
+  const old=[batteryRun('off',{id:'old_a'}),batteryRun('capture_only',{id:'old_b'}),batteryRun('detection',{id:'old_c'})];
+  const current=[batteryRun('off',{id:'new_a'}),batteryRun('capture_only',{id:'new_b'})];
+  const plan=batteryAutomation({status:'completed',mode:null,runIds:['new_a','new_b','new_c']});
+  const selected=batteryRunsForComparison([...old,...current],plan);
+  assert.deepEqual(selected.map(r=>r.id),['new_a','new_b']); assert.equal(latestBatteryRuns(selected).detection,undefined);
+  for(const status of ['waiting_screen_off','transitioning','running','cancelled','interrupted'])assert.deepEqual(batteryRunsForComparison([...old,...current],{...plan,status}),[]);
+  assert.deepEqual(batteryRunsForComparison([...old,...current],{...plan,validation:true}),[]);
+  assert.deepEqual(batteryRunsForComparison(old,null),old,'legacy manual reports retain their existing comparison behavior');
 });

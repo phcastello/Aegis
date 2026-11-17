@@ -48,6 +48,11 @@ object NodeHandsFree {
     }
     fun batteryStart(context:Context,payload:String):String = runtime(context).startBatteryStudy(JSONObject(payload).getString("mode")).toString()
     fun batteryFinish(context:Context):String = runtime(context).finishBatteryStudy().toString()
+    fun batteryAutoStart(context:Context,payload:String):String = runtime(context).startBatteryAutomation(JSONObject(payload).optBoolean("validation",false)).toString()
+    fun batteryAutoCancel(context:Context):String = runtime(context).finishBatteryStudy().toString()
+    internal fun batteryAlarm(context:Context,token:HandsFreeBatteryAutomation.Token,onComplete:()->Unit) {
+        try{runtime(context).queueBatteryTransition(token,onComplete)}catch(_:Throwable){onComplete()}
+    }
     internal fun permission(context:Context)=context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
     internal fun selected(context:Context)=VoiceInteractionService.isActiveService(context,ComponentName(context,NodeVoiceInteractionService::class.java))
 }
@@ -58,8 +63,13 @@ internal class HandsFreeRuntime(private val context:Context) {
     internal val collection=HandsFreeActivationCollection(context)
     private val batteryDiagnostics=HandsFreeBatteryDiagnostics(context)
     private val powerMonitors=HandsFreePowerMonitors(context)
+    private val batteryAutomation=HandsFreeBatteryAutomation(context)
+    private val batteryAlarm=HandsFreeBatteryAlarm(context)
+    private val batteryControl=Any()
+    private val batteryTransitionPending=java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var batteryChanging=false
     @Volatile private var batteryStopRequested=false
+    @Volatile private var batteryAbortPending=false
     @Volatile private var batterySuspended=prefs.getBoolean("batteryStudySuspended",false)
     @Volatile private var batteryDeadlineMs=0L
     @Volatile private var batteryNextObservationMs=0L
@@ -184,7 +194,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         }?:false}catch(_:Throwable){false}
         metrics.restoreRequested(enabled,diagnostic)
     }
-    internal fun attach(value:NodeVoiceInteractionService) {service=value;metrics.event("assistant_ready");recoverFromSystem()}
+    internal fun attach(value:NodeVoiceInteractionService) {service=value;metrics.event("assistant_ready");recoverFromSystem();observeBattery(force=true)}
     internal fun detach(value:NodeVoiceInteractionService) {
         if(service!==value)return
         interruptBatteryStudy("assistant_unavailable")
@@ -254,8 +264,11 @@ internal class HandsFreeRuntime(private val context:Context) {
         if(modelChanging || batteryChanging)return
         recordIdentity()
         if(!wantsCapture()) {
-            if(batteryBlocksNormal())stop("battery_paused",if(batteryDiagnostics.activeMode()=="off")
-                "Medição: escuta desligada. Encerre o teste nas configurações." else "Medição interrompida. Encerre o teste nas configurações para retomar.")
+            if(batteryBlocksNormal())stop("battery_paused",when {
+                batteryAutomation.isWaiting()->"Comparação pronta. Apague a tela para iniciar."
+                batteryDiagnostics.activeMode()=="off"->"Medição: escuta desligada."
+                else->"Medição interrompida. Encerre o teste nas configurações para retomar."
+            })
             else stop("disabled","Hands-free desligado.")
             return
         }
@@ -271,10 +284,10 @@ internal class HandsFreeRuntime(private val context:Context) {
             worker=Thread({run(generation)},"AegisHandsFreeAudio").apply{isDaemon=true;start()}
         }
     }
-    private fun batteryBlocksNormal()=batterySuspended || batteryDiagnostics.blocksNormal()
+    private fun batteryBlocksNormal()=batterySuspended || batteryDiagnostics.blocksNormal() || batteryAutomation.blocksNormal()
     private fun batteryState():JSONObject = batteryDiagnostics.state().also {
-        if(batterySuspended && it.isNull("active"))it.put("requiresResume",true)
-        it.put("powerMonitors",powerMonitors.state())
+        if((batterySuspended || batteryAutomation.blocksNormal()) && it.isNull("active"))it.put("requiresResume",true)
+        it.put("powerMonitors",powerMonitors.state()).put("automation",batteryAutomation.state().takeUnless{a->a.optString("status")=="idle"}?:JSONObject.NULL)
     }
     private fun wantsCapture():Boolean {
         if(batteryStopRequested)return false
@@ -370,7 +383,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         return null
     }
     /** Explicit study controls never overwrite the owner's normal listening preferences. */
-    internal fun startBatteryStudy(mode:String):JSONObject {
+    internal fun startBatteryStudy(mode:String):JSONObject = synchronized(batteryControl) {
+        if(batteryAutomation.isLive())return@synchronized state()
         require(mode in setOf("off","capture_only","detection")){"battery_mode"}
         var alreadyActive=false
         val previous=synchronized(lock) {
@@ -384,7 +398,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             // This second durable gate precedes the study's own storage boundary.
             // A failure in that storage cannot restore an old enabled=true preference.
             check(prefs.edit().putBoolean("batteryStudySuspended",true).commit()){"battery_storage"}
-            batterySuspended=true;batteryChanging=true;batteryStopRequested=false
+            batterySuspended=true;batteryChanging=true;batteryStopRequested=false;batteryAbortPending=false
             batteryStudyGeneration.incrementAndGet()
             try {
                 val info=context.packageManager.getPackageInfo(context.packageName,0)
@@ -402,44 +416,179 @@ internal class HandsFreeRuntime(private val context:Context) {
                 batteryChanging=false;throw error
             }
         }
-        if(alreadyActive)return state()
+        if(alreadyActive)return@synchronized state()
         try {
             if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
             if(previous?.isAlive==true)batteryDiagnostics.interrupt("capture_shutdown_timeout")
             metrics.event("battery_study_started",JSONObject().put("mode",mode));powerMonitors.request()
         }finally{batteryChanging=false}
-        reconcile();return state()
+        reconcile();state()
     }
-    internal fun finishBatteryStudy():JSONObject {
-        var alreadyFinished=false
-        val previous=synchronized(lock) {
-            if(!batteryBlocksNormal() || batteryChanging){alreadyFinished=true;return@synchronized null}
-            batteryChanging=true;batteryStudyGeneration.incrementAndGet()
-            stop("battery_finishing","Encerrando medição de bateria.")
-            worker
-        }
-        if(alreadyFinished)return state()
+    internal fun finishBatteryStudy():JSONObject = synchronized(batteryControl) {
+        if(!batteryBlocksNormal() || batteryChanging)return@synchronized state()
+        batteryChanging=true;batteryStopRequested=true;batteryAbortPending=true;batteryStudyGeneration.incrementAndGet()
+        val alarmToken=batteryAutomation.token()
+        if(alarmToken!=null)cancelBatteryAlarm(alarmToken)
         try {
+            stop("battery_finishing","Encerrando comparação de bateria.")
+            val previous=worker
             if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
-            if(previous?.isAlive==true)batteryDiagnostics.interrupt("capture_shutdown_timeout")
-            else {
+            if(previous?.isAlive==true) {
+                batteryAutomation.interrupt("capture_shutdown_timeout")
+                batteryDiagnostics.interrupt("capture_shutdown_timeout")
+            } else {
+                if(batteryAutomation.isLive())batteryDiagnostics.interrupt("automation_cancelled")
                 batteryDiagnostics.finish()
                 check(prefs.edit().putBoolean("batteryStudySuspended",false).commit()){"battery_storage"}
-                batterySuspended=false;batteryStopRequested=false;batteryDeadlineMs=0L;powerMonitors.request()
+                // The sequence gate is the last durable gate removed. A failure here
+                // leaves it recoverable/interrupted even if the preference write succeeded.
+                batteryAutomation.cancel()
+                batterySuspended=false;batteryStopRequested=false;batteryAbortPending=false;batteryDeadlineMs=0L;powerMonitors.request()
             }
             metrics.event("battery_study_finished")
         }finally{batteryChanging=false}
-        reconcile();return state()
+        reconcile();state()
     }
+    /** Fail closed immediately; finalize slow platform observations off the audio/main thread. */
     internal fun interruptBatteryStudy(reason:String) {
-        if(batteryDiagnostics.activeMode()==null)return
+        if(batteryDiagnostics.activeMode()==null && !batteryAutomation.isLive())return
+        val generation=synchronized(lock) {
+            batteryStopRequested=true;batteryAbortPending=true;batteryDeadlineMs=0L
+            val value=batteryStudyGeneration.incrementAndGet()
+            stop("battery_interrupted","Medição interrompida. Encerre o teste nas configurações para retomar.")
+            value
+        }
+        cleanup.execute{synchronized(batteryControl){
+            if(batteryStudyGeneration.get()!=generation)return@synchronized
+            batteryAutomation.token()?.let{cancelBatteryAlarm(it)}
+            if(batteryAutomation.isLive())batteryAutomation.interrupt(reason)
+            batteryDiagnostics.interrupt(reason)
+        }}
+    }
+    private fun cancelBatteryAlarm(token:HandsFreeBatteryAutomation.Token) {
+        // The persisted sequence token remains authoritative even if Android refuses cancellation.
+        try{batteryAlarm.cancel(token)}catch(_:RuntimeException){metrics.add("battery_alarm_cancel_failures")}
+    }
+    private fun batteryIdentity():JSONObject {
+        val info=context.packageManager.getPackageInfo(context.packageName,0)
+        return HandsFreeModel.metadata(installedModel)
+            .put("appVersion",info.versionName?:"unknown").put("build",if(Build.VERSION.SDK_INT>=28)info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong())
+            .put("requestedEnabled",enabled).put("requestedDiagnostic",diagnostic)
+            .put("audioSource","MIC").put("sampleRate",16000).put("readSamples",3200)
+            .put("commandsSuppressed",true).put("audioCollectionSuppressed",true)
+    }
+    private fun batteryAutomationPrerequisites() {
+        check(NodeHandsFree.selected(context) && service!=null && service===NodeVoiceInteractionService.current){"battery_assistant_required"}
+        check(NodeHandsFree.permission(context)){"battery_permission_required"}
+        check(modelReady){"battery_model_required"}
+        check(!modelChanging && manualLease==null && !pendingActivation && sessionId==null &&
+            status !in setOf("capturing","processing","speaking","continuation")){"battery_audio_busy"}
+        check(!microphoneBlocked()){"battery_microphone_unavailable"}
+        val battery=context.registerReceiver(null,android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        check(battery!=null && battery.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED,-1)==0 &&
+            battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS,-1) !in setOf(android.os.BatteryManager.BATTERY_STATUS_CHARGING,android.os.BatteryManager.BATTERY_STATUS_FULL)){"battery_unplug_required"}
+    }
+    internal fun startBatteryAutomation(validation:Boolean):JSONObject = synchronized(batteryControl) {
+        if(batteryAutomation.isLive())return@synchronized state()
+        check(!batteryBlocksNormal() && !batteryChanging){"battery_resume_required"}
+        batteryAutomationPrerequisites()
+        check(prefs.edit().putBoolean("batteryStudySuspended",true).commit()){"battery_storage"}
+        batterySuspended=true;batteryChanging=true;batteryStopRequested=true;batteryAbortPending=false
         batteryStudyGeneration.incrementAndGet()
-        // Yield the microphone before any platform IPC or persistence in interrupt().
-        batteryStopRequested=true;batteryDeadlineMs=0L
-        stop("battery_interrupted","Medição interrompida. Encerre o teste nas configurações para retomar.")
-        batteryDiagnostics.interrupt(reason)
+        try {
+            batteryAutomation.arm(validation)
+            stop("battery_waiting_screen_off","Comparação pronta. Apague a tela para iniciar.")
+            val previous=worker
+            if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
+            check(previous?.isAlive!=true){"capture_shutdown_timeout"}
+        }catch(error:Throwable){
+            stop("battery_interrupted","Não foi possível preparar a comparação. Encerre o teste para retomar.")
+            batteryAutomation.interrupt("preparation_failed")
+            throw error
+        }finally{batteryChanging=false}
+        if(!context.getSystemService(PowerManager::class.java).isInteractive)requestBatteryTransition(null)
+        state()
+    }
+    /** The receiver owns a bounded wake lock. No periodic wakeup is added during a phase. */
+    internal fun queueBatteryTransition(token:HandsFreeBatteryAutomation.Token?,onComplete:()->Unit) {
+        val generation=batteryStudyGeneration.get()
+        cleanup.execute{try{synchronized(batteryControl){
+            if(!batteryAbortPending && batteryStudyGeneration.get()==generation)advanceBatteryAutomation(token)
+        }}catch(_:Throwable){interruptBatteryStudy("transition_failed")}finally{onComplete()}}
+    }
+    private fun requestBatteryTransition(token:HandsFreeBatteryAutomation.Token?) {
+        if(!batteryTransitionPending.compareAndSet(false,true))return
+        var wake:PowerManager.WakeLock?=null
+        try {
+            wake=context.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Aegis:battery-transition")
+            wake.acquire(10000)
+            val held=wake
+            queueBatteryTransition(token){
+                try{if(held.isHeld)held.release()}catch(_:RuntimeException){}
+                batteryTransitionPending.set(false)
+            }
+        }catch(_:Throwable){
+            try{if(wake?.isHeld==true)wake.release()}catch(_:RuntimeException){}
+            batteryTransitionPending.set(false);interruptBatteryStudy("transition_unavailable")
+        }
+    }
+    private fun advanceBatteryAutomation(token:HandsFreeBatteryAutomation.Token?) {
+        val generation=batteryStudyGeneration.get()
+        val step=if(token==null) {
+            if(context.getSystemService(PowerManager::class.java).isInteractive)return
+            batteryAutomation.claimScreenOff()
+        } else batteryAutomation.claimDue(token)
+        if(step==null)return
+        batteryChanging=true;batteryStopRequested=true;batteryDeadlineMs=0L
+        try {
+            if(token!=null)cancelBatteryAlarm(token)
+            stop("battery_transition","Mudando a etapa da comparação de bateria.")
+            val previous=worker
+            if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
+            check(previous?.isAlive!=true){"capture_shutdown_timeout"}
+            check(batteryStudyGeneration.get()==generation){"conditions_changed"}
+            if(batteryDiagnostics.activeMode()!=null)batteryDiagnostics.finishPhase()
+            if(step.mode==null) {
+                batteryDiagnostics.finish()
+                synchronized(lock) {
+                    check(!batteryAbortPending && batteryStudyGeneration.get()==generation){"conditions_changed"}
+                    check(prefs.edit().putBoolean("batteryStudySuspended",false).commit()){"battery_storage"}
+                    batteryAutomation.complete(step)
+                    batterySuspended=false;batteryStopRequested=false
+                }
+            } else {
+                batteryAutomationPrerequisites()
+                check(batteryStudyGeneration.get()==generation){"conditions_changed"}
+                batteryDiagnostics.start(checkNotNull(step.mode),batteryIdentity(),step.sequenceId,step.validation)
+                val next=batteryAutomation.running(step,checkNotNull(batteryDiagnostics.activeRunId()),
+                    checkNotNull(batteryDiagnostics.activeStartElapsedMs()),"pending")
+                val precision=batteryAlarm.schedule(next)
+                batteryAutomation.setAlarmPrecision(next,precision)
+                check(batteryStudyGeneration.get()==generation){"conditions_changed"}
+                batteryNextObservationMs=SystemClock.elapsedRealtime()+60000L
+                if(step.mode!="off")check(service?.ensureForeground()==true){"foreground_start_denied"}
+                synchronized(lock) {
+                    check(!batteryAbortPending && batteryStudyGeneration.get()==generation){"conditions_changed"}
+                    batteryStopRequested=false
+                }
+                powerMonitors.request()
+            }
+        }catch(_:Throwable){
+            batteryStopRequested=true;batteryAbortPending=true
+            stop("battery_interrupted","Comparação interrompida. Encerre o teste nas configurações para retomar.")
+            batteryAutomation.token()?.let{cancelBatteryAlarm(it)}
+            try{batteryAutomation.interrupt("transition_failed")}catch(_:Exception){metrics.add("battery_storage_failures")}
+            try{batteryDiagnostics.interrupt("transition_failed")}catch(_:Exception){metrics.add("battery_storage_failures")}
+        }finally{batteryChanging=false}
+        reconcile()
     }
     internal fun observeBattery(force:Boolean=false) {
+        if(batteryAutomation.isWaiting()) {
+            if(!context.getSystemService(PowerManager::class.java).isInteractive)requestBatteryTransition(null)
+            return
+        }
+        val token=batteryAutomation.token()
+        if(token!=null && SystemClock.elapsedRealtime()>=token.deadlineElapsedMs)requestBatteryTransition(token)
         if(batteryDiagnostics.activeMode()==null)return
         val now=SystemClock.elapsedRealtime()
         val deadline=batteryDeadlineMs
@@ -455,7 +604,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     }
     internal fun exportMetrics():String = JSONObject(metrics.export())
         .put("batteryDiagnostics",batteryDiagnostics.export().put("suspensionPersisted",batterySuspended)
-            .put("powerMonitors",powerMonitors.state())).toString()
+            .put("powerMonitors",powerMonitors.state()).put("automation",batteryAutomation.export().takeUnless{a->a.optString("status")=="idle"}?:JSONObject.NULL)).toString()
 
     private fun showSession() {
         val token=sessionId?:return

@@ -166,6 +166,8 @@ class MainActivity : TauriActivity() {
   fun handsFreeConfigure(payload:String):String=NodeHandsFree.configure(this,payload)
   fun handsFreeBatteryStart(payload:String):String=NodeHandsFree.batteryStart(this,payload)
   fun handsFreeBatteryFinish(payload:String):String=NodeHandsFree.batteryFinish(this)
+  fun handsFreeBatteryAutoStart(payload:String):String=NodeHandsFree.batteryAutoStart(this,payload)
+  fun handsFreeBatteryAutoCancel(payload:String):String=NodeHandsFree.batteryAutoCancel(this)
   fun handsFreeManualAcquire(payload:String):String=NodeHandsFree.manualAcquire(this,payload)
   fun handsFreeManualRelease(payload:String):String=NodeHandsFree.manualRelease(this,payload)
   fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)

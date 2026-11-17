@@ -72,8 +72,21 @@ export interface HandsFreeBatterySnapshot {
   locked: boolean | null;
   uidHealth: { status: 'ok' | 'unavailable'; scope?: string; userCpuMs: number | null; systemCpuMs: number | null; audioTimerMs: number | null };
 }
+export interface HandsFreeBatteryAutomation {
+  id: string;
+  status: 'waiting_screen_off' | 'transitioning' | 'running' | 'completed' | 'cancelled' | 'interrupted';
+  mode: HandsFreeBatteryMode | null;
+  stageDurationMs: number;
+  validation: boolean;
+  remainingEstimateMs: number | null;
+  runIds: string[];
+  alarmPrecision?: 'exact' | 'inexact';
+  delayMs?: number;
+  issue?: string | null;
+}
 export interface HandsFreeBatteryDiagnostics {
   schema: 1;
+  automation?: HandsFreeBatteryAutomation | null;
   active: { id: string; mode: HandsFreeBatteryMode; startedAt: string; elapsedMs: number } | null;
   requiresResume: boolean;
   latest: HandsFreeBatterySnapshot | null;
@@ -106,12 +119,27 @@ function batterySnapshot(value: unknown): value is HandsFreeBatterySnapshot {
     (health.scope === undefined || batteryCode(health.scope)) &&
     ['userCpuMs', 'systemCpuMs', 'audioTimerMs'].every(key => health[key] === null || batteryNumber(health[key]));
 }
+export function isBatteryAutomationLive(value?: HandsFreeBatteryAutomation | null): boolean {
+  return Boolean(value && ['waiting_screen_off', 'transitioning', 'running'].includes(value.status));
+}
+function batteryAutomation(value: unknown): value is HandsFreeBatteryAutomation {
+  return batteryRecord(value) && batteryId(value.id) &&
+    ['waiting_screen_off', 'transitioning', 'running', 'completed', 'cancelled', 'interrupted'].includes(String(value.status)) &&
+    (value.mode === null || batteryModes.includes(String(value.mode))) && typeof value.validation === 'boolean' &&
+    batteryNumber(value.stageDurationMs) && value.stageDurationMs > 0 &&
+    (value.remainingEstimateMs === null || batteryNumber(value.remainingEstimateMs)) &&
+    Array.isArray(value.runIds) && value.runIds.length <= 3 && value.runIds.every(batteryId) && new Set(value.runIds).size === value.runIds.length &&
+    (value.alarmPrecision === undefined || ['exact', 'inexact'].includes(String(value.alarmPrecision))) &&
+    (value.delayMs === undefined || batteryNumber(value.delayMs)) &&
+    (value.issue === undefined || value.issue === null || batteryCode(value.issue));
+}
 function batteryDiagnostics(value: unknown): value is HandsFreeBatteryDiagnostics {
   if (!batteryRecord(value) || value.schema !== 1 || typeof value.requiresResume !== 'boolean' || !Array.isArray(value.runs) || value.runs.length > 8) return false;
   if (value.active !== null) {
     const active = value.active;
     if (!batteryRecord(active) || !batteryId(active.id) || !batteryModes.includes(String(active.mode)) || !batteryTime(active.startedAt) || !batteryNumber(active.elapsedMs)) return false;
   }
+  if (value.automation !== undefined && value.automation !== null && !batteryAutomation(value.automation)) return false;
   if (value.latest !== null && !batterySnapshot(value.latest)) return false;
   const summaryKeys = ['phoneChargeMah', 'phoneEnergyMwh', 'phoneDischargeMahPerHour', 'batteryPercentPoints', 'processCpuMs', 'captureThreadCpuMs', 'detectorCpuMs', 'verifierCpuMs', 'awakeMs', 'screenOnMs', 'captureAudioMs', 'verifierCandidates', 'uidUserCpuMs', 'uidSystemCpuMs', 'uidAudioTimerMs'];
   const signedKeys = ['phoneChargeMah', 'phoneEnergyMwh', 'phoneDischargeMahPerHour', 'batteryPercentPoints'];
@@ -124,6 +152,13 @@ function batteryDiagnostics(value: unknown): value is HandsFreeBatteryDiagnostic
     ids.add(run.id);
     return Object.entries(run.summary).every(([key, number]) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && (number === null || batteryNumber(number, signedKeys.includes(key) || !summaryKeys.includes(key))));
   });
+}
+/** Automatic comparisons belong to one completed production sequence; quick checks never estimate consumption. */
+export function batteryRunsForComparison(runs: readonly HandsFreeBatteryRun[], automation?: HandsFreeBatteryAutomation | null): readonly HandsFreeBatteryRun[] {
+  if (!automation) return runs;
+  if (automation.status !== 'completed' || automation.validation) return [];
+  const selected = new Set(automation.runIds);
+  return runs.filter(run => selected.has(run.id));
 }
 /** Compare only the most recent eligible group. Legacy reports remain readable without inferring compatibility. */
 export function latestBatteryRuns(runs: readonly HandsFreeBatteryRun[]): Partial<Record<HandsFreeBatteryMode, HandsFreeBatteryRun>> {
@@ -198,7 +233,7 @@ async function invokeControl(args: Record<string, unknown>): Promise<unknown> {
   try { return await invoke<unknown>('node_hands_free', args); }
   catch (reason) { throw handsFreeError(reason); }
 }
-export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete' | 'batteryStart' | 'batteryFinish' | 'batteryExport';
+export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete' | 'batteryStart' | 'batteryFinish' | 'batteryExport' | 'batteryAutoStart' | 'batteryAutoValidate' | 'batteryAutoCancel';
 export interface HandsFreeOptions { enabled?: boolean; diagnostic?: boolean; collectionEnabled?: boolean; collectionLimitMiB?: number; batteryMode?: HandsFreeBatteryMode }
 export async function handsFree(operation: HandsFreeOperation, options?: HandsFreeOptions): Promise<HandsFreeState> {
   return stateResponse(await invokeControl({ operation, ...options }));

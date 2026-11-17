@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { handsFree, handsFreeError, type HandsFreeDiagnosticCode, type HandsFreeOperation, type HandsFreeState, type HandsFreeOptions, type HandsFreeBatteryMode } from '../services/handsFree.js';
+import { handsFree, handsFreeError, isBatteryAutomationLive, type HandsFreeDiagnosticCode, type HandsFreeOperation, type HandsFreeState, type HandsFreeOptions, type HandsFreeBatteryMode } from '../services/handsFree.js';
 
 export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   const state = ref<HandsFreeState | null>(null);
@@ -9,7 +9,9 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   const diagnosticCode = ref<HandsFreeDiagnosticCode | null>(null);
   const stale = computed(() => state.value !== null && !current.value);
   const canAct = computed(() => state.value !== null && current.value && !busy.value);
-  const batteryLocked = computed(() => Boolean(state.value?.batteryDiagnostics?.active || state.value?.batteryDiagnostics?.requiresResume));
+  const automationSupported = computed(() => state.value?.batteryDiagnostics?.automation !== undefined);
+  const automationLive = computed(() => isBatteryAutomationLive(state.value?.batteryDiagnostics?.automation));
+  const batteryLocked = computed(() => Boolean(state.value?.batteryDiagnostics?.active || state.value?.batteryDiagnostics?.requiresResume || automationLive.value));
   const canConfigure = computed(() => canAct.value && !batteryLocked.value);
   let disposed = false;
   let generation = 0;
@@ -31,7 +33,7 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
       if (owns()) {
         const safe = handsFreeError(reason); error.value = safe.message; diagnosticCode.value = safe.code;
         // A lost reply does not cancel a native start/finish. Read ownership before any retry.
-        if (operation === 'batteryStart' || operation === 'batteryFinish') refreshQueued = true;
+        if (['batteryStart', 'batteryFinish', 'batteryAutoStart', 'batteryAutoValidate', 'batteryAutoCancel'].includes(operation)) refreshQueued = true;
       }
     } finally {
       if (owns()) {
@@ -62,14 +64,25 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
     await request('batteryStart', { batteryMode: mode });
   }
   async function finishBattery(): Promise<void> {
-    if (!canAct.value || !batteryLocked.value) return;
+    if (!canAct.value || !batteryLocked.value || automationLive.value) return;
     await request('batteryFinish');
   }
+  function canStartAuto(): boolean {
+    return automationSupported.value && canStartBattery('detection');
+  }
+  async function startAuto(validation = false): Promise<void> {
+    if (!canStartAuto()) return;
+    await request(validation ? 'batteryAutoValidate' : 'batteryAutoStart');
+  }
+  async function cancelAuto(): Promise<void> {
+    if (!canAct.value || !state.value?.batteryDiagnostics?.automation || !batteryLocked.value) return;
+    await request('batteryAutoCancel');
+  }
   async function exportBattery(): Promise<void> {
-    if (!canAct.value || !state.value?.batteryDiagnostics || state.value.batteryDiagnostics.active) return;
+    if (!canAct.value || !state.value?.batteryDiagnostics || state.value.batteryDiagnostics.active || automationLive.value) return;
     await request('batteryExport');
   }
   function dispose() { disposed = true; generation++; refreshQueued = false; }
   onBeforeUnmount(dispose);
-  return { state, busy, current, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, canStartBattery, startBattery, finishBattery, exportBattery, dispose };
+  return { state, busy, current, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, automationSupported, automationLive, canStartBattery, startBattery, finishBattery, canStartAuto, startAuto, cancelAuto, exportBattery, dispose };
 }

@@ -78,8 +78,10 @@ alarme, wakelock, microfone, upload ou conversão para consumo por aplicativo.
 Usar mesma duração configurada, tela apagada, telefone sem carregamento,
 condições de rede/temperatura/ambiente comparáveis e ordem alternada entre
 repetições. O observador não deve manter um wakelock na referência, pois isso
-poderia esconder o custo de impedir suspensão. Não adicionar polling/alarmes
-só para terminar a janela: usar os relógios efetivamente observados nos limites.
+poderia esconder o custo de impedir suspensão. Na sequência automática, um alarme desperta o aparelho somente na fronteira
+entre cenários. Não há polling que acorde a referência desligada. Usar os
+relógios efetivamente observados nos limites e registrar o custo das transições
+separadamente; não subtrair energia estimada do alarme.
 
 Guardar snapshots nos limites e CPU por trecho em acumuladores separados.
 Leituras de HealthStats/PowerMonitor ficam fora do loop do microfone. Corrente
@@ -176,7 +178,10 @@ ponte: 188 testes Node, 79 contratos, typecheck/build Vue e browser mobile/deskt
 passaram. O helper Rust puro passou em dois testes; o crate completo é compilado
 no fluxo nativo oficial, não nessa prova portátil.
 
-A coleta não cria timer, alarme ou wake lock. O estado normal do usuário não é
+Na entrega unstable.17, a coleta não cria timer, alarme ou wake lock.
+A automação posterior adiciona um alarme por fronteira e proteção de CPU de no
+máximo dez segundos durante a transição; nenhum desses recursos é mantido
+pelos 30 minutos da referência. Veja [sequência automática](battery-automation.md). O estado normal do usuário não é
 reescrito pelo ensaio. Um segundo gate durável precede o início, mantém a escuta
 pausada após reinício/falha e só é removido por término explícito após parar o
 worker. Consultas de plataforma e gravação ocorrem fora do thread de áudio;

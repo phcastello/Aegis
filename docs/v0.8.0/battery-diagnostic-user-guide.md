@@ -17,8 +17,8 @@ a janela, inclusive no cenário C.
 4. Usar a mesma rede, sinal e ambiente nos três testes. Evitar música, vídeos,
    jogos, downloads, chamadas e outras interações no primeiro comparativo.
    Manter a mesma configuração de economia de bateria e de tela sempre ativa.
-5. Usar um relógio externo para acompanhar os 30 minutos. O aplicativo não cria
-   alarme ou wake lock para encerrar a referência com a escuta desligada.
+5. Escolher **Iniciar comparação automática** e apagar a tela. O aplicativo
+   aguarda a tela apagar para começar A e avança sozinho para B e C.
 
 Não é preciso deixar o computador conectado para o ensaio. USB/depuração são
 recursos opcionais para análise avançada, não requisitos do coletor no app.
@@ -31,22 +31,37 @@ recursos opcionais para análise avançada, não requisitos do coletor no app.
 | B · Somente microfone | Mesmo AudioRecord MIC, PCM16 mono a 16 kHz, leituras de 200 ms; sem carregar Strong/openWakeWord ou executar ativação. |
 | C · Detecção local | Captura e detecção local completas, incluindo o verificador quando instalado; sem beep, painel, coleta de áudio, transcrição ou resposta. |
 
-Para cada cenário:
+## Início único e tela apagada
 
-1. Tocar o botão e verificar o nome do teste ativo.
-2. Apagar a tela logo após começar. Em B/C, o indicador de microfone do Android
-   pode permanecer visível, pois a captura é real.
-3. Deixar o aparelho sem uso por cerca de 30 minutos.
-4. Desbloquear, voltar à mesma tela e tocar **Encerrar teste e voltar às
-   configurações anteriores**.
-5. Repetir para o próximo cenário.
+1. Tocar **Iniciar comparação automática** e confirmar na própria tela que está
+   aguardando a tela apagar.
+2. Apagar a tela e deixar o telefone sem uso por cerca de **1h30**. Não é preciso
+   destravar ou tocar no app entre os cenários.
+3. Ao voltar, consultar as três janelas e exportar o relatório. A conclusão
+   restaura a preferência de escuta anterior automaticamente.
+4. Se precisar usar o aparelho, voltar à tela e tocar **Cancelar comparação**.
+   O trecho incompleto fica registrado e não completa uma comparação válida.
 
-O encerramento restaura a preferência de escuta que o usuário mantém nas
-configurações. Um desligamento explícito feito durante o ensaio é respeitado.
-Reinício, interrupção ou falha deixa a escuta pausada até encerramento explícito;
-a captura não é retomada automaticamente como se a medição tivesse continuado.
-O limite de segurança de uma hora é verificado em callbacks já existentes,
-sem alarme que acorde o telefone; não substitui o término manual em 30 minutos.
+O Android pode atrasar uma transição. O relatório registra as durações reais;
+o próximo cenário recebe seus próprios 30 minutos completos. A previsão de
+1h30 é aproximada, principalmente sem acesso a alarmes exatos. O app usa a
+autorização já disponível, sem mudar a otimização de bateria nem pedir uma
+permissão adicional para este ensaio.
+
+**Opções avançadas** conserva os testes individuais e oferece **Verificar
+automação (sem medir consumo)**: três etapas de um minuto para conferir se o
+telefone permite as transições com tela apagada. Esse teste também pode sofrer
+atraso do Android e nunca entra nos resultados de consumo.
+
+Reinício, interrupção, falha de armazenamento ou recusa do microfone pausa a
+sequência. O app não continua uma janela cujo consumo não observou. Encerre a
+comparação e inicie outra após resolver a causa. Alterações explícitas da
+preferência de escuta feitas durante o teste são respeitadas.
+
+Nos controles individuais, começar cada cenário, apagar a tela e encerrá-lo
+manualmente após cerca de 30 minutos. O limite de segurança de uma hora dos
+controles individuais é observado em callbacks já existentes; não substitui o
+encerramento manual.
 
 Janelas abaixo de 20 minutos, carregadas, com captura insuficiente ou muita tela
 ligada ficam registradas para diagnóstico, mas não entram na comparação

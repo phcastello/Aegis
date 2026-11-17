@@ -52,6 +52,7 @@
           <intent-filter><action android:name="android.speech.RecognitionService" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
           <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
         </service>
+        <receiver android:name=".NodeHandsFreeBatteryAlarmReceiver" android:exported="false" />
         <receiver android:name=".NodeReminderActionReceiver" android:exported="false" />
         <receiver android:name=".NodeGeofenceReceiver" android:exported="false" />
         <service android:name=".NodeMonitoringService" android:exported="false" android:foregroundServiceType="location" android:stopWithTask="false" />

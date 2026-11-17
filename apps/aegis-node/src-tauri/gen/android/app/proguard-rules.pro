@@ -51,6 +51,8 @@
   public java.lang.String handsFreeConfigure(java.lang.String);
   public java.lang.String handsFreeBatteryStart(java.lang.String);
   public java.lang.String handsFreeBatteryFinish(java.lang.String);
+  public java.lang.String handsFreeBatteryAutoStart(java.lang.String);
+  public java.lang.String handsFreeBatteryAutoCancel(java.lang.String);
   public java.lang.String handsFreeCollectionConfigure(java.lang.String);
   public java.lang.String handsFreeCollectionDelete(java.lang.String);
   public java.lang.String handsFreeManualAcquire(java.lang.String);

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { batteryRateDifference, latestBatteryRuns, type HandsFreeBatteryMode } from '../services/handsFree';
+import { batteryRateDifference, batteryRunsForComparison, latestBatteryRuns, type HandsFreeBatteryMode } from '../services/handsFree';
 import { useHandsFreeSettings } from '../composables/useHandsFreeSettings';
 
-const { state, busy, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, canStartBattery, startBattery, finishBattery, exportBattery } = useHandsFreeSettings();
+const { state, busy, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, automationSupported, automationLive, canStartBattery, startBattery, finishBattery, canStartAuto, startAuto, cancelAuto, exportBattery } = useHandsFreeSettings();
 const battery = computed(() => state.value?.batteryDiagnostics);
-const eligibleRuns = computed(() => latestBatteryRuns(battery.value?.runs ?? []));
+const automation = computed(() => battery.value?.automation);
+const comparisonVisible = computed(() => !automation.value || (automation.value.status === 'completed' && !automation.value.validation));
+const automationCleanup = computed(() => automationLive.value || Boolean(automation.value?.status === 'interrupted' && battery.value?.requiresResume));
+const eligibleRuns = computed(() => latestBatteryRuns(batteryRunsForComparison(battery.value?.runs ?? [], automation.value)));
 const batteryRows = computed(() => (['off', 'capture_only', 'detection'] as const).map(mode => ({ mode, run: eligibleRuns.value[mode] })));
 const captureDifference = computed(() => batteryRateDifference(eligibleRuns.value.capture_only, eligibleRuns.value.off));
 const detectionDifference = computed(() => batteryRateDifference(eligibleRuns.value.detection, eligibleRuns.value.capture_only));
@@ -15,10 +18,22 @@ function measured(value: number | null | undefined, unit: string, signed = false
   return `${signed && value > 0 ? '+' : ''}${value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`;
 }
 function minutes(value: number): string { return (value / 60000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
+const automationMessage = computed(() => {
+  const plan = automation.value;
+  if (!plan) return '';
+  const kind = plan.validation ? 'Verificação' : 'Comparação';
+  if (plan.status === 'waiting_screen_off') return `${kind} preparada. Apague a tela para começar a etapa A.`;
+  if (plan.status === 'transitioning') return plan.mode ? `Preparando ${batteryLabels[plan.mode]}.` : 'Preparando a próxima etapa.';
+  if (plan.status === 'running') return plan.mode ? `${batteryLabels[plan.mode]} em execução.` : `${kind} em execução.`;
+  if (plan.status === 'completed') return `${kind} concluída. A Aegis voltou às configurações anteriores.`;
+  if (plan.status === 'cancelled') return `${kind} cancelada. A Aegis voltou às configurações anteriores.`;
+  return `${kind} interrompida. ${battery.value?.requiresResume ? 'Cancele para voltar às configurações anteriores.' : 'Confira as condições no relatório antes de tentar novamente.'}`;
+});
+function isValidationRun(id: string): boolean { return Boolean(automation.value?.validation && automation.value.runIds.includes(id)); }
 const deleteArmed = ref(false);
 let collectionRefresh: ReturnType<typeof setInterval> | undefined;
 function foreground() { if (document.visibilityState === 'visible') void refresh(); }
-onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.batteryDiagnostics?.active)) void refresh(); }, 5000); });
+onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
 onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); });
 </script>
 <template>
@@ -40,27 +55,48 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
       <div class="settings-actions"><button type="button" :disabled="!canConfigure" @click="run('cancel')">Cancelar interação</button><button type="button" :disabled="!canConfigure" @click="run('export')">Exportar métricas e ativações (ZIP)</button></div>
       <fieldset v-if="battery" class="battery-settings">
         <legend>Investigar consumo de bateria</legend>
-        <template v-if="batteryLocked">
+        <template v-if="automation">
+          <p role="status">{{ automationMessage }}</p>
+          <p v-if="automationLive && automation.remainingEstimateMs !== null">Tempo restante aproximado: {{ minutes(automation.remainingEstimateMs) }} min.</p>
+          <p v-if="automation.validation" class="settings-muted">Verificação funcional da automação. Estes resultados não medem consumo de bateria.</p>
+          <p v-if="automation.alarmPrecision === 'inexact'" class="settings-muted">O Android pode atrasar as trocas de etapa. O relatório registra os tempos efetivos.</p>
+          <p v-if="automation.delayMs && automation.delayMs > 0" class="settings-muted">Houve atraso na troca de etapa. Considere a duração real registrada no relatório.</p>
+          <button v-if="automationCleanup" type="button" :disabled="!canAct" @click="cancelAuto">{{ automation.validation ? 'Cancelar verificação' : 'Cancelar comparação' }}</button>
+          <p v-if="automationCleanup" class="settings-muted">Cancelar encerra toda a sequência e volta às configurações anteriores.</p>
+        </template>
+        <template v-if="batteryLocked && !automationCleanup">
           <p role="status" v-if="battery.active">Em teste: {{ batteryLabels[battery.active.mode] }} · {{ minutes(battery.active.elapsedMs) }} min decorridos.</p>
           <p role="status" v-else>O teste foi interrompido. Encerre para voltar às configurações anteriores.</p>
           <p v-if="battery.active && battery.active.elapsedMs >= 1800000">Já decorreram 30 minutos. Você pode encerrar o teste.</p>
-          <p>Os controles normais ficam suspensos até o encerramento.</p>
+          <p>Este é um teste manual. Volte aqui para encerrar manualmente após cerca de 30 minutos.</p>
           <button type="button" :disabled="!canAct" @click="finishBattery">Encerrar teste e voltar às configurações anteriores</button>
         </template>
-        <p>Compare três testes de 30 minutos, um por vez, fora do carregador, com a tela apagada e no mesmo ambiente. Nos três cenários, a Aegis não responde a chamadas. Durante o teste, nenhum áudio é salvo ou enviado.</p>
-        <p>O término é manual, sem alarme. Apague a tela após iniciar; ao final de cerca de 30 minutos, volte aqui para encerrar. Mudanças de tela, carga e disponibilidade ficam registradas para avaliar a comparação.</p>
+        <p v-if="automationSupported">Inicie uma vez e apague a tela. A Aegis compara A → B → C automaticamente, por 30 minutos em cada etapa: cerca de 1h30 após apagar a tela. As trocas podem atrasar no Android.</p>
+        <p>Comece com carga entre 50% e 80%, aparelho frio e fora do carregador. Mantenha a tela apagada e o mesmo ambiente. Durante os testes, a Aegis não responde a chamadas e nenhum áudio é salvo ou enviado.</p>
+        <p v-if="batteryLocked" class="settings-muted">Os controles normais ficam suspensos até o encerramento.</p>
         <p v-if="!state.assistantSelected" class="settings-muted">Selecione a Aegis como assistente no Android antes de iniciar os testes.</p>
-        <p v-else-if="!state.permissionGranted" class="settings-muted">Para B e C, permita o microfone nos controles acima.</p>
-        <p v-else-if="!state.modelReady" class="settings-muted">Para C, importe e confira o modelo de detecção nos controles acima.</p>
-        <div v-if="!batteryLocked" class="settings-actions battery-start-actions">
-          <button type="button" :disabled="!canStartBattery('off')" @click="startBattery('off')">A · Escuta desligada</button>
-          <button type="button" :disabled="!canStartBattery('capture_only')" @click="startBattery('capture_only')">B · Somente microfone</button>
-          <button type="button" :disabled="!canStartBattery('detection')" @click="startBattery('detection')">C · Detecção local (sem comandos)</button>
-        </div>
+        <p v-else-if="!state.permissionGranted" class="settings-muted">Para a sequência automática, permita o microfone nos controles acima.</p>
+        <p v-else-if="!state.modelReady" class="settings-muted">Para a sequência automática, importe e confira o modelo de detecção nos controles acima.</p>
+        <div v-if="automationSupported && !batteryLocked" class="settings-actions"><button type="button" :disabled="!canStartAuto()" @click="startAuto()">Iniciar comparação automática</button></div>
+        <details v-if="!batteryLocked" class="battery-advanced" :open="!automationSupported">
+          <summary>Opções avançadas</summary>
+          <template v-if="automationSupported">
+            <p>Verifique apenas a passagem entre as três etapas, com cerca de 1 minuto em cada uma. Duração aproximada de 3 minutos após apagar a tela, sujeita a atrasos do Android. Esta verificação não mede consumo.</p>
+            <button type="button" :disabled="!canStartAuto()" @click="startAuto(true)">Verificar automação (sem medir consumo)</button>
+          </template>
+          <p>Testes manuais: cada botão inicia uma etapa de 30 minutos. Apague a tela e volte aqui para encerrar manualmente; os botões abaixo não executam a sequência automática.</p>
+          <div class="settings-actions battery-start-actions">
+            <button type="button" :disabled="!canStartBattery('off')" @click="startBattery('off')">A · Escuta desligada</button>
+            <button type="button" :disabled="!canStartBattery('capture_only')" @click="startBattery('capture_only')">B · Somente microfone</button>
+            <button type="button" :disabled="!canStartBattery('detection')" @click="startBattery('detection')">C · Detecção local (sem comandos)</button>
+          </div>
+        </details>
         <p class="settings-muted">A mede o aparelho com a escuta desligada. B mantém apenas a captura do microfone. C acrescenta a detecção local, sem transcrição, resposta, sinal sonoro ou coleta de ativações.</p>
-        <div class="settings-actions"><button type="button" :disabled="!canAct || Boolean(battery.active)" @click="exportBattery">Exportar relatório de bateria (sem áudio)</button></div>
+        <div class="settings-actions"><button type="button" :disabled="!canAct || Boolean(battery.active) || automationLive" @click="exportBattery">Exportar relatório de bateria (sem áudio)</button></div>
         <template v-if="battery.runs.length">
-          <h4>Últimos testes comparáveis</h4>
+          <h4>Resultados de bateria</h4>
+          <p v-if="!comparisonVisible" class="settings-muted">{{ automation?.validation ? 'A verificação funcional fica somente no histórico, sem comparação de consumo.' : 'A comparação desta sequência aparece após a conclusão das três etapas. Os dados parciais ficam no histórico.' }}</p>
+          <template v-if="comparisonVisible">
           <div class="battery-table-scroll"><table class="battery-table">
             <caption>Último resultado de cada cenário no grupo comparável mais recente. Os valores de descarga são do aparelho inteiro.</caption>
             <thead><tr><th scope="col">Cenário</th><th scope="col">Duração</th><th scope="col">Descarga do aparelho</th><th scope="col">Taxa do aparelho</th></tr></thead>
@@ -68,10 +104,12 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
           </table></div>
           <p>Estimativa do custo adicional de captura (B − A): <strong>{{ measured(captureDifference, 'mAh/h', true) }}</strong>. Estimativa adicional da detecção (C − B): <strong>{{ measured(detectionDifference, 'mAh/h', true) }}</strong>.</p>
           <p class="settings-muted">Somente testes do mesmo aparelho, versão, modelo e configuração são comparados. As diferenças estimam mudanças entre testes do telefone inteiro; não medem energia exclusiva da Aegis. Valores negativos são preservados e podem refletir variação das condições. Sensores indisponíveis aparecem como “Indisponível”.</p>
+          </template>
           <details class="battery-history"><summary>Histórico dos últimos {{ battery.runs.length }} testes e CPU</summary>
             <article v-for="result in [...battery.runs].reverse()" :key="result.id" class="battery-result">
               <h4>{{ batteryLabels[result.mode] }} · {{ minutes(result.durationMs) }} min</h4>
-              <p>{{ result.eligible ? 'Condições aceitas para comparação.' : 'Não elegível para comparação: duração, condições ou disponibilidade precisam ser verificadas na exportação.' }}</p>
+              <p v-if="isValidationRun(result.id)">Verificação funcional: este resultado não mede consumo.</p>
+              <p v-else>{{ result.eligible ? 'Condições aceitas para comparação.' : 'Não elegível para comparação: duração, condições ou disponibilidade precisam ser verificadas na exportação.' }}</p>
               <p v-if="result.issues.length">{{ result.issues.length }} observação(ões) registrada(s). A exportação conserva os motivos do resultado.</p>
               <dl class="battery-cpu"><dt>Energia do aparelho</dt><dd>{{ measured(result.summary.phoneEnergyMwh, 'mWh') }}</dd><dt>Variação da bateria</dt><dd>{{ measured(result.summary.batteryPercentPoints, 'p.p.') }}</dd><dt>Tempo do aparelho acordado</dt><dd>{{ measured(result.summary.awakeMs, 'ms') }}</dd><dt>Tela ligada</dt><dd>{{ measured(result.summary.screenOnMs, 'ms') }}</dd></dl>
               <dl class="battery-cpu"><dt>CPU do processo</dt><dd>{{ measured(result.summary.processCpuMs, 'ms') }}</dd><dt>CPU da captura</dt><dd>{{ measured(result.summary.captureThreadCpuMs, 'ms') }}</dd><dt>CPU do detector</dt><dd>{{ measured(result.summary.detectorCpuMs, 'ms') }}</dd><dt>CPU do verificador</dt><dd>{{ measured(result.summary.verifierCpuMs, 'ms') }}</dd></dl>
@@ -98,4 +136,4 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
     <div class="settings-actions"><button type="button" :disabled="busy" @click="refresh">{{ error && !state ? 'Tentar novamente' : 'Atualizar estado' }}</button></div>
   </section>
 </template>
-<style scoped>.hands-free-settings { margin-top: 24px; border-top: 1px solid var(--border-color, #444); padding-top: 18px; }.hands-free-settings p { margin: 12px 0; }.collection-settings { margin-top:20px; border:1px solid var(--border-color, #444); border-radius:12px; padding:16px; }.collection-settings select { margin-left:12px; }.battery-settings { margin-top:20px; padding:16px; border:1px solid var(--border-color, #444); border-radius:12px; min-width:0; }.battery-start-actions { flex-wrap:wrap; }.battery-start-actions button { flex:1 1 150px; }.battery-table-scroll { overflow-x:auto; }.battery-table { width:100%; border-collapse:collapse; font-size:.9rem; }.battery-table th,.battery-table td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--border-color, #444); }.battery-table caption { text-align:left; padding-bottom:10px; }.battery-result { border-top:1px solid var(--border-color, #444); padding-top:8px; margin-top:12px; }.battery-cpu { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }.battery-cpu dd { margin:0; }.battery-history summary { cursor:pointer; padding:10px 0; }</style>
+<style scoped>.hands-free-settings { margin-top: 24px; border-top: 1px solid var(--border-color, #444); padding-top: 18px; }.hands-free-settings p { margin: 12px 0; }.collection-settings { margin-top:20px; border:1px solid var(--border-color, #444); border-radius:12px; padding:16px; }.collection-settings select { margin-left:12px; }.battery-settings { margin-top:20px; padding:16px; border:1px solid var(--border-color, #444); border-radius:12px; min-width:0; }.battery-start-actions { flex-wrap:wrap; }.battery-start-actions button { flex:1 1 150px; }.battery-table-scroll { overflow-x:auto; }.battery-table { width:100%; border-collapse:collapse; font-size:.9rem; }.battery-table th,.battery-table td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--border-color, #444); }.battery-table caption { text-align:left; padding-bottom:10px; }.battery-result { border-top:1px solid var(--border-color, #444); padding-top:8px; margin-top:12px; }.battery-cpu { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }.battery-cpu dd { margin:0; }.battery-advanced { margin:16px 0; }.battery-advanced summary { cursor:pointer; padding:10px 0; }.battery-history summary { cursor:pointer; padding:10px 0; }</style>
