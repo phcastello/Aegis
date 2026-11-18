@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -136,6 +137,7 @@ class NodeHandsFreeBatteryAlarmReceiver: BroadcastReceiver() {
             val transitionLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Aegis:BatteryTransition")
             lock = transitionLock
             transitionLock.setReferenceCounted(false)
+            val leaseDeadlineMs = SystemClock.elapsedRealtime() + TRANSITION_TIMEOUT_MS
             transitionLock.acquire(TRANSITION_TIMEOUT_MS)
             // Timeout only releases the broadcast/transition lease. The supervisor owns
             // cancellation and must never declare an unfinished transition successful.
@@ -143,7 +145,7 @@ class NodeHandsFreeBatteryAlarmReceiver: BroadcastReceiver() {
                 completion.run()
                 return
             }
-            NodeHandsFree.batteryAlarm(context.applicationContext, token) { completion.run() }
+            NodeHandsFree.batteryAlarm(context.applicationContext, token, leaseDeadlineMs) { completion.run() }
         } catch (_: RuntimeException) {
             completion.run()
         }

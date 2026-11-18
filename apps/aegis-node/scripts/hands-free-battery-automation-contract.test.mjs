@@ -63,7 +63,8 @@ test('the alarm receiver is private and uses a bounded transition lease without 
   assert.match(delivery, /acquire\(TRANSITION_TIMEOUT_MS\)/);
   assert.match(delivery, /postDelayed\(completion, TRANSITION_TIMEOUT_MS\)/);
   assert.match(delivery, /TRANSITION_TIMEOUT_MS = 10000L/);
-  assert.match(delivery, /NodeHandsFree\.batteryAlarm\(context\.applicationContext, token\)/);
+  assert.match(delivery, /val leaseDeadlineMs = SystemClock\.elapsedRealtime\(\) \+ TRANSITION_TIMEOUT_MS/);
+  assert.match(delivery, /NodeHandsFree\.batteryAlarm\(context\.applicationContext, token, leaseDeadlineMs\)/);
   assert.doesNotMatch(delivery, /AudioRecord|startRecording|ensureForeground|startForeground|MicroWakeWordNative|logcat|Log\./);
   assert.match(alarm, /setExactAndAllowWhileIdle\(AlarmManager\.ELAPSED_REALTIME_WAKEUP/);
   assert.match(alarm, /setAndAllowWhileIdle\(AlarmManager\.ELAPSED_REALTIME_WAKEUP/);
@@ -71,24 +72,52 @@ test('the alarm receiver is private and uses a bounded transition lease without 
   assert.doesNotMatch(alarm, /setAlarmClock\(|setRepeating\(|setInexactRepeating\(/);
 });
 
-test('native transitions drain the old worker and schedule the next boundary before enabling capture', () => {
+test('native transitions await capture readiness before snapshots and the measured phase deadline', () => {
   const runtime = android('NodeHandsFree');
   const transition = section(runtime, 'private fun advanceBatteryAutomation(', 'internal fun observeBattery(');
   const stop = transition.indexOf('stop("battery_transition"');
   const joined = transition.indexOf('previous.join(1500)', stop);
-  const started = transition.indexOf('batteryDiagnostics.start(', joined);
-  const scheduled = transition.indexOf('batteryAlarm.schedule(next)', started);
-  const enabled = transition.indexOf('batteryStopRequested=false', scheduled);
-  assert.ok(stop >= 0 && joined > stop && started > joined && scheduled > started && enabled > scheduled);
+  const captureBranch = transition.indexOf('if(mode!="off")', joined);
+  const foreground = transition.indexOf('service?.ensureForeground()', captureBranch);
+  const launched = transition.indexOf('worker=Thread(', foreground);
+  const ready = transition.indexOf('pending.awaitReady()', launched);
+  const started = transition.indexOf('batteryDiagnostics.start(', ready);
+  const measuredAt = transition.indexOf('batteryDiagnostics.activeStartElapsedMs()', started);
+  const running = transition.indexOf('batteryAutomation.running(step,runId,measuredAt', measuredAt);
+  const scheduled = transition.indexOf('batteryAlarm.schedule(next)', running);
+  const enabled = transition.indexOf('markMeasuring(runId)', scheduled);
+  assert.ok(stop >= 0 && joined > stop && captureBranch > joined && foreground > captureBranch && launched > foreground);
+  assert.ok(ready > launched && started > ready && measuredAt > started && running > measuredAt && scheduled > running && enabled > scheduled);
   assert.match(transition, /check\(previous\?\.isAlive!=true\)/);
-  assert.match(transition, /if\(step\.mode!="off"\)check\(service\?\.ensureForeground\(\)==true\)/);
+  assert.match(transition, /val startupDeadlineMs=leaseDeadlineMs-1000L/);
+  assert.match(transition, /HandsFreeCaptureStartup\(mode,generation,audioEpoch,startupDeadlineMs\)/);
+  assert.match(transition, /val basis=if\(startup==null\)"capture_disabled" else "first_positive_pcm"/);
   const capture = section(runtime, 'private fun wantsCapture()', 'private fun current(');
   assert.match(capture, /"off"->false/);
   const shutdown = section(runtime, 'private fun stop(', 'fun manualAcquire(');
   assert.match(shutdown, /stopHandsFreeForeground\(\)/);
   const start = section(runtime, 'internal fun startBatteryAutomation(', 'internal fun queueBatteryTransition(');
   assert.ok(start.indexOf('putBoolean("batteryStudySuspended",true).commit()') < start.indexOf('batteryAutomation.arm(validation)'));
-  assert.match(start, /NodeHandsFree|batteryAutomationPrerequisites\(\)/);
+  assert.match(start, /batteryAutomationPrerequisites\(\)/);
+});
+
+test('both capture paths gate preparation on positive unsilenced PCM and exclude preparation from component clocks', () => {
+  const runtime = android('NodeHandsFree');
+  const worker = section(runtime, 'private fun run(', '/** Same source, format and reads');
+  const signal = worker.indexOf('startup.signalReady(');
+  assert.ok(signal > worker.indexOf('audio.activeRecordingConfiguration?.isClientSilenced==true'));
+  assert.match(worker, /if\(startup==null \|\| startup\.shouldMeasure\(\)\)return true/);
+  assert.match(worker, /if\(startup\?\.measurementRunId\(\)==null\)return/);
+  const captureOnly = section(runtime, 'private fun captureOnly(', 'private fun capture(');
+  const capture = runtime.slice(runtime.indexOf('private fun capture('));
+  for (const path of [captureOnly, capture]) {
+    const read = path.indexOf('audio.read(');
+    const positive = path.indexOf('if(count<=0', read);
+    const gate = path.indexOf('!measureBlock(audio)', positive);
+    const measured = path.indexOf('captureConfirmed=true', gate);
+    assert.ok(read >= 0 && positive > read && gate > positive && measured > gate, 'no preparation acknowledgement or measurement before a positive read');
+    assert.ok(path.indexOf('silenced.get()', positive) < gate, 'silenced input cannot confirm readiness');
+  }
 });
 
 test('delayed callbacks retain a generation guard and claim failures interrupt capture', () => {
@@ -104,4 +133,7 @@ test('delayed callbacks retain a generation guard and claim failures interrupt c
   assert.match(interrupt, /batteryStudyGeneration\.incrementAndGet\(\)/);
   const transition = section(runtime, 'private fun advanceBatteryAutomation(', 'internal fun observeBattery(');
   assert.match(transition, /check\(!batteryAbortPending && batteryStudyGeneration\.get\(\)==generation\)/);
+  const finish = section(runtime, 'internal fun finishBatteryStudy()', '/** Fail closed immediately');
+  assert.ok(finish.indexOf('batteryCaptureStartup?.cancel(') >= 0 && finish.indexOf('batteryCaptureStartup?.cancel(') < finish.indexOf('synchronized(batteryControl)'));
+  assert.ok(interrupt.indexOf('batteryCaptureStartup?.fail(reason)') < interrupt.indexOf('cleanup.execute'));
 });

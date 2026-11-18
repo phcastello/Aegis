@@ -333,4 +333,25 @@ class NodeHandsFreeBatteryDiagnosticsTest {
         assertThrows(IllegalStateException::class.java){restored.start("capture_only",identity(),"seq-a")}
         restored.finish();assertFalse(restored.blocksNormal())
     }
+
+    @Test fun preparationMetadataDoesNotChangeComparisonIdentityOrAccumulateStudyCpu() {
+        val f=Fixture();val d=f.store()
+        d.start("off",identity(),"seq-a",false,120,"microphone_stopped")
+        f.advance(1200000);d.finishPhase()
+        d.start("capture_only",identity(),"seq-a",false,250,"first_positive_pcm")
+        d.capture(19_200_000,false);d.component("capture_thread",0,1000000,1000000)
+        f.advance(1200000);d.finishPhase()
+        val rows=d.export().getJSONArray("runs");val first=rows.getJSONObject(0);val second=rows.getJSONObject(1)
+        assertEquals(first.getString("comparisonKey"),second.getString("comparisonKey"))
+        assertEquals(250L,second.getLong("preparationMs"));assertEquals("first_positive_pcm",second.getString("measurementStartBasis"))
+        assertFalse(second.getJSONObject("identity").has("preparationMs"))
+        assertEquals(1.0,second.getJSONObject("summary").getDouble("captureThreadCpuMs"),0.0)
+        assertEquals(250L,d.state().getJSONArray("runs").getJSONObject(1).getLong("preparationMs"))
+    }
+    @Test fun invalidPreparationMetadataIsRejectedBeforeStartingAnyRun() {
+        val f=Fixture();val d=f.store()
+        assertThrows(IllegalArgumentException::class.java){d.start("off",identity(),preparationMs=-1)}
+        assertThrows(IllegalArgumentException::class.java){d.start("off",identity(),measurementStartBasis="")}
+        assertNull(d.activeMode());assertEquals(0,f.probes);assertFalse(d.blocksNormal())
+    }
 }

@@ -190,6 +190,22 @@ test('battery reports preserve unavailable sensors and signed device deltas', as
   assert.deepEqual((await handsFree('state')).batteryDiagnostics, diagnostics);
 });
 
+test('preparation metadata remains optional and never invents a legacy measurement boundary', async () => {
+  globalThis.window = {};
+  for (const fields of [{}, { preparationMs: null }, { preparationMs: 0, measurementStartBasis: 'capture_disabled' }, { preparationMs: 80000, measurementStartBasis: 'first_positive_pcm' }]) {
+    const run = batteryRun('capture_only', fields);
+    mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ runs: [run] }) }));
+    const actual = (await handsFree('state')).batteryDiagnostics.runs[0];
+    assert.deepEqual(actual, run);
+    if (!('preparationMs' in fields)) assert.equal(Object.hasOwn(actual, 'preparationMs'), false);
+    if (!('measurementStartBasis' in fields)) assert.equal(Object.hasOwn(actual, 'measurementStartBasis'), false);
+  }
+  for (const fields of [{ preparationMs: -1 }, { preparationMs: '80000' }, { preparationMs: Infinity }, { measurementStartBasis: 'recording_requested' }, { measurementStartBasis: null }]) {
+    mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ runs: [batteryRun('capture_only', fields)] }) }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
 test('battery boundary rejects malformed histories, active owners and impossible CPU values', async () => {
   globalThis.window = {};
   const valid = batteryRun();
@@ -346,15 +362,31 @@ test('automatic state validates all native lifecycle stages and bounded schedule
   }
   const invalid = [{ id: '' }, { status: 'private/error' }, { mode: 'other' }, { validation: 'true' }, { stageDurationMs: 0 },
     { stageDurationMs: -1 }, { remainingEstimateMs: -1 }, { runIds: ['a','a'] }, { runIds: ['a','b','c','d'] }, { runIds: ['private/path'] },
-    { alarmPrecision: 'always_exact' }, { delayMs: -1 }, { issue: '/private/error' }];
+    { alarmPrecision: 'always_exact' }, { delayMs: -1 }, { preparationElapsedMs: -1 }, { preparationElapsedMs: '80000' }, { preparationElapsedMs: NaN }, { preparationElapsedMs: Infinity }, { issue: '/private/error' }];
   for (const fields of invalid) {
     mockIPC(() => automaticState(batteryAutomation(fields))); await assert.rejects(handsFree('state'), { code: 'invalid_response' });
   }
 });
 
+test('eighty seconds preparing remain outside the thirty minute measured run', async () => {
+  globalThis.window = {};
+  for (const preparationElapsedMs of [undefined, null, 0, 80000]) {
+    const automation = batteryAutomation({ status: 'transitioning', mode: 'capture_only', remainingEstimateMs: null, ...(preparationElapsedMs !== undefined ? { preparationElapsedMs } : {}) });
+    mockIPC(() => automaticState(automation));
+    const state = await handsFree('state');
+    assert.deepEqual(state.batteryDiagnostics.automation, automation);
+    assert.equal(state.batteryDiagnostics.active, null, 'preparing is not a measured audio run');
+  }
+  const measured = batteryRun('capture_only', { startedAt: '2026-11-16T10:01:20-03:00', endedAt: '2026-11-16T10:31:20-03:00', preparationMs: 80000, measurementStartBasis: 'first_positive_pcm' });
+  mockIPC(() => ({ ...automaticState(batteryAutomation({ status: 'completed', mode: null, runIds: [measured.id], remainingEstimateMs: 0 })), batteryDiagnostics: batteryStudy({ runs: [measured] }) }));
+  const run = (await handsFree('state')).batteryDiagnostics.runs[0];
+  assert.equal(Date.parse(run.endedAt) - Date.parse(run.startedAt), run.durationMs);
+  assert.equal(run.durationMs, 1800000); assert.equal(run.preparationMs, 80000);
+});
+
 test('armed and transitioning sequences block manual actions even before an audio run exists', async () => {
   for (const status of ['waiting_screen_off','transitioning','running']) {
-    const calls = []; const response = automaticState(batteryAutomation({ status }));
+    const calls = []; const response = automaticState(batteryAutomation({ status, ...(status === 'transitioning' ? { mode: 'capture_only', preparationElapsedMs: 80000, remainingEstimateMs: null } : {}) }));
     const settings = useHandsFreeSettings(async operation => { calls.push(operation); return response; });
     await settings.refresh(); assert.equal(settings.state.value.batteryDiagnostics.active, null);
     assert.equal(settings.automationLive.value, true); assert.equal(settings.batteryLocked.value, true);
@@ -382,7 +414,7 @@ test('lost automatic start validate or cancel replies query durable native owner
     const recovery=deferred(), calls=[];
     const settings=useHandsFreeSettings(async requested => {
       calls.push(requested);
-      if(calls.length===1)return automaticState(operation==='batteryAutoCancel'?batteryAutomation():null);
+      if(calls.length===1)return automaticState(operation==='batteryAutoCancel'?batteryAutomation({status:'transitioning',mode:'capture_only',preparationElapsedMs:80000,remainingEstimateMs:null}):null);
       if(requested===operation)throw {code:'timeout'};
       return recovery.promise;
     });
@@ -390,7 +422,8 @@ test('lost automatic start validate or cancel replies query durable native owner
     if(operation==='batteryAutoCancel')await settings.cancelAuto(); else await settings.startAuto(operation==='batteryAutoValidate');
     await flush(); await settings.startAuto();
     assert.deepEqual(calls,['state',operation,'state']); assert.equal(settings.canAct.value,false);
-    recovery.resolve(automaticState(batteryAutomation({status:operation==='batteryAutoCancel'?'cancelled':'waiting_screen_off'}))); await flush();
+    recovery.resolve(automaticState(batteryAutomation(operation==='batteryAutoCancel'?{status:'cancelled',mode:null}:{status:'transitioning',mode:'capture_only',preparationElapsedMs:80000,remainingEstimateMs:null}))); await flush();
+    if(operation!=='batteryAutoCancel'){await settings.startAuto();assert.equal(settings.batteryLocked.value,true);}
     assert.deepEqual(calls,['state',operation,'state'],'recovery is a state read, never an automatic retry');
   }
 });

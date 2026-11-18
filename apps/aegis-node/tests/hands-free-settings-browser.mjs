@@ -189,7 +189,7 @@ try {
   await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
   const primary = battery.getByRole('button', { name: 'Iniciar comparação automática', exact: true });
   await primary.waitFor(); assert.equal(await primary.isEnabled(), true);
-  assert.match(await battery.innerText(), /cerca de 1h30 após apagar a tela/);
+  assert.match(await battery.innerText(), /cerca de 1h30, além da preparação entre etapas/);
   assert.match(await battery.innerText(), /carga entre 50% e 80%/);
   assert.equal(await battery.locator('.battery-advanced').getAttribute('open'), null, 'advanced controls start collapsed');
   await primary.click();
@@ -214,10 +214,19 @@ try {
   assert.match(await battery.innerText(), /Estes resultados não medem consumo de bateria/);
   const automaticCalls = await page.evaluate(() => window.hfFixture.calls.filter(c => c.operation.startsWith('batteryAuto')));
   assert.deepEqual(automaticCalls, [{ operation: 'batteryAutoStart' }, { operation: 'batteryAutoCancel' }, { operation: 'batteryAutoValidate' }]);
-  await page.evaluate(() => { Object.assign(window.hfFixture.initial.batteryDiagnostics.automation, { status: 'transitioning', mode: 'capture_only', remainingEstimateMs: 120000, delayMs: 1000 }); });
+  await page.evaluate(() => { Object.assign(window.hfFixture.initial.batteryDiagnostics.automation, { status: 'transitioning', mode: 'capture_only', remainingEstimateMs: 120000, preparationElapsedMs: 80000, delayMs: 27 }); });
   await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
   await battery.getByText('Preparando B · Somente microfone.', { exact: true }).waitFor();
+  assert.match(await battery.innerText(), /A preparação fica fora da medição. A janela de 1 min ainda não começou/);
+  assert.match(await battery.innerText(), /Preparação decorrida: 80 s/);
+  assert.doesNotMatch(await battery.innerText(), /Previsão:|Houve atraso na troca de etapa/);
+  await page.evaluate(() => { window.hfFixture.initial.batteryDiagnostics.automation.delayMs = 4999; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  assert.doesNotMatch(await battery.innerText(), /Houve atraso na troca de etapa/, 'sub-five-second scheduling jitter has no prominent warning');
+  await page.evaluate(() => { window.hfFixture.initial.batteryDiagnostics.automation.delayMs = 5000; });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
   assert.match(await battery.innerText(), /Houve atraso na troca de etapa/);
+  if (evidence) { await battery.locator('legend').scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-auto-preparing-mobile.png` }); }
   await page.evaluate(() => { Object.assign(window.hfFixture.initial.batteryDiagnostics.automation, { status: 'completed', mode: null, remainingEstimateMs: 0, runIds: ['result_2'] }); });
   await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
   await battery.getByText('Verificação concluída. A Aegis voltou às configurações anteriores.', { exact: true }).waitFor();
@@ -225,7 +234,7 @@ try {
   await page.evaluate(() => {
     const d = window.hfFixture.initial.batteryDiagnostics;
     for (const row of d.runs) { row.endedAt = '2026-11-16T14:00:00-03:00'; row.summary.phoneDischargeMahPerHour = 999; }
-    const production = ['off', 'capture_only', 'detection'].map((mode, i) => ({ ...d.runs[i], id: `auto_result_${i}`, startedAt: '2026-11-16T11:00:00-03:00', endedAt: '2026-11-16T11:30:00-03:00', summary: { ...d.runs[i].summary, phoneDischargeMahPerHour: [30,20,24][i] } }));
+    const production = ['off', 'capture_only', 'detection'].map((mode, i) => ({ ...d.runs[i], id: `auto_result_${i}`, preparationMs: [0,80000,850][i], measurementStartBasis: i === 0 ? 'capture_disabled' : 'first_positive_pcm', startedAt: '2026-11-16T11:00:00-03:00', endedAt: '2026-11-16T11:30:00-03:00', summary: { ...d.runs[i].summary, phoneDischargeMahPerHour: [30,20,24][i] } }));
     d.runs.push(...production);
     d.automation = { ...d.automation, validation: false, stageDurationMs: 1800000, runIds: production.map(r => r.id), delayMs: 0 };
   });
@@ -233,6 +242,10 @@ try {
   await battery.getByText('Comparação concluída. A Aegis voltou às configurações anteriores.', { exact: true }).waitFor();
   await battery.getByText('-10 mAh/h', { exact: true }).waitFor(); await battery.getByText('+4 mAh/h', { exact: true }).waitFor();
   assert.equal(await battery.locator('table').getByText('999 mAh/h', { exact: true }).count(), 0, 'results use this sequence runIds rather than newer records from another run');
+  assert.match(await battery.innerText(), /Preparação: 80 s, fora da janela de medição/);
+  assert.match(await battery.innerText(), /A medição começou após a confirmação de áudio do microfone/);
+  assert.match(await battery.innerText(), /A medição começou após confirmar a captura desligada/);
+  assert.match(await battery.innerText(), /Este registro não informa o marco de início da medição/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   if (evidence) {
     await battery.locator('caption').scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/battery-auto-results-mobile.png` });

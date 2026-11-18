@@ -195,7 +195,7 @@ test('capture-only study retains the normal microphone source without requiring 
   const run = runtimeSection(runtime, 'private fun run(generation:', 'private fun captureOnly(');
   const loadGuard = run.indexOf('if(batteryMode!="capture_only")');
   assert.ok(loadGuard >= 0 && loadGuard < run.indexOf('HandsFreeModel.readPackage(context)'));
-  assert.match(run, /val command=if\(batteryMode=="capture_only"\)captureOnly\(generation\)/);
+  assert.match(run, /val command=if\(batteryMode=="capture_only"\)captureOnly\(generation,startup,::measureBlock\)/);
   const capture = runtimeSection(runtime, 'private fun captureOnly(', 'private fun capture(');
   assert.match(capture, /val audio=openRecorder\(\)/);
   assert.match(capture, /ShortArray\(3200\)/);
@@ -300,7 +300,8 @@ test('battery status probes and idempotent controls never query platform snapsho
   const finish = runtimeFunction(runtime, 'internal fun finishBatteryStudy()');
   assert.match(start, /alreadyActive=true;return@synchronized null/);
   assert.match(start, /\}\s*if\(alreadyActive\)return(?:@synchronized)? state\(\)/);
-  assert.match(finish, /= synchronized\(batteryControl\)/);
+  assert.match(finish, /return synchronized\(batteryControl\)/);
+  assert.ok(finish.indexOf('batteryCaptureStartup?.cancel(') < finish.indexOf('synchronized(batteryControl)'));
   assert.match(finish, /if\(!batteryBlocksNormal\(\) \|\| batteryChanging\)return@synchronized state\(\)/);
   assert.doesNotMatch(finish, /synchronized\(lock\)/);
   assert.doesNotMatch(start + finish, /synchronized\(lock\)\s*\{[^}]*return state\(\)/);

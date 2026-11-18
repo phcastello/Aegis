@@ -141,4 +141,28 @@ class NodeHandsFreeBatteryAutomationTest {
         assertThrows(IllegalStateException::class.java){first.arm(false)}
         assertTrue(first.state().getString("id").isNotEmpty());assertEquals("storage_failure",first.state().getString("issue"))
     }
+
+    @Test fun captureReadyMetadataIsPersistentAndDeadlineStartsAtMeasuredSnapshot() {
+        val f=Fixture();val m=f.model();m.arm(false);var step=m.claimScreenOff()!!
+        val off=m.running(step,"run-off",f.now,"exact");f.now=off.deadlineElapsedMs;step=m.claimDue(off)!!
+        f.now+=200;m.recordCaptureReady(step,f.now,123456)
+        assertEquals(200L,m.state().getLong("preparationElapsedMs"))
+        val ready=f.now;f.now+=50
+        val measured=m.running(step,"run-capture",f.now,"exact",250,"first_positive_pcm")
+        assertEquals(f.now+1800000,measured.deadlineElapsedMs)
+        val entry=m.export().getJSONArray("transitions").getJSONObject(1)
+        assertEquals(ready,entry.getLong("captureReadyElapsedMs"));assertEquals(123456L,entry.getLong("startupThreadCpuNanos"))
+        assertEquals(250L,entry.getLong("preparationMs"));assertEquals("first_positive_pcm",entry.getString("measurementStartBasis"))
+        assertFalse(m.state().getBoolean("validation"))
+    }
+    @Test fun captureReadyMetadataCannotBeForgedForOffOrAStaleTransition() {
+        val f=Fixture();val m=f.model();m.arm(true);val offStep=m.claimScreenOff()!!
+        assertThrows(IllegalArgumentException::class.java){m.recordCaptureReady(offStep,f.now,100)}
+        val off=m.running(offStep,"run-off",f.now,"exact");f.now=off.deadlineElapsedMs;val step=m.claimDue(off)!!
+        f.now+=100;m.recordCaptureReady(step,f.now,-1)
+        val entry=m.state().getJSONArray("transitions").getJSONObject(1);assertTrue(entry.isNull("startupThreadCpuNanos"))
+        assertThrows(IllegalStateException::class.java){m.recordCaptureReady(offStep,f.now,100)}
+        f.now+=1
+        assertThrows(IllegalStateException::class.java){m.recordCaptureReady(step,f.now,100)}
+    }
 }

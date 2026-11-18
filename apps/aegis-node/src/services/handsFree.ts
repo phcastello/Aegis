@@ -41,6 +41,8 @@ export interface HandsFreeBatteryRun {
   startedAt: string;
   endedAt: string | null;
   durationMs: number;
+  preparationMs?: number | null;
+  measurementStartBasis?: 'capture_disabled' | 'first_positive_pcm';
   eligible: boolean;
   issues: string[];
   summary: HandsFreeBatterySummary;
@@ -79,6 +81,7 @@ export interface HandsFreeBatteryAutomation {
   stageDurationMs: number;
   validation: boolean;
   remainingEstimateMs: number | null;
+  preparationElapsedMs?: number | null;
   runIds: string[];
   alarmPrecision?: 'exact' | 'inexact';
   delayMs?: number;
@@ -128,6 +131,7 @@ function batteryAutomation(value: unknown): value is HandsFreeBatteryAutomation 
     (value.mode === null || batteryModes.includes(String(value.mode))) && typeof value.validation === 'boolean' &&
     batteryNumber(value.stageDurationMs) && value.stageDurationMs > 0 &&
     (value.remainingEstimateMs === null || batteryNumber(value.remainingEstimateMs)) &&
+    (value.preparationElapsedMs === undefined || value.preparationElapsedMs === null || batteryNumber(value.preparationElapsedMs)) &&
     Array.isArray(value.runIds) && value.runIds.length <= 3 && value.runIds.every(batteryId) && new Set(value.runIds).size === value.runIds.length &&
     (value.alarmPrecision === undefined || ['exact', 'inexact'].includes(String(value.alarmPrecision))) &&
     (value.delayMs === undefined || batteryNumber(value.delayMs)) &&
@@ -147,7 +151,9 @@ function batteryDiagnostics(value: unknown): value is HandsFreeBatteryDiagnostic
   return value.runs.every((run: unknown) => {
     if (!batteryRecord(run) || !batteryId(run.id) || ids.has(run.id) ||
         (run.comparisonKey !== undefined && (typeof run.comparisonKey !== 'string' || !/^[a-f0-9]{64}$/.test(run.comparisonKey))) || !batteryModes.includes(String(run.mode)) || !['active', 'completed', 'interrupted'].includes(String(run.status)) || !batteryTime(run.startedAt) ||
-        !(run.endedAt === null || batteryTime(run.endedAt)) || !batteryNumber(run.durationMs) || typeof run.eligible !== 'boolean' ||
+        !(run.endedAt === null || batteryTime(run.endedAt)) || !batteryNumber(run.durationMs) ||
+        !(run.preparationMs === undefined || run.preparationMs === null || batteryNumber(run.preparationMs)) ||
+        !(run.measurementStartBasis === undefined || ['capture_disabled', 'first_positive_pcm'].includes(String(run.measurementStartBasis))) || typeof run.eligible !== 'boolean' ||
         !Array.isArray(run.issues) || run.issues.length > 32 || !run.issues.every(batteryCode) || !batteryRecord(run.summary) || !Object.prototype.hasOwnProperty.call(run.summary, 'phoneChargeMah')) return false;
     ids.add(run.id);
     return Object.entries(run.summary).every(([key, number]) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && (number === null || batteryNumber(number, signedKeys.includes(key) || !summaryKeys.includes(key))));

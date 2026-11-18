@@ -41,6 +41,28 @@ fase faltante com corridas antigas da mesma configuração. O modo de validaçã
 de um minuto por etapa é sempre inelegível, mesmo se um alarme atrasado fizer
 a janela durar mais de vinte minutos.
 
+## Prontidão de captura
+
+No ensaio longo da unstable.18, B e C incluíram aproximadamente 78 e 81
+segundos de suspensão antes da primeira captura. Os prazos já estavam em
+andamento enquanto o Android voltava a dormir entre a transição e a leitura.
+
+A transição agora mantém a proteção de CPU já usada na fronteira até receber
+o primeiro bloco positivo e sem silenciamento do microfone. Esse bloco
+confirma prontidão. A medição e o próximo alarme partem do snapshot obtido
+logo depois. A exportação registra o instante da confirmação e o custo de CPU
+da preparação separadamente. A preparação tem prazo absoluto de até nove
+segundos desde o início da proteção de dez segundos. Fila, abertura do
+microfone e carregamento do modelo contam nesse prazo.
+
+Ao expirar, cancelar ou perder a captura durante a preparação, a sequência
+interrompe e conserva o bloqueio necessário para retomada explícita. Uma
+leitura tardia não agenda outra etapa. A janela desligada continua sem
+captura. O fluxo descarta o áudio da preparação e não abre comandos durante
+a medição.
+
+[Pesquisa sobre consumo com escuta contínua](battery-capture-alternatives-20261117.md).
+
 ## Fontes e limites
 
 [AlarmManager](https://developer.android.com/reference/android/app/AlarmManager),

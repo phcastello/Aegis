@@ -125,9 +125,12 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
     fun activeStartElapsedMs():Long?=publishedStartElapsedMs
     fun blocksNormal():Boolean=publishedMode!=null || requiresResume
 
-    @Synchronized fun start(mode:String,identity:JSONObject,automationId:String?=null,validation:Boolean=false):JSONObject {
+    @Synchronized fun start(mode:String,identity:JSONObject,automationId:String?=null,validation:Boolean=false,
+        preparationMs:Long?=null,measurementStartBasis:String?=null):JSONObject {
         active?.let{return state()}
         require(mode in modes){"battery_mode"}
+        require(preparationMs==null || preparationMs>=0){"battery_preparation"}
+        require(measurementStartBasis==null || measurementStartBasis.length in 1..80){"battery_start_basis"}
         require(automationId==null || automationId.matches(Regex("[A-Za-z0-9_-]{1,128}"))){"battery_automation_id"}
         require(!validation || automationId!=null){"battery_validation_requires_automation"}
         if(requiresResume) {
@@ -140,6 +143,7 @@ internal class HandsFreeBatteryDiagnostics internal constructor(
         val row=JSONObject().put("id",newId()).put("mode",mode).put("status","active")
             .put("comparisonKey",comparisonKey(identity,snapshot))
             .put("automationId",automationId?:JSONObject.NULL).put("validation",validation)
+            .put("preparationMs",preparationMs?:JSONObject.NULL).put("measurementStartBasis",measurementStartBasis?:JSONObject.NULL)
             .put("identity",JSONObject(identity.toString())).put("startedAt",snapshot.opt("at")?:JSONObject.NULL)
             .put("endedAt",JSONObject.NULL).put("durationMs",JSONObject.NULL)
             .put("eligible",false).put("issues",JSONArray()).put("samples",JSONArray())

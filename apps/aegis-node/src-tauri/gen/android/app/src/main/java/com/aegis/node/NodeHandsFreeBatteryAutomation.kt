@@ -101,11 +101,14 @@ internal class HandsFreeBatteryAutomation internal constructor(
         transition(candidate,next,token.deadlineElapsedMs,now)
         commit(candidate);return step
     }
-    @Synchronized fun running(step:Step,runId:String,startElapsedMs:Long,alarmPrecision:String="pending"):Token {
+    @Synchronized fun running(step:Step,runId:String,startElapsedMs:Long,alarmPrecision:String="pending",
+        preparationMs:Long?=null,measurementStartBasis:String?=null):Token {
         val existing=publishedToken
         if(root.optString("status")=="running" && existing!=null && existing.sequenceId==step.sequenceId &&
             existing.stageIndex==step.stageIndex && existing.runId==runId)return existing
         checkStep(step);require(step.stageIndex in 0..2 && validId(runId)){"battery_auto_run"}
+        require(preparationMs==null || preparationMs>=0){"battery_auto_preparation"}
+        require(measurementStartBasis==null || measurementStartBasis.length in 1..80){"battery_auto_basis"}
         require(alarmPrecision in setOf("pending","exact","inexact")){"battery_auto_precision"}
         val now=now()
         require(startElapsedMs>=step.claimedAtElapsedMs && startElapsedMs<=now && startElapsedMs<=Long.MAX_VALUE-step.durationMs){"battery_auto_start_clock"}
@@ -118,7 +121,23 @@ internal class HandsFreeBatteryAutomation internal constructor(
             .put("actualStartElapsedMs",startElapsedMs).put("deadlineElapsedMs",token.deadlineElapsedMs).put("alarmPrecision",alarmPrecision)
         candidate.getJSONArray("transitions").getJSONObject(candidate.getJSONArray("transitions").length()-1)
             .put("nextStartElapsedMs",startElapsedMs).put("transitionCompletedElapsedMs",now)
+            .put("preparationMs",preparationMs?:JSONObject.NULL).put("measurementStartBasis",measurementStartBasis?:JSONObject.NULL)
+        candidate.put("preparationMs",preparationMs?:JSONObject.NULL).put("measurementStartBasis",measurementStartBasis?:JSONObject.NULL)
         commit(candidate);return token
+    }
+    @Synchronized fun recordCaptureReady(step:Step,readyElapsedMs:Long,startupCpuNanos:Long?) {
+        checkStep(step)
+        require(step.mode=="capture_only" || step.mode=="detection"){"battery_auto_ready_mode"}
+        require(readyElapsedMs>=step.claimedAtElapsedMs && readyElapsedMs<=now()){"battery_auto_ready_clock"}
+        val candidate=copy()
+        val transitions=candidate.getJSONArray("transitions")
+        val entry=transitions.getJSONObject(transitions.length()-1)
+        if(entry.has("captureReadyElapsedMs")) {
+            check(entry.getLong("captureReadyElapsedMs")==readyElapsedMs){"battery_auto_ready_duplicate"}
+            return
+        }
+        entry.put("captureReadyElapsedMs",readyElapsedMs).put("startupThreadCpuNanos",startupCpuNanos?.takeIf{it>=0}?:JSONObject.NULL)
+        commit(candidate)
     }
     @Synchronized fun setAlarmPrecision(token:Token,precision:String) {
         require(precision in setOf("exact","inexact")){"battery_auto_precision"}
@@ -159,6 +178,10 @@ internal class HandsFreeBatteryAutomation internal constructor(
         }
         val transitions=root.optJSONArray("transitions")
         val latest=transitions?.let{if(it.length()>0)it.optJSONObject(it.length()-1) else null}
+        val preparationElapsed=if(root.optString("status")=="transitioning")readClock()?.let{now->
+            (root.opt("transitionStartedElapsedMs") as? Number)?.toLong()?.takeIf{it<=now}?.let{now-it}
+        } else null
+        value.put("preparationElapsedMs",preparationElapsed?:JSONObject.NULL)
         value.put("stageDurationMs",duration).put("remainingEstimateMs",remaining?:JSONObject.NULL)
             .put("issue",root.opt("reason")?:JSONObject.NULL)
         if(value.optString("alarmPrecision")=="pending")value.remove("alarmPrecision")

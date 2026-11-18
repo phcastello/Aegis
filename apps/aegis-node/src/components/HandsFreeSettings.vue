@@ -18,6 +18,7 @@ function measured(value: number | null | undefined, unit: string, signed = false
   return `${signed && value > 0 ? '+' : ''}${value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`;
 }
 function minutes(value: number): string { return (value / 60000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
+function seconds(value: number): string { return (value / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
 const automationMessage = computed(() => {
   const plan = automation.value;
   if (!plan) return '';
@@ -57,10 +58,12 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
         <legend>Investigar consumo de bateria</legend>
         <template v-if="automation">
           <p role="status">{{ automationMessage }}</p>
-          <p v-if="automationLive && automation.remainingEstimateMs !== null">Tempo restante aproximado: {{ minutes(automation.remainingEstimateMs) }} min.</p>
+          <p v-if="automation.status === 'transitioning'">A preparação fica fora da medição. A janela de {{ minutes(automation.stageDurationMs) }} min ainda não começou.</p>
+          <p v-if="automation.status === 'transitioning' && automation.preparationElapsedMs !== undefined && automation.preparationElapsedMs !== null" class="settings-muted">Preparação decorrida: {{ seconds(automation.preparationElapsedMs) }} s.</p>
+          <p v-if="automationLive && automation.status !== 'transitioning' && automation.remainingEstimateMs !== null">Previsão: {{ minutes(automation.remainingEstimateMs) }} min de medição, mais preparação entre etapas.</p>
           <p v-if="automation.validation" class="settings-muted">Verificação funcional da automação. Estes resultados não medem consumo de bateria.</p>
           <p v-if="automation.alarmPrecision === 'inexact'" class="settings-muted">O Android pode atrasar as trocas de etapa. O relatório registra os tempos efetivos.</p>
-          <p v-if="automation.delayMs && automation.delayMs > 0" class="settings-muted">Houve atraso na troca de etapa. Considere a duração real registrada no relatório.</p>
+          <p v-if="automation.delayMs !== undefined && automation.delayMs >= 5000" class="settings-muted">Houve atraso na troca de etapa. Considere a duração real registrada no relatório.</p>
           <button v-if="automationCleanup" type="button" :disabled="!canAct" @click="cancelAuto">{{ automation.validation ? 'Cancelar verificação' : 'Cancelar comparação' }}</button>
           <p v-if="automationCleanup" class="settings-muted">Cancelar encerra toda a sequência e volta às configurações anteriores.</p>
         </template>
@@ -71,7 +74,7 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
           <p>Este é um teste manual. Volte aqui para encerrar manualmente após cerca de 30 minutos.</p>
           <button type="button" :disabled="!canAct" @click="finishBattery">Encerrar teste e voltar às configurações anteriores</button>
         </template>
-        <p v-if="automationSupported">Inicie uma vez e apague a tela. A Aegis compara A → B → C automaticamente, por 30 minutos em cada etapa: cerca de 1h30 após apagar a tela. As trocas podem atrasar no Android.</p>
+        <p v-if="automationSupported">Inicie uma vez e apague a tela. A Aegis compara A → B → C automaticamente, por 30 minutos de medição em cada etapa: cerca de 1h30, além da preparação entre etapas. Apague a tela para começar. As trocas podem atrasar no Android.</p>
         <p>Comece com carga entre 50% e 80%, aparelho frio e fora do carregador. Mantenha a tela apagada e o mesmo ambiente. Durante os testes, a Aegis não responde a chamadas e nenhum áudio é salvo ou enviado.</p>
         <p v-if="batteryLocked" class="settings-muted">Os controles normais ficam suspensos até o encerramento.</p>
         <p v-if="!state.assistantSelected" class="settings-muted">Selecione a Aegis como assistente no Android antes de iniciar os testes.</p>
@@ -81,7 +84,7 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
         <details v-if="!batteryLocked" class="battery-advanced" :open="!automationSupported">
           <summary>Opções avançadas</summary>
           <template v-if="automationSupported">
-            <p>Verifique apenas a passagem entre as três etapas, com cerca de 1 minuto em cada uma. Duração aproximada de 3 minutos após apagar a tela, sujeita a atrasos do Android. Esta verificação não mede consumo.</p>
+            <p>Verifique apenas a passagem entre as três etapas, com cerca de 1 minuto em cada uma. São cerca de 3 minutos de verificação, além da preparação entre etapas, após apagar a tela. As trocas podem atrasar no Android. Esta verificação não mede consumo.</p>
             <button type="button" :disabled="!canStartAuto()" @click="startAuto(true)">Verificar automação (sem medir consumo)</button>
           </template>
           <p>Testes manuais: cada botão inicia uma etapa de 30 minutos. Apague a tela e volte aqui para encerrar manualmente; os botões abaixo não executam a sequência automática.</p>
@@ -108,6 +111,10 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
           <details class="battery-history"><summary>Histórico dos últimos {{ battery.runs.length }} testes e CPU</summary>
             <article v-for="result in [...battery.runs].reverse()" :key="result.id" class="battery-result">
               <h4>{{ batteryLabels[result.mode] }} · {{ minutes(result.durationMs) }} min</h4>
+              <p v-if="result.preparationMs !== undefined && result.preparationMs !== null" class="settings-muted">Preparação: {{ seconds(result.preparationMs) }} s, fora da janela de medição.</p>
+              <p v-if="result.measurementStartBasis === 'first_positive_pcm'" class="settings-muted">A medição começou após a confirmação de áudio do microfone.</p>
+              <p v-else-if="result.measurementStartBasis === 'capture_disabled'" class="settings-muted">A medição começou após confirmar a captura desligada.</p>
+              <p v-else class="settings-muted">Este registro não informa o marco de início da medição.</p>
               <p v-if="isValidationRun(result.id)">Verificação funcional: este resultado não mede consumo.</p>
               <p v-else>{{ result.eligible ? 'Condições aceitas para comparação.' : 'Não elegível para comparação: duração, condições ou disponibilidade precisam ser verificadas na exportação.' }}</p>
               <p v-if="result.issues.length">{{ result.issues.length }} observação(ões) registrada(s). A exportação conserva os motivos do resultado.</p>
