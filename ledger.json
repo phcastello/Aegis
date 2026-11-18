@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000019,
+  "highWaterMark": 8000020,
   "reservations": [
     {
       "schema": 2,
@@ -874,6 +874,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000019
+    },
+    {
+      "schema": 2,
+      "sha": "50971044f85bfd37b677eb540812038ad3c22427",
+      "branch": "fix/v0.8.0-captura-inicio-consumo",
+      "number": 20,
+      "platform": "both",
+      "version": "0.8.0-unstable.20",
+      "kind": "normal",
+      "sourceCommit": "50971044f85bfd37b677eb540812038ad3c22427",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "50971044f85bfd37b677eb540812038ad3c22427",
+        "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "pwa": "6e4e233df12bbac1eed5e06eed1d0f50d803ff9e",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-18T00:19:23.205Z",
+      "repository": "phcastello/Aegis",
+      "runId": "44206810258",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000020
     }
   ],
   "recommended": {
