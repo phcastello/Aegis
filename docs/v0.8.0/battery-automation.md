@@ -63,6 +63,26 @@ a medição.
 
 [Pesquisa sobre consumo com escuta contínua](battery-capture-alternatives-20261117.md).
 
+### Validação da unstable.20
+
+A [prévia assinada](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.20)
+foi instalada e verificada no S20 FE com Android 13. A verificação de um minuto
+por etapa concluiu A → B → C com a tela apagada. O primeiro áudio chegou após
+555 ms de preparação em B e 619 ms em C. Os snapshots iniciais vieram 60 ms
+e 9 ms depois dessas confirmações, respectivamente. As duas janelas registraram
+60 s de áudio e o alarme de cada janela usou seu snapshot inicial como base.
+
+O ensaio curto confirmou a ordem de início e preservou a preferência
+de escuta anterior, que estava desligada. A referência não entrou em sono
+profundo nesta execução de um minuto. A economia e o comportamento durante
+uma referência longa em sono profundo dependem de outro ensaio.
+
+Passaram 253 testes Android, 197 testes de interface e 86 verificações de
+contratos. Os testes incluem seis estados gerados pelo coletor Android para
+validar a leitura dos relatórios manuais e automáticos. A prévia unstable.19
+foi cancelada antes da publicação para corrigir a compatibilidade com
+relatórios sem informação de prontidão.
+
 ## Fontes e limites
 
 [AlarmManager](https://developer.android.com/reference/android/app/AlarmManager),

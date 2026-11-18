@@ -1,7 +1,7 @@
 # Como comparar o consumo da escuta no Android
 
-[Entrega atual: 0.8.0-unstable.18](battery-automation-publication-unstable18.md).
-A comparação automática foi acrescentada nesta versão; a entrega anterior
+[Entrega atual: 0.8.0-unstable.20](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.20).
+[A entrega unstable.18](battery-automation-publication-unstable18.md) acrescentou a comparação automática. A entrega anterior
 [unstable.17](battery-diagnostic-publication-unstable17.md) oferece os controles individuais.
 
 O diagnóstico fica em **Configurações → Áudio e voz → Investigar consumo de bateria**.
