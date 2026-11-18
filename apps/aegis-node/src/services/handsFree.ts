@@ -42,7 +42,7 @@ export interface HandsFreeBatteryRun {
   endedAt: string | null;
   durationMs: number;
   preparationMs?: number | null;
-  measurementStartBasis?: 'capture_disabled' | 'first_positive_pcm';
+  measurementStartBasis?: 'capture_disabled' | 'first_positive_pcm' | null;
   eligible: boolean;
   issues: string[];
   summary: HandsFreeBatterySummary;
@@ -153,7 +153,7 @@ function batteryDiagnostics(value: unknown): value is HandsFreeBatteryDiagnostic
         (run.comparisonKey !== undefined && (typeof run.comparisonKey !== 'string' || !/^[a-f0-9]{64}$/.test(run.comparisonKey))) || !batteryModes.includes(String(run.mode)) || !['active', 'completed', 'interrupted'].includes(String(run.status)) || !batteryTime(run.startedAt) ||
         !(run.endedAt === null || batteryTime(run.endedAt)) || !batteryNumber(run.durationMs) ||
         !(run.preparationMs === undefined || run.preparationMs === null || batteryNumber(run.preparationMs)) ||
-        !(run.measurementStartBasis === undefined || ['capture_disabled', 'first_positive_pcm'].includes(String(run.measurementStartBasis))) || typeof run.eligible !== 'boolean' ||
+        !(run.measurementStartBasis === undefined || run.measurementStartBasis === null || ['capture_disabled', 'first_positive_pcm'].includes(String(run.measurementStartBasis))) || typeof run.eligible !== 'boolean' ||
         !Array.isArray(run.issues) || run.issues.length > 32 || !run.issues.every(batteryCode) || !batteryRecord(run.summary) || !Object.prototype.hasOwnProperty.call(run.summary, 'phoneChargeMah')) return false;
     ids.add(run.id);
     return Object.entries(run.summary).every(([key, number]) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && (number === null || batteryNumber(number, signedKeys.includes(key) || !summaryKeys.includes(key))));

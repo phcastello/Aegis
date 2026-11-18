@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import { handsFree, handsFreeError, acquireNativeAudio, latestBatteryRuns, batteryRateDifference, isBatteryAutomationLive, batteryRunsForComparison } from '../.test-build/services/handsFree.js';
@@ -192,7 +193,7 @@ test('battery reports preserve unavailable sensors and signed device deltas', as
 
 test('preparation metadata remains optional and never invents a legacy measurement boundary', async () => {
   globalThis.window = {};
-  for (const fields of [{}, { preparationMs: null }, { preparationMs: 0, measurementStartBasis: 'capture_disabled' }, { preparationMs: 80000, measurementStartBasis: 'first_positive_pcm' }]) {
+  for (const fields of [{}, { preparationMs: null }, { preparationMs: null, measurementStartBasis: null }, { preparationMs: 0, measurementStartBasis: 'capture_disabled' }, { preparationMs: 80000, measurementStartBasis: 'first_positive_pcm' }]) {
     const run = batteryRun('capture_only', fields);
     mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ runs: [run] }) }));
     const actual = (await handsFree('state')).batteryDiagnostics.runs[0];
@@ -200,10 +201,31 @@ test('preparation metadata remains optional and never invents a legacy measureme
     if (!('preparationMs' in fields)) assert.equal(Object.hasOwn(actual, 'preparationMs'), false);
     if (!('measurementStartBasis' in fields)) assert.equal(Object.hasOwn(actual, 'measurementStartBasis'), false);
   }
-  for (const fields of [{ preparationMs: -1 }, { preparationMs: '80000' }, { preparationMs: Infinity }, { measurementStartBasis: 'recording_requested' }, { measurementStartBasis: null }]) {
+  for (const fields of [{ preparationMs: -1 }, { preparationMs: '80000' }, { preparationMs: Infinity }, { measurementStartBasis: 'recording_requested' }]) {
     mockIPC(() => ({ ...initial, batteryDiagnostics: batteryStudy({ runs: [batteryRun('capture_only', fields)] }) }));
     await assert.rejects(handsFree('state'), { code: 'invalid_response' });
   }
+});
+
+test('literal JVM manual and automatic battery states cross the TypeScript boundary without shape changes', async () => {
+  globalThis.window = {};
+  // Literal state() outputs from final Kotlin helpers, using synthetic observations only.
+  // The wrapper mirrors runtime.batteryState(); this does not claim an Android IPC execution.
+  const fixtures = JSON.parse(readFileSync(new URL('./fixtures/native-battery-states.json', import.meta.url), 'utf8'));
+  assert.deepEqual(fixtures.cases.map(row => row.name).sort(), ['auto-completed', 'auto-running', 'auto-transitioning', 'auto-waiting', 'manual-active', 'manual-completed']);
+  for (const { name, batteryDiagnostics } of fixtures.cases) {
+    mockIPC(() => ({ ...initial, batteryDiagnostics }));
+    const actual = (await handsFree('state')).batteryDiagnostics;
+    assert.deepEqual(actual, batteryDiagnostics, name);
+    if (name.startsWith('manual-')) {
+      assert.equal(actual.runs.length, 1);
+      assert.equal(actual.runs[0].measurementStartBasis, null, 'default native manual start explicitly emits null');
+      assert.equal(actual.runs[0].preparationMs, null);
+    }
+  }
+  const rows = fixtures.cases.flatMap(row => row.batteryDiagnostics.runs);
+  assert(rows.some(row => row.measurementStartBasis === 'capture_disabled'));
+  assert(rows.some(row => row.measurementStartBasis === 'first_positive_pcm'));
 });
 
 test('battery boundary rejects malformed histories, active owners and impossible CPU values', async () => {
