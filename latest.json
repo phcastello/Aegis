@@ -1,27 +1,27 @@
 {
-  "version": "0.8.0-unstable.28",
-  "notes": "Aegis 0.8.0-unstable.28",
-  "pub_date": "2026-11-24T21:13:17.677Z",
+  "version": "0.8.0-unstable.30",
+  "notes": "Aegis 0.8.0-unstable.30",
+  "pub_date": "2026-11-24T22:22:22.551Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.28/Aegis-Windows-x86_64-Setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcXhDcDZEWFIvWUtkQ0kwK0hqMmd1QVRjQ1dzVTdGeUZQeTRXS2xka2JzU2pnYkZpakFlcVJNMmRGbkgwQ3AzcjFEYjNySTVGa2IzUTJDUDY5eXhKYWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTU1MzY0CWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC44LjAtdW5zdGFibGUuMjgKcXUvS09ZcUVlU1E0ZG94YmJoOEFqZ2JVSVQrYkZ3bExIT0creFAwdEdYK09WVXhoRzN3WmE4OFRyMGlsdTFaazBTaGUxNWRaTGJmTmhib3cwQjNEQWc9PQo=",
-      "sha256": "02b514a1f2ca0342e008f51f32f255c85e4178260c6d5ec4bb260d451d99d740"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.30/Aegis-Windows-x86_64-Setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcXlQMzVOZ1dtVnJPY1Y1UkRBS29CUEVhQzhNSnNrL2swWkJ6bDYxRWxLamhDYzMxUm9EOEVEQXcxcnVlVFVveVBUUUtWVnk5R3M1TUk0RDlKU2s1dndvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTU5NzE2CWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC44LjAtdW5zdGFibGUuMzAKd25XV2RBcnZFaDlja1FOUjZUV0l0cEloTkI0VEJnclFEbXFRWUMxWERRNSs3NEZSMFdRZWNGdm1YWnNXNnNsRnVWMGFUNHVxY0lRY25sMDZoa24vQVE9PQo=",
+      "sha256": "69d60923955e6cebf08bd52720ee7f499a54a7fc8486606608d214d2bff44e09"
     }
   },
   "android": {
     "aarch64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.28/Aegis-Android-arm64.apk",
-      "versionCode": 8000028,
-      "sha256": "7efad3216dff42bc0b8c746ff3b1c51327c66771f7390647e4e270d58c5785e4"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.30/Aegis-Android-arm64.apk",
+      "versionCode": 8000030,
+      "sha256": "43921fd6400680a3d1c4ce1ec4b7acc0a65cca1cb93828a456dc2916b583cda8"
     }
   },
   "schema": 2,
-  "versionCode": 8000028,
+  "versionCode": 8000030,
   "kind": "normal",
-  "sourceCommit": "5812fb85985acb08e276de0d86d04e4dfba8c0af",
+  "sourceCommit": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
   "sourceVersion": "0.8.0",
-  "publishedAt": "2026-11-24T21:13:17.677Z",
+  "publishedAt": "2026-11-24T22:22:22.551Z",
   "compatibility": {
     "api": 1,
     "nodeData": 1
