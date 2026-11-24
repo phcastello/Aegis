@@ -715,9 +715,11 @@ internal class HandsFreeRuntime(private val context:Context) {
 
     private class MicrophoneUnavailable:Exception()
     private class WakeVerificationUnavailable(cause:Throwable):Exception(cause)
-    private fun microphoneBlocked():Boolean {
+    private fun microphoneBlocked(allowCommunication: Boolean = false):Boolean {
         val manager=context.getSystemService(AudioManager::class.java)
-        if(manager.mode!=AudioManager.MODE_NORMAL || manager.isMicrophoneMute)return true
+        val mode = manager.mode
+        if((mode!=AudioManager.MODE_NORMAL && !(allowCommunication && mode==AudioManager.MODE_IN_COMMUNICATION)) ||
+            manager.isMicrophoneMute)return true
         // Public snapshot prevents starting over an already recording application. Keep no
         // other-app metadata: only the boolean, and our own bounded recent session IDs.
         if(manager.activeRecordingConfigurations.any{!isOwnAudioSession(it.clientAudioSessionId)})return true
@@ -731,11 +733,23 @@ internal class HandsFreeRuntime(private val context:Context) {
         // MIC is deliberately not privacy-sensitive; no VOICE_COMMUNICATION source to take priority.
         return AudioRecord(MediaRecorder.AudioSource.MIC,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,maxOf(min,12800)).also{
             if(it.state!=AudioRecord.STATE_INITIALIZED){it.release();throw MicrophoneUnavailable()}
-            synchronized(lock){ownAudioSessions.add(it.audioSessionId);while(ownAudioSessions.size>8)ownAudioSessions.remove(ownAudioSessions.first())}
+            registerOwnedAudioSession(it.audioSessionId)
         }
     }
+    private fun registerOwnedAudioSession(audioSessionId: Int) = synchronized(lock) {
+        ownAudioSessions.add(audioSessionId)
+        while (ownAudioSessions.size > 8) ownAudioSessions.remove(ownAudioSessions.first())
+    }
+
+    private val bargeInDetectorModel by lazy {
+        context.assets.open(HandsFreeDoubleTalkDetector.ASSET).use { HandsFreeDoubleTalkDetector.Model.load(it) }
+    }
+
     private class ResponseBargeIn {
         val echo = HandsFreeBargeInEcho()
+        var model: HandsFreeDoubleTalkDetector.Model? = null
+        @Volatile var native: HandsFreeConversationAudio? = null
+        @Volatile var nativeFailed = false
         @Volatile var playing = false
         @Volatile var destination: String? = null
         @Volatile var listener: HandsFreeBargeInCapture? = null
@@ -751,11 +765,33 @@ internal class HandsFreeRuntime(private val context:Context) {
         playedFrames: HandsFreePlaybackClock
     ) {
         if (!ownsTurn(generation,session,owner) || response.destination==null || diagnostic) return
-        val audio = try { openRecorder() } catch (_: Exception) {
+        val model = response.model ?: return
+        val native = response.native
+        fun nativeUsable(): Boolean {
+            val reason = native?.unavailableReason() ?: return true
+            response.nativeFailed = true
+            metrics.event("barge_in_audio_path", JSONObject().put("outcome",reason))
+            return false
+        }
+        if (!nativeUsable()) return
+        val audio = try { native?.record ?: openRecorder() } catch (_: Exception) {
             metrics.event("barge_in_capture", JSONObject().put("outcome", "recorder_open_failed"))
             return
         }
+        val processor = HandsFreeDuplexSpeech(response.echo, HandsFreeDoubleTalkDetector(model), native != null,
+            native?.playbackGain() ?: 1f)
+        if (!processor.available) {
+            processor.close()
+            if (native != null) native.closeRecorder() else audio.release()
+            metrics.event("barge_in_audio_path", JSONObject().put("outcome","software_aec_unavailable"))
+            return
+        }
         val audioManager = context.getSystemService(AudioManager::class.java)
+        fun outputVolume(): Int = native?.mediaVolume() ?:
+            if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) 0
+            else audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val audioPath = if (native != null) "native_aec" else "software_aec3"
+        metrics.event("barge_in_audio_path", JSONObject().put("outcome","active").put("path",audioPath))
         lateinit var listener: HandsFreeBargeInCapture
         var readyReported = false
         fun acceptInterruption(): Boolean {
@@ -764,7 +800,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                 val activation = continuityActivation
                 if (destination == null || activation == null || !response.playing ||
                     !ownsTurn(generation,session,owner) || responseCapture !== listener ||
-                    activation.identity != currentIdentity() || microphoneBlocked() || playedFrames() == null
+                    activation.identity != currentIdentity() || !nativeUsable() ||
+                    microphoneBlocked(native?.isOwnedMode() == true) || playedFrames() == null
                 ) {
                     false
                 } else {
@@ -790,8 +827,11 @@ internal class HandsFreeRuntime(private val context:Context) {
             return accepted
         }
         listener = HandsFreeBargeInCapture(
-            audio, response.echo, playedFrames,
-            mediaVolume = { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) },
+            audio, processor, playedFrames,
+            mediaVolume = ::outputVolume,
+            inputUsable = ::nativeUsable,
+            releaseAudio = { if (native != null) native.closeRecorder() else audio.release() },
+            onInputFailure = { if (native != null) response.nativeFailed = true },
             stillCurrent = { ownsSession(generation,session) && responseCapture===listener },
             onSpeech = ::acceptInterruption,
             onProbeResult = { outcome, floorRms, peakRms ->
@@ -799,11 +839,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                     .put("outcome", outcome)
                     .put("backgroundRms", floorRms)
                     .put("confirmationPeakRms", peakRms)
-                    .put("mediaVolume", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)))
+                    .put("mediaVolume", outputVolume())
+                    .put("path", audioPath))
             },
             onCaptureSummary = { summary ->
                 metrics.event("barge_in_capture", JSONObject()
                     .put("outcome", summary.outcome.name.lowercase())
+                    .put("path",audioPath)
                     .put("accepted", summary.accepted)
                     .put("timestampFrames", summary.timestampFrames)
                     .put("playbackHeadFrames", summary.playbackHeadFrames)
@@ -812,6 +854,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                     .put("voiceReadyFrames", summary.voiceReadyFrames)
                     .put("independentFrames", summary.independentFrames)
                     .put("levelRejectedFrames", summary.levelRejectedFrames)
+                    .put("detectorPeakPercent", (processor.peakSpeechScore * 100).toInt())
+                    .put("nativeQualityFrames", processor.qualifiedNativeFrames)
                     .put("commandFrames", summary.commandFrames))
             },
             onAvailabilityChanged = {
@@ -819,7 +863,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                     ownsTurn(generation,session,owner)) {
                     readyReported = true
                     metrics.event("barge_in_ready", JSONObject()
-                        .put("mediaVolume", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)))
+                        .put("mediaVolume", outputVolume())
+                        .put("path",audioPath))
                 }
                 main.post {
                     NodeVoiceInteractionSession.current?.refreshBargeInControls(session)
@@ -832,14 +877,15 @@ internal class HandsFreeRuntime(private val context:Context) {
             }
         )
         synchronized(lock) {
-            if (!ownsTurn(generation,session,owner) || responseCapture!=null || diagnostic || microphoneBlocked()) {
+            if (!ownsTurn(generation,session,owner) || responseCapture!=null || diagnostic ||
+                microphoneBlocked(native?.isOwnedMode() == true)) {
                 listener.close()
                 return
             }
             responseCapture = listener
             response.listener = listener
         }
-        listener.start()
+        if (!listener.start() && native != null) response.nativeFailed = true
     }
 
     private fun run(generation:Int,startup:HandsFreeCaptureStartup?=null) {
@@ -899,6 +945,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             synchronized(lock){if(!current(generation))return;installedModel=loaded;recordIdentity()}
             }
             var continuation=false
+            var nativeRejectedSession: String? = null
             while(current(generation)) {
                 val interrupted = nextCommand
                 nextCommand = null
@@ -937,6 +984,32 @@ internal class HandsFreeRuntime(private val context:Context) {
                             }
                         },
                         echo = response?.echo,
+                        prepareCommunication = {
+                            if (response == null || !ownsTurn(generation,session,active) || response.destination == null) null
+                            else {
+                                response.model = try { bargeInDetectorModel } catch (_: Exception) {
+                                    metrics.event("barge_in_audio_path", JSONObject().put("outcome","detector_unavailable"))
+                                    null
+                                }
+                                if (response.model == null || nativeRejectedSession == session) null
+                                else {
+                                    response.native = HandsFreeConversationAudio.tryOpen(context, ::microphoneBlocked,
+                                        ::registerOwnedAudioSession) { reason ->
+                                        response.nativeFailed = true
+                                        metrics.event("barge_in_audio_path", JSONObject().put("outcome",reason))
+                                    }
+                                    response.native?.playbackGain()
+                                }
+                            }
+                        },
+                        onCommunicationFailed = {
+                            response?.let {
+                                it.nativeFailed = true
+                                it.native?.close()
+                                it.native = null
+                                metrics.event("barge_in_audio_path", JSONObject().put("outcome","native_aec_playback_failed"))
+                            }
+                        },
                         onPlaybackReady = { head ->
                             if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
                         }
@@ -978,7 +1051,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     nextCommand = captured
                                     "queued"
                                 }
-                                ownsFollowUp && NodeHandsFree.permission(context) && !microphoneBlocked() -> {
+                                ownsFollowUp && NodeHandsFree.permission(context) &&
+                                    !microphoneBlocked(interruptedResponse.native?.isOwnedMode() == true) -> {
                                     // The player is already stopped. Reopen normal speech capture once,
                                     // in the same conversation, if the interrupted recording ended empty.
                                     continuation = true
@@ -1013,7 +1087,9 @@ internal class HandsFreeRuntime(private val context:Context) {
                             }
                         }
                     } finally {
-                        response?.echo?.clear()
+                        try { response?.native?.close() }
+                        finally { response?.echo?.clear() }
+                        if (response?.nativeFailed == true) nativeRejectedSession = session
                     }
                     trace?.let{it.mark("turn_ended");metrics.turnLatency(it,turnOutcome,turnIdentity)}
                     capturedTurnLatency=null

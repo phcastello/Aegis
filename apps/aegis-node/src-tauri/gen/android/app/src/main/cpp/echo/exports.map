@@ -1,0 +1,5 @@
+{
+  global:
+    Java_com_aegis_node_HandsFreeEchoNative_*;
+  local: *;
+};

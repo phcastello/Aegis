@@ -136,8 +136,11 @@ internal class HandsFreeVad(
         return total>=maxSamples || (hasSpeech && quiet>=silenceSamples) || (!hasSpeech && total>=noSpeechSamples)
     }
     // The barge-in gate has already verified speech through the final frame of its prefix.
-    fun confirmSpeechAtCurrentFrame() {
+    fun confirmSpeechAtCurrentFrame(initialNoiseRms: Double = 8.0) {
         check(total > 0 && pending == 0)
+        // A screened lead-in may contain inserted silence. Seed the real
+        // microphone floor after that prefix has passed through the VAD.
+        noise = maxOf(noise, initialNoiseRms.coerceIn(8.0, 300.0))
         hasSpeech = true
         lastActiveEndSample = total
         quiet = 0
@@ -156,7 +159,8 @@ internal class HandsFreeCommandCapture(
     private val command:ShortArray,
     initialPostCount:Int,
     classifier:HandsFreeSpeechClassifier,
-    initialSpeechConfirmed: Boolean = false
+    initialSpeechConfirmed: Boolean = false,
+    initialNoiseRms: Double = 8.0
 ) {
     private val vad=HandsFreeVad(classifier,maxSamples=320000,noSpeechSamples=initialPostCount+HandsFreeVad.NO_SPEECH_SAMPLES)
     private var afterActivation=0
@@ -170,7 +174,7 @@ internal class HandsFreeCommandCapture(
     init {
         require(initialPostCount in 0..minOf(command.size,320000))
         vad.process(command,initialPostCount)
-        if (initialSpeechConfirmed) vad.confirmSpeechAtCurrentFrame()
+        if (initialSpeechConfirmed) vad.confirmSpeechAtCurrentFrame(initialNoiseRms)
         uncertainInitialAudio=vad.signalSamples>=640 // At least40ms of variable initial post audio.
     }
     fun append(samples:ShortArray,count:Int):Boolean {

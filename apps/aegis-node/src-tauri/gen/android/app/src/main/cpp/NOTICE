@@ -27,3 +27,10 @@ Local command endpointing additionally links libfvad/WebRTC VAD, commit
 532ab666c20d3cfda38bca63abbb0f152706c369, BSD-3-Clause with patent grant.
 The packaged assets/licenses/hands-free include its LICENSE, PATENTS and AUTHORS.
 This classifier is independent from microWakeWord and has no model weights.
+
+Software acoustic echo cancellation during active hands-free conversations uses
+WebRTC audio-processing 2.1 (BSD-3-Clause), distributed by Freedesktop.org, and
+Abseil C++ 20240722.0 (Apache-2.0). See WebRTC-APM-*.txt for their notices,
+patents and bundled third-party licenses.
+https://www.freedesktop.org/software/pulseaudio/webrtc-audio-processing/
+https://github.com/abseil/abseil-cpp/releases/tag/20240722.0

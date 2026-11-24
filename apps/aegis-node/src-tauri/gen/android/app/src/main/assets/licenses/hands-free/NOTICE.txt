@@ -37,3 +37,10 @@ Artifacts: https://repo.maven.apache.org/maven2/com/squareup/okhttp3/okhttp/4.12
 https://repo.maven.apache.org/maven2/com/squareup/okio/okio-jvm/3.6.0/
 
 Candidate-only wake verification adapts openWakeWord preprocessing and streaming conventions (dscripka/openWakeWord, Apache-2.0). The Java ONNX Runtime1.31.1 dependency is Copyright (c) Microsoft Corporation, MIT. Full licenses and third-party notices are included alongside this notice. Personal wake weights and reference feature models are imported privately and are not APK assets.
+
+Software acoustic echo cancellation during active hands-free conversations uses
+WebRTC audio-processing 2.1 (BSD-3-Clause), distributed by Freedesktop.org, and
+Abseil C++ 20240722.0 (Apache-2.0). See WebRTC-APM-*.txt for their notices,
+patents and bundled third-party licenses.
+https://www.freedesktop.org/software/pulseaudio/webrtc-audio-processing/
+https://github.com/abseil/abseil-cpp/releases/tag/20240722.0

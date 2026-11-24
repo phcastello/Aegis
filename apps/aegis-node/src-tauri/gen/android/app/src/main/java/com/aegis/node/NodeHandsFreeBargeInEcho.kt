@@ -57,6 +57,37 @@ internal class HandsFreeBargeInEcho {
         }
     }
 
+    /** Copy the capture-aligned playback interval, resampling 24 kHz to 16 kHz.
+     * Offered PCM beyond the proven playback position never enters the processor.
+     * Negative positions are silence before the beginning of this track.
+     */
+    fun copyRender(output: ShortArray, headFrame: Long): Boolean = synchronized(lock) {
+        require(output.size == HandsFreeVad.FRAME_SAMPLES)
+        fun missing(): Boolean {
+            output.fill(0)
+            return false
+        }
+        if (headFrame <= 0 || headFrame > newestEnd) return@synchronized missing()
+        for (i in output.indices) {
+            val halfFrame = headFrame * 2 - (output.size - i) * 3L
+            if (halfFrame < 0) {
+                output[i] = 0
+                continue
+            }
+            val frame = halfFrame / 2
+            val slot = (frame % REFERENCE_FRAMES).toInt()
+            if (positions[slot] != frame) return@synchronized missing()
+            val first = pcm[slot].toInt()
+            if (halfFrame % 2 == 0L) output[i] = first.toShort()
+            else {
+                val next = ((frame + 1) % REFERENCE_FRAMES).toInt()
+                if (frame + 1 >= headFrame || positions[next] != frame + 1) return@synchronized missing()
+                output[i] = ((first + pcm[next].toInt()) / 2).toShort()
+            }
+        }
+        true
+    }
+
     fun clear() = synchronized(lock) {
         generation++
         pcm.fill(0)

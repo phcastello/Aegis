@@ -275,6 +275,13 @@ if(AEGIS_BUILD_VAD_HOST_JNI AND NOT ANDROID)
   target_include_directories(aegis_microwakeword PRIVATE "${AEGIS_JNI_INCLUDE}" "${AEGIS_JNI_PLATFORM_INCLUDE}")
 endif()
 
+# Software echo cancellation is separate from libfvad/static wake-word DSP.
+# The host target is opt-in, so passive-listening/native parity builds are unchanged.
+option(AEGIS_BUILD_AEC_HOST_JNI "Build the AEC3 JNI library on a Linux replay host" OFF)
+if(ANDROID OR AEGIS_BUILD_AEC_HOST_JNI)
+  add_subdirectory(echo)
+endif()
+
 # Explicit diagnostic build only; the normal APK contains neither harness nor data.
 option(AEGIS_BUILD_REPLAY "Build private WAV replay command" OFF)
 set(AEGIS_REPLAY_SOURCE "" CACHE FILEPATH "Path to scripts/hands-free/replay-native.cpp")
