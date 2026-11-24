@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000020,
+  "highWaterMark": 8000021,
   "reservations": [
     {
       "schema": 2,
@@ -904,6 +904,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000020
+    },
+    {
+      "schema": 2,
+      "sha": "1e26d0b5cff92b4b73113f9941177bd751f7930f",
+      "branch": "fix/wakeword-negativos-sibilantes",
+      "number": 21,
+      "platform": "both",
+      "version": "0.8.0-unstable.21",
+      "kind": "normal",
+      "sourceCommit": "1e26d0b5cff92b4b73113f9941177bd751f7930f",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "1e26d0b5cff92b4b73113f9941177bd751f7930f",
+        "backend": "350f892442acba5e1826ee60d376935c75a4fd49",
+        "pwa": "6e4e233df12bbac1eed5e06eed1d0f50d803ff9e",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-24T04:19:20.675Z",
+      "repository": "phcastello/Aegis",
+      "runId": "45325529029",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000021
     }
   ],
   "recommended": {
