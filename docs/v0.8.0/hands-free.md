@@ -117,10 +117,14 @@ reprodução nativa, o Android abre o microfone para detectar uma interrupção.
 O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
 AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
 
-Uma suspeita de fala faz uma pausa curta na resposta, com o áudio
-pendente ainda no AudioTrack. A captura guarda o começo do pedido e
-confirma fala após a cauda acústica. Se a confirmação falhar, a resposta
-retoma do mesmo ponto. Uma fala muito curta pode terminar antes de confirmar.
+O monitor estima o nível de fundo do microfone no início da reprodução.
+O barge-in exige sinal acima desse fundo e detecção de fala para abrir uma
+pausa curta, com o áudio pendente ainda no AudioTrack. A captura guarda
+o começo do pedido. Ela confirma fala acima do mesmo nível de fundo após
+a cauda acústica, com o detector já adaptado ao sinal da pausa. Se a
+confirmação falhar, a resposta retoma do mesmo ponto. Uma fala muito baixa
+ou curta pode não confirmar. O relatório sem áudio registra o resultado,
+o nível de fundo, o pico da confirmação e o volume de mídia por tentativa.
 
 Ao confirmar fala, o AudioTrack descarta o áudio pendente e o cliente
 solicita o cancelamento daquele turno. A captura segue até o endpoint

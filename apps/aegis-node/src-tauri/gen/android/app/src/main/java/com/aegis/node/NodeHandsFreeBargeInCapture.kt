@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 internal data class BargeInCommand(val wav:ByteArray,val trace:HandsFreeTurnLatency)
 
@@ -59,6 +61,49 @@ internal class HandsFreeBargeInOnset(
     companion object { const val PRE_SAMPLES=1920 }
 }
 
+/** The fresh libfvad model can call stationary microphone noise voiced for its
+ * first 80–100 ms. Learn the noise level independently of that early decision.
+ * This gate applies only while listening for interruptions.
+ */
+private class HandsFreeBargeInLevelGate {
+    private val calibration = DoubleArray(10) // 200 ms of samples with usable playback reference.
+    private var calibratedFrames = 0
+    var floorRms = 0.0
+        private set
+
+    fun observe(rms: Double, voiced: Boolean): Boolean {
+        if (calibratedFrames < calibration.size) {
+            calibration[calibratedFrames++] = rms
+            if (calibratedFrames == calibration.size) {
+                calibration.sort()
+                floorRms = calibration[2]
+            }
+            return false
+        }
+        val loud = aboveFloor(rms)
+        // Learn quieter levels even if mislabelled by the VAD, and allow a
+        // change in background after the warmed VAD classifies it as non-speech.
+        if (!loud || !voiced) floorRms += (rms - floorRms) * 0.05
+        return loud
+    }
+
+    fun aboveFloor(rms: Double) = rms >= maxOf(64.0, floorRms * 2.5)
+
+    companion object {
+        fun rms(frame: ShortArray): Double {
+            var sum = 0.0
+            var squares = 0.0
+            for (sample in frame) {
+                val value = sample.toDouble()
+                sum += value
+                squares += value * value
+            }
+            val mean = sum / frame.size
+            return sqrt((squares / frame.size - mean * mean).coerceAtLeast(0.0))
+        }
+    }
+}
+
 /** One microphone, owned only for the current response and its accepted new utterance.
  * close() requests stop without joining; awaitClosed() proves stop/release completed.
  */
@@ -71,7 +116,8 @@ internal class HandsFreeBargeInCapture internal constructor(
     private val stillCurrent:()->Boolean,
     private val onSpeech:()->Boolean,
     private val classifierFactory:()->HandsFreeBargeInClassifier,
-    private val clock:()->Long={HandsFreeTurnLatency.now()}
+    private val clock:()->Long={HandsFreeTurnLatency.now()},
+    private val onProbeResult: (String, Int, Int) -> Unit = { _, _, _ -> }
 ):AutoCloseable {
     constructor(
         audio:AudioRecord,
@@ -80,7 +126,8 @@ internal class HandsFreeBargeInCapture internal constructor(
         pauseResponse:()->Boolean,
         resumeResponse:()->Unit,
         stillCurrent:()->Boolean,
-        onSpeech:()->Boolean
+        onSpeech:()->Boolean,
+        onProbeResult: (String, Int, Int) -> Unit = { _, _, _ -> }
     ):this(AndroidInput(audio),{pcm,count,head->echo.suppress(pcm,count,head)},playedFrames,pauseResponse,resumeResponse,stillCurrent,onSpeech,{
             val native=NativeHandsFreeSpeechClassifier()
             object:HandsFreeBargeInClassifier {
@@ -88,7 +135,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                 override fun reset()=native.reset()
                 override fun close()=native.close()
             }
-        })
+        }, onProbeResult = onProbeResult)
     private val lifecycle=AtomicInteger(0) // new, started, closing, released
     private val stopping=AtomicBoolean(false)
     private val accepted=AtomicBoolean(false)
@@ -149,17 +196,25 @@ internal class HandsFreeBargeInCapture internal constructor(
         },"AegisBargeInStop").apply{isDaemon=true;start()}
     }
     private fun current():Boolean=!stopping.get() && try{stillCurrent()}catch(_:Exception){false}
-    private class SpeechProbe(prefix:ShortArray,val pausedAt:Long) {
+    private class SpeechProbe(prefix:ShortArray,val pausedAt:Long,val floorRms:Int) {
         private val prefixSamples=prefix.size
         val pcm=prefix.copyOf(prefixSamples+PROBE_SAMPLES)
         var length=prefixSamples;private set
         val samplesSincePause:Int get()=length-prefixSamples
         var confirmation:HandsFreeVad?=null
+        var peakRms=0
+        var reported=false
 
         fun append(frame:ShortArray) {
             frame.copyInto(pcm,length)
             length+=frame.size
         }
+    }
+
+    private fun reportProbe(probe:SpeechProbe, reason:String) {
+        if (probe.reported) return
+        probe.reported = true
+        try { onProbeResult(reason, probe.floorRms, probe.peakRms) } catch (_: Exception) { }
     }
 
     private fun capture() {
@@ -178,7 +233,13 @@ internal class HandsFreeBargeInCapture internal constructor(
         try {
             if(!current())return
             val vad=classifierFactory();classifier=vad
-            onset=HandsFreeBargeInOnset(vad){vad.reset()}
+            val levels = HandsFreeBargeInLevelGate()
+            val onsetClassifier = HandsFreeSpeechClassifier { samples ->
+                val voiced = vad.isSpeech(samples)
+                val loud = levels.observe(HandsFreeBargeInLevelGate.rms(samples), voiced)
+                loud && voiced
+            }
+            onset=HandsFreeBargeInOnset(onsetClassifier) { vad.reset() }
             input.start()
             if(!current())return
             readySucceeded=true;ready.countDown()
@@ -195,20 +256,29 @@ internal class HandsFreeBargeInCapture internal constructor(
                 if(!accepted.get()) {
                     val pendingProbe=probe
                     if(pendingProbe==null) {
-                        if(cooldownSamples>0) {
-                            cooldownSamples-=frame.size
-                            continue
-                        }
+                        val coolingDown = cooldownSamples > 0
+                        if (coolingDown) cooldownSamples -= frame.size
                         val observed=try{playedFrames()?.takeIf{it>=0}}catch(_:Exception){null}
                         val monotonic=observed!=null && (lastHead==null || observed>=checkNotNull(lastHead))
                         if(monotonic)lastHead=observed
-                        val safe=monotonic && observed!=null && clean(frame,frame.size,observed)
+                        val safe=monotonic && clean(frame,frame.size,checkNotNull(observed))
+                        if (coolingDown) {
+                            // Adapt to new background after a rejected probe, without
+                            // accumulating an onset or losing the original PCM cadence.
+                            if (safe) onsetClassifier.isSpeech(frame)
+                            continue
+                        }
                         val prefix=onset.process(frame,safe)?:continue
                         try {
                             if(!current()) break
                             paused=pauseResponse()
-                            if(paused)probe=SpeechProbe(prefix,clock())
-                            else {
+                            if(paused) {
+                                val pausedAt = clock()
+                                probe=SpeechProbe(prefix,pausedAt,levels.floorRms.roundToInt())
+                                // Warm the freshly reset classifier on guard frames,
+                                // including stationary noise. None can count as speech.
+                                vad.reset()
+                            } else {
                                 onset.reset()
                                 cooldownSamples=PROBE_COOLDOWN_SAMPLES
                             }
@@ -225,19 +295,25 @@ internal class HandsFreeBargeInCapture internal constructor(
                     val frameEndsAfterTail=elapsed>=ECHO_TAIL_MS+FRAME_MS &&
                         pendingProbe.samplesSincePause>ECHO_TAIL_SAMPLES
                     if(frameEndsAfterTail && elapsed<=PROBE_DEADLINE_MS) {
-                        val confirmation=pendingProbe.confirmation ?: HandsFreeVad(vad).also {
-                            vad.reset()
-                            pendingProbe.confirmation=it
-                        }
+                        val confirmation=pendingProbe.confirmation ?: HandsFreeVad(HandsFreeSpeechClassifier { samples ->
+                            val rms = HandsFreeBargeInLevelGate.rms(samples)
+                            pendingProbe.peakRms = maxOf(pendingProbe.peakRms, rms.roundToInt())
+                            val voiced = vad.isSpeech(samples)
+                            voiced && levels.aboveFloor(rms)
+                        }).also { pendingProbe.confirmation=it }
                         confirmation.process(frame,frame.size)
                         if(confirmation.hasSpeech) {
                             if(!current()) break
                             decisionAt=now
                             val approved=try{onSpeech()}catch(_:Exception){false}
-                            if(!approved) break
+                            if(!approved) {
+                                reportProbe(pendingProbe,"stale")
+                                break
+                            }
                             // The approved handoff now owns the paused playback and aborts it.
                             accepted.set(true)
                             paused=false
+                            reportProbe(pendingProbe,"confirmed")
                             val pcm=ShortArray(320000);command=pcm
                             pendingProbe.pcm.copyInto(pcm,endIndex=pendingProbe.length)
                             val initial=pendingProbe.length
@@ -249,6 +325,8 @@ internal class HandsFreeBargeInCapture internal constructor(
                             state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
                             continue
                         }
+                    } else if (!frameEndsAfterTail) {
+                        vad.isSpeech(frame)
                     }
                     if(pendingProbe.samplesSincePause==PROBE_SAMPLES || elapsed>PROBE_DEADLINE_MS) {
                         pendingProbe.pcm.fill(0)
@@ -257,6 +335,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                         paused=false
                         onset.reset()
                         cooldownSamples=PROBE_COOLDOWN_SAMPLES
+                        reportProbe(pendingProbe,"no_speech")
                     }
                     continue
                 }
@@ -280,7 +359,10 @@ internal class HandsFreeBargeInCapture internal constructor(
             stopping.set(true);ready.countDown()
             if(paused)try{resumeResponse()}catch(_:Exception){}
             try{classifier?.close()}catch(_:Exception){}
-            probe?.pcm?.fill(0)
+            probe?.let { pending ->
+                pending.pcm.fill(0)
+                reportProbe(pending,"cancelled")
+            }
             onset?.clear();frame.fill(0);command?.fill(0)
             releaseInput()
             synchronized(deliveryLock) {

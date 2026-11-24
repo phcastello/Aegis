@@ -777,6 +777,14 @@ internal class HandsFreeRuntime(private val context:Context) {
                     metrics.add("barge_in_interruptions")
                 }
                 accepted
+            },
+            onProbeResult = { outcome, floorRms, peakRms ->
+                val audioManager = context.getSystemService(AudioManager::class.java)
+                metrics.event("barge_in_probe", JSONObject()
+                    .put("outcome", outcome)
+                    .put("backgroundRms", floorRms)
+                    .put("confirmationPeakRms", peakRms)
+                    .put("mediaVolume", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)))
             }
         )
         synchronized(lock) {
