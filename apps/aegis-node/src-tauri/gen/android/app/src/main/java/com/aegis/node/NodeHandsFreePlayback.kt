@@ -24,7 +24,7 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
         stillCurrent: () -> Boolean,
         onPlaybackEvent: (String) -> Unit,
         echo: HandsFreeBargeInEcho? = null,
-        onPlaybackReady: (() -> Long?) -> Unit = {}
+        onPlaybackReady: (HandsFreePlaybackProbe) -> Unit = {}
     ): HandsFreePcmSink {
         val token = generation.incrementAndGet()
         lateinit var stream: HandsFreeStreamingPcmSink
@@ -94,6 +94,7 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
                     check(track.setNotificationMarkerPosition(frame) == AudioTrack.SUCCESS) { "audio_marker_failed" }
                 }
                 override fun play() { track.play() }
+                override fun pause() { track.pause() }
                 override fun stop() { try { track.pause(); track.flush(); track.stop() } catch (_: Exception) { } }
                 override fun close() {
                     if (!closed.compareAndSet(false, true)) return

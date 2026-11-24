@@ -739,13 +739,15 @@ internal class HandsFreeRuntime(private val context:Context) {
         session: String,
         owner: NodeHandsFreeBackend,
         sink: HandsFreePcmSink,
-        playedFrames: () -> Long?
+        probe: HandsFreePlaybackProbe
     ) {
         if (!ownsTurn(generation,session,owner) || response.destination==null || diagnostic) return
         val audio = try { openRecorder() } catch (_: Exception) { return }
         lateinit var listener: HandsFreeBargeInCapture
         listener = HandsFreeBargeInCapture(
-            audio, response.echo, playedFrames,
+            audio, response.echo, probe::playedFrames,
+            pauseResponse = probe::pause,
+            resumeResponse = probe::resume,
             stillCurrent = { ownsSession(generation,session) && responseCapture===listener },
             onSpeech = {
                 val accepted = synchronized(lock) {
@@ -753,20 +755,25 @@ internal class HandsFreeRuntime(private val context:Context) {
                     val activation = continuityActivation
                     if (destination==null || activation==null || !response.playing ||
                         !ownsTurn(generation,session,owner) || responseCapture!==listener ||
-                        activation.identity!=currentIdentity() || microphoneBlocked()) false
+                        activation.identity!=currentIdentity() || microphoneBlocked() || !probe.claimPause()) false
                     else {
                         response.accepted = true
                         conversationId = destination
                         backend = null
-                        finishEvent("interrupted","barge_in")
-                        transcriptionStatus = "not_started"
-                        setState("capturing","Escutando pedido…")
                         true
                     }
                 }
                 if (accepted) {
+                    // Once confirmed, stop this track before any UI or collection work.
                     sink.abort()
                     owner.requestCancellation()
+                    synchronized(lock) {
+                        if (ownsSession(generation,session)) {
+                            finishEvent("interrupted","barge_in")
+                            transcriptionStatus = "not_started"
+                            setState("capturing","Escutando pedido…")
+                        }
+                    }
                     metrics.add("barge_in_interruptions")
                 }
                 accepted
@@ -878,8 +885,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                             }
                         },
                         echo = response?.echo,
-                        onPlaybackReady = { head ->
-                            if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
+                        onPlaybackReady = { probe ->
+                            if (response!=null) startResponseCapture(response,generation,session,active,sink,probe)
                         }
                     )
                     val turn=active.execute(command,session,conversationId,sink,trace,incremental=true) { destination ->

@@ -28,6 +28,8 @@ class NodeHandsFreeBargeInCaptureTest {
         var releaseGate:CountDownLatch?=null
         var stopGate:CountDownLatch?=null
         var silenced=false
+        var timestampAt:(Int)->Long={it*1000L/16000}
+        var takeSample:(Int,Short)->Short={_,sample->sample}
         val starts=AtomicInteger();val stops=AtomicInteger();val closes=AtomicInteger()
         @Volatile var offset=0
         override fun start(){starts.incrementAndGet()}
@@ -36,8 +38,12 @@ class NodeHandsFreeBargeInCaptureTest {
             if(stopped.count==0L)return -1
             if(this.offset>=pcm.size){exhausted.countDown();stopped.await();return -1}
             val n=minOf(count,chunk,pcm.size-this.offset)
-            pcm.copyInto(samples,offset,this.offset,this.offset+n);this.offset+=n
-            clock.set(this.offset*1000L/16000);return n
+            for(i in 0 until n) {
+                val index=this.offset+i
+                samples[offset+i]=takeSample(index,pcm[index])
+            }
+            this.offset+=n
+            clock.set(timestampAt(this.offset));return n
         }
         override fun silenced()=silenced
         override fun stop(){stops.incrementAndGet();stopGate?.await();stopped.countDown();proceed.countDown()}
@@ -45,8 +51,8 @@ class NodeHandsFreeBargeInCaptureTest {
     }
     private fun capture(input:Input,classifier:Classifier=Classifier(),head:()->Long?={24000L},
         current:()->Boolean={true},clean:(ShortArray,Int,Long)->Boolean={_,_,_->true},
-        speech:()->Boolean={true})=
-        HandsFreeBargeInCapture(input,clean,head,current,speech,{classifier},{input.clock.get()})
+        pause:()->Boolean={true},resume:()->Unit={},speech:()->Boolean={true})=
+        HandsFreeBargeInCapture(input,clean,head,pause,resume,current,speech,{classifier},{input.clock.get()})
     private fun pcm(wav:ByteArray):ShortArray {
         val b=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);b.position(44)
         return ShortArray((wav.size-44)/2){b.short}
@@ -80,7 +86,7 @@ class NodeHandsFreeBargeInCaptureTest {
         }
     }
     @Test fun acceptedCommandPreservesEverySampleWithPartialReadsAndHeadDisappearing() {
-        val quiet=List(12){frame(it%5+1)};val speech=List(14){frame(1000+it)}
+        val quiet=List(12){frame(it%5+1)};val speech=List(22){frame(1000+it)}
         val frames=quiet+speech+List(40){frame(0)}
         val input=Input(flatten(frames),AtomicLong(),73);val approved=CountDownLatch(1)
         val classifier=Classifier();val calls=AtomicInteger()
@@ -97,14 +103,41 @@ class NodeHandsFreeBargeInCaptureTest {
         assertEquals(1,input.stops.get());assertEquals(1,input.closes.get())
         assertNull(capture.awaitCommand())
     }
-    @Test fun unsafeTailCannotEraseAlreadyAcceptedSpeech() {
-        val speech=List(10){frame(1200+it)};val input=Input(flatten(speech+List(40){frame(0)}),AtomicLong())
+    @Test fun bufferedEchoCannotConfirmBeforeMonotonicGuardHasElapsed() {
+        val echo=List(4+HandsFreeBargeInCapture.PROBE_SAMPLES/320){frame(1800)}
+        val input=Input(flatten(echo),AtomicLong()).apply{timestampAt={0L}}
+        val pauses=AtomicInteger();val resumes=AtomicInteger();val calls=AtomicInteger()
+        val capture=capture(input,pause={pauses.incrementAndGet();true},resume={resumes.incrementAndGet()},
+            speech={calls.incrementAndGet();true})
+        assertTrue(capture.start());input.proceed.countDown();await(input.exhausted)
+        assertEquals(1,pauses.get());assertEquals(1,resumes.get());assertEquals(0,calls.get())
+        capture.close();assertTrue(capture.awaitClosed(1000));assertNull(capture.awaitCommand())
+    }
+
+    @Test fun failedProbeResumesAndCanConfirmADistinctLaterInterruption() {
+        val cooldown=HandsFreeBargeInCapture.PROBE_COOLDOWN_SAMPLES/320
+        val speech=List(24){frame(2200+it)}
+        val frames=List(8){frame(1500)}+List(15+cooldown){frame(0)}+speech+List(40){frame(0)}
+        val input=Input(flatten(frames),AtomicLong())
+        val pauses=AtomicInteger();val resumes=AtomicInteger();val calls=AtomicInteger()
         val approved=CountDownLatch(1)
-        val capture=capture(input,clean={samples,_,_->if(approved.count>0)true else{samples.fill(0);false}},
-            speech={approved.countDown();true})
+        val capture=capture(input,pause={pauses.incrementAndGet();true},resume={resumes.incrementAndGet()},
+            speech={calls.incrementAndGet();approved.countDown();true})
         assertTrue(capture.start());input.proceed.countDown();await(approved)
-        val result=checkNotNull(capture.awaitCommand())
-        assertArrayEquals(flatten(speech+List(40){frame(0)}),pcm(result.wav))
+        val actual=pcm(checkNotNull(capture.awaitCommand()).wav)
+        assertArrayEquals(flatten(speech+List(40){frame(0)}),actual)
+        assertEquals(2,pauses.get());assertEquals(1,resumes.get());assertEquals(1,calls.get())
+    }
+
+    @Test fun closingDuringProbeReturnsTheHeldPlaybackWithoutSubmitting() {
+        val input=Input(flatten(List(6){frame(1700)}),AtomicLong())
+        val pauses=AtomicInteger();val resumes=AtomicInteger();val calls=AtomicInteger()
+        val capture=capture(input,pause={pauses.incrementAndGet();true},resume={resumes.incrementAndGet()},
+            speech={calls.incrementAndGet();true})
+        assertTrue(capture.start());input.proceed.countDown();await(input.exhausted)
+        capture.close();assertTrue(capture.awaitClosed(1000))
+        assertEquals(1,pauses.get());assertEquals(1,resumes.get());assertEquals(0,calls.get())
+        assertNull(capture.awaitCommand())
     }
     @Test fun missingOrUnsafePlaybackReferenceNeverCallsOnSpeech() {
         for(missing in listOf(true,false)) {
@@ -118,7 +151,7 @@ class NodeHandsFreeBargeInCaptureTest {
     }
     @Test fun rejectedOrStaleTurnNeverProducesCommand() {
         for(reject in listOf(true,false)) {
-            val input=Input(flatten(List(8){frame(2000)}),AtomicLong());val calls=AtomicInteger()
+            val input=Input(flatten(List(22){frame(2000)}),AtomicLong());val calls=AtomicInteger()
             val current={reject || input.offset<640}
             val capture=capture(input,current=current,speech={calls.incrementAndGet();false})
             assertTrue(capture.start());input.proceed.countDown()
@@ -156,7 +189,7 @@ class NodeHandsFreeBargeInCaptureTest {
         assertEquals(0,input.starts.get());assertEquals(1,input.stops.get());assertEquals(1,input.closes.get())
     }
     @Test fun timedOutWaitDiscardsLateCommandPublication() {
-        val input=Input(flatten(List(8){frame(2000)}+List(40){frame(0)}),AtomicLong())
+        val input=Input(flatten(List(24){frame(2000)}+List(40){frame(0)}),AtomicLong())
         val releaseGate=CountDownLatch(1);input.releaseGate=releaseGate
         val approved=CountDownLatch(1);val capture=capture(input,speech={approved.countDown();true})
         assertTrue(capture.start());input.proceed.countDown();await(approved);await(input.releasing)
@@ -167,7 +200,7 @@ class NodeHandsFreeBargeInCaptureTest {
     }
     @Test fun realEchoFilterDoesNotInterruptOwnPcmButPreservesConcurrentSpeech() {
         for(withVoice in listOf(false,true)) {
-            val blocks=if(withVoice)64 else 24
+            val blocks=if(withVoice)85 else 24
             val reference=ShortArray(12000+blocks*480+2){i->
                 val t=i/24000.0
                 (5000*kotlin.math.sin(2*Math.PI*211.3*t)+2800*kotlin.math.sin(2*Math.PI*627.7*t)+
@@ -176,7 +209,7 @@ class NodeHandsFreeBargeInCaptureTest {
             val bytes=ByteArray(reference.size*2)
             reference.forEachIndexed{i,v->bytes[i*2]=v.toByte();bytes[i*2+1]=(v.toInt() shr 8).toByte()}
             val frames=List(blocks){block->ShortArray(320){i->
-                if(withVoice && block>=24)0 else {
+                if(withVoice && block>=45)0 else {
                     val half=(12000+(block+1)*480)*2-(320-i+160)*3
                     val at=half/2
                     val rendered=if(half%2==0)reference[at].toDouble() else (reference[at]+reference[at+1])*.5
@@ -185,12 +218,18 @@ class NodeHandsFreeBargeInCaptureTest {
                 }
             }}
             val input=Input(flatten(frames),AtomicLong());val filter=HandsFreeBargeInEcho()
+            var pauseAt:Int?=null
             val approved=CountDownLatch(1);val calls=AtomicInteger()
+            input.takeSample={i,sample->
+                if(pauseAt?.let {i >= it+640}==true && i<45*320) {
+                    (1500*kotlin.math.sin(2*Math.PI*2781*i/16000.0)).toInt().toShort()
+                } else sample
+            }
             val capture=capture(input,head={12000L+input.offset*3L/2},
                 clean={samples,count,head->
                     filter.offer(bytes,0,head.toInt()*2,0)
                     filter.suppress(samples,count,head)
-                },speech={calls.incrementAndGet();approved.countDown();true})
+                },pause={pauseAt=input.offset;true},speech={calls.incrementAndGet();approved.countDown();true})
             assertTrue(capture.start());input.proceed.countDown()
             if(withVoice) {
                 await(approved);val result=checkNotNull(capture.awaitCommand())
@@ -201,5 +240,37 @@ class NodeHandsFreeBargeInCaptureTest {
                 assertTrue(capture.awaitClosed(1000));assertNull(capture.awaitCommand())
             }
         }
+    }
+
+    @Test fun uncorrelatedSpeakerEchoResumesAfterPauseAndDoesNotReturnACommand() {
+        val reference=ByteArray(24000)
+        for(i in 0 until reference.size/2) {
+            val value=(8000*kotlin.math.sin(2*Math.PI*311.2*i/24000)).toInt()
+            reference[i*2]=value.toByte();reference[i*2+1]=(value shr 8).toByte()
+        }
+        val filter=HandsFreeBargeInEcho().also{it.offer(reference,0,reference.size,0)}
+        // Distortion introduces harmonics absent from the render reference.
+        val echo=ShortArray(36*320){i->
+            val t=i/16000.0
+            val phase=2*Math.PI*311.2*t
+            val envelope=.65+.2*kotlin.math.sin(2*Math.PI*5.0*t)
+            ((2600*kotlin.math.sin(2*phase)+600*kotlin.math.sin(3*phase))*envelope).toInt().toShort()
+        }
+        val input=Input(echo,AtomicLong())
+        var pauseAt:Int?=null
+        val pauses=AtomicInteger();val resumes=AtomicInteger();val calls=AtomicInteger()
+        input.takeSample={i,sample->
+            val sincePause=pauseAt?.let {i-it}
+            if(sincePause!=null && resumes.get()==0) {
+                (sample*(1920-sincePause).coerceIn(0,1920)/1920).toShort()
+            } else sample
+        }
+        val capture=capture(input,head={12000L},
+            clean={samples,count,head->filter.suppress(samples,count,head)},
+            pause={pauses.incrementAndGet();pauseAt=input.offset;true},
+            resume={resumes.incrementAndGet()},speech={calls.incrementAndGet();true})
+        assertTrue(capture.start());input.proceed.countDown();await(input.exhausted)
+        assertEquals(1,pauses.get());assertEquals(1,resumes.get());assertEquals(0,calls.get())
+        capture.close();assertTrue(capture.awaitClosed(1000));assertNull(capture.awaitCommand())
     }
 }

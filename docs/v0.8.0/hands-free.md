@@ -117,11 +117,16 @@ reprodução nativa, o Android abre o microfone para detectar uma interrupção.
 O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
 AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
 
-Quando a interrupção é aceita, o AudioTrack descarta o áudio pendente e o
-cliente solicita o cancelamento daquele turno. A captura preserva o início
-da fala, segue até o endpoint normal e envia o novo pedido para a mesma
-conversa, sem beep ou nova invocação. Se a captura concorrente estiver
-indisponível, a resposta continua sendo reproduzida.
+Uma suspeita de fala faz uma pausa curta na resposta, com o áudio
+pendente ainda no AudioTrack. A captura guarda o começo do pedido e
+confirma fala após a cauda acústica. Se a confirmação falhar, a resposta
+retoma do mesmo ponto. Uma fala muito curta pode terminar antes de confirmar.
+
+Ao confirmar fala, o AudioTrack descarta o áudio pendente e o cliente
+solicita o cancelamento daquele turno. A captura segue até o endpoint
+normal e envia o pedido para a mesma conversa, sem beep ou nova invocação.
+Se a captura concorrente estiver indisponível, a resposta continua sendo
+reproduzida.
 
 Após o fim real do AudioTrack, `continue` abre até dois segundos para **início**
 de fala; uma fala iniciada a tempo segue até o endpoint/limite normal. `close`,

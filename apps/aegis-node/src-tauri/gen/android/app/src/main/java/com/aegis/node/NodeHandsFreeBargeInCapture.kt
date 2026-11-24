@@ -35,8 +35,7 @@ internal class HandsFreeBargeInOnset(
         require(frame.size==HandsFreeVad.FRAME_SAMPLES)
         if(latched)return null
         if(!safe) {
-            ring.clear()
-            if(received>0){resetClassifier();vad=HandsFreeVad(classifier);received=0}
+            if(received>0)reset()
             return null
         }
         ring.append(frame,frame.size);received+=frame.size
@@ -48,6 +47,14 @@ internal class HandsFreeBargeInOnset(
         latched=true
         return ShortArray(size).also{ring.copyRangeTo(it,(begin-retainedStart).toInt(),size)}
     }
+    fun reset() {
+        ring.clear()
+        resetClassifier()
+        vad=HandsFreeVad(classifier)
+        received=0
+        latched=false
+    }
+
     fun clear(){ring.clear()}
     companion object { const val PRE_SAMPLES=1920 }
 }
@@ -59,13 +66,22 @@ internal class HandsFreeBargeInCapture internal constructor(
     private val input:HandsFreeBargeInInput,
     private val clean:(ShortArray,Int,Long)->Boolean,
     private val playedFrames:()->Long?,
+    private val pauseResponse:()->Boolean,
+    private val resumeResponse:()->Unit,
     private val stillCurrent:()->Boolean,
     private val onSpeech:()->Boolean,
     private val classifierFactory:()->HandsFreeBargeInClassifier,
     private val clock:()->Long={HandsFreeTurnLatency.now()}
 ):AutoCloseable {
-    constructor(audio:AudioRecord,echo:HandsFreeBargeInEcho,playedFrames:()->Long?,stillCurrent:()->Boolean,onSpeech:()->Boolean):
-        this(AndroidInput(audio),{pcm,count,head->echo.suppress(pcm,count,head)},playedFrames,stillCurrent,onSpeech,{
+    constructor(
+        audio:AudioRecord,
+        echo:HandsFreeBargeInEcho,
+        playedFrames:()->Long?,
+        pauseResponse:()->Boolean,
+        resumeResponse:()->Unit,
+        stillCurrent:()->Boolean,
+        onSpeech:()->Boolean
+    ):this(AndroidInput(audio),{pcm,count,head->echo.suppress(pcm,count,head)},playedFrames,pauseResponse,resumeResponse,stillCurrent,onSpeech,{
             val native=NativeHandsFreeSpeechClassifier()
             object:HandsFreeBargeInClassifier {
                 override fun isSpeech(frame:ShortArray)=native.isSpeech(frame)
@@ -133,9 +149,21 @@ internal class HandsFreeBargeInCapture internal constructor(
         },"AegisBargeInStop").apply{isDaemon=true;start()}
     }
     private fun current():Boolean=!stopping.get() && try{stillCurrent()}catch(_:Exception){false}
+    private class SpeechProbe(prefix:ShortArray,val pausedAt:Long) {
+        private val prefixSamples=prefix.size
+        val pcm=prefix.copyOf(prefixSamples+PROBE_SAMPLES)
+        var length=prefixSamples;private set
+        val samplesSincePause:Int get()=length-prefixSamples
+        var confirmation:HandsFreeVad?=null
+
+        fun append(frame:ShortArray) {
+            frame.copyInto(pcm,length)
+            length+=frame.size
+        }
+    }
+
     private fun capture() {
         val frame=ShortArray(HandsFreeVad.FRAME_SAMPLES)
-        val original=ShortArray(frame.size)
         var classifier:HandsFreeBargeInClassifier?=null
         var onset:HandsFreeBargeInOnset?=null
         var command:ShortArray?=null
@@ -143,9 +171,10 @@ internal class HandsFreeBargeInCapture internal constructor(
         var candidate:BargeInCommand?=null
         var trace:HandsFreeTurnLatency?=null
         var lastActiveAt:Long?=null
-        var frozenHead:Long?=null
         var lastHead:Long?=null
-        var tailSamples=0
+        var cooldownSamples=0
+        var probe:SpeechProbe?=null
+        var paused=false
         try {
             if(!current())return
             val vad=classifierFactory();classifier=vad
@@ -163,31 +192,73 @@ internal class HandsFreeBargeInCapture internal constructor(
                 if(pending<frame.size)continue
                 pending=0
                 val now=clock()
-                val observed=try{playedFrames()?.takeIf{it>=0}}catch(_:Exception){null}
                 if(!accepted.get()) {
-                    val monotonic=observed!=null && (lastHead==null || observed>=checkNotNull(lastHead))
-                    if(monotonic)lastHead=observed
-                    val safe=monotonic && observed!=null && clean(frame,frame.size,observed)
-                    val prefix=onset.process(frame,safe)
-                    if(prefix==null)continue
-                    decisionAt=now
-                    val approved=try{onSpeech()}catch(_:Exception){false}
-                    if(!approved){prefix.fill(0);break}
-                    accepted.set(true);frozenHead=lastHead
-                    val pcm=ShortArray(320000);command=pcm
-                    prefix.copyInto(pcm);val initial=prefix.size;prefix.fill(0)
-                    vad.reset();state=HandsFreeCommandCapture(pcm,initial,vad)
-                    trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
-                    state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
+                    val pendingProbe=probe
+                    if(pendingProbe==null) {
+                        if(cooldownSamples>0) {
+                            cooldownSamples-=frame.size
+                            continue
+                        }
+                        val observed=try{playedFrames()?.takeIf{it>=0}}catch(_:Exception){null}
+                        val monotonic=observed!=null && (lastHead==null || observed>=checkNotNull(lastHead))
+                        if(monotonic)lastHead=observed
+                        val safe=monotonic && observed!=null && clean(frame,frame.size,observed)
+                        val prefix=onset.process(frame,safe)?:continue
+                        try {
+                            if(!current()) break
+                            paused=pauseResponse()
+                            if(paused)probe=SpeechProbe(prefix,clock())
+                            else {
+                                onset.reset()
+                                cooldownSamples=PROBE_COOLDOWN_SAMPLES
+                            }
+                        } finally {
+                            prefix.fill(0)
+                        }
+                        continue
+                    }
+
+                    pendingProbe.append(frame)
+                    val elapsed=now-pendingProbe.pausedAt
+                    // A delayed capture thread can drain buffered microphone data in
+                    // a burst. Require both real time and samples since pausing.
+                    val frameEndsAfterTail=elapsed>=ECHO_TAIL_MS+FRAME_MS &&
+                        pendingProbe.samplesSincePause>ECHO_TAIL_SAMPLES
+                    if(frameEndsAfterTail && elapsed<=PROBE_DEADLINE_MS) {
+                        val confirmation=pendingProbe.confirmation ?: HandsFreeVad(vad).also {
+                            vad.reset()
+                            pendingProbe.confirmation=it
+                        }
+                        confirmation.process(frame,frame.size)
+                        if(confirmation.hasSpeech) {
+                            if(!current()) break
+                            decisionAt=now
+                            val approved=try{onSpeech()}catch(_:Exception){false}
+                            if(!approved) break
+                            // The approved handoff now owns the paused playback and aborts it.
+                            accepted.set(true)
+                            paused=false
+                            val pcm=ShortArray(320000);command=pcm
+                            pendingProbe.pcm.copyInto(pcm,endIndex=pendingProbe.length)
+                            val initial=pendingProbe.length
+                            pendingProbe.pcm.fill(0)
+                            probe=null
+                            vad.reset()
+                            state=HandsFreeCommandCapture(pcm,initial,vad)
+                            trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
+                            state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
+                            continue
+                        }
+                    }
+                    if(pendingProbe.samplesSincePause==PROBE_SAMPLES || elapsed>PROBE_DEADLINE_MS) {
+                        pendingProbe.pcm.fill(0)
+                        probe=null
+                        resumeResponse()
+                        paused=false
+                        onset.reset()
+                        cooldownSamples=PROBE_COOLDOWN_SAMPLES
+                    }
                     continue
-                }
-                // Preserve the user's PCM even when the old player/head disappears.
-                // Attempt a short residual-tail cleanup, then capture raw user audio.
-                if(tailSamples<TAIL_SAMPLES) {
-                    frame.copyInto(original)
-                    val head=observed?.takeIf{frozenHead==null || it>=checkNotNull(frozenHead)}?:frozenHead
-                    if(head==null || !clean(frame,frame.size,head))original.copyInto(frame)
-                    tailSamples+=frame.size
                 }
                 val capture=checkNotNull(state)
                 val ended=capture.append(frame,frame.size)
@@ -207,8 +278,10 @@ internal class HandsFreeBargeInCapture internal constructor(
             // No partial or failed capture becomes a command.
         }finally {
             stopping.set(true);ready.countDown()
+            if(paused)try{resumeResponse()}catch(_:Exception){}
             try{classifier?.close()}catch(_:Exception){}
-            onset?.clear();frame.fill(0);original.fill(0);command?.fill(0)
+            probe?.pcm?.fill(0)
+            onset?.clear();frame.fill(0);command?.fill(0)
             releaseInput()
             synchronized(deliveryLock) {
                 if(!discard.get() && accepted.get() && releaseSucceeded.get())result.set(candidate)
@@ -251,6 +324,11 @@ internal class HandsFreeBargeInCapture internal constructor(
     companion object {
         const val START_WAIT_MS=750L
         const val COMMAND_WAIT_MS=22000L
-        const val TAIL_SAMPLES=4800
+        private const val FRAME_MS=20L
+        private const val ECHO_TAIL_MS=200L
+        const val ECHO_TAIL_SAMPLES=3200
+        const val PROBE_SAMPLES=6080 // 200ms for echo travel and 180ms to confirm live speech.
+        private const val PROBE_DEADLINE_MS=420L // Allows read scheduling jitter without extending the PCM window.
+        const val PROBE_COOLDOWN_SAMPLES=32000
     }
 }

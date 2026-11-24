@@ -116,19 +116,104 @@ class NodeHandsFreePcmStreamTest {
                 return backing.write(bytes, offset, count)
             }
         }
-        lateinit var head: () -> Long?
+        lateinit var probe: HandsFreePlaybackProbe
         val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackReady = {
-            head = it
-            assertEquals(0L, head())
+            probe = it
+            assertNull(probe.playedFrames())
+            assertFalse(probe.pause())
             events.add("ready")
         })
         try {
             sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
             sink.write(byteArrayOf(5, 6), 0, 2)
             assertEquals(listOf("ready", "play", "write", "write"), events)
-            assertEquals(3L, head())
+            assertEquals(3L, probe.playedFrames())
             sink.abort()
-            assertNull(head())
+            assertNull(probe.playedFrames())
+            assertThrows(CancellationException::class.java) { sink.finish() }
+        } finally {
+            sink.close()
+        }
+    }
+
+    @Test fun rejectingAPlaybackProbeKeepsTheExactUnplayedSuffix() {
+        for (shortWrite in listOf(0, 2)) {
+            val backing = Device(autoPlay = true)
+            val writing = CountDownLatch(1)
+            val paused = CountDownLatch(1)
+            var calls = 0
+            val device = object : HandsFreePcmDevice by backing {
+                override fun pause() { paused.countDown() }
+                override fun write(bytes: ByteArray, offset: Int, count: Int): Int {
+                    if (++calls != 2) return backing.write(bytes, offset, count)
+                    writing.countDown()
+                    check(paused.await(5, TimeUnit.SECONDS))
+                    return if (shortWrite == 0) 0 else backing.write(bytes, offset, shortWrite)
+                }
+            }
+            lateinit var probe: HandsFreePlaybackProbe
+            val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackReady = { probe = it })
+            val worker = Executors.newSingleThreadExecutor()
+            try {
+                sink.write(byteArrayOf(1, 2), 0, 2)
+                val writingReply = worker.submit { sink.write(byteArrayOf(3, 4, 5, 6), 0, 4) }
+                assertTrue(writing.await(5, TimeUnit.SECONDS))
+                assertTrue(probe.pause())
+                assertFalse(writingReply.isDone)
+                probe.resume()
+                writingReply.get(5, TimeUnit.SECONDS)
+                sink.finish()
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), backing.recorded.toByteArray())
+                assertFalse(probe.pause())
+            } finally {
+                sink.abort()
+                sink.close()
+                worker.shutdownNow()
+            }
+        }
+    }
+
+    @Test fun expiredProbeResumesAndCannotBeClaimedByAStaleCapture() {
+        val backing = Device(autoPlay = true)
+        val resumed = CountDownLatch(1)
+        var plays = 0
+        val device = object : HandsFreePcmDevice by backing {
+            override fun play() {
+                if (++plays == 2) resumed.countDown()
+            }
+        }
+        lateinit var probe: HandsFreePlaybackProbe
+        val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackReady = { probe = it })
+        try {
+            sink.write(byteArrayOf(1, 2), 0, 2)
+            assertTrue(probe.pause())
+            assertTrue(resumed.await(5, TimeUnit.SECONDS))
+            assertFalse(probe.claimPause())
+            sink.write(byteArrayOf(3, 4), 0, 2)
+            sink.finish()
+        } finally {
+            sink.close()
+        }
+    }
+
+    @Test fun claimedProbeCannotResumeOrLeakTheTailOfAnInterruptedReply() {
+        val backing = Device(autoPlay = false)
+        var plays = 0
+        val device = object : HandsFreePcmDevice by backing {
+            override fun play() { plays++ }
+        }
+        lateinit var probe: HandsFreePlaybackProbe
+        val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackReady = { probe = it })
+        try {
+            sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
+            assertTrue(probe.pause())
+            assertTrue(probe.claimPause())
+            probe.resume()
+            sink.abort()
+            probe.resume()
+            assertEquals(1, plays)
+            assertEquals(0, backing.queuedFrames)
+            assertFalse(probe.claimPause())
             assertThrows(CancellationException::class.java) { sink.finish() }
         } finally {
             sink.close()
@@ -237,6 +322,7 @@ class NodeHandsFreePcmStreamTest {
             lock.notifyAll();if(played>=marker)reached?.invoke()
         }
         override fun play(){}
+        override fun pause(){}
         override fun stop()=synchronized(lock){stopped=true;queuedFrames=0;lock.notifyAll()}
         override fun close(){stop();closed=true}
     }
