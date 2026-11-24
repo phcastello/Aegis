@@ -85,7 +85,7 @@ internal fun handsFreeSamplesBeforeCancellation(count:Int,readReturnedAtMs:Long,
 /** Classifies one complete PCM16/16kHz/20ms frame. It does not own or change the PCM. */
 internal fun interface HandsFreeSpeechClassifier { fun isSpeech(frame:ShortArray):Boolean }
 
-/** Endpointing is independent of wake detection and never seeds evidence of a command. */
+/** Endpointing is independent of wake detection. A verified barge-in may supply speech evidence. */
 internal class HandsFreeVad(
     private val classifier:HandsFreeSpeechClassifier,
     private val silenceSamples:Int=12800,
@@ -135,6 +135,14 @@ internal class HandsFreeVad(
         }
         return total>=maxSamples || (hasSpeech && quiet>=silenceSamples) || (!hasSpeech && total>=noSpeechSamples)
     }
+    // The barge-in gate has already verified speech through the final frame of its prefix.
+    fun confirmSpeechAtCurrentFrame() {
+        check(total > 0 && pending == 0)
+        hasSpeech = true
+        lastActiveEndSample = total
+        quiet = 0
+    }
+
     companion object {
         const val FRAME_SAMPLES=320
         const val ONSET_SAMPLES=1280 // 80ms; one click or the 40ms local cue is insufficient.
@@ -147,7 +155,8 @@ internal class HandsFreeVad(
 internal class HandsFreeCommandCapture(
     private val command:ShortArray,
     initialPostCount:Int,
-    classifier:HandsFreeSpeechClassifier
+    classifier:HandsFreeSpeechClassifier,
+    initialSpeechConfirmed: Boolean = false
 ) {
     private val vad=HandsFreeVad(classifier,maxSamples=320000,noSpeechSamples=initialPostCount+HandsFreeVad.NO_SPEECH_SAMPLES)
     private var afterActivation=0
@@ -161,6 +170,7 @@ internal class HandsFreeCommandCapture(
     init {
         require(initialPostCount in 0..minOf(command.size,320000))
         vad.process(command,initialPostCount)
+        if (initialSpeechConfirmed) vad.confirmSpeechAtCurrentFrame()
         uncertainInitialAudio=vad.signalSamples>=640 // At least40ms of variable initial post audio.
     }
     fun append(samples:ShortArray,count:Int):Boolean {

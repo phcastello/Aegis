@@ -5,11 +5,14 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRouting
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /** A fresh, lazily opened stream per turn. AudioTrack's fixed buffer supplies backpressure. */
@@ -24,7 +27,7 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
         stillCurrent: () -> Boolean,
         onPlaybackEvent: (String) -> Unit,
         echo: HandsFreeBargeInEcho? = null,
-        onPlaybackReady: (() -> Long?) -> Unit = {}
+        onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {}
     ): HandsFreePcmSink {
         val token = generation.incrementAndGet()
         lateinit var stream: HandsFreeStreamingPcmSink
@@ -82,10 +85,18 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
             // a short reply immediately; older releases use the smallest accepted native buffer.
             if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)
             else track.setBufferSizeInFrames(1)
+            val routeChanges = AtomicLong()
+            val routing = AudioRouting.OnRoutingChangedListener { routeChanges.incrementAndGet() }
+            track.addOnRoutingChangedListener(routing, handler)
             return object : HandsFreePcmDevice {
+                private val audioTimestamp = AudioTimestamp()
                 private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
                 override fun write(bytes: ByteArray, offset: Int, count: Int) = track.write(bytes, offset, count, AudioTrack.WRITE_BLOCKING)
                 override fun playedFrames() = track.playbackHeadPosition.toLong() and 0xffffffffL
+                override fun timestamp() = if (track.getTimestamp(audioTimestamp))
+                    HandsFreeAudioTimestamp(audioTimestamp.framePosition, audioTimestamp.nanoTime) else null
+                override fun discontinuity() =
+                    (routeChanges.get() shl 32) or (track.underrunCount.toLong() and 0xffffffffL)
                 override fun endMarker(frame: Int, reached: () -> Unit) {
                     track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
                         override fun onMarkerReached(track: AudioTrack) { reached() }
@@ -97,7 +108,11 @@ internal class HandsFreePlayback(private val createDevice: (() -> Unit) -> Hands
                 override fun stop() { try { track.pause(); track.flush(); track.stop() } catch (_: Exception) { } }
                 override fun close() {
                     if (!closed.compareAndSet(false, true)) return
-                    try { stop(); track.release() } finally { abandon() }
+                    try {
+                        track.removeOnRoutingChangedListener(routing)
+                    } finally {
+                        try { stop(); track.release() } finally { abandon() }
+                    }
                 }
             }
         } catch (error: Exception) {

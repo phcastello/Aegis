@@ -11,8 +11,9 @@ internal enum class HandsFreeBargeInEvidence { UNAVAILABLE, AMBIGUOUS, INDEPENDE
  * offer() borrows 24 kHz mono PCM16 LE immediately before an AudioTrack write.
  * startFrame is the absolute frame index in that stream (partial writes may overwrite
  * the same positions). suppress() consumes a <=20 ms 16 kHz mono capture block;
- * headFrame is the played-frame count observed at the END of that block. No offered
- * sample at/after that head is used, including bytes not yet accepted by a write.
+ * headFrame is the playback position mapped to the end of the capture block.
+ * The caller bounds mapped positions by playback progress or committed audio.
+ * No offered sample at or beyond that position contributes to the fit.
  *
  * Only a delayed/scaled linear component is modeled; reverberation, clipping and
  * route-dependent processing can leave residual self speech. [inspect] separates

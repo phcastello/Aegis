@@ -57,9 +57,10 @@ class NodeHandsFreeBargeInCaptureTest {
         current:()->Boolean={true},inspect:(ShortArray,Int,Long)->HandsFreeBargeInEvidence={_,_,_->INDEPENDENT},
         volume:()->Int={8},resetEvidence:()->Unit={},speech:()->Boolean={true},
         result: (String, Int, Int) -> Unit = { _, _, _ -> },
-        onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false }) =
+        onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false },
+        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {}) =
         HandsFreeBargeInCapture(input,inspect,head,volume,resetEvidence,current,speech,{classifier},{input.clock.get()},
-            result, onAvailabilityChanged, voicePathReady)
+            result, onAvailabilityChanged, voicePathReady, onCaptureSummary = onCaptureSummary)
     private fun pcm(wav:ByteArray):ShortArray {
         val b=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);b.position(44)
         return ShortArray((wav.size-44)/2){b.short}
@@ -110,6 +111,35 @@ class NodeHandsFreeBargeInCaptureTest {
         assertEquals(1,input.stops.get());assertEquals(1,input.closes.get())
         assertNull(capture.awaitCommand())
     }
+    @Test fun confirmedInterruptedSpeechEndpointsAfterEightHundredMillisecondsWithoutNewVoice() {
+        val warmup = List(12) { frame(0) }
+        val speech = List(7) { frame(2000 + it) }
+        val silence = List(150) { frame(0) }
+        val input = Input(flatten(warmup + speech + silence), AtomicLong())
+        val approved = CountDownLatch(1)
+        val capture = capture(input, inspect = { _, _, _ ->
+            val speechFrame = input.offset / 320 - warmup.size - 1
+            if (speechFrame in setOf(1, 3, 5)) AMBIGUOUS else INDEPENDENT
+        }, speech = {
+            approved.countDown()
+            true
+        })
+        try {
+            assertTrue(capture.start())
+            input.proceed.countDown()
+            await(approved)
+            val command = checkNotNull(capture.awaitCommand())
+            val prefix = speech.mapIndexed { index, frame ->
+                if (index % 2 == 0) frame else silence.first()
+            }
+            assertArrayEquals(flatten(warmup.takeLast(6) + prefix + silence.take(40)), pcm(command.wav))
+            assertEquals((warmup.size + speech.size + 40) * 20L, input.clock.get())
+        } finally {
+            capture.close()
+            assertTrue(capture.awaitClosed(1000))
+        }
+    }
+
     @Test fun stationaryBackgroundNeverConfirmsEvenWhenClassifierCallsEveryFrameSpeech() {
         for (amplitude in listOf(20, 50, 250)) {
             val input = Input(flatten(List(35) { frame(amplitude + it % 7) }),AtomicLong())
@@ -271,11 +301,22 @@ class NodeHandsFreeBargeInCaptureTest {
             assertEquals(1,input.closes.get())
         }
     }
-    @Test fun silencedRecorderNeverQualifiesSpeech() {
+    @Test fun silencedRecorderNeverQualifiesSpeechAndReportsTheReason() {
         val input=Input(flatten(List(8){frame(2000)}),AtomicLong());input.silenced=true
-        val calls=AtomicInteger();val capture=capture(input,speech={calls.incrementAndGet();true})
+        val calls = AtomicInteger()
+        val reported = CountDownLatch(1)
+        var summary: HandsFreeBargeInCaptureSummary? = null
+        val capture = capture(input, speech = { calls.incrementAndGet(); true }, onCaptureSummary = {
+            summary = it
+            reported.countDown()
+        })
         assertTrue(capture.start());input.proceed.countDown()
+        await(reported)
         assertTrue(capture.awaitClosed(1000));assertNull(capture.awaitCommand());assertEquals(0,calls.get())
+        val recorded = checkNotNull(summary)
+        assertEquals(HandsFreeBargeInCaptureOutcome.RECORDER_SILENCED, recorded.outcome)
+        assertFalse(recorded.accepted)
+        assertEquals(0, recorded.commandFrames)
     }
     @Test fun maxCommandIs20SecondsIncludingPreroll() {
         val input=Input(flatten(List(12){frame(0)}+List(1100){frame(2000)}),AtomicLong());val approved=CountDownLatch(1)

@@ -748,10 +748,13 @@ internal class HandsFreeRuntime(private val context:Context) {
         session: String,
         owner: NodeHandsFreeBackend,
         sink: HandsFreePcmSink,
-        playedFrames: () -> Long?
+        playedFrames: HandsFreePlaybackClock
     ) {
         if (!ownsTurn(generation,session,owner) || response.destination==null || diagnostic) return
-        val audio = try { openRecorder() } catch (_: Exception) { return }
+        val audio = try { openRecorder() } catch (_: Exception) {
+            metrics.event("barge_in_capture", JSONObject().put("outcome", "recorder_open_failed"))
+            return
+        }
         val audioManager = context.getSystemService(AudioManager::class.java)
         lateinit var listener: HandsFreeBargeInCapture
         var readyReported = false
@@ -797,6 +800,19 @@ internal class HandsFreeRuntime(private val context:Context) {
                     .put("backgroundRms", floorRms)
                     .put("confirmationPeakRms", peakRms)
                     .put("mediaVolume", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)))
+            },
+            onCaptureSummary = { summary ->
+                metrics.event("barge_in_capture", JSONObject()
+                    .put("outcome", summary.outcome.name.lowercase())
+                    .put("accepted", summary.accepted)
+                    .put("timestampFrames", summary.timestampFrames)
+                    .put("playbackHeadFrames", summary.playbackHeadFrames)
+                    .put("timingResets", summary.timingResets)
+                    .put("referenceUnavailableFrames", summary.referenceUnavailableFrames)
+                    .put("voiceReadyFrames", summary.voiceReadyFrames)
+                    .put("independentFrames", summary.independentFrames)
+                    .put("levelRejectedFrames", summary.levelRejectedFrames)
+                    .put("commandFrames", summary.commandFrames))
             },
             onAvailabilityChanged = {
                 if (!readyReported && listener.panelAvailability() == HandsFreeBargeInPanelAvailability.VOICE &&

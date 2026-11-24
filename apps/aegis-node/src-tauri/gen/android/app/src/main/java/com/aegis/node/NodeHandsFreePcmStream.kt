@@ -61,6 +61,8 @@ internal class HandsFreePcm16Framer(
 internal interface HandsFreePcmDevice : AutoCloseable {
     fun write(bytes: ByteArray, offset: Int, count: Int): Int
     fun playedFrames(): Long
+    fun timestamp(): HandsFreeAudioTimestamp? = null
+    fun discontinuity(): Long = 0
     fun endMarker(frame: Int, reached: () -> Unit)
     fun play()
     fun stop()
@@ -73,7 +75,7 @@ internal class HandsFreeStreamingPcmSink(
     private val onClosed: () -> Unit = {},
     private val onPlaybackEvent:(String)->Unit={},
     private val echo: HandsFreeBargeInEcho? = null,
-    private val onPlaybackReady: (() -> Long?) -> Unit = {}
+    private val onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {}
 ) : HandsFreePcmSink {
     private val cancelled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -81,7 +83,7 @@ internal class HandsFreeStreamingPcmSink(
     private val creationLock = Any()
     private val completion = CountDownLatch(1)
     @Volatile private var device: HandsFreePcmDevice? = null
-    private var writtenFrames = 0L
+    @Volatile private var writtenFrames = 0L
     private var firstWriteObserved=false
     private fun checkCurrent() { if (cancelled.get() || closed.get() || !stillCurrent()) throw CancellationException() }
     private fun output(): HandsFreePcmDevice = device ?: synchronized(creationLock) {
@@ -90,10 +92,15 @@ internal class HandsFreeStreamingPcmSink(
             device = it
             try {
                 checkCurrent()
-                onPlaybackReady {
-                    if (cancelled.get() || closed.get() || device !== it) null
-                    else it.playedFrames()
+                fun currentDevice() = it.takeUnless { target ->
+                    cancelled.get() || closed.get() || device !== target
                 }
+                onPlaybackReady(HandsFreePlaybackClock(
+                    playedFrames = { currentDevice()?.playedFrames() },
+                    timestamp = { currentDevice()?.timestamp() },
+                    discontinuity = { currentDevice()?.discontinuity() ?: 0 },
+                    enqueuedFrames = { if (currentDevice() != null) writtenFrames else 0L }
+                ))
                 checkCurrent()
                 it.play()
                 onPlaybackEvent("player_play_called")
@@ -112,8 +119,8 @@ internal class HandsFreeStreamingPcmSink(
         while (consumed < count) {
             checkCurrent()
             val chunk = minOf(8192, count - consumed)
-            // A blocking write may already be audible before it returns. The playback
-            // head bounds which samples the echo filter can use, including short writes.
+            // A blocking write can become audible before it returns. Offer its PCM
+            // now and let playback progress bound which samples the filter can use.
             echo?.offer(bytes, offset + consumed, chunk, writtenFrames)
             val written = target.write(bytes, offset + consumed, chunk)
             check(written > 0 && written % 2 == 0 && written <= chunk) { "audio_playback_failed" }
