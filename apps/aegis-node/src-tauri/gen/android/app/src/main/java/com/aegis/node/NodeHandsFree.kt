@@ -711,7 +711,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         collection.finish(id,finalState,reason,transcription)
     }
     private fun closePanel(token:String?,immediate:Boolean=false,failed:Boolean=false){if(token!=null){releaseSessionPower(token);main.post{NodeVoiceInteractionSession.current?.finishIfSession(token,immediate,failed)}}}
-    private fun beep(){activationCue.play()}
+    private fun beep()=activationCue.play()
 
     private class MicrophoneUnavailable:Exception()
     private class WakeVerificationUnavailable(cause:Throwable):Exception(cause)
@@ -754,6 +754,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         @Volatile var destination: String? = null
         @Volatile var listener: HandsFreeBargeInCapture? = null
         @Volatile var accepted = false
+        @Volatile var interruption: HandsFreePlaybackInterruption? = null
     }
 
     private fun startResponseCapture(
@@ -778,8 +779,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             metrics.event("barge_in_capture", JSONObject().put("outcome", "recorder_open_failed"))
             return
         }
-        val processor = HandsFreeDuplexSpeech(response.echo, HandsFreeDoubleTalkDetector(model), native != null,
-            native?.playbackGain() ?: 1f)
+        val processor = HandsFreeDuplexSpeech(response.echo, HandsFreeDoubleTalkDetector(model), native != null)
         if (!processor.available) {
             processor.close()
             if (native != null) native.closeRecorder() else audio.release()
@@ -798,15 +798,16 @@ internal class HandsFreeRuntime(private val context:Context) {
             val accepted = synchronized(lock) {
                 val destination = response.destination
                 val activation = continuityActivation
-                if (destination == null || activation == null || !response.playing ||
+                val head = if (destination == null || activation == null || !response.playing ||
                     !ownsTurn(generation,session,owner) || responseCapture !== listener ||
                     activation.identity != currentIdentity() || !nativeUsable() ||
-                    microphoneBlocked(native?.isOwnedMode() == true) || playedFrames() == null
-                ) {
+                    microphoneBlocked(native?.isOwnedMode() == true)) null else playedFrames()
+                if (head == null) {
                     false
                 } else {
+                    response.interruption = head.takeIf { it > 0L }?.let(owner::playbackInterruption)
                     response.accepted = true
-                    conversationId = destination
+                    conversationId = checkNotNull(destination)
                     backend = null
                     true
                 }
@@ -890,6 +891,7 @@ internal class HandsFreeRuntime(private val context:Context) {
 
     private fun run(generation:Int,startup:HandsFreeCaptureStartup?=null) {
         var nextCommand: BargeInCommand? = null
+        var pendingInterruption: Pair<String, HandsFreePlaybackInterruption>? = null
         var detector=0L
         var modelPackage:HandsFreeModelPackage?=null
         var wakeVerifier:HandsFreeWakeVerifier?=null
@@ -956,6 +958,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(command.isEmpty()){synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 if(sessionCancelled){command.fill(0);synchronized(lock){finishEvent("cancelled",endReason?:"operation_cancelled")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val session=sessionId?:UUID.randomUUID().toString().also{sessionId=it}
+                if (pendingInterruption?.first != session) pendingInterruption = null
                 val turnIdentity=metrics.identityToken()
                 val trace=interrupted?.trace ?: capturedTurnLatency
                 val response = if (batteryMode==null && !diagnostic) ResponseBargeIn() else null
@@ -985,20 +988,20 @@ internal class HandsFreeRuntime(private val context:Context) {
                         },
                         echo = response?.echo,
                         prepareCommunication = {
-                            if (response == null || !ownsTurn(generation,session,active) || response.destination == null) null
+                            if (response == null || !ownsTurn(generation,session,active) || response.destination == null) false
                             else {
                                 response.model = try { bargeInDetectorModel } catch (_: Exception) {
                                     metrics.event("barge_in_audio_path", JSONObject().put("outcome","detector_unavailable"))
                                     null
                                 }
-                                if (response.model == null || nativeRejectedSession == session) null
+                                if (response.model == null || nativeRejectedSession == session) false
                                 else {
                                     response.native = HandsFreeConversationAudio.tryOpen(context, ::microphoneBlocked,
                                         ::registerOwnedAudioSession) { reason ->
                                         response.nativeFailed = true
                                         metrics.event("barge_in_audio_path", JSONObject().put("outcome",reason))
                                     }
-                                    response.native?.playbackGain()
+                                    response.native != null
                                 }
                             }
                         },
@@ -1014,9 +1017,11 @@ internal class HandsFreeRuntime(private val context:Context) {
                             if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
                         }
                     )
-                    val turn=active.execute(command,session,conversationId,sink,trace,incremental=true) { destination ->
+                    val turn=active.execute(command,session,conversationId,sink,trace,incremental=true,
+                        interruptedPlayback = pendingInterruption?.second) { destination ->
                         response?.destination = destination
                     }
+                    if (turn.playedAudio) pendingInterruption = null
                     command.fill(0)
                     synchronized(lock) {
                         if(!ownsTurn(generation,session,active))throw CancellationException()
@@ -1042,6 +1047,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         }
                     }
                     if (interruptedResponse!=null) {
+                        pendingInterruption = interruptedResponse.interruption?.let { session to it }
                         turnOutcome = "interrupted"
                         val captured = interruptedResponse.listener?.awaitCommand()
                         synchronized(lock) {
@@ -1068,6 +1074,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                             metrics.event("barge_in_handoff", JSONObject().put("outcome",handoff))
                         }
                     } else {
+                        pendingInterruption = null
                         val cancelled=!current(generation) || sessionCancelled || error is CancellationException
                         turnOutcome=if(cancelled)"cancelled" else "failed"
                         synchronized(lock){finishEvent(turnOutcome,endReason?:if(cancelled)"operation_cancelled" else if(transcriptionStatus=="in_progress")"transcription_failed" else "session_processing_failed")}
@@ -1203,6 +1210,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         var trace:HandsFreeTurnLatency?=null
         var classifier:NativeHandsFreeSpeechClassifier?=null
         var commandCapture:HandsFreeCommandCapture?=null
+        var cueCompletion:HandsFreeCueCompletion?=null
         var lastVadSample:Int?=null
         var lastVadFrameAtMs:Long?=null
         var captureEvent:String?=null
@@ -1288,7 +1296,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(captured) {
                     val commandState=checkNotNull(commandCapture)
                     val before=commandState.length
-                    val ended=commandState.append(buffer,count)
+                    val cueReady=cueCompletion?.completedBy(readReturnedAtMs)==true
+                    if(cueReady) {
+                        cueCompletion=null
+                        trace?.markAt("activation_cue_observed_completed",readReturnedAtMs)
+                    }
+                    val ended=commandState.append(buffer,count,
+                        activationCueCompleted=cueReady,readReturnedAtMs=readReturnedAtMs)
                     val accepted=commandState.length-before
                     // Persistence sees the identical bounded PCM even when VAD rejects it.
                     collection.appendPost(captureEvent,buffer,0,accepted)
@@ -1480,12 +1494,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                         captured=true;commandStarted=now
                         HandsFreePanelSignal.capture(sessionId,buffer,count,now)
                         if(!continuation)collection.appendPost(captureEvent,command,0,length)
-                        speechClassifier.reset();commandCapture=HandsFreeCommandCapture(command,length,speechClassifier)
+                        speechClassifier.reset()
+                        commandCapture=HandsFreeCommandCapture(command,length,speechClassifier,waitForActivationCue=!continuation)
                         commandCapture?.lastActiveEndSample?.let{last->
                             lastVadSample=last;lastVadFrameAtMs=readReturnedAtMs-(length-last)*1000L/16000
                         }
                         val activeTrace=HandsFreeTurnLatency().also{it.mark("wake_accepted")};trace=activeTrace
                         val session=checkNotNull(sessionId)
+                        metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession()
+                        if(!continuation)cueCompletion=beep()
                         val activeBackend=backend?:newBackend(generation,session).also{backend=it}
                         realtime=try{activeBackend.beginCapture(activeTrace){partial->
                             // The capture closure and trace gate delayed callbacks even in a continuation
@@ -1494,7 +1511,6 @@ internal class HandsFreeRuntime(private val context:Context) {
                                 main.post{if(current(generation) && !sessionCancelled && sessionId==session && trace===activeTrace && !capturedSuccessfully)
                                     NodeVoiceInteractionSession.current?.showPartial(session,activeTrace.turnId,partial)}
                         }.also{transcriptionStatus="requested";it.append(command,length)}}catch(_:Exception){null}
-                        metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession();if(!continuation)beep()
                     }
                 }
             }

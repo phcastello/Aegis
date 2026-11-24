@@ -292,13 +292,13 @@ export function getMemoryActivity(assistantMessageId: string, signal?: AbortSign
   });
 }
 
-export async function getConversations(limit = 30, cursor?: string | null): Promise<ConversationPage> {
+export async function getConversations(limit = 30, cursor?: string | null, signal?: AbortSignal): Promise<ConversationPage> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) {
     params.set('cursor', cursor);
   }
 
-  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`, { cache: 'no-store' });
+  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`, { cache: 'no-store', signal });
 }
 
 export async function renameConversation(

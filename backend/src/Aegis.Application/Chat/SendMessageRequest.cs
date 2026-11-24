@@ -15,5 +15,7 @@ public sealed class SendMessageRequest
 
     public bool VoiceSegments { get; init; }
 
+    public Aegis.Application.Voice.VoicePlaybackInterruption? InterruptedPlayback { get; init; }
+
     public string Content { get; init; } = string.Empty;
 }

@@ -182,36 +182,35 @@ class NodeHandsFreePanelTest {
         assertFalse(HandsFreePanelState.ERROR.animated)
         assertEquals("Não consegui concluir. Tente novamente.",HandsFreePanelState.ERROR.label)
     }
-    @Test fun bargeInHintFollowsTheVisibleSpeakingSessionAndItsAvailability() {
+    @Test fun bargeInAccessibilityHintFollowsTheVisibleSpeakingSessionAndItsAvailability() {
         val presentation = HandsFreePanelPresentation()
         presentation.begin("current")
         presentation.refresh("processing")
         val voice = HandsFreeBargeInPanelAvailability.VOICE
-        assertNull(presentation.bargeInHint("current", voice))
+        assertNull(presentation.bargeInAccessibilityHint("current", voice))
 
         presentation.refresh("speaking")
-        assertNull(presentation.bargeInHint("old", voice))
-        assertEquals("Fale por cima da resposta.", presentation.bargeInHint("current", voice))
-        assertEquals("Preparando a escuta…", presentation.bargeInHint("current", HandsFreeBargeInPanelAvailability.PREPARING))
-        assertEquals("Interrupção indisponível agora.", presentation.bargeInHint("current", HandsFreeBargeInPanelAvailability.UNAVAILABLE))
+        assertNull(presentation.bargeInAccessibilityHint("old", voice))
+        assertEquals("Fale por cima da resposta.", presentation.bargeInAccessibilityHint("current", voice))
+        assertEquals("Preparando a escuta…", presentation.bargeInAccessibilityHint("current", HandsFreeBargeInPanelAvailability.PREPARING))
+        assertEquals("Interrupção indisponível agora.", presentation.bargeInAccessibilityHint("current", HandsFreeBargeInPanelAvailability.UNAVAILABLE))
 
         presentation.refresh("capturing")
-        assertNull(presentation.bargeInHint("current", voice))
+        assertNull(presentation.bargeInAccessibilityHint("current", voice))
         presentation.refresh("speaking")
         presentation.end()
-        assertNull(presentation.bargeInHint("current", voice))
+        assertNull(presentation.bargeInAccessibilityHint("current", voice))
     }
 
-    @Test fun confirmedInterruptionTellsTheUserToKeepSpeaking() {
+    @Test fun listeningStatesHaveTheSameNeutralStatusWithoutInstructionText() {
         val presentation = HandsFreePanelPresentation()
         presentation.begin("current")
         presentation.refresh("speaking")
-        assertEquals("Aegis está falando", presentation.label(HANDSFREE_BARGE_IN_LISTENING))
+        assertEquals("Aegis está falando", presentation.state.label)
         presentation.refresh("capturing")
-        assertEquals("Continue falando", presentation.label(HANDSFREE_BARGE_IN_LISTENING))
-        assertEquals("Estou ouvindo", presentation.label("Escutando pedido…"))
+        assertEquals("Estou ouvindo", presentation.state.label)
         presentation.refresh("continuation")
-        assertEquals("Pode continuar", presentation.label(HANDSFREE_BARGE_IN_LISTENING))
+        assertEquals("Estou ouvindo", presentation.state.label)
     }
 
     @Test fun explicitTerminalFailureSurvivesDroppedOrQueuedRuntimeStatus() {

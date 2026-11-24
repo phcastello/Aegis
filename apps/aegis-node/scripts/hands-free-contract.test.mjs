@@ -101,7 +101,8 @@ test('wake upload begins at the native decision suffix and cancellation uses the
   assert.match(capture, /it\.append\(command,length\)/);
   assert.doesNotMatch(capture, /(?:realtime|activeBackend)\??\.[^\n]*(?:contextPcm|triggerContext|trigger_context|ring\.)/);
   assert.match(capture, /collection\.finishCapture\(captureEvent\)/);
-  const execute = runtime.match(/active\.execute\(([^\n]*)\)/)[1];
+  const execute = runtime.match(/active\.execute\(([^)]*)\)/)?.[1];
+  assert.ok(execute, 'backend execution still receives the captured command');
   assert.match(execute, /^command,session,conversationId,sink/);
   assert.doesNotMatch(execute, /context|ring|trigger/i);
 });

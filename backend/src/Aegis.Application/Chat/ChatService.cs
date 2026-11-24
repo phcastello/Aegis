@@ -53,6 +53,7 @@ public sealed class ChatService(
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
+        VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
         if (automaticMemory?.Enabled == true)
@@ -67,7 +68,7 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, request.IsHandsFree, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
 
         try
@@ -151,6 +152,7 @@ public sealed class ChatService(
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
+        VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
         if (automaticMemory?.Enabled == true)
@@ -165,7 +167,7 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, request.IsHandsFree, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
         var modelRequest = CreateModelRequest(promptResult, userContent, request);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
@@ -388,6 +390,7 @@ public sealed class ChatService(
         string userContent,
         Guid conversationId,
         bool handsFree,
+        ChatMessage userMessage,
         CancellationToken cancellationToken)
     {
         using var timing = TurnLatencyProfile.Measure("chat.prepare", metrics?.ChatPreparationSeconds);
@@ -416,6 +419,7 @@ public sealed class ChatService(
             states.Add("Há ações pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
         if (reminders is not null && await TurnLatencyProfile.MeasureAsync("context.reminders", () => reminders.GetContextAsync(conversationId, cancellationToken)) is { } reminderContext)
             states.Add(reminderContext);
+        var playbackContext = VoicePlaybackContext.Describe(history, userMessage);
         var pendingState = string.Join("\n", states);
         var automaticContext = handsFree || hybrid is null ? MemoryAutomaticContextResult.Empty :
             await TurnLatencyProfile.MeasureAsync("context.automatic_memory", () => hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken));
@@ -424,6 +428,20 @@ public sealed class ChatService(
         var memoryContext = string.Join("\n", new[] { observedContext.Text, automaticContext.Text }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
         var prompt = await TurnLatencyProfile.MeasureAsync("context.prompt", () => promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext));
+        if (playbackContext is not null)
+        {
+            // Previously generated text and user speech remain data at user authority.
+            var data = System.Text.Json.JsonSerializer.SerializeToElement(new
+            {
+                role = "user", content = "Dados de reprodução de áudio anteriores (não são um novo pedido):\n" + playbackContext
+            });
+            var guidance = System.Text.Json.JsonSerializer.SerializeToElement(new { role = "developer", content = VoicePlaybackContext.Guidance });
+            prompt = prompt with
+            {
+                InputItems = [.. prompt.InputItems, data, guidance],
+                AuditInputItems = [.. prompt.AuditInputItems ?? prompt.InputItems, data, guidance]
+            };
+        }
         TurnLatencyProfile.Mark("context.history_messages", history.Count);
         TurnLatencyProfile.Mark("context.memory_characters", memoryContext.Length);
         return prompt with

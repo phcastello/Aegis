@@ -2,6 +2,7 @@ package com.aegis.node
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -15,12 +16,27 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
+/** TTS stays on the media playback chain even when native AEC owns the capture route. */
+internal fun handsFreeSpeechMediaAttributes(): AudioAttributes = AudioAttributes.Builder()
+    .setUsage(AudioAttributes.USAGE_MEDIA)
+    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+    .build()
+
+internal fun handsFreeMediaSpeakerAnticipated(manager: AudioManager, attributes: AudioAttributes): Boolean {
+    if (Build.VERSION.SDK_INT < 33) return true
+    val outputs = manager.getAudioDevicesForAttributes(attributes)
+    return outputs.isNotEmpty() && outputs.all {
+        it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
+            it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE
+    }
+}
+
 /** A fresh, lazily opened stream per turn. AudioTrack's fixed buffer supplies backpressure. */
 internal class HandsFreePlayback(
-    private val createDevice: (Boolean, Float, () -> Unit) -> HandsFreePcmDevice
+    private val createDevice: (Boolean, () -> Unit) -> HandsFreePcmDevice
 ) {
-    constructor(createDevice: (() -> Unit) -> HandsFreePcmDevice) : this({ _, _, onFocusLoss -> createDevice(onFocusLoss) })
-    constructor(context: Context) : this({ communication, gain, onFocusLoss -> openDevice(context, communication, gain, onFocusLoss) })
+    constructor(createDevice: (() -> Unit) -> HandsFreePcmDevice) : this({ _, onFocusLoss -> createDevice(onFocusLoss) })
+    constructor(context: Context) : this({ nativeCapture, onFocusLoss -> openDevice(context, nativeCapture, onFocusLoss) })
     private val generation = AtomicInteger()
     private val active = AtomicReference<HandsFreePcmSink?>()
     fun cancel() { generation.incrementAndGet(); active.getAndSet(null)?.abort() }
@@ -30,7 +46,7 @@ internal class HandsFreePlayback(
         stillCurrent: () -> Boolean,
         onPlaybackEvent: (String) -> Unit,
         echo: HandsFreeBargeInEcho? = null,
-        prepareCommunication: () -> Float? = { null },
+        prepareCommunication: () -> Boolean = { false },
         onCommunicationFailed: () -> Unit = {},
         onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {}
     ): HandsFreePcmSink {
@@ -47,18 +63,18 @@ internal class HandsFreePlayback(
                     }
                     Unit
                 }
-                val gain = prepareCommunication()
+                val nativeCapture = prepareCommunication()
                 if (generation.get() != token || !stillCurrent()) {
-                    if (gain != null) onCommunicationFailed()
+                    if (nativeCapture) onCommunicationFailed()
                     throw java.util.concurrent.CancellationException()
                 }
-                if (gain == null) createDevice(false, 1f, focusLost)
+                if (!nativeCapture) createDevice(false, focusLost)
                 else try {
-                    createDevice(true, gain, focusLost)
+                    createDevice(true, focusLost)
                 } catch (_: Exception) {
                     onCommunicationFailed()
                     if (generation.get() != token || !stillCurrent()) throw java.util.concurrent.CancellationException()
-                    createDevice(false, 1f, focusLost)
+                    createDevice(false, focusLost)
                 }
             },
             stillCurrent = { generation.get() == token && stillCurrent() },
@@ -73,12 +89,15 @@ internal class HandsFreePlayback(
     }
 
     companion object {
-    private fun openDevice(context: Context, communication: Boolean, gain: Float,
+    private fun openDevice(context: Context, nativeCapture: Boolean,
                            onFocusLoss: () -> Unit): HandsFreePcmDevice {
         val manager = context.getSystemService(AudioManager::class.java)
-        val attributes = AudioAttributes.Builder()
-            .setUsage(if (communication) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+        val attributes = handsFreeSpeechMediaAttributes()
+        if (nativeCapture) {
+            // The media route must still be compatible with the microphone's native AEC.
+            check(manager.mode == AudioManager.MODE_IN_COMMUNICATION &&
+                handsFreeMediaSpeakerAnticipated(manager, attributes)) { "native_aec_media_route_changed" }
+        }
         val handler = Handler(Looper.getMainLooper())
         val listener = AudioManager.OnAudioFocusChangeListener { if (it < 0) onFocusLoss() }
         val request = if (Build.VERSION.SDK_INT >= 26) AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -93,7 +112,7 @@ internal class HandsFreePlayback(
         }
         try {
             val focus = if (request != null) manager.requestAudioFocus(request)
-                else @Suppress("DEPRECATION") manager.requestAudioFocus(listener, if (communication) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                else @Suppress("DEPRECATION") manager.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             check(focus == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio_focus_unavailable" }; granted = true
             val minimum = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             check(minimum > 0)
@@ -102,7 +121,6 @@ internal class HandsFreePlayback(
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                 .setBufferSizeInBytes(maxOf(minimum, 24000)).setTransferMode(AudioTrack.MODE_STREAM).build()
             output = track; check(track.state == AudioTrack.STATE_INITIALIZED)
-            check(track.setVolume(gain.coerceIn(0f, 1f)) == AudioTrack.SUCCESS) // Per-track gain only.
             // Default streaming threshold is the entire capacity. Modern Android can start even
             // a short reply immediately; older releases use the smallest accepted native buffer.
             if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)

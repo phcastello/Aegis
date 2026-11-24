@@ -119,7 +119,7 @@ class NodeHandsFreeDuplexSpeechTest {
         assertTrue(frame.all { it == 1000.toShort() })
     }
 
-    @Test fun failedCommunicationPlaybackRestoresBeforeCreatingMediaDevice() {
+    @Test fun failedNativeCapturePlaybackRestoresBeforeRetryingMediaDevice() {
         val events = mutableListOf<String>()
         val device = object : HandsFreePcmDevice {
             override fun write(bytes: ByteArray, offset: Int, count: Int) = count
@@ -129,32 +129,32 @@ class NodeHandsFreeDuplexSpeechTest {
             override fun stop() = Unit
             override fun close() { events += "close" }
         }
-        val playback = HandsFreePlayback { communication: Boolean, gain: Float, _: () -> Unit ->
-            if (communication) {
-                events += "native:$gain"
-                throw IllegalStateException("communication device unavailable")
+        val playback = HandsFreePlayback { nativeCapture: Boolean, _: () -> Unit ->
+            if (nativeCapture) {
+                events += "native_media"
+                throw IllegalStateException("media route incompatible with AEC")
             }
-            events += "software:$gain"
+            events += "software_media"
             device
         }
         val stream = playback.openStream(stillCurrent = { true }, onPlaybackEvent = {},
-            prepareCommunication = { events += "prepare"; .5f },
+            prepareCommunication = { events += "prepare"; true },
             onCommunicationFailed = { events += "restore" })
         assertTrue(events.isEmpty())
         stream.write(ByteArray(4), 0, 4)
         stream.close()
-        assertEquals(listOf("prepare", "native:0.5", "restore", "software:1.0", "play", "close"), events)
+        assertEquals(listOf("prepare", "native_media", "restore", "software_media", "play", "close"), events)
     }
 
     @Test fun cancellingWhilePreparingNativeAudioReleasesBeforeAnyDeviceIsOpened() {
         var opened = false
         var restored = false
-        val playback = HandsFreePlayback { _: Boolean, _: Float, _: () -> Unit ->
+        val playback = HandsFreePlayback { _: Boolean, _: () -> Unit ->
             opened = true
             error("a cancelled response cannot open a device")
         }
         val stream = playback.openStream(stillCurrent = { true }, onPlaybackEvent = {},
-            prepareCommunication = { playback.cancel(); .5f },
+            prepareCommunication = { playback.cancel(); true },
             onCommunicationFailed = { restored = true })
         try {
             stream.write(ByteArray(2), 0, 2)

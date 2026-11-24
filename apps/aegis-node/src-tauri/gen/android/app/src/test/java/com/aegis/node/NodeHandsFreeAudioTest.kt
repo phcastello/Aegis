@@ -156,6 +156,68 @@ class NodeHandsFreeAudioTest {
         repeat(11){ended=command.append(ShortArray(3200),3200) || ended}
         assertTrue(ended)
     }
+    @Test fun wakeTailAndCueEchoCannotEndCaptureBeforePostCueSpeech() {
+        val pcm=ShortArray(320000)
+        speech(3200).copyInto(pcm) // 200ms tail of the wake word, already confirmed by VAD.
+        val capture=HandsFreeCommandCapture(pcm,3200,voice,waitForActivationCue=true)
+        var now=1000L
+        fun append(samples:ShortArray,ready:Boolean=false):Boolean {
+            now+=samples.size/16L
+            return capture.append(samples,samples.size,ready,now)
+        }
+        repeat(5){assertFalse(append(ShortArray(3200)))} // Delayed cue, despite >800ms quiet.
+        val cue=ShortArray(3200)
+        HandsFreeCueSignal.samples.copyInto(cue)
+        assertFalse(append(cue,true))
+        assertTrue(capture.hasSpeech)
+        assertFalse(append(speech(1920),true)) // Acoustic tail after the cue is observed.
+        repeat(8){assertFalse(append(ShortArray(3200),true))}
+        assertFalse(append(speech(3200),true)) // The user finally starts 1.7s after the cue.
+        repeat(3){assertFalse(append(ShortArray(3200),true))}
+        assertTrue(append(ShortArray(3200),true)) // Real command gets the ordinary 800ms endpoint.
+        assertTrue(capture.hasUsefulAudio)
+    }
+
+    @Test fun initialListeningBudgetStartsAtObservedCueCompletionAndAlsoUsesWallClock() {
+        val capture=HandsFreeCommandCapture(ShortArray(320000),0,neverSpeech,waitForActivationCue=true)
+        val silence=ShortArray(3200)
+        repeat(15){assertFalse(capture.append(silence,silence.size,false,200L*it))}
+        assertFalse(capture.append(silence,silence.size,true,3000L))
+        // Already-buffered reads cannot spend time faster than elapsed real time.
+        repeat(15){assertFalse(capture.append(silence,silence.size,true,3500L))}
+        assertFalse(capture.append(silence,silence.size,true,5999L))
+        assertTrue(capture.append(silence,silence.size,true,6000L))
+        assertFalse(capture.hasUsefulAudio)
+    }
+
+    @Test fun queuedVoiceBlocksCannotSpendThePostCueSpeechGuardBeforeRealTimePasses() {
+        val capture=HandsFreeCommandCapture(ShortArray(320000),0,voice,waitForActivationCue=true)
+        val silence=ShortArray(3200)
+        assertFalse(capture.append(silence,silence.size,true,1000L))
+        // Capture catches up with queued voice in two immediate reads. Their
+        // sample count alone would have bypassed the settling guard.
+        repeat(2){assertFalse(capture.append(speech(3200),3200,true,1001L))}
+        repeat(4){assertFalse(capture.append(silence,silence.size,true,1200L+200L*it))}
+        assertTrue(capture.hasSpeech)
+        // The queued utterance is retained; wait for the user's new utterance.
+        assertFalse(capture.append(speech(3200),3200,true,2300L))
+        repeat(3){assertFalse(capture.append(silence,silence.size,true,2500L+200L*it))}
+        assertTrue(capture.append(silence,silence.size,true,3100L))
+    }
+
+    @Test fun unpausedShortCommandBeforeCueIsPreservedAndCanReachTheEndpoint() {
+        val pcm=ShortArray(320000)
+        val earlySpeech=speech(3200)
+        earlySpeech.copyInto(pcm)
+        val capture=HandsFreeCommandCapture(pcm,earlySpeech.size,voice,waitForActivationCue=true)
+        val silence=ShortArray(3200)
+        assertFalse(capture.append(silence,silence.size,true,200L))
+        repeat(14){assertFalse(capture.append(silence,silence.size,true,400L+200L*it))}
+        assertTrue(capture.append(silence,silence.size,true,3200L))
+        assertTrue(capture.hasUsefulAudio)
+        assertArrayEquals(earlySpeech,pcm.copyOf(earlySpeech.size))
+    }
+
     @Test fun longQuietPreRollDoesNotSpendThePostActivationNoSpeechBudget() {
         val command=HandsFreeCommandCapture(ShortArray(360000),40000,voice)
         repeat(5){assertFalse(command.append(ShortArray(3200),3200))}

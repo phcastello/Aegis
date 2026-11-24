@@ -199,7 +199,7 @@ internal object HandsFreePanelSignal {
 
 /** The status text deliberately excludes transport errors and operational diagnostics. */
 internal enum class HandsFreePanelState(val label:String,val animated:Boolean=false) {
-    CAPTURING("Estou ouvindo",true),CONTINUATION("Pode continuar",true),
+    CAPTURING("Estou ouvindo",true),CONTINUATION("Estou ouvindo",true),
     PROCESSING("Processando",true),SPEAKING("Aegis está falando",true),
     ERROR("Não consegui concluir. Tente novamente."),IDLE("Aegis");
     companion object {
@@ -214,7 +214,7 @@ internal enum class HandsFreePanelState(val label:String,val animated:Boolean=fa
     }
 }
 
-internal const val HANDSFREE_BARGE_IN_LISTENING = "Continue falando"
+internal const val HANDSFREE_BARGE_IN_LISTENING = "Escutando pedido…"
 
 internal enum class HandsFreeBargeInPanelAvailability(val hint: String) {
     PREPARING("Preparando a escuta…"),
@@ -241,11 +241,7 @@ internal class HandsFreePanelPresentation {
     fun snapshot():Snapshot?=activeSnapshot
     fun isCurrent(snapshot:Snapshot)=activeSnapshot===snapshot
     fun end(){activeSnapshot=null}
-    fun label(message: String): String = when {
-        state == HandsFreePanelState.CAPTURING && message == HANDSFREE_BARGE_IN_LISTENING -> HANDSFREE_BARGE_IN_LISTENING
-        else -> state.label
-    }
-    fun bargeInHint(token: String, availability: HandsFreeBargeInPanelAvailability): String? =
+    fun bargeInAccessibilityHint(token: String, availability: HandsFreeBargeInPanelAvailability): String? =
         availability.hint.takeIf { state == HandsFreePanelState.SPEAKING && activeSnapshot?.session == token }
 
     fun refresh(status:String):Boolean {

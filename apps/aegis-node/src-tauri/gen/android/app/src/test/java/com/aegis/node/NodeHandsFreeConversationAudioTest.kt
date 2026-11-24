@@ -12,7 +12,8 @@ class NodeHandsFreeConversationAudioTest {
         var ready = true
         var effectAvailable = true
         var effectActive = true
-        var gain: Float? = 0.5f
+        var mediaRoute = true
+        var outputVolume = 7
         var activeMode = false
         var activeRoute = false
         var failRegistration = false
@@ -65,8 +66,8 @@ class NodeHandsFreeConversationAudioTest {
         override fun releaseRecord(record: String) { operations.add("release_record") }
         override fun releaseSpeaker() { operations.add("release_speaker"); activeRoute = false }
         override fun releaseMode() { operations.add("release_mode"); activeMode = false }
-        override fun playbackGain() = gain
-        override fun volume() = 7
+        override fun mediaSpeakerActive() = mediaRoute
+        override fun mediaVolume() = outputVolume
     }
 
     @Test fun existingRecordingPreventsAllNativeRequests() {
@@ -104,11 +105,11 @@ class NodeHandsFreeConversationAudioTest {
         assertEquals(listOf("request_mode", "release_mode"), port.operations)
     }
 
-    @Test fun nominalVolumeMismatchRestoresRouteBeforePortableFallback() {
-        val port = Port().apply { gain = null }
+    @Test fun incompatibleMediaRouteRestoresCommunicationRouteBeforePortableFallback() {
+        val port = Port().apply { mediaRoute = false }
         val reasons = mutableListOf<String>()
         assertNull(HandsFreeNativeAecLease.tryOpen(port, { false }, reasons::add))
-        assertEquals(listOf("native_aec_gain_unavailable"), reasons)
+        assertEquals(listOf("native_aec_route_unavailable"), reasons)
         assertEquals(listOf("request_mode", "request_speaker", "release_speaker", "release_mode"),
             port.operations)
     }
@@ -140,7 +141,6 @@ class NodeHandsFreeConversationAudioTest {
         val lease = checkNotNull(HandsFreeNativeAecLease.tryOpen(port, { false }, {}))
         assertEquals("capture", lease.record)
         assertEquals(7, lease.mediaVolume())
-        assertEquals(0.5f, lease.playbackGain(), 0f)
         assertTrue(lease.usable())
         lease.closeRecorder()
         lease.closeRecorder()
@@ -173,6 +173,9 @@ class NodeHandsFreeConversationAudioTest {
         port.activeRoute = false
         assertEquals("native_aec_route_changed", lease.unavailableReason())
         port.activeRoute = true
+        port.mediaRoute = false
+        assertEquals("native_aec_route_changed", lease.unavailableReason())
+        port.mediaRoute = true
         port.activeMode = false
         assertEquals("native_aec_mode_lost", lease.unavailableReason())
         lease.close()
@@ -192,11 +195,16 @@ class NodeHandsFreeConversationAudioTest {
         }
     }
 
-    @Test fun nominalAttenuationCannotBoostOrIgnoreMutedOrUnknownMediaLevel() {
-        assertEquals(1f, checkNotNull(nativeAecAttenuation(-10f, -10f)), 0f)
-        assertEquals(0.501187f, checkNotNull(nativeAecAttenuation(-16f, -10f)), 0.000001f)
-        assertNull(nativeAecAttenuation(-8f, -10f))
-        assertNull(nativeAecAttenuation(Float.NEGATIVE_INFINITY, -10f))
-        assertNull(nativeAecAttenuation(-10f, Float.NaN))
+    @Test fun mediaVolumeChangesRemainVisibleWithoutChangingTheNativeCaptureLease() {
+        val port = Port()
+        val lease = checkNotNull(HandsFreeNativeAecLease.tryOpen(port, { false }, {}))
+        assertEquals(7, lease.mediaVolume())
+        port.outputVolume = 0
+        assertEquals(0, lease.mediaVolume())
+        assertTrue(lease.usable())
+        port.outputVolume = 12
+        assertEquals(12, lease.mediaVolume())
+        assertTrue(lease.usable())
+        lease.close()
     }
 }

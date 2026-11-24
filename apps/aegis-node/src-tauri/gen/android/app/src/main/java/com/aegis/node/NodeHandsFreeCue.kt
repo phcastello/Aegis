@@ -12,6 +12,13 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+/** Clock shared with the capture read. A failed cue also releases the readiness gate. */
+internal class HandsFreeCueCompletion {
+    @Volatile private var completedAtMs:Long?=null
+    fun completedBy(readReturnedAtMs:Long):Boolean=completedAtMs?.let{it<=readReturnedAtMs}?:false
+    fun complete(){completedAtMs=System.nanoTime()/1_000_000L}
+}
+
 /** Tiny local PCM cue. Its worker never blocks capture, the UI or a detector handoff. */
 internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
     private val generation=AtomicInteger()
@@ -21,12 +28,13 @@ internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
         .apply{allowCoreThreadTimeOut(true)}
     @Volatile private var active:AudioTrack?=null
     @Volatile private var completion:CountDownLatch?=null
-    fun play() {
+    fun play():HandsFreeCueCompletion {
         val token=generation.incrementAndGet()
+        val ready=HandsFreeCueCompletion()
         executor.execute {
-            if(token!=generation.get())return@execute
             var player:AudioTrack?=null
             try {
+                if(token!=generation.get())return@execute
                 val pcm=HandsFreeCueSignal.samples
                 val attrs=AudioAttributes.Builder().setUsage(if(Build.VERSION.SDK_INT>=26)AudioAttributes.USAGE_ASSISTANT else AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
@@ -49,21 +57,30 @@ internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
                 // A cancellation cannot stop the track and then race with a late play().
                 val started=synchronized(lock){if(token!=generation.get())false else {track.play();true}}
                 if(!started)return@execute
-                val markerReached=done.await(500,TimeUnit.MILLISECONDS)
+                val deadline=System.nanoTime()+500_000_000L
+                var finished=false
+                while(token==generation.get() && System.nanoTime()<deadline) {
+                    // Do not wait another half second when the marker is queued on
+                    // a busy main looper but the playback head already reached it.
+                    if(done.await(10,TimeUnit.MILLISECONDS) || track.playbackHeadPosition>=pcm.size) {
+                        finished=true
+                        break
+                    }
+                }
                 synchronized(lock) {
                     if(token!=generation.get())return@execute
-                    // The main looper may be busy while the mixer already finished.
-                    // A missing marker is only a failure if the playback head is short.
-                    check(markerReached || track.playbackHeadPosition>=pcm.size){"activation_cue_playback_timeout"}
+                    check(finished || track.playbackHeadPosition>=pcm.size){"activation_cue_playback_timeout"}
                 }
             }catch(_:InterruptedException){Thread.currentThread().interrupt();if(token==generation.get())failure()}
             catch(_:Exception){if(token==generation.get())failure()}
             finally {
+                ready.complete()
                 synchronized(lock){completion=null;active=null}
                 try{player?.stop()}catch(_:Exception){}
                 try{player?.release()}catch(_:Exception){}
             }
         }
+        return ready
     }
     fun cancel(){synchronized(lock){generation.incrementAndGet();executor.queue.clear();completion?.countDown();try{active?.stop()}catch(_:Exception){}}}
 }

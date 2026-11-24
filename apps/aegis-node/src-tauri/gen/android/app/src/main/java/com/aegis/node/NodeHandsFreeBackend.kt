@@ -43,6 +43,9 @@ class NodeHandsFreeBackend internal constructor(
   @Volatile private var correlationId:String?=null
   private var pinnedSessionId: String? = null
   private var pinnedConversationId: String? = null
+  private val playbackProgress = HandsFreePlaybackProgress()
+
+  internal fun playbackInterruption(playedFrames: Long) = playbackProgress.at(playedFrames)
 
   private fun conversationChanged(id: String) {
     requireUuid(id)
@@ -176,8 +179,10 @@ class NodeHandsFreeBackend internal constructor(
     execute(wav,sessionId,conversationId,pcm,null)
 
   internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?, incremental:Boolean=false,
+                       interruptedPlayback: HandsFreePlaybackInterruption? = null,
                        onConversation:(String)->Unit={}):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
+    playbackProgress.reset()
     latencyTrace=trace
     activePcm = pcm
     val conversationReportLock = Any()
@@ -194,7 +199,7 @@ class NodeHandsFreeBackend internal constructor(
       }
     }
     try {
-      return executeTurn(wav, sessionId, conversationId, pcm, incremental, reportConversation)
+      return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, reportConversation)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -207,7 +212,7 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean,
-                          reportConversation:(String)->Unit): HandsFreeTurn {
+                          interruptedPlayback: HandsFreePlaybackInterruption?, reportConversation:(String)->Unit): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
     validateWav(wav)
@@ -241,7 +246,7 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcribed", 0)
       checkCurrent()
       turnId = id
-      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, reportConversation)
+      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback, reportConversation)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
         json("/api/chat/messages", JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
@@ -342,7 +347,7 @@ class NodeHandsFreeBackend internal constructor(
 
   /** Two synthesis slots, bounded PCM pipes and one writer keep playback continuous. */
   private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink,
-                               reportConversation:(String)->Unit):HandsFreeTurn {
+                               interruptedPlayback: HandsFreePlaybackInterruption?, reportConversation:(String)->Unit):HandsFreeTurn {
     val trace=latencyTrace
     val events=java.util.concurrent.ArrayBlockingQueue<JSONObject>(2)
     val units=java.util.concurrent.ArrayBlockingQueue<SegmentDownload>(2)
@@ -357,6 +362,7 @@ class NodeHandsFreeBackend internal constructor(
     }
     val bytes=JSONObject().put("turnId",id).put("conversationId",conversationId?:JSONObject.NULL)
       .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
+      .apply { interruptedPlayback?.takeIf { it.conversationId == conversationId }?.let { put("interruptedPlayback", it.toJson()) } }
       .toString().toByteArray(Charsets.UTF_8)
     val reader=Thread({
       var persistedDestination=conversationId
@@ -448,8 +454,9 @@ class NodeHandsFreeBackend internal constructor(
               val body=JSONObject().put("turnId",id).put("speechRequestId",speech).put("assistantMessageId",messageId)
                 .put("conversationId",destination).put("segmentId",segmentId).put("sequence",sequence).toString().toByteArray(Charsets.UTF_8)
               unit.worker=Thread({
+                var synthesizedFrames = 0L
                 val pipe=object:HandsFreePcmSink {
-                  override fun write(bytes:ByteArray,offset:Int,count:Int){unit.output.write(bytes,offset,count)}
+                  override fun write(bytes:ByteArray,offset:Int,count:Int){unit.output.write(bytes,offset,count);synthesizedFrames += count / 2}
                   override fun finish()=Unit
                   override fun abort()=unit.close()
                   override fun close()=Unit
@@ -459,6 +466,7 @@ class NodeHandsFreeBackend internal constructor(
                   request("/api/voice/speech/segments",body,"application/json",24000*2*180,300,pcm=pipe,
                     pcmDeliveryMetrics=false,onFirstByte={unit.firstByte.countDown();if(unitSequence==0)trace?.mark("tts_first_byte")},
                     onPcmAvailable={if(unitSequence==0)trace?.mark("tts_first_pcm_available")})
+                  playbackProgress.synthesized(segmentId, synthesizedFrames)
                 }catch(error:Throwable){unit.failure.set(error);failPipeline(error)}
                 finally{body.fill(0);try{unit.output.close()}catch(_:Exception){};unit.completed.countDown()}
               },"AegisSegmentPcm-$sequence").apply{isDaemon=true;start()}
@@ -504,6 +512,8 @@ class NodeHandsFreeBackend internal constructor(
             pinnedConversationId=destination;speechId=null;turnId=null
             return HandsFreeTurn(destination,true,unit.event.optString("voiceContinuation")=="continue")
           }
+          playbackProgress.begin(unit.event.getString("conversationId"), id, unit.event.getString("assistantMessageId"),
+            unit.event.getString("segmentId"), unit.event.getInt("sequence"), framer.samples)
           while(true) {
             checkNotCancelled();schedulerFailure.get()?.let{throw it};unit.failure.get()?.let{throw it}
             if(System.nanoTime()-identityCheckedAt>=1000000000L){checkCurrent();identityCheckedAt=System.nanoTime()}

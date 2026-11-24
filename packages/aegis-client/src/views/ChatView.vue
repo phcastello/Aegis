@@ -58,6 +58,8 @@ type ConversationContext = {
   createdAt: string | null;
   error: string | null;
   loaded: boolean;
+  remoteUpdatedAt: string | null;
+  remoteMessageCount: number | null;
   revision: number;
   following: boolean;
   scrollTop: number | null;
@@ -67,7 +69,7 @@ type ConversationContext = {
 };
 function createConversationContext(id: string | null = null): ConversationContext {
   return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
-    loaded: false, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
+    loaded: false, remoteUpdatedAt: null, remoteMessageCount: null, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
 }
 const contexts = new Map<string, ConversationContext>();
 const deletedConversations = new Set<string>();
@@ -225,7 +227,7 @@ async function syncProactiveMessages(): Promise<void> {
     const activity = await getProactiveActivity(proactiveAbort.signal);
     if (proactiveAbort.signal.aborted) return;
     const signature = JSON.stringify([...activity].sort((a,b) => a.conversationId.localeCompare(b.conversationId)));
-    if (signature !== lastActivity) { if (activity.length) await refreshProactiveHistory(); lastActivity = signature; }
+    if (signature !== lastActivity) { if (activity.length) await refreshConversationHead(); lastActivity = signature; }
     for (const row of activity) {
       latestProactiveSequences.set(row.conversationId, Math.max(latestProactiveSequences.get(row.conversationId) ?? 0, row.lastProactiveSequence));
       const read = Math.max(readSequences.get(row.conversationId) ?? 0, row.readProactiveSequence);
@@ -617,6 +619,8 @@ const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation; rev
   if (owner) {
     owner.revision++;
     owner.messages = mergeConversationMessages(owner.messages, snapshot.messages);
+    owner.remoteUpdatedAt = snapshot.updatedAt;
+    owner.remoteMessageCount = snapshot.messages.length;
     owner.loaded = true;
     if (owner === selected.value) { resumeMemoryActivityPolling(); void nextTick(observeProactiveMessages); }
   }
@@ -652,23 +656,78 @@ function conversationChanged(id: string): void {
 async function reconcileConversations(): Promise<void> {
   if (disposed || document.visibilityState !== 'visible') return;
   if (selected.value.id) conversationSync.invalidate(selected.value.id);
-  await Promise.allSettled([refreshProactiveHistory(), conversationSync.flush()]);
+  await Promise.allSettled([refreshConversationHead(), conversationSync.flush()]);
 }
 watch(() => [...activeTurns.values()].map(turn => turn.owner.id).filter((id): id is string => !!id), (current, previous) => {
   for (const id of new Set([...current, ...previous])) if (conversationSync.pending(id)) conversationSync.invalidate(id);
   flushConversationChanges();
 });
 
-async function refreshProactiveHistory(): Promise<void> {
-  const revision = summaryRevision;
-  const page = await getConversations(30, null);
-  if (disposed) return;
-  if (conversations.value.length === 0) {
-    nextHistoryCursor.value = page.nextCursor ?? null; hasMoreHistory.value = page.hasMore;
-  }
-  // Merge the current head without discarding pages the reader already loaded or their cursor.
-  for (const summary of page.items) if ((summaryRevisions.get(summary.id) ?? 0) <= revision) mergeConversationSummary(summary);
+let conversationHeadRead: Promise<void> | undefined;
+let conversationHeadAbort: AbortController | undefined;
+let conversationHeadTimer: ReturnType<typeof setTimeout> | undefined;
+
+function summaryUnchanged(previous: ConversationSummary | undefined, incoming: ConversationSummary): boolean {
+  return previous !== undefined && previous.title === incoming.title && previous.titleSource === incoming.titleSource &&
+    previous.createdAt === incoming.createdAt && previous.updatedAt === incoming.updatedAt &&
+    previous.messageCount === incoming.messageCount && previous.lastMessagePreview === incoming.lastMessagePreview &&
+    previous.hasUnreadProactive === incoming.hasUnreadProactive;
 }
+
+function refreshConversationHead(): Promise<void> {
+  if (disposed) return Promise.resolve();
+  if (conversationHeadRead) return conversationHeadRead;
+  const controller = new AbortController();
+  conversationHeadAbort = controller;
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const revision = summaryRevision;
+  conversationHeadRead = (async () => {
+    const page = await getConversations(30, null, controller.signal);
+    if (disposed || controller.signal.aborted) return;
+    const previous = new Map(conversations.value.map(summary => [summary.id, summary]));
+    // Retain loaded pages. If an entirely new head displaced every known row,
+    // restart pagination from that head so the intervening rows remain reachable.
+    if (previous.size === 0 || (page.hasMore && !page.items.some(row => previous.has(row.id)))) {
+      nextHistoryCursor.value = page.nextCursor ?? null;
+      hasMoreHistory.value = page.hasMore;
+    }
+    for (const summary of page.items) {
+      if (deletedConversations.has(summary.id) || (summaryRevisions.get(summary.id) ?? 0) > revision) continue;
+      const old = previous.get(summary.id);
+      if (!summaryUnchanged(old, summary)) mergeConversationSummary(summary);
+      const owner = contexts.get(summary.id);
+      const messageCountChanged = old?.messageCount !== summary.messageCount;
+      // Only fetch a detail snapshot when a loaded context is behind the server.
+      // The existing queue defers this work during a local streaming turn.
+      if (owner?.loaded && (owner.remoteUpdatedAt !== summary.updatedAt ||
+          (messageCountChanged && owner.remoteMessageCount !== summary.messageCount)) &&
+          !conversationSync.pending(summary.id)) conversationSync.invalidate(summary.id);
+    }
+    flushConversationChanges();
+  })().finally(() => {
+    clearTimeout(timeout);
+    conversationHeadRead = undefined;
+    if (conversationHeadAbort === controller) conversationHeadAbort = undefined;
+  });
+  return conversationHeadRead;
+}
+
+// Native Android writes already emit a targeted local invalidation. Poll less
+// frequently there, and only while its Activity is actually in the foreground.
+function scheduleConversationHeadSync(immediate = false): void {
+  clearTimeout(conversationHeadTimer);
+  if (disposed || document.visibilityState !== 'visible' || !navigator.onLine) return;
+  const foreground = clientEnvironment().isForeground;
+  conversationHeadTimer = setTimeout(async () => {
+    if (disposed || document.visibilityState !== 'visible') return;
+    try {
+      if (!foreground || await foreground()) await refreshConversationHead();
+    } catch { /* The next bounded poll or reconnect retries. */ }
+    scheduleConversationHeadSync();
+  }, immediate ? 0 : foreground ? 15000 : 5000);
+}
+
+function conversationHeadForeground(): void { scheduleConversationHeadSync(true); }
 
 async function loadConversationHistory(reset = false): Promise<void> {
   if (isLoadingHistory.value) {
@@ -779,6 +838,8 @@ async function openConversation(targetConversationId: string, restoring = false)
     }
     owner.revision++;
     owner.messages = mergeConversationMessages(owner.messages, conversation.messages);
+    owner.remoteUpdatedAt = conversation.updatedAt;
+    owner.remoteMessageCount = conversation.messages.length;
     owner.loaded = true;
     resumeMemoryActivityPolling();
   } catch {
@@ -1159,6 +1220,11 @@ onMounted(() => {
   window.addEventListener('aegis-app-visibility', serverForeground);
   window.addEventListener('online', serverNetworkChanged);
   window.addEventListener('offline', serverNetworkChanged);
+  document.addEventListener('visibilitychange', conversationHeadForeground);
+  window.addEventListener('focus', conversationHeadForeground);
+  window.addEventListener('online', conversationHeadForeground);
+  window.addEventListener('offline', conversationHeadForeground);
+  scheduleConversationHeadSync();
   syncViewportHeight();
   layoutObserver = new ResizeObserver(handleMessagesLayout);
   if (messagesContainer.value) layoutObserver.observe(messagesContainer.value);
@@ -1216,6 +1282,12 @@ onBeforeUnmount(() => {
   disposed = true;
   conversationSync.dispose(); clearTimeout(conversationSyncTimer); for (const timer of conversationRetryTimers.values()) clearTimeout(timer); conversationRetryTimers.clear();
   healthController?.abort();
+  clearTimeout(conversationHeadTimer);
+  conversationHeadAbort?.abort();
+  document.removeEventListener('visibilitychange', conversationHeadForeground);
+  window.removeEventListener('focus', conversationHeadForeground);
+  window.removeEventListener('online', conversationHeadForeground);
+  window.removeEventListener('offline', conversationHeadForeground);
   document.removeEventListener('visibilitychange', serverForeground);
   window.removeEventListener('focus', serverForeground);
   window.removeEventListener('aegis-app-visibility', serverForeground);

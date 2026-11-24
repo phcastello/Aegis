@@ -102,10 +102,12 @@ class NodeHandsFreeBackendTest {
       val old = fixture.backend()
       val first = RecordingSink()
       var destination: String? = null
+      var position: HandsFreePlaybackInterruption? = null
       val interrupting = object : HandsFreePcmSink by first {
         override fun write(bytes: ByteArray, offset: Int, count: Int) {
           first.write(bytes, offset, count)
           assertEquals(conversation, destination)
+          position = old.playbackInterruption(1)
           old.requestCancellation()
         }
       }
@@ -115,13 +117,20 @@ class NodeHandsFreeBackendTest {
       assertTrue(first.aborted)
       assertFalse(first.finished)
       val next = RecordingSink()
-      val result = fixture.backend().execute(wav(), session, checkNotNull(destination), next, null, incremental=true)
+      val result = fixture.backend().execute(wav(), session, checkNotNull(destination), next, null, incremental=true,
+        interruptedPlayback = checkNotNull(position))
       val chat = fixture.requests.filter { it.path=="/api/chat/messages/stream" }.map { JSONObject(it.text()) }
       assertEquals(2, chat.size)
       assertTrue(chat[0].isNull("conversationId"))
       assertEquals(conversation, chat[1].getString("conversationId"))
       assertEquals(listOf(session, session), chat.map { it.getString("voiceSessionId") })
       assertNotEquals(chat[0].getString("turnId"), chat[1].getString("turnId"))
+      assertFalse(chat[0].has("interruptedPlayback"))
+      val pointer = chat[1].getJSONObject("interruptedPlayback")
+      assertEquals(chat[0].getString("turnId"), pointer.getString("turnId"))
+      assertEquals(message, pointer.getString("assistantMessageId"))
+      assertEquals(0, pointer.getInt("sequence"))
+      assertEquals(1L, pointer.getLong("playedFramesInSegment"))
       assertTrue(next.finished)
       assertFalse(next.aborted)
       assertEquals(conversation, result.conversationId)

@@ -101,6 +101,7 @@ internal class HandsFreeVad(
     var hasSpeech=false;private set
     val hasVoiceStart:Boolean get()=hasSpeech
     var confirmedStartSample:Int?=null;private set
+    var latestConfirmedSpeechEndSample:Int?=null;private set
     // Observation only: the end of the latest frame meeting the existing active rule.
     var lastActiveEndSample:Int?=null;private set
     val pendingStartSample:Int? get()=if(voicedRun>0)total-voicedRun else null
@@ -124,8 +125,11 @@ internal class HandsFreeVad(
             if(active) {
                 lastActiveEndSample=total
                 voicedRun+=FRAME_SAMPLES;quiet=0
-                if(voicedRun>=ONSET_SAMPLES && !hasSpeech) {
-                    hasSpeech=true;confirmedStartSample=total-voicedRun
+                if(voicedRun>=ONSET_SAMPLES) {
+                    latestConfirmedSpeechEndSample=total
+                    if(!hasSpeech) {
+                        hasSpeech=true;confirmedStartSample=total-voicedRun
+                    }
                 }
             } else {
                 voicedRun=0;quiet+=FRAME_SAMPLES
@@ -160,10 +164,14 @@ internal class HandsFreeCommandCapture(
     initialPostCount:Int,
     classifier:HandsFreeSpeechClassifier,
     initialSpeechConfirmed: Boolean = false,
-    initialNoiseRms: Double = 8.0
+    initialNoiseRms: Double = 8.0,
+    private val waitForActivationCue: Boolean = false
 ) {
     private val vad=HandsFreeVad(classifier,maxSamples=320000,noSpeechSamples=initialPostCount+HandsFreeVad.NO_SPEECH_SAMPLES)
     private var afterActivation=0
+    private var postCueSample:Int?=null
+    private var postCueTimeMs=0L
+    private var postCueSpeech=false
     private val uncertainInitialAudio:Boolean
     var length=initialPostCount;private set
     val hasSpeech:Boolean get()=vad.hasSpeech
@@ -177,12 +185,50 @@ internal class HandsFreeCommandCapture(
         if (initialSpeechConfirmed) vad.confirmSpeechAtCurrentFrame(initialNoiseRms)
         uncertainInitialAudio=vad.signalSamples>=640 // At least40ms of variable initial post audio.
     }
-    fun append(samples:ShortArray,count:Int):Boolean {
+    fun append(samples:ShortArray,count:Int,activationCueCompleted:Boolean=false,readReturnedAtMs:Long=0L):Boolean {
         require(count in 0..samples.size)
         val accepted=minOf(count,command.size-length)
         samples.copyInto(command,length,0,accepted);length+=accepted;afterActivation+=accepted
+        val previousConfirmedEnd=vad.latestConfirmedSpeechEndSample
         val endpoint=vad.process(samples,accepted)
-        return length==command.size || afterActivation>=320000 || (afterActivation>=3200 && endpoint)
+        if(length==command.size || afterActivation>=320000)return true
+        if(waitForActivationCue) {
+            val readySample=postCueSample
+            if(readySample==null) {
+                if(activationCueCompleted) {
+                    // The completion may have occurred inside this read. Anchor at
+                    // its end so no earlier buffered PCM spends the listening window.
+                    postCueSample=length
+                    postCueTimeMs=readReturnedAtMs
+                }
+                return false
+            }
+            // A confirmed wake-word tail or the cue's acoustic tail must not
+            // turn the initial listening window into the 800ms speech endpoint.
+            // All PCM, including an unpaused command, remains in the same buffer.
+            val confirmedEnd=vad.latestConfirmedSpeechEndSample
+            val freshOnsetSamples=CUE_TAIL_SAMPLES+HandsFreeVad.ONSET_SAMPLES
+            // A queued AudioRecord block may arrive faster than real time.
+            // Require a newly observed active speech frame beyond both boundaries.
+            if(confirmedEnd!=null && confirmedEnd!=previousConfirmedEnd &&
+                confirmedEnd>=readySample+freshOnsetSamples &&
+                readReturnedAtMs-(length-confirmedEnd)/16L>=postCueTimeMs+freshOnsetSamples/16L)
+                postCueSpeech=true
+            if(!postCueSpeech) {
+                val expired=length-readySample>=HandsFreeVad.NO_SPEECH_SAMPLES &&
+                    readReturnedAtMs-postCueTimeMs>=HandsFreeVad.NO_SPEECH_SAMPLES/16L
+                if(!expired)return false
+                val pending=vad.pendingStartSample
+                // Retain an onset that began just before the no-speech deadline
+                // but needs the next frame(s) to be confirmed.
+                return pending==null || pending>=readySample+HandsFreeVad.NO_SPEECH_SAMPLES
+            }
+        }
+        return afterActivation>=3200 && endpoint
+    }
+
+    companion object {
+        private const val CUE_TAIL_SAMPLES = 1920 // 120ms for acoustic settling; PCM is still retained.
     }
 }
 

@@ -41,7 +41,6 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     private val main=Handler(Looper.getMainLooper())
     private var label:TextView?=null
     private var partial:TextView?=null
-    private var bargeInHint: TextView? = null
     private var card:View?=null
     private var visualizer:HandsFreePanelView?=null
     private var visible=false
@@ -84,13 +83,6 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             visibility=View.GONE;setPadding(0,dp(8),dp(8),0);contentDescription="Transcrição temporária"
             accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_NONE
         }.also{panel.addView(it)}
-        bargeInHint = TextView(context).apply {
-            setTextColor(0xffaab5ca.toInt())
-            textSize = 14f
-            gravity = Gravity.CENTER
-            visibility = View.GONE
-            setPadding(0, dp(6), dp(8), 0)
-        }.also { panel.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)) }
         root.addView(panel,FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM))
         ViewCompat.setOnApplyWindowInsetsListener(root){view,insets->
             val safe=insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -109,7 +101,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(args?.getBoolean("activation")==true && boundSession!=runtime.activeSessionToken()){finishQuietly();return}
         if(previousSession!=boundSession){displayedState="";partialRequestId=null;partial?.text="";partial?.visibility=View.GONE}
         presentation.begin(boundSession)
-        renderBargeInHint(null)
+        updatePlaybackAccessibility(null)
         current=this
         val decision=boundSession?.let{NodeVoiceInteractionService.current?.presentationDecision(it,args?.getBoolean("wakeScreen")==true || runtime.activationNeedsWake(it))}
             ?: HandsFreePresentationPolicy.Decision(false,false)
@@ -141,24 +133,22 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(!presentation.refresh(state))return
         if(displayedState!=state){partial?.text="";partial?.visibility=View.GONE;partialRequestId=null;HandsFreePanelSignal.reset(this)}
         displayedState=state
-        label?.text=presentation.label(message);visualizer?.state(presentation.state)
+        label?.text=presentation.state.label;visualizer?.state(presentation.state)
         val token = boundSession
         if (state == "speaking" && token != null) refreshBargeInControls(token)
-        else renderBargeInHint(null)
+        else updatePlaybackAccessibility(null)
         updateScreenPolicy()
     }
 
     internal fun refreshBargeInControls(token: String) {
         if (!visible || boundSession != token || presentation.state != HandsFreePanelState.SPEAKING) return
         val availability = NodeHandsFree.runtime(context).bargeInPanelAvailability(token)
-        renderBargeInHint(presentation.bargeInHint(token, availability))
+        updatePlaybackAccessibility(presentation.bargeInAccessibilityHint(token, availability))
     }
 
-    private fun renderBargeInHint(hint: String?) {
-        bargeInHint?.apply {
-            if (text.toString() != hint.orEmpty()) text = hint.orEmpty()
-            visibility = if (hint == null) View.GONE else View.VISIBLE
-        }
+    private fun updatePlaybackAccessibility(hint: String?) {
+        // Availability remains readable via TalkBack without an extra visible instruction.
+        label?.contentDescription = hint?.let { "${presentation.state.label}. $it" }
     }
 
     internal fun showPartial(token:String,requestId:String,text:String) {
@@ -183,7 +173,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(boundSession!=token)return
         if(presentation.delayClose(immediate,failed)){
             partial?.text="";partial?.visibility=View.GONE;HandsFreePanelSignal.reset(this)
-            renderBargeInHint(null)
+            updatePlaybackAccessibility(null)
             label?.text=presentation.state.label;visualizer?.state(presentation.state)
             updateScreenPolicy()
             main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
@@ -194,7 +184,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         return Runnable{if(current===this && presentation.isCurrent(snapshot))finishQuietly()}
     }
     internal fun finishQuietly(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;finish()}
-    private fun stopVisuals(){presentation.end();renderBargeInHint(null);main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
+    private fun stopVisuals(){presentation.end();updatePlaybackAccessibility(null);main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
     override fun onHide(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onHide()}
     override fun onDestroy(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onDestroy()}
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}

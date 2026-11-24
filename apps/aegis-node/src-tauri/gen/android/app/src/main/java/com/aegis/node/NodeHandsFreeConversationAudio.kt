@@ -1,7 +1,6 @@
 package com.aegis.node
 
 import android.content.Context
-import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -13,7 +12,6 @@ import android.os.Build
 import android.os.SystemClock
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.pow
 
 internal interface HandsFreeNativeAecEffect : AutoCloseable {
     fun active(): Boolean
@@ -34,8 +32,8 @@ internal interface HandsFreeNativeAecPort<R : Any> {
     fun releaseRecord(record: R)
     fun releaseSpeaker()
     fun releaseMode()
-    fun playbackGain(): Float?
-    fun volume(): Int
+    fun mediaSpeakerActive(): Boolean
+    fun mediaVolume(): Int
 }
 
 /**
@@ -53,11 +51,9 @@ internal class HandsFreeNativeAecLease<R : Any> private constructor(
     private var speakerRequested = false
     private var recordValue: R? = null
     private var effect: HandsFreeNativeAecEffect? = null
-    private var gain = 1f
 
     val record: R get() = checkNotNull(recordValue)
-    fun mediaVolume(): Int = port.volume()
-    fun playbackGain(): Float = gain
+    fun mediaVolume(): Int = port.mediaVolume()
     fun isOwnedMode(): Boolean = !closed.get() && modeRequested && try {
         port.modeActive()
     } catch (_: RuntimeException) { false }
@@ -67,7 +63,7 @@ internal class HandsFreeNativeAecLease<R : Any> private constructor(
             closed.get() -> "native_aec_closed"
             recorderClosed.get() -> "native_aec_recorder_closed"
             !isOwnedMode() -> "native_aec_mode_lost"
-            !port.speakerActive() -> "native_aec_route_changed"
+            !port.speakerActive() || !port.mediaSpeakerActive() -> "native_aec_route_changed"
             microphoneBlocked(true) -> "native_aec_microphone_blocked"
             effect?.active() != true -> "native_aec_effect_lost"
             else -> port.recordingIssue(record)
@@ -122,8 +118,8 @@ internal class HandsFreeNativeAecLease<R : Any> private constructor(
                 if (!port.enterMode()) return unavailable("native_aec_mode_unavailable")
                 if (microphoneBlocked(true)) return unavailable("native_aec_microphone_blocked")
                 lease.speakerRequested = true
-                if (!port.selectSpeaker()) return unavailable("native_aec_route_unavailable")
-                lease.gain = port.playbackGain() ?: return unavailable("native_aec_gain_unavailable")
+                if (!port.selectSpeaker() || !port.mediaSpeakerActive())
+                    return unavailable("native_aec_route_unavailable")
                 if (microphoneBlocked(true)) return unavailable("native_aec_microphone_blocked")
 
                 val record = port.openRecord()
@@ -156,7 +152,6 @@ internal class HandsFreeConversationAudio private constructor(
 ) : AutoCloseable {
     val record: AudioRecord get() = lease.record
     fun mediaVolume(): Int = lease.mediaVolume()
-    fun playbackGain(): Float = lease.playbackGain()
     fun isOwnedMode(): Boolean = lease.isOwnedMode()
     fun usable(): Boolean = lease.usable()
     fun unavailableReason(): String? = lease.unavailableReason()
@@ -192,31 +187,19 @@ private class AndroidNativeAecPort(
 ) : HandsFreeNativeAecPort<AudioRecord> {
     private var previousSpeaker = false
     private var speakerId: Int? = null
-    private var initialMediaDb = Float.NaN
 
     override fun availabilityIssue(): String? = when {
         !AcousticEchoCanceler.isAvailable() -> "native_aec_effect_unsupported"
         AudioEffect.queryEffects()?.any {
             it.type == AudioEffect.EFFECT_TYPE_AEC && it.uuid != AOSP_AEC
         } != true -> "native_aec_effect_unsupported"
-        !speakerRouteEligible() || !normalMediaSpeaker() -> "native_aec_non_speaker_route"
-        manager.isStreamMute(AudioManager.STREAM_MUSIC) ||
-            manager.getStreamVolume(AudioManager.STREAM_MUSIC) == 0 -> "native_aec_media_muted"
-        else -> {
-            // Sample the normal media route before putting the device into call mode.
-            initialMediaDb = manager.getStreamVolumeDb(AudioManager.STREAM_MUSIC,
-                manager.getStreamVolume(AudioManager.STREAM_MUSIC), AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
-            if (initialMediaDb.isFinite()) null else "native_aec_gain_unavailable"
-        }
+        !speakerRouteEligible() || !mediaSpeakerActive() -> "native_aec_non_speaker_route"
+        mediaVolume() == 0 -> "native_aec_media_muted"
+        else -> null
     }
 
-    private fun normalMediaSpeaker(): Boolean {
-        if (Build.VERSION.SDK_INT < 33) return true
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        val anticipated = manager.getAudioDevicesForAttributes(attributes)
-        return anticipated.isNotEmpty() && anticipated.all { isSpeaker(it.type) }
-    }
+    override fun mediaSpeakerActive(): Boolean =
+        handsFreeMediaSpeakerAnticipated(manager, handsFreeSpeechMediaAttributes())
 
     private fun speakerRouteEligible(): Boolean {
         val outputs = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
@@ -333,14 +316,9 @@ private class AndroidNativeAecPort(
         awaitPlatform { !modeActive() }
     }
 
-    override fun volume() = manager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
-
-    override fun playbackGain(): Float? {
-        if (manager.isStreamMute(AudioManager.STREAM_VOICE_CALL)) return null
-        val voiceDb = manager.getStreamVolumeDb(AudioManager.STREAM_VOICE_CALL, volume(),
-            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
-        return nativeAecAttenuation(initialMediaDb, voiceDb)
-    }
+    // Playback uses the same media stream whether the microphone has native AEC or not.
+    override fun mediaVolume() = if (manager.isStreamMute(AudioManager.STREAM_MUSIC)) 0
+        else manager.getStreamVolume(AudioManager.STREAM_MUSIC)
 
     private fun awaitPlatform(condition: () -> Boolean): Boolean {
         val deadline = SystemClock.elapsedRealtime() + 150
@@ -357,12 +335,4 @@ private class AndroidNativeAecPort(
     companion object {
         private val AOSP_AEC = UUID.fromString("bb392ec0-8d4d-11e0-a896-0002a5d5c51b")
     }
-}
-
-/** Nominal Android stream dB, not a measurement of acoustic sound pressure. */
-internal fun nativeAecAttenuation(mediaDb: Float, voiceDb: Float): Float? {
-    if (!mediaDb.isFinite() || !voiceDb.isFinite()) return null
-    if (mediaDb > voiceDb) return null // A track cannot safely boost past its maximum gain.
-    return 10.0.pow((mediaDb.toDouble() - voiceDb.toDouble()) / 20.0)
-        .toFloat().takeIf { it.isFinite() && it > 0f && it <= 1f }
 }

@@ -1,4 +1,4 @@
-// Real Vue/Chromium + HTTP; native identity/event journal is simulated. No device evidence.
+// Real Vue/Chromium + HTTP; native identity/event journal and remote writes are simulated. No device evidence.
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRequire } from 'node:module';
@@ -13,10 +13,10 @@ const generation='90000000-0000-4000-8000-000000000009';
 const date='2026-10-01T12:00:00Z';
 const data=new Map([a,b].map((id,index)=>[id,{id,title:index?'Beta':'Alfa',createdAt:date,updatedAt:date,titleSource:'manual',messages:[{id:`${id}-initial`,conversationId:id,role:'assistant',createdAt:date,content:Array.from({length:35},(_,i)=>`Parágrafo ${i} do histórico ${index?'Beta':'Alfa'}.`).join('\n\n')}]}]));
 const summary=row=>({...row,messages:undefined,messageCount:row.messages.length,lastMessagePreview:row.messages.at(-1)?.content});
-let hold=null, held=null, failReads=0, stream=null, reads=0, heads=0;
+let hold=null, held=null, failReads=0, failHeads=0, stream=null, reads=0, heads=0;
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label){for(let i=0;i<200;i++){if(fn())return;await delay(20);}throw Error(`timeout: ${label}`);}
-const vite=await createServer({root:join(root,'apps/aegis-node'),server:{host:'127.0.0.1',port:0,strictPort:false}});await vite.listen();
+const vite=await createServer({root:join(root,'apps/aegis-node'),resolve:{alias:{'@aegis/client':join(root,'packages/aegis-client/src')}},server:{host:'127.0.0.1',port:0,strictPort:false}});await vite.listen();
 const viteOrigin=`http://127.0.0.1:${vite.httpServer.address().port}`;
 const json=(res,value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 const server=http.createServer(async(req,res)=>{
@@ -28,7 +28,7 @@ const server=http.createServer(async(req,res)=>{
   if(path==='/api/voice/transcription/status')return json(res,{enabled:false,configured:false});
   if(path==='/api/email/status')return json(res,{isConnected:false});
   if(path==='/api/chat/proactive-activity')return json(res,[]);
-  if(path==='/api/chat/conversations'){heads++;return json(res,{items:[...data.values()].map(summary),hasMore:false});}
+  if(path==='/api/chat/conversations'){heads++;if(failHeads>0){failHeads--;return json(res,{error:'temporary'},503);}return json(res,{items:[...data.values()].map(summary),hasMore:false});}
   if(path==='/api/chat/messages/stream'){
     res.writeHead(200,{'Content-Type':'application/x-ndjson'});res.flushHeaders();
     const row=data.get(body.conversationId);
@@ -101,5 +101,62 @@ try{
   await page.evaluate(()=>{window.fixtureJournalFailures=1;});append(b,'Recuperada após falha da ponte nativa.');await publish(b);await visible('Recuperada após falha da ponte nativa.').waitFor();equal(await visible('Recuperada após falha da ponte nativa.').count(),1,'bounded retry recovers a native snapshot failure while app stays open');
   // A native process/identity epoch can restart its revision counter independently.
   await page.evaluate(()=>{window.fixtureJournal={generation:'80000000-0000-4000-8000-000000000008',changes:[]};});append(b,'Nova geração nativa.');await publish(b,{sequence:1});await visible('Nova geração nativa.').waitFor();equal(await visible('Nova geração nativa.').count(),1,'journal epoch reset accepts lower revision after restart');
-  equal(errors.length,0,'no Vue/browser errors');console.log(JSON.stringify({suite:'hands-free-sync-browser',assertions,result:'passed',evidence:'Chromium + Vue + HTTP, simulated Android journal'}));
+  equal(errors.length,0,'no Vue/browser errors');
+  // A different device has no access to the local Android event journal. It discovers
+  // the same persisted rows through ordinary conversation APIs, including on reconnect.
+  await context.close();
+  const desktop = await browser.newContext({viewport:{width:1280,height:900}});
+  try {
+    await desktop.addInitScript(origin=>{
+      localStorage.setItem('aegis.voice.autoSpeak','false');
+      window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
+        if(command==='runtime_info')return {platform:'windows',backendUrl:origin,version:'0.8.0',processSessionId:'sync-desktop-test'};
+        if(command==='node_hands_free')throw Error('Android journal unavailable on Windows');
+        if(command==='node_status')return {state:'unpaired',node:null};
+        if(command==='node_transport_status')return {transportState:'online'};
+        if(command==='node_notification_settings')return {granted:false,pushConfigured:false,pendingActions:0};
+        if(command==='node_consume_reminder_open')return {reminderId:null,conversationId:null};
+        if(command==='check_android_update')return null;
+      }};
+    },origin);
+    const desktopPage=await desktop.newPage();
+    desktopPage.setDefaultTimeout(10000);
+    const desktopErrors=[];desktopPage.on('pageerror',e=>desktopErrors.push(e.message));
+    const desktopComposer=desktopPage.locator('.composer textarea');
+    const desktopTitle=desktopPage.locator('.chat-header h1');
+    const desktopMessage=text=>desktopPage.locator('.messages').getByText(text,{exact:true});
+    const sidebarRow=title=>desktopPage.locator('.history-item__main').filter({hasText:title});
+    await desktopPage.goto(origin);await desktopComposer.waitFor();
+    await sidebarRow('Beta renomeada').click();await desktopMessage('Nova geração nativa.').waitFor();
+    await desktopComposer.fill('Rascunho no computador');
+    const fromPhone='40000000-0000-4000-8000-000000000004';
+    data.set(fromPhone,{id:fromPhone,title:'Criada em outro aparelho',titleSource:'generated',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),messages:[]});
+    append(fromPhone,'Resposta em outro aparelho.');
+    // No DOM bridge event, focus event, reload or user action.
+    await sidebarRow('Criada em outro aparelho').waitFor();
+    equal((await desktopTitle.textContent()).trim(),'Beta renomeada','remote creation appears without navigating');
+    equal(await desktopComposer.inputValue(),'Rascunho no computador','remote creation preserves the desktop draft');
+    append(b,'Mensagem que chegou pelo celular.');
+    await desktopMessage('Mensagem que chegou pelo celular.').waitFor();
+    equal(await desktopMessage('Mensagem que chegou pelo celular.').count(),1,'periodic sync merges a selected remote message once');
+    equal(await desktopComposer.inputValue(),'Rascunho no computador','remote message preserves the desktop draft');
+    // An unchanged head does not trigger full history downloads.
+    const beforeQuietReads=reads,beforeQuietHeads=heads;
+    await desktopPage.waitForTimeout(5300);assert.ok(heads>beforeQuietHeads,'unchanged periodic head was fetched');
+    await delay(300);
+    equal(reads,beforeQuietReads,'unchanged periodic head avoids detail requests');
+    data.get(fromPhone).title='Título gerado no celular';data.get(fromPhone).updatedAt=new Date().toISOString();
+    await desktopPage.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await sidebarRow('Título gerado no celular').waitFor({timeout:3000});
+    equal(await sidebarRow('Título gerado no celular').count(),1,'focus refreshes remote generated titles immediately');
+    failHeads=1;
+    append(b,'Mensagem recuperada após a rede voltar.');
+    await desktopPage.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await until(()=>failHeads===0,'failed cross-device history head');
+    await desktopPage.evaluate(()=>window.dispatchEvent(new Event('online')));
+    await desktopMessage('Mensagem recuperada após a rede voltar.').waitFor({timeout:3000});
+    equal(await desktopMessage('Mensagem recuperada após a rede voltar.').count(),1,'network recovery fetches changes after a failed head request');
+    equal(desktopErrors.length,0,'no errors during cross-device synchronization');
+  }finally{await desktop.close();}
+  console.log(JSON.stringify({suite:'hands-free-sync-browser',assertions,result:'passed',evidence:'Chromium + Vue + HTTP, simulated Android journal and remote writes'}));
 }finally{held?.release();await context.close();await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await vite.close();}

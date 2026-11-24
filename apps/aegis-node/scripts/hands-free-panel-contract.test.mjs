@@ -92,6 +92,14 @@ test('processing and playback use distinct state animations and idle does not sc
   assert.match(panel, /else->Unit\s*\n\s*\}\s*\n\s*paint.alpha=255/);
 });
 
+test('interruption availability uses accessibility rather than a separate visible instruction', () => {
+  const panel = android('NodeVoiceInteractionSession');
+  assert.doesNotMatch(panel, /bargeInHint: TextView|renderBargeInHint/);
+  assert.match(panel, /updatePlaybackAccessibility\(presentation\.bargeInAccessibilityHint\(token, availability\)\)/);
+  assert.match(panel, /label\?\.contentDescription\s*=/);
+  assert.match(panel, /label\?\.text=presentation\.state\.label;visualizer\?\.state/);
+});
+
 test('temporary transcription still rejects updates from a previous session or request', () => {
   const panel = android('NodeVoiceInteractionSession');
   const partial = panel.slice(panel.indexOf('internal fun showPartial('), panel.indexOf('internal fun suppressScreenOn'));

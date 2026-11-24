@@ -85,6 +85,70 @@ public sealed class FinalSpeechSegmentTests
     }
 
     [Fact]
+    public async Task InterruptedPlaybackSurvivesAnInterveningQuestionInModelContext()
+    {
+        using var fixture = new Fixture();
+        fixture.Model.Release.TrySetResult();
+        var initial = new List<ChatStreamEvent>();
+        await foreach (var item in fixture.Chat.StreamMessageAsync(fixture.Request())) initial.Add(item);
+        var first = initial.Single(x => x.Type == "final_segment" && x.Sequence == 0);
+        var second = initial.Single(x => x.Type == "final_segment" && x.Sequence == 1);
+        var pointer = new VoicePlaybackInterruption(first.TurnId!.Value, first.AssistantMessageId!.Value,
+            second.SegmentId!.Value, 1, 12000, 48000);
+        var request = new SendMessageRequest
+        {
+            TurnId = Guid.NewGuid(), ConversationId = first.ConversationId, Origin = "hands_free",
+            VoiceSessionId = Guid.NewGuid(), VoiceSegments = true, Content = "Pera, sobre o que era?",
+            InterruptedPlayback = pointer
+        };
+        await foreach (var _ in fixture.Chat.StreamMessageAsync(request)) { }
+        var interruptingMessage = await fixture.Db.ChatMessages.SingleAsync(x => x.Content == request.Content);
+        Assert.Contains("voicePlayback", interruptingMessage.MetadataJson);
+        Assert.Equal(request.Content, interruptingMessage.Content);
+        var interruptContext = fixture.Model.Requests[1].Request.InputItems!
+            .Select(x => x.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
+                ? content.GetString() : null).Single(x => x?.Contains("milissegundosOuvidosNoTrecho") == true)!;
+        Assert.Contains("Ora, tudo certo.", interruptContext);
+        Assert.Contains("Quer conferir mais alguma coisa?", interruptContext);
+        Assert.Contains("\"milissegundosOuvidosNoTrecho\":500", interruptContext);
+        Assert.Contains("\"unidadesIntegralmenteOuvidas\":1", interruptContext);
+        Assert.Contains("\"trechoIntegralmenteOuvido\":false", interruptContext);
+
+        await fixture.Chat.SendMessageAsync(new SendMessageRequest { ConversationId = first.ConversationId, Content = "Pode continuar, então." });
+        var nextContext = fixture.Model.Requests.Last().Request.InputItems!
+            .Select(x => x.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
+                ? content.GetString() : null).Single(x => x?.Contains("milissegundosOuvidosNoTrecho") == true)!;
+        Assert.Contains("Pera, sobre o que era?", nextContext);
+        Assert.Contains(fixture.Model.Requests.Last().Request.InputItems!, x =>
+            x.GetProperty("role").GetString() == "developer" && x.GetProperty("content").ValueKind == JsonValueKind.String &&
+            x.GetProperty("content").GetString()!.Contains("trecho parcialmente ouvido"));
+        Assert.Contains(fixture.Model.Requests.Last().Request.InputItems!, x =>
+            x.GetProperty("role").GetString() == "user" && x.GetProperty("content").ValueKind == JsonValueKind.String &&
+            x.GetProperty("content").GetString()!.Contains("milissegundosOuvidosNoTrecho"));
+    }
+
+    [Fact]
+    public async Task InvalidPlaybackReferenceDoesNotBecomeModelContextOrDiscardTheRequest()
+    {
+        using var fixture = new Fixture();
+        fixture.Model.Release.TrySetResult();
+        var initial = new List<ChatStreamEvent>();
+        await foreach (var item in fixture.Chat.StreamMessageAsync(fixture.Request())) initial.Add(item);
+        var first = initial.Single(x => x.Type == "final_segment" && x.Sequence == 0);
+        var request = new SendMessageRequest
+        {
+            TurnId = Guid.NewGuid(), ConversationId = first.ConversationId, Origin = "hands_free",
+            VoiceSessionId = Guid.NewGuid(), VoiceSegments = true, Content = "Outra pergunta",
+            InterruptedPlayback = new VoicePlaybackInterruption(first.TurnId!.Value, first.AssistantMessageId!.Value,
+                Guid.NewGuid(), 0, 12000, 48000)
+        };
+        await foreach (var _ in fixture.Chat.StreamMessageAsync(request)) { }
+        var userMessage = await fixture.Db.ChatMessages.SingleAsync(x => x.Content == request.Content);
+        Assert.Null(userMessage.MetadataJson);
+        Assert.DoesNotContain(fixture.Model.Requests.Last().Request.InputItems!, x => x.GetRawText().Contains("milissegundosOuvidosNoTrecho"));
+    }
+
+    [Fact]
     public async Task PartialFailurePreservesSpokenPrefixAndCancelsAllUpstreamSegments()
     {
         using var fixture = new Fixture();
