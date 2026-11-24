@@ -71,7 +71,9 @@ internal class HandsFreeStreamingPcmSink(
     private val createDevice: () -> HandsFreePcmDevice,
     private val stillCurrent: () -> Boolean = { true },
     private val onClosed: () -> Unit = {},
-    private val onPlaybackEvent:(String)->Unit={}
+    private val onPlaybackEvent:(String)->Unit={},
+    private val echo: HandsFreeBargeInEcho? = null,
+    private val onPlaybackReady: (() -> Long?) -> Unit = {}
 ) : HandsFreePcmSink {
     private val cancelled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -86,7 +88,20 @@ internal class HandsFreeStreamingPcmSink(
         checkCurrent()
         device ?: createDevice().also {
             device = it
-            try { checkCurrent(); it.play();onPlaybackEvent("player_play_called") } catch (error: Exception) { it.close(); throw error }
+            try {
+                checkCurrent()
+                onPlaybackReady {
+                    if (cancelled.get() || closed.get() || device !== it) null
+                    else it.playedFrames()
+                }
+                checkCurrent()
+                it.play()
+                onPlaybackEvent("player_play_called")
+            } catch (error: Exception) {
+                device = null
+                it.close()
+                throw error
+            }
         }
     }
     override fun write(bytes: ByteArray, offset: Int, count: Int) {
@@ -96,8 +111,12 @@ internal class HandsFreeStreamingPcmSink(
         var consumed = 0
         while (consumed < count) {
             checkCurrent()
-            val written = target.write(bytes, offset + consumed, minOf(8192, count - consumed))
-            check(written > 0 && written % 2 == 0 && written <= count - consumed) { "audio_playback_failed" }
+            val chunk = minOf(8192, count - consumed)
+            // A blocking write may already be audible before it returns. The playback
+            // head bounds which samples the echo filter can use, including short writes.
+            echo?.offer(bytes, offset + consumed, chunk, writtenFrames)
+            val written = target.write(bytes, offset + consumed, chunk)
+            check(written > 0 && written % 2 == 0 && written <= chunk) { "audio_playback_failed" }
             consumed += written; writtenFrames += written / 2
             if(!firstWriteObserved) {
                 firstWriteObserved=true
@@ -125,7 +144,8 @@ internal class HandsFreeStreamingPcmSink(
         onPlaybackEvent("player_drained")
     }
     override fun abort() {
-        cancelled.set(true); completion.countDown()
+        if (!cancelled.compareAndSet(false, true)) return
+        completion.countDown()
         try { device?.stop() } catch (_: Exception) { }
     }
     override fun close() {

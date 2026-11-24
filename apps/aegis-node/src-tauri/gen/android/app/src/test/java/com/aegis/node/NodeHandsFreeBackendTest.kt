@@ -43,6 +43,186 @@ class NodeHandsFreeBackendTest {
     return execute(wav,sessionId,conversationId,sink)
   }
 
+  private fun segmentedReply(request:Request,markers:Int=1,changeFirst:(JSONObject)->Unit={}):Reply {
+    val turn=JSONObject(request.text()).getString("turnId")
+    val accepted=JSONObject().put("type","conversation").put("turnId",turn).put("conversationId",conversation).toString()+"\n"
+    val first=JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
+      .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",0).put("content","Oi.")
+    changeFirst(first)
+    val done=JSONObject().put("type","done").put("turnId",turn).put("conversationId",conversation)
+      .put("assistantMessageId",message).put("voiceContinuation","continue").toString()+"\n"
+    return Reply(bytes=(accepted.repeat(markers)+first.toString()+"\n"+done).toByteArray())
+  }
+  private fun segmentPcmReply()=Reply(bytes=byteArrayOf(1,2,3,4),headers=mapOf(
+    "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
+
+  @Test fun conversationCallbackReportsOnceBeforeSegmentSpeechWithAndWithoutMarker() {
+    for(markers in listOf(0,1,2)) {
+      val destinations=CopyOnWriteArrayList<String>()
+      Fixture(respond={request,normal->when(request.path) {
+        "/api/chat/messages/stream"->segmentedReply(request,markers)
+        "/api/voice/speech/segments"->{assertEquals(listOf(conversation),destinations);segmentPcmReply()}
+        else->normal
+      }}).use{fixture->
+        val turn=fixture.backend().execute(wav(),session,null,RecordingSink(),null,incremental=true,
+          onConversation={destinations.add(it)})
+        assertEquals(conversation,turn.conversationId)
+        assertEquals(listOf(conversation),destinations)
+        assertEquals(1,fixture.requests.count{it.path=="/api/voice/speech/segments"})
+      }
+    }
+  }
+
+  @Test fun conversationCallbackReportsCommittedDestinationBeforeCancellationWithoutSpeech() {
+    val destinations=CopyOnWriteArrayList<String>()
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        val turn=JSONObject(request.text()).getString("turnId")
+        Reply(bytes=(JSONObject().put("type","conversation").put("turnId",turn)
+          .put("conversationId",conversation).toString()+"\n").toByteArray())
+      } else normal
+    }).use{fixture->
+      val backend=fixture.backend()
+      assertThrows(java.util.concurrent.CancellationException::class.java) {
+        backend.execute(wav(),session,null,RecordingSink(),null,incremental=true,onConversation={
+          destinations.add(it);backend.requestCancellation()
+        })
+      }
+      assertEquals(listOf(conversation),destinations)
+      assertFalse(fixture.requests.any{it.path.startsWith("/api/voice/speech") && it.method=="POST"})
+    }
+  }
+
+  @Test fun interruptionWhilePlayingLetsTheNextTurnReuseTheConversationAndVoiceSession() {
+    Fixture(respond={request,normal->when(request.path) {
+      "/api/chat/messages/stream"->segmentedReply(request)
+      "/api/voice/speech/segments"->segmentPcmReply()
+      else->normal
+    }}).use{fixture->
+      val old = fixture.backend()
+      val first = RecordingSink()
+      var destination: String? = null
+      val interrupting = object : HandsFreePcmSink by first {
+        override fun write(bytes: ByteArray, offset: Int, count: Int) {
+          first.write(bytes, offset, count)
+          assertEquals(conversation, destination)
+          old.requestCancellation()
+        }
+      }
+      assertThrows(java.util.concurrent.CancellationException::class.java) {
+        old.execute(wav(), session, null, interrupting, null, incremental=true) { destination=it }
+      }
+      assertTrue(first.aborted)
+      assertFalse(first.finished)
+      val next = RecordingSink()
+      val result = fixture.backend().execute(wav(), session, checkNotNull(destination), next, null, incremental=true)
+      val chat = fixture.requests.filter { it.path=="/api/chat/messages/stream" }.map { JSONObject(it.text()) }
+      assertEquals(2, chat.size)
+      assertTrue(chat[0].isNull("conversationId"))
+      assertEquals(conversation, chat[1].getString("conversationId"))
+      assertEquals(listOf(session, session), chat.map { it.getString("voiceSessionId") })
+      assertNotEquals(chat[0].getString("turnId"), chat[1].getString("turnId"))
+      assertTrue(next.finished)
+      assertFalse(next.aborted)
+      assertEquals(conversation, result.conversationId)
+    }
+  }
+
+  @Test fun invalidFirstStreamBoundaryNeverReportsAConversation() {
+    for(failure in listOf("turn","conversation","requested","message","segment","sequence","content")) {
+      val destinations=CopyOnWriteArrayList<String>()
+      Fixture(respond={request,normal->
+        if(request.path=="/api/chat/messages/stream")segmentedReply(request,markers=0){first->when(failure) {
+          "turn"->first.put("turnId",UUID.randomUUID().toString())
+          "conversation"->first.put("conversationId","invalid")
+          "requested"->first.put("conversationId",UUID.randomUUID().toString())
+          "message"->first.put("assistantMessageId","invalid")
+          "segment"->first.put("segmentId","invalid")
+          "sequence"->first.put("sequence",2)
+          "content"->first.put("content","")
+        }} else normal
+      }).use{fixture->
+        assertThrows(Exception::class.java) {
+          fixture.backend().execute(wav(),session,conversation,RecordingSink(),null,incremental=true,
+            onConversation={destinations.add(it)})
+        }
+        assertTrue(failure,destinations.isEmpty())
+        assertFalse(fixture.requests.any{it.path=="/api/voice/speech/segments"})
+      }
+    }
+  }
+
+  @Test fun revokedIdentityBeforeCommittedStreamBoundaryNeverReportsAConversation() {
+    val destinations=CopyOnWriteArrayList<String>()
+    val authority=AtomicReference<NodeNativeSession.Session>()
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream") {
+        authority.set(authority.get().copy(credential="revoked-test-credential"))
+        segmentedReply(request)
+      } else normal
+    }).use{fixture->
+      authority.set(fixture.identity)
+      val backend=NodeHandsFreeBackend({authority.get()})
+      assertThrows(Exception::class.java) {
+        backend.execute(wav(),session,null,RecordingSink(),null,incremental=true,onConversation={destinations.add(it)})
+      }
+      assertTrue(destinations.isEmpty())
+      assertFalse(fixture.requests.any{it.path=="/api/voice/speech/segments"})
+    }
+  }
+
+  @Test fun conversationCallbackPrecedesJsonSpeechAndSurvivesTtsFailure() {
+    val destinations=CopyOnWriteArrayList<String>()
+    Fixture(respond={request,normal->
+      if(request.path=="/api/voice/speech") {assertEquals(listOf(conversation),destinations);Reply(503)} else normal
+    }).use{fixture->
+      assertThrows(Exception::class.java) {
+        fixture.backend().execute(wav(),session,null,RecordingSink(),null,onConversation={destinations.add(it)})
+      }
+      assertEquals(listOf(conversation),destinations)
+    }
+  }
+
+  @Test fun emptySttAndInvalidJsonNeverReportAnUnvalidatedConversation() {
+    for(failure in listOf("empty","conversation","message-conversation","message","role")) {
+      val destinations=CopyOnWriteArrayList<String>()
+      Fixture(transcript=if(failure=="empty")"Aegis" else "Aegis, diga oi",respond={request,normal->
+        if(request.path=="/api/chat/messages") {
+          val json=JSONObject(String(normal.bytes))
+          when(failure) {
+            "conversation"->json.put("conversationId",UUID.randomUUID().toString())
+            "message-conversation"->json.getJSONObject("message").put("conversationId",UUID.randomUUID().toString())
+            "message"->json.getJSONObject("message").put("id","invalid")
+            "role"->json.getJSONObject("message").put("role","user")
+          }
+          Reply.json(json)
+        } else normal
+      }).use{fixture->
+        val call={fixture.backend().execute(wav(),session,conversation,RecordingSink(),null,
+          onConversation={destinations.add(it)})}
+        if(failure=="empty")call() else assertThrows(Exception::class.java){call()}
+        assertTrue(failure,destinations.isEmpty())
+        assertFalse(fixture.requests.any{it.path=="/api/voice/speech" && it.method=="POST"})
+      }
+    }
+  }
+
+  @Test fun reboundBackendSessionCannotReportAnotherConversation() {
+    Fixture().use{fixture->
+      val backend=fixture.backend()
+      backend.runTurn(wav(),session,null)
+      val requests=fixture.requests.size
+      val destinations=CopyOnWriteArrayList<String>()
+      for(next in listOf(UUID.randomUUID().toString() to conversation,session to UUID.randomUUID().toString())) {
+        assertThrows(IllegalArgumentException::class.java) {
+          backend.execute(wav(),next.first,next.second,RecordingSink(),null,onConversation={destinations.add(it)})
+        }
+      }
+      assertTrue(destinations.isEmpty())
+      assertEquals(requests,fixture.requests.size)
+    }
+  }
+
   @Test fun persistedChatInvalidatesBeforeSpeechEvenWhenTtsFails() {
     val changes=mutableListOf<String>()
     Fixture(respond={request,normal->

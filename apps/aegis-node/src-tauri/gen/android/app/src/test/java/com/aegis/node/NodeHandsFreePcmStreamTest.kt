@@ -106,6 +106,35 @@ class NodeHandsFreePcmStreamTest {
         }finally{sink.abort();sink.close();executor.shutdownNow()}
     }
 
+    @Test fun bargeInGetsPlaybackHeadBeforeAnyAudioAndLosesItOnAbort() {
+        val backing = Device(autoPlay = true)
+        val events = mutableListOf<String>()
+        val device = object : HandsFreePcmDevice by backing {
+            override fun play() { events.add("play"); backing.play() }
+            override fun write(bytes: ByteArray, offset: Int, count: Int): Int {
+                events.add("write")
+                return backing.write(bytes, offset, count)
+            }
+        }
+        lateinit var head: () -> Long?
+        val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackReady = {
+            head = it
+            assertEquals(0L, head())
+            events.add("ready")
+        })
+        try {
+            sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
+            sink.write(byteArrayOf(5, 6), 0, 2)
+            assertEquals(listOf("ready", "play", "write", "write"), events)
+            assertEquals(3L, head())
+            sink.abort()
+            assertNull(head())
+            assertThrows(CancellationException::class.java) { sink.finish() }
+        } finally {
+            sink.close()
+        }
+    }
+
     @Test fun cancelDuringDrainNeverLooksLikeNormalCompletion() {
         val device=Device(autoPlay=false)
         val sink=HandsFreeStreamingPcmSink({device})

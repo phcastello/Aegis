@@ -112,11 +112,21 @@ STT vazio ou somente a invocação não cria conversa nem chama o modelo. O
 e decisão estruturada no mesmo turno. As ferramentas mantêm suas confirmações.
 Erros, cancelamentos e resultados atrasados não redirecionam a sessão.
 
-Durante processamento remoto e TTS, o microfone é liberado e o detector fica
-suspenso. Não há barge-in. Após o fim real do AudioTrack, `continue` abre até
-dois segundos para **início** de fala; uma fala iniciada a tempo segue até o
-endpoint/limite normal. `close`, decisão ausente/inválida, falha de reprodução
-ou ausência de fala volta à wake word. A decisão não desliga hands-free.
+Durante o processamento remoto, o microfone fica liberado. No começo da
+reprodução nativa, o Android abre o microfone para detectar uma interrupção.
+O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
+AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
+
+Quando a interrupção é aceita, o AudioTrack descarta o áudio pendente e o
+cliente solicita o cancelamento daquele turno. A captura preserva o início
+da fala, segue até o endpoint normal e envia o novo pedido para a mesma
+conversa, sem beep ou nova invocação. Se a captura concorrente estiver
+indisponível, a resposta continua sendo reproduzida.
+
+Após o fim real do AudioTrack, `continue` abre até dois segundos para **início**
+de fala; uma fala iniciada a tempo segue até o endpoint/limite normal. `close`,
+decisão ausente/inválida, falha de reprodução ou ausência de fala volta à wake
+word. A decisão não desliga hands-free.
 
 O chat pede exclusividade antes de gravação ou reprodução manual e a libera
 após parar tracks/reprodução. Callbacks de uma operação antiga não liberam uma
@@ -193,6 +203,10 @@ batterystats. Consumo baixo com serviço indisponível não representa eficiênc
   cancelamentos e painel sem desbloqueio.
 - Reprodução nativa, conclusão real, continuação antes/depois do limite e nenhuma
   ativação pela própria voz; três dias completos de disponibilidade e bateria.
+- Barge-in no alto-falante: deixar uma resposta longa tocar sozinha e depois
+  interromper outra resposta com um pedido curto sem invocação. Conferir que o
+  áudio antigo para, o começo da fala é transcrito e a resposta seguinte entra
+  na mesma conversa. Repetir em volumes diferentes e com headset/Bluetooth.
 
 Não foi declarado funcionamento no aparelho do proprietário. Ver
 [verificações, commits e publicação](validation-and-publication.md) para a

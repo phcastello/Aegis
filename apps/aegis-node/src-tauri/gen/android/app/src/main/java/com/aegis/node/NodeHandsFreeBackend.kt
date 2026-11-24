@@ -175,12 +175,26 @@ class NodeHandsFreeBackend internal constructor(
   fun execute(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink): HandsFreeTurn =
     execute(wav,sessionId,conversationId,pcm,null)
 
-  internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?, incremental:Boolean=false):HandsFreeTurn {
+  internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?, incremental:Boolean=false,
+                       onConversation:(String)->Unit={}):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
     latencyTrace=trace
     activePcm = pcm
+    val conversationReportLock = Any()
+    var reportedConversation:String? = null
+    val reportConversation:(String)->Unit = { destination ->
+      synchronized(conversationReportLock) {
+        checkCurrent();requireUuid(destination)
+        require(conversationId == null || destination == conversationId)
+        require(reportedConversation == null || reportedConversation == destination)
+        if (reportedConversation == null) {
+          reportedConversation = destination
+          onConversation(destination)
+        }
+      }
+    }
     try {
-      return executeTurn(wav, sessionId, conversationId, pcm, incremental)
+      return executeTurn(wav, sessionId, conversationId, pcm, incremental, reportConversation)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -192,7 +206,8 @@ class NodeHandsFreeBackend internal constructor(
     }
   }
 
-  private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean): HandsFreeTurn {
+  private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean,
+                          reportConversation:(String)->Unit): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
     validateWav(wav)
@@ -226,7 +241,7 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcribed", 0)
       checkCurrent()
       turnId = id
-      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm)
+      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, reportConversation)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
         json("/api/chat/messages", JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
@@ -242,6 +257,7 @@ class NodeHandsFreeBackend internal constructor(
       val messageId = message.getString("id")
       require(UUID.fromString(messageId).toString() == messageId)
       conversationChanged(destination)
+      reportConversation(destination)
       val speechRequest = UUID.randomUUID().toString()
       trace?.speech(speechRequest)
       speechId = speechRequest
@@ -325,7 +341,8 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   /** Two synthesis slots, bounded PCM pipes and one writer keep playback continuous. */
-  private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink):HandsFreeTurn {
+  private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink,
+                               reportConversation:(String)->Unit):HandsFreeTurn {
     val trace=latencyTrace
     val events=java.util.concurrent.ArrayBlockingQueue<JSONObject>(2)
     val units=java.util.concurrent.ArrayBlockingQueue<SegmentDownload>(2)
@@ -355,6 +372,7 @@ class NodeHandsFreeBackend internal constructor(
               require(persistedDestination==null || persistedDestination==destination)
               persistedDestination=destination
               conversationChanged(destination)
+              reportConversation(destination)
             }
             "final_segment","done","error" -> {
               // These stream boundaries follow SaveChanges, independently of speech backpressure.
@@ -412,6 +430,8 @@ class NodeHandsFreeBackend internal constructor(
               require(messageId==null || nextMessage==messageId);messageId=nextMessage
               val segmentId=event.getString("segmentId");requireUuid(segmentId);require(seen.add(segmentId))
               require(event.getString("content").isNotBlank() && event.getString("content").length<=8000)
+              // Streams without a separate conversation marker still bind before synthesis.
+              reportConversation(nextDestination)
               trace?.mark("first_final_segment_received")
               // Prior acceptance orders claims. Next synthesis begins while current PCM plays.
               previous?.let {prior->
