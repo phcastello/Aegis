@@ -118,13 +118,14 @@ O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
 AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
 
 O monitor estima o nível de fundo do microfone no início da reprodução.
-O barge-in exige sinal acima desse fundo e detecção de fala para abrir uma
-pausa curta, com o áudio pendente ainda no AudioTrack. A captura guarda
-o começo do pedido. Ela confirma fala acima do mesmo nível de fundo após
-a cauda acústica, com o detector já adaptado ao sinal da pausa. Se a
-confirmação falhar, a resposta retoma do mesmo ponto. Uma fala muito baixa
-ou curta pode não confirmar. O relatório sem áudio registra o resultado,
-o nível de fundo, o pico da confirmação e o volume de mídia por tentativa.
+O barge-in exige fala acima desse fundo e evidência acústica independente
+na comparação com o PCM já reproduzido. A confirmação acontece enquanto
+a resposta toca, sem alterar o volume ou interromper o AudioTrack por uma
+suspeita. Em trechos ambíguos, a resposta segue normalmente e o app
+aguarda evidência suficiente, inclusive nas pausas naturais da voz.
+Uma fala curta ou baixa pode terminar antes da confirmação. O relatório
+sem áudio registra o resultado, o fundo, o pico da detecção e o volume de
+mídia nas confirmações.
 
 Ao confirmar fala, o AudioTrack descarta o áudio pendente e o cliente
 solicita o cancelamento daquele turno. A captura segue até o endpoint

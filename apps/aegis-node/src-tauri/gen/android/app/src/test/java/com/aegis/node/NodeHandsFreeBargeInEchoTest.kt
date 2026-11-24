@@ -152,6 +152,102 @@ class NodeHandsFreeBargeInEchoTest {
         assertFalse(filter.suppress(actual, actual.size, 23040))
         assertTrue(actual.all { it == 0.toShort() })
     }
+    private fun broadbandReference(frames: Int): ShortArray {
+        val random = java.util.Random(7)
+        var x = 0.0
+        return ShortArray(frames) {
+            x = .31 * x + (random.nextDouble() - .5) * 9000
+            x.roundToInt().toShort()
+        }
+    }
+
+    private fun mixed(vararg parts: ShortArray): ShortArray = ShortArray(parts.first().size) { i ->
+        parts.sumOf { it[i].toInt() }.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
+    private fun nearSpeech(head: Long): ShortArray = ShortArray(320) { i ->
+        val t = (head * 2 / 3 - 320 + i) / 16000.0
+        val envelope = .81 + .17 * sin(2 * PI * 4.6 * t)
+        (envelope * (4900 * sin(2 * PI * 317.1 * t) + 2800 * sin(2 * PI * 947.1 * t) +
+            2400 * sin(2 * PI * 2297.1 * t))).roundToInt().toShort()
+    }
+
+    private fun train(filter: HandsFreeBargeInEcho, pcm: ShortArray, start: Long, delay: Int, gain: Double) {
+        repeat(8) { n ->
+            val head = start + n * 480
+            val self = echo(pcm, head, delay, gain)
+            assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(self, self.size, head))
+        }
+    }
+
+    @Test fun quietEvidenceRequiresACompleteRenderedHorizonAndMovingPlaybackHead() {
+        val filter = HandsFreeBargeInEcho()
+        filter.offer(bytes(ShortArray(12000)), 0, 24000, 0)
+        val voice = nearSpeech(7200)
+        val actual = voice.copyOf()
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(actual, actual.size, 6240))
+        assertEquals(HandsFreeBargeInEvidence.INDEPENDENT, filter.inspect(actual, actual.size, 6720))
+        assertArrayEquals(voice, actual)
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(actual, actual.size, 6720))
+
+        val gap = HandsFreeBargeInEcho()
+        gap.offer(bytes(ShortArray(3000)), 0, 6000, 0)
+        gap.offer(bytes(ShortArray(6000)), 0, 12000, 4000)
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, gap.inspect(actual, actual.size, 7200))
+    }
+
+    @Test fun renderOnlyCanTrainButCannotTriggerEvenWhenEchoVolumeChanges() {
+        val pcm = broadbandReference(26400)
+        val filter = HandsFreeBargeInEcho(); val data = bytes(pcm)
+        filter.offer(data, 0, data.size, 0)
+        train(filter, pcm, 12000, 437, .19)
+        for ((i, gain) in listOf(.23, .46, .63, .65, .18, .2).withIndex()) {
+            val head = 15840L + i * 480
+            val input = echo(pcm, head, 437, gain)
+            assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(input, input.size, head))
+        }
+        val changedRoute = echo(pcm, 18720, 2677, .65)
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(changedRoute, changedRoute.size, 18720))
+    }
+
+    @Test fun multipathEchoCannotTurnAFallbackIntoIndependentSpeech() {
+        val pcm = broadbandReference(26400)
+        val filter = HandsFreeBargeInEcho(); val data = bytes(pcm)
+        filter.offer(data, 0, data.size, 0)
+        train(filter, pcm, 12000, 437, .12)
+        repeat(12) { n ->
+            val head = 15840L + n * 480
+            val input = mixed(echo(pcm, head, 437, .34), echo(pcm, head, 1451, .34), echo(pcm, head, 2677, .34))
+            assertEquals("three correlated reflections at block $n", HandsFreeBargeInEvidence.AMBIGUOUS,
+                filter.inspect(input, input.size, head))
+        }
+    }
+
+    @Test fun aStableFarEndProfileAllowsIndependentSpeechOverContinuousRender() {
+        val pcm = broadbandReference(26400)
+        val filter = HandsFreeBargeInEcho(); val data = bytes(pcm)
+        filter.offer(data, 0, data.size, 0)
+        val first = mixed(nearSpeech(11040), echo(pcm, 11040, 437, .27))
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(first, first.size, 11040))
+        filter.resetEvidence()
+        train(filter, pcm, 12000, 437, .27)
+        repeat(8) { n ->
+            val head = 15840L + n * 480
+            val voice = nearSpeech(head)
+            val input = mixed(voice, echo(pcm, head, 437, .27), echo(pcm, head, 911, .05))
+            assertEquals("near speech at block $n", HandsFreeBargeInEvidence.INDEPENDENT,
+                filter.inspect(input, input.size, head))
+            assertTrue(projection(input, voice) > .9)
+        }
+        filter.resetEvidence()
+        val head = 19680L
+        val input = mixed(nearSpeech(head), echo(pcm, head, 437, .27))
+        assertEquals(HandsFreeBargeInEvidence.AMBIGUOUS, filter.inspect(input, input.size, head))
+        filter.clear()
+        assertEquals(HandsFreeBargeInEvidence.UNAVAILABLE, filter.inspect(input, input.size, head))
+        assertTrue(input.all { it == 0.toShort() })
+    }
+
     @Test fun concurrentOfferSuppressAndClearAreBoundedAndDoNotThrow() {
         val filter = HandsFreeBargeInEcho(); val data = bytes(reference(26400))
         val failure = AtomicReference<Throwable?>(); val start = CountDownLatch(1)

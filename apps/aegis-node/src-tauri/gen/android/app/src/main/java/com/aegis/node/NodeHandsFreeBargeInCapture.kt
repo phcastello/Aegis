@@ -30,17 +30,26 @@ internal class HandsFreeBargeInOnset(
     private val resetClassifier:()->Unit={}
 ) {
     private val ring=HandsFreeRing(PRE_SAMPLES+HandsFreeVad.ONSET_SAMPLES)
-    private var vad=HandsFreeVad(classifier)
+    private var independent = false
+    private val independentClassifier = HandsFreeSpeechClassifier { frame ->
+        val voiced = classifier.isSpeech(frame)
+        independent && voiced
+    }
+    private var vad = HandsFreeVad(independentClassifier)
     private var received=0L
     private var latched=false
-    fun process(frame:ShortArray,safe:Boolean):ShortArray? {
+
+    fun process(frame: ShortArray, evidence: HandsFreeBargeInEvidence): ShortArray? {
         require(frame.size==HandsFreeVad.FRAME_SAMPLES)
         if(latched)return null
-        if(!safe) {
+        if(evidence==HandsFreeBargeInEvidence.UNAVAILABLE) {
             if(received>0)reset()
             return null
         }
-        ring.append(frame,frame.size);received+=frame.size
+        independent = evidence==HandsFreeBargeInEvidence.INDEPENDENT
+        // Give the classifier time to adapt without forwarding uncertain echo to STT.
+        ring.append(if (independent) frame else SILENCE,frame.size)
+        received+=frame.size
         vad.process(frame,frame.size)
         val onset=vad.confirmedStartSample?:return null
         val retainedStart=received-ring.size
@@ -52,13 +61,16 @@ internal class HandsFreeBargeInOnset(
     fun reset() {
         ring.clear()
         resetClassifier()
-        vad=HandsFreeVad(classifier)
+        vad=HandsFreeVad(independentClassifier)
         received=0
         latched=false
     }
 
     fun clear(){ring.clear()}
-    companion object { const val PRE_SAMPLES=1920 }
+    companion object {
+        const val PRE_SAMPLES=1920
+        private val SILENCE = ShortArray(HandsFreeVad.FRAME_SAMPLES)
+    }
 }
 
 /** The fresh libfvad model can call stationary microphone noise voiced for its
@@ -90,16 +102,16 @@ private class HandsFreeBargeInLevelGate {
     fun aboveFloor(rms: Double) = rms >= maxOf(64.0, floorRms * 2.5)
 
     companion object {
-        fun rms(frame: ShortArray): Double {
+        fun rms(samples: ShortArray, offset: Int = 0, count: Int = samples.size): Double {
             var sum = 0.0
             var squares = 0.0
-            for (sample in frame) {
-                val value = sample.toDouble()
+            for (i in offset until offset + count) {
+                val value = samples[i].toDouble()
                 sum += value
                 squares += value * value
             }
-            val mean = sum / frame.size
-            return sqrt((squares / frame.size - mean * mean).coerceAtLeast(0.0))
+            val mean = sum / count
+            return sqrt((squares / count - mean * mean).coerceAtLeast(0.0))
         }
     }
 }
@@ -109,10 +121,10 @@ private class HandsFreeBargeInLevelGate {
  */
 internal class HandsFreeBargeInCapture internal constructor(
     private val input:HandsFreeBargeInInput,
-    private val clean:(ShortArray,Int,Long)->Boolean,
-    private val playedFrames:()->Long?,
-    private val pauseResponse:()->Boolean,
-    private val resumeResponse:()->Unit,
+    private val inspect: (ShortArray, Int, Long) -> HandsFreeBargeInEvidence,
+    private val playedFrames: () -> Long?,
+    private val mediaVolume: () -> Int,
+    private val resetEvidence: () -> Unit,
     private val stillCurrent:()->Boolean,
     private val onSpeech:()->Boolean,
     private val classifierFactory:()->HandsFreeBargeInClassifier,
@@ -123,12 +135,11 @@ internal class HandsFreeBargeInCapture internal constructor(
         audio:AudioRecord,
         echo:HandsFreeBargeInEcho,
         playedFrames:()->Long?,
-        pauseResponse:()->Boolean,
-        resumeResponse:()->Unit,
+        mediaVolume: () -> Int,
         stillCurrent:()->Boolean,
         onSpeech:()->Boolean,
         onProbeResult: (String, Int, Int) -> Unit = { _, _, _ -> }
-    ):this(AndroidInput(audio),{pcm,count,head->echo.suppress(pcm,count,head)},playedFrames,pauseResponse,resumeResponse,stillCurrent,onSpeech,{
+    ):this(AndroidInput(audio),echo::inspect,playedFrames,mediaVolume,echo::resetEvidence,stillCurrent,onSpeech,{
             val native=NativeHandsFreeSpeechClassifier()
             object:HandsFreeBargeInClassifier {
                 override fun isSpeech(frame:ShortArray)=native.isSpeech(frame)
@@ -196,25 +207,18 @@ internal class HandsFreeBargeInCapture internal constructor(
         },"AegisBargeInStop").apply{isDaemon=true;start()}
     }
     private fun current():Boolean=!stopping.get() && try{stillCurrent()}catch(_:Exception){false}
-    private class SpeechProbe(prefix:ShortArray,val pausedAt:Long,val floorRms:Int) {
-        private val prefixSamples=prefix.size
-        val pcm=prefix.copyOf(prefixSamples+PROBE_SAMPLES)
-        var length=prefixSamples;private set
-        val samplesSincePause:Int get()=length-prefixSamples
-        var confirmation:HandsFreeVad?=null
-        var peakRms=0
-        var reported=false
-
-        fun append(frame:ShortArray) {
-            frame.copyInto(pcm,length)
-            length+=frame.size
+    private fun reportDetection(reason: String, floorRms: Double, prefix: ShortArray) {
+        val frameSamples = HandsFreeVad.FRAME_SAMPLES
+        val start = prefix.size - HandsFreeVad.ONSET_SAMPLES
+        var peakRms = 0.0
+        for (offset in start until prefix.size step frameSamples) {
+            peakRms = maxOf(peakRms, HandsFreeBargeInLevelGate.rms(prefix, offset, frameSamples))
         }
+        reportDetection(reason, floorRms, peakRms)
     }
 
-    private fun reportProbe(probe:SpeechProbe, reason:String) {
-        if (probe.reported) return
-        probe.reported = true
-        try { onProbeResult(reason, probe.floorRms, probe.peakRms) } catch (_: Exception) { }
+    private fun reportDetection(reason: String, floorRms: Double, peakRms: Double) {
+        try { onProbeResult(reason, floorRms.roundToInt(), peakRms.roundToInt()) } catch (_: Exception) { }
     }
 
     private fun capture() {
@@ -227,16 +231,34 @@ internal class HandsFreeBargeInCapture internal constructor(
         var trace:HandsFreeTurnLatency?=null
         var lastActiveAt:Long?=null
         var lastHead:Long?=null
-        var cooldownSamples=0
-        var probe:SpeechProbe?=null
-        var paused=false
+        var volume: Int? = null
+        var framesUntilVolumeRead = 0
+        var evidence = HandsFreeBargeInEvidence.UNAVAILABLE
+        var ambiguousRun = 0
+        var ambiguousRunPeak = 0.0
+        var ambiguousDetection: Pair<Double, Double>? = null
+        fun clearAmbiguousRun() {
+            ambiguousRun = 0
+            ambiguousRunPeak = 0.0
+        }
         try {
             if(!current())return
             val vad=classifierFactory();classifier=vad
             val levels = HandsFreeBargeInLevelGate()
             val onsetClassifier = HandsFreeSpeechClassifier { samples ->
                 val voiced = vad.isSpeech(samples)
-                val loud = levels.observe(HandsFreeBargeInLevelGate.rms(samples), voiced)
+                val rms = HandsFreeBargeInLevelGate.rms(samples)
+                val loud = levels.observe(rms, voiced)
+                if (ambiguousDetection==null) {
+                    if (loud && voiced && evidence==HandsFreeBargeInEvidence.AMBIGUOUS) {
+                        ambiguousRun += samples.size
+                        ambiguousRunPeak = maxOf(ambiguousRunPeak, rms)
+                        if (ambiguousRun>=HandsFreeVad.ONSET_SAMPLES)
+                            ambiguousDetection = levels.floorRms to ambiguousRunPeak
+                    } else {
+                        clearAmbiguousRun()
+                    }
+                }
                 loud && voiced
             }
             onset=HandsFreeBargeInOnset(onsetClassifier) { vad.reset() }
@@ -254,88 +276,52 @@ internal class HandsFreeBargeInCapture internal constructor(
                 pending=0
                 val now=clock()
                 if(!accepted.get()) {
-                    val pendingProbe=probe
-                    if(pendingProbe==null) {
-                        val coolingDown = cooldownSamples > 0
-                        if (coolingDown) cooldownSamples -= frame.size
-                        val observed=try{playedFrames()?.takeIf{it>=0}}catch(_:Exception){null}
-                        val monotonic=observed!=null && (lastHead==null || observed>=checkNotNull(lastHead))
-                        if(monotonic)lastHead=observed
-                        val safe=monotonic && clean(frame,frame.size,checkNotNull(observed))
-                        if (coolingDown) {
-                            // Adapt to new background after a rejected probe, without
-                            // accumulating an onset or losing the original PCM cadence.
-                            if (safe) onsetClassifier.isSpeech(frame)
+                    if (framesUntilVolumeRead==0) {
+                        val observedVolume=mediaVolume()
+                        if (volume!=null && observedVolume!=volume) {
+                            resetEvidence()
+                            onset.reset()
+                            clearAmbiguousRun()
+                        }
+                        volume=observedVolume
+                        framesUntilVolumeRead=VOLUME_READ_INTERVAL
+                    }
+                    framesUntilVolumeRead--
+                    val observed=try{playedFrames()?.takeIf{it>0}}catch(_:Exception){null}
+                    val advancing=observed!=null && observed>(lastHead?:0L)
+                    if (advancing) lastHead=observed
+                    evidence=if(advancing)inspect(frame,frame.size,checkNotNull(observed))
+                        else HandsFreeBargeInEvidence.UNAVAILABLE
+                    if (evidence==HandsFreeBargeInEvidence.UNAVAILABLE) clearAmbiguousRun()
+                    val prefix=onset.process(frame,evidence)?:continue
+                    try {
+                        if(!current()) break
+                        // Recheck at handoff so a recent gain change cannot reuse the old profile.
+                        val observedVolume=mediaVolume()
+                        if (observedVolume!=volume) {
+                            volume=observedVolume
+                            resetEvidence()
+                            onset.reset()
+                            clearAmbiguousRun()
+                            framesUntilVolumeRead=VOLUME_READ_INTERVAL
                             continue
                         }
-                        val prefix=onset.process(frame,safe)?:continue
-                        try {
-                            if(!current()) break
-                            paused=pauseResponse()
-                            if(paused) {
-                                val pausedAt = clock()
-                                probe=SpeechProbe(prefix,pausedAt,levels.floorRms.roundToInt())
-                                // Warm the freshly reset classifier on guard frames,
-                                // including stationary noise. None can count as speech.
-                                vad.reset()
-                            } else {
-                                onset.reset()
-                                cooldownSamples=PROBE_COOLDOWN_SAMPLES
-                            }
-                        } finally {
-                            prefix.fill(0)
+                        decisionAt=now
+                        val approved=try{onSpeech()}catch(_:Exception){false}
+                        if(!approved) {
+                            reportDetection("stale",levels.floorRms,prefix)
+                            break
                         }
-                        continue
-                    }
-
-                    pendingProbe.append(frame)
-                    val elapsed=now-pendingProbe.pausedAt
-                    // A delayed capture thread can drain buffered microphone data in
-                    // a burst. Require both real time and samples since pausing.
-                    val frameEndsAfterTail=elapsed>=ECHO_TAIL_MS+FRAME_MS &&
-                        pendingProbe.samplesSincePause>ECHO_TAIL_SAMPLES
-                    if(frameEndsAfterTail && elapsed<=PROBE_DEADLINE_MS) {
-                        val confirmation=pendingProbe.confirmation ?: HandsFreeVad(HandsFreeSpeechClassifier { samples ->
-                            val rms = HandsFreeBargeInLevelGate.rms(samples)
-                            pendingProbe.peakRms = maxOf(pendingProbe.peakRms, rms.roundToInt())
-                            val voiced = vad.isSpeech(samples)
-                            voiced && levels.aboveFloor(rms)
-                        }).also { pendingProbe.confirmation=it }
-                        confirmation.process(frame,frame.size)
-                        if(confirmation.hasSpeech) {
-                            if(!current()) break
-                            decisionAt=now
-                            val approved=try{onSpeech()}catch(_:Exception){false}
-                            if(!approved) {
-                                reportProbe(pendingProbe,"stale")
-                                break
-                            }
-                            // The approved handoff now owns the paused playback and aborts it.
-                            accepted.set(true)
-                            paused=false
-                            reportProbe(pendingProbe,"confirmed")
-                            val pcm=ShortArray(320000);command=pcm
-                            pendingProbe.pcm.copyInto(pcm,endIndex=pendingProbe.length)
-                            val initial=pendingProbe.length
-                            pendingProbe.pcm.fill(0)
-                            probe=null
-                            vad.reset()
-                            state=HandsFreeCommandCapture(pcm,initial,vad)
-                            trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
-                            state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
-                            continue
-                        }
-                    } else if (!frameEndsAfterTail) {
-                        vad.isSpeech(frame)
-                    }
-                    if(pendingProbe.samplesSincePause==PROBE_SAMPLES || elapsed>PROBE_DEADLINE_MS) {
-                        pendingProbe.pcm.fill(0)
-                        probe=null
-                        resumeResponse()
-                        paused=false
-                        onset.reset()
-                        cooldownSamples=PROBE_COOLDOWN_SAMPLES
-                        reportProbe(pendingProbe,"no_speech")
+                        accepted.set(true)
+                        reportDetection("confirmed",levels.floorRms,prefix)
+                        val pcm=ShortArray(320000);command=pcm
+                        prefix.copyInto(pcm)
+                        vad.reset()
+                        state=HandsFreeCommandCapture(pcm,prefix.size,vad)
+                        trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
+                        state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
+                    } finally {
+                        prefix.fill(0)
                     }
                     continue
                 }
@@ -357,11 +343,9 @@ internal class HandsFreeBargeInCapture internal constructor(
             // No partial or failed capture becomes a command.
         }finally {
             stopping.set(true);ready.countDown()
-            if(paused)try{resumeResponse()}catch(_:Exception){}
             try{classifier?.close()}catch(_:Exception){}
-            probe?.let { pending ->
-                pending.pcm.fill(0)
-                reportProbe(pending,"cancelled")
+            if (!accepted.get()) ambiguousDetection?.let { (floorRms, peakRms) ->
+                reportDetection("ambiguous", floorRms, peakRms)
             }
             onset?.clear();frame.fill(0);command?.fill(0)
             releaseInput()
@@ -406,11 +390,6 @@ internal class HandsFreeBargeInCapture internal constructor(
     companion object {
         const val START_WAIT_MS=750L
         const val COMMAND_WAIT_MS=22000L
-        private const val FRAME_MS=20L
-        private const val ECHO_TAIL_MS=200L
-        const val ECHO_TAIL_SAMPLES=3200
-        const val PROBE_SAMPLES=6080 // 200ms for echo travel and 180ms to confirm live speech.
-        private const val PROBE_DEADLINE_MS=420L // Allows read scheduling jitter without extending the PCM window.
-        const val PROBE_COOLDOWN_SAMPLES=32000
+        private const val VOLUME_READ_INTERVAL = 4 // Poll at 80 ms and again at the decision boundary.
     }
 }

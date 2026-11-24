@@ -171,7 +171,6 @@ class NodeHandsFreeContinuityTest {
             override fun playedFrames() = played.get()
             override fun endMarker(frame: Int, reached: () -> Unit) { marker.set(reached); armed.countDown() }
             override fun play() = Unit
-            override fun pause() = Unit
             override fun stop() = Unit
             override fun close() = Unit
         }
@@ -204,7 +203,6 @@ class NodeHandsFreeContinuityTest {
             override fun playedFrames() = 0L
             override fun endMarker(frame: Int, reached: () -> Unit) { armed.countDown() }
             override fun play() = Unit
-            override fun pause() = Unit
             override fun stop() = Unit
             override fun close() = Unit
         }

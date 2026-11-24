@@ -739,15 +739,15 @@ internal class HandsFreeRuntime(private val context:Context) {
         session: String,
         owner: NodeHandsFreeBackend,
         sink: HandsFreePcmSink,
-        probe: HandsFreePlaybackProbe
+        playedFrames: () -> Long?
     ) {
         if (!ownsTurn(generation,session,owner) || response.destination==null || diagnostic) return
         val audio = try { openRecorder() } catch (_: Exception) { return }
+        val audioManager = context.getSystemService(AudioManager::class.java)
         lateinit var listener: HandsFreeBargeInCapture
         listener = HandsFreeBargeInCapture(
-            audio, response.echo, probe::playedFrames,
-            pauseResponse = probe::pause,
-            resumeResponse = probe::resume,
+            audio, response.echo, playedFrames,
+            mediaVolume = { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) },
             stillCurrent = { ownsSession(generation,session) && responseCapture===listener },
             onSpeech = {
                 val accepted = synchronized(lock) {
@@ -755,7 +755,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                     val activation = continuityActivation
                     if (destination==null || activation==null || !response.playing ||
                         !ownsTurn(generation,session,owner) || responseCapture!==listener ||
-                        activation.identity!=currentIdentity() || microphoneBlocked() || !probe.claimPause()) false
+                        activation.identity!=currentIdentity() || microphoneBlocked() || playedFrames()==null) false
                     else {
                         response.accepted = true
                         conversationId = destination
@@ -779,8 +779,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 accepted
             },
             onProbeResult = { outcome, floorRms, peakRms ->
-                val audioManager = context.getSystemService(AudioManager::class.java)
-                metrics.event("barge_in_probe", JSONObject()
+                metrics.event("barge_in_detection", JSONObject()
                     .put("outcome", outcome)
                     .put("backgroundRms", floorRms)
                     .put("confirmationPeakRms", peakRms)
@@ -893,8 +892,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                             }
                         },
                         echo = response?.echo,
-                        onPlaybackReady = { probe ->
-                            if (response!=null) startResponseCapture(response,generation,session,active,sink,probe)
+                        onPlaybackReady = { head ->
+                            if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
                         }
                     )
                     val turn=active.execute(command,session,conversationId,sink,trace,incremental=true) { destination ->
