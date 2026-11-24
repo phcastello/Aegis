@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000029,
+  "highWaterMark": 8000030,
   "reservations": [
     {
       "schema": 2,
@@ -1174,6 +1174,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000029
+    },
+    {
+      "schema": 2,
+      "sha": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
+      "branch": "feat/v0.8.0-barge-in-android",
+      "number": 30,
+      "platform": "both",
+      "version": "0.8.0-unstable.30",
+      "kind": "normal",
+      "sourceCommit": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
+        "backend": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
+        "pwa": "72f832c32185876acdbfa8a9f96f42f97e4b4e4c",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-24T22:22:22.551Z",
+      "repository": "phcastello/Aegis",
+      "runId": "45500270539",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000030
     }
   ],
   "recommended": {
