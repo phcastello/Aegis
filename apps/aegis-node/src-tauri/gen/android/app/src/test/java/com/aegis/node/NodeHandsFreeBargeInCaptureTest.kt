@@ -33,7 +33,6 @@ class NodeHandsFreeBargeInCaptureTest {
         var releaseGate:CountDownLatch?=null
         var stopGate:CountDownLatch?=null
         var silenced=false
-        var timestampAt:(Int)->Long={it*1000L/16000}
         var takeSample:(Int,Short)->Short={_,sample->sample}
         val starts=AtomicInteger();val stops=AtomicInteger();val closes=AtomicInteger()
         @Volatile var offset=0
@@ -48,7 +47,7 @@ class NodeHandsFreeBargeInCaptureTest {
                 samples[offset+i]=takeSample(index,pcm[index])
             }
             this.offset+=n
-            clock.set(timestampAt(this.offset));return n
+            clock.set(this.offset*1000L/16000);return n
         }
         override fun silenced()=silenced
         override fun stop(){stops.incrementAndGet();stopGate?.await();stopped.countDown();proceed.countDown()}
@@ -57,10 +56,10 @@ class NodeHandsFreeBargeInCaptureTest {
     private fun capture(input:Input,classifier:Classifier=Classifier(),head:()->Long?={24000L+input.offset*3L/2},
         current:()->Boolean={true},inspect:(ShortArray,Int,Long)->HandsFreeBargeInEvidence={_,_,_->INDEPENDENT},
         volume:()->Int={8},resetEvidence:()->Unit={},speech:()->Boolean={true},
-        result: (String, Int, Int) -> Unit = { _, _, _ -> }, explicit: () -> Boolean = { false },
-        onExplicitReady: () -> Unit = {}, onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false }) =
+        result: (String, Int, Int) -> Unit = { _, _, _ -> },
+        onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false }) =
         HandsFreeBargeInCapture(input,inspect,head,volume,resetEvidence,current,speech,{classifier},{input.clock.get()},
-            result, explicit, onExplicitReady, onAvailabilityChanged, voicePathReady)
+            result, onAvailabilityChanged, voicePathReady)
     private fun pcm(wav:ByteArray):ShortArray {
         val b=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);b.position(44)
         return ShortArray((wav.size-44)/2){b.short}
@@ -222,47 +221,6 @@ class NodeHandsFreeBargeInCaptureTest {
         }
     }
 
-    @Test fun tapWorksWhileAutomaticEvidenceIsUnavailableAndWaitsForTheEchoTail() {
-        val first = frame(20)
-        val echoTail = List(11) { frame(1500) }
-        val speech = List(16) { frame(2100 + it) }
-        val input = Input(flatten(listOf(first) + echoTail + speech + List(40) { frame(0) }), AtomicLong())
-        // Simulate PCM already buffered by Android. Sample count on its own cannot end the guard.
-        input.timestampAt = { offset ->
-            if (offset <= 11 * 320) 20L else offset * 1000L / 16000
-        }
-        val accepted = AtomicInteger()
-        val explicit = CountDownLatch(1)
-        val ready = CountDownLatch(1)
-        val readyAt = AtomicInteger()
-        lateinit var capture: HandsFreeBargeInCapture
-        capture = capture(input, head = { null }, speech = { fail("automatic handoff"); false },
-            explicit = { accepted.incrementAndGet(); explicit.countDown(); true },
-            onExplicitReady = { readyAt.set(input.offset); ready.countDown() },
-            onAvailabilityChanged = {
-                if (capture.panelAvailability() == HandsFreeBargeInPanelAvailability.TAP) {
-                    assertTrue(capture.requestInterruption())
-                    assertFalse(capture.requestInterruption())
-                }
-            })
-        try {
-            assertTrue(capture.start())
-            assertEquals(HandsFreeBargeInPanelAvailability.PREPARING, capture.panelAvailability())
-            assertFalse(capture.requestInterruption())
-            input.proceed.countDown(); await(explicit); await(ready)
-            assertEquals(12 * 320, readyAt.get())
-            assertEquals(1, accepted.get())
-            val actual = pcm(checkNotNull(capture.awaitCommand()).wav)
-            assertArrayEquals(flatten(speech + List(40) { frame(0) }), actual)
-            assertEquals(1, input.starts.get())
-        } finally {
-            capture.close()
-            assertTrue(capture.awaitClosed(1000))
-            assertEquals(HandsFreeBargeInPanelAvailability.UNAVAILABLE, capture.panelAvailability())
-            assertFalse(capture.requestInterruption())
-        }
-    }
-
     @Test fun voiceAvailabilityRequiresBothCalibrationAndUsableEchoPath() {
         val input = Input(flatten(List(15) { frame(20) }), AtomicLong())
         val observed = mutableListOf<Pair<Int, HandsFreeBargeInPanelAvailability>>()
@@ -276,9 +234,8 @@ class NodeHandsFreeBargeInCaptureTest {
             assertTrue(capture.awaitClosed(1000))
         }
         assertEquals(listOf(
-            320 to HandsFreeBargeInPanelAvailability.TAP,
             3200 to HandsFreeBargeInPanelAvailability.VOICE,
-            4160 to HandsFreeBargeInPanelAvailability.TAP,
+            4160 to HandsFreeBargeInPanelAvailability.PREPARING,
             4800 to HandsFreeBargeInPanelAvailability.UNAVAILABLE
         ), observed)
     }

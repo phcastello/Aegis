@@ -17,7 +17,7 @@ internal enum class HandsFreeBargeInEvidence { UNAVAILABLE, AMBIGUOUS, INDEPENDE
  * Only a delayed/scaled linear component is modeled; reverberation, clipping and
  * route-dependent processing can leave residual self speech. [inspect] separates
  * evidence of independent sound from usable reference. The caller still verifies speech.
- * A valid reference with no coherent echo passes through, preserving double-talk.
+ * Evidence uses the residual of a previously observed path when playback overlaps the microphone.
  * A missing/overwritten reference or clear() racing the work returns false and zeros
  * the borrowed input: the caller must not advance VAD/onset through that frame.
  * Keep one instance per playback stream; a stale stream must never offer into its
@@ -106,11 +106,12 @@ internal class HandsFreeBargeInEcho {
                 val slot = (frame % REFERENCE_FRAMES).toInt()
                 if (positions[slot] == frame) { data[i] = pcm[slot]; valid[i] = true }
             }
-            val trustedLag = profile?.takeIf {
+            val trusted = profile?.takeIf {
                 evaluateEvidence && it.blocks >= PROFILE_BLOCKS &&
                     headFrame in it.lastVerifiedHead..(it.lastVerifiedHead + PROFILE_RECENCY_FRAMES)
-            }?.lag
-            Snapshot(first, data, valid, generation, evidenceGeneration, trustedLag)
+            }
+            Snapshot(first, data, valid, generation, evidenceGeneration,
+                trusted?.let { TrustedPath(it.lag, it.gain, it.maximumLeakageGain) })
         } ?: return unavailable()
         val endHalfFrame = headFrame * 2
         // The most recent rendered block must be known, even when an older lag fits.
@@ -118,6 +119,7 @@ internal class HandsFreeBargeInEcho {
         for (i in 0 until count) {
             if (snapshot.sample(endHalfFrame - (count - i) * 3L).isNaN()) return unavailable()
         }
+        val renderEnvelope = if (evaluateEvidence) snapshot.renderEnvelope(requiredFrames) else null
         val full = moments(input, count, 1)
         val output = input.copyOf(count)
         var fittedEcho: Fit? = null
@@ -132,21 +134,8 @@ internal class HandsFreeBargeInEcho {
             val reference = DoubleArray(MAX_DELAY_SAMPLES + count) { i ->
                 snapshot.sample(endHalfFrame - (count + MAX_DELAY_SAMPLES - i) * 3L)
             }
-            val sparse = moments(input, count, COARSE_STRIDE)
             val fit = Fit()
-            val peaks = ArrayList<Peak>(COARSE_PEAKS)
-            for (lag in 0..MAX_DELAY_SAMPLES step COARSE_STEP) {
-                computeFit(input, count, COARSE_STRIDE, sparse, reference, lag, fit)
-                if (fit.score.isNaN()) continue
-                val close = peaks.indexOfFirst { abs(it.lag - lag) < COARSE_PEAK_SEPARATION }
-                if (close >= 0) {
-                    if (fit.score > peaks[close].score) peaks[close] = Peak(lag, fit.score)
-                } else if (peaks.size < COARSE_PEAKS) peaks.add(Peak(lag, fit.score))
-                else {
-                    val weakest = peaks.indices.minByOrNull { peaks[it].score }!!
-                    if (fit.score > peaks[weakest].score) peaks[weakest] = Peak(lag, fit.score)
-                }
-            }
+            val peaks = coarsePeaks(input, count, reference, fit)
             var best: Fit? = null
             var bestLag = 0
             for (peak in peaks) {
@@ -159,31 +148,36 @@ internal class HandsFreeBargeInEcho {
             }
             fittedEcho = best
             fittedLag = bestLag
-            val trustedLag = snapshot.trustedLag
+            val trusted = snapshot.trustedPath
             var subtractionLag = bestLag
-            if (trustedLag != null) {
+            if (trusted != null) {
                 var bestLocalHit: Fit? = null
-                for (lag in maxOf(0, trustedLag - MAX_PROFILE_LAG_DRIFT)..minOf(MAX_DELAY_SAMPLES, trustedLag + MAX_PROFILE_LAG_DRIFT)) {
+                for (lag in maxOf(0, trusted.lag - MAX_PROFILE_LAG_DRIFT)..minOf(MAX_DELAY_SAMPLES, trusted.lag + MAX_PROFILE_LAG_DRIFT)) {
                     computeFit(input, count, 1, full, reference, lag, fit)
-                    if (!fit.score.isNaN() && (bestLocalHit == null || fit.score > bestLocalHit.score)) {
+                    if (!fit.score.isNaN() && fit.referenceRms >= MIN_PROFILE_REFERENCE_RMS &&
+                        (bestLocalHit == null || fit.score > bestLocalHit.score)) {
                         bestLocalHit = fit.copy()
                         subtractionLag = lag
                     }
                 }
                 observedPath = bestLocalHit
             }
-            val match = if (trustedLag != null) observedPath else best
-            if (match != null && match.score >= MIN_CORRELATION_SQUARED) {
-                // A coherent but out-of-range fit must not become raw self speech.
-                if (abs(match.gain) > MAX_ABS_GAIN) return unavailable()
-                for (i in 0 until count) {
-                    val renderedSample = reference[MAX_DELAY_SAMPLES - subtractionLag + i]
-                    val residual = input[i] - full.mean - match.gain * (renderedSample - match.referenceMean)
-                    output[i] = residual.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-                }
+            val match = if (trusted == null) best?.takeIf { it.score >= MIN_CORRELATION_SQUARED }
+                else observedPath?.takeIf { it.score >= TRUSTED_PATH_CORRELATION_SQUARED && compatibleGain(it.gain, trusted.gain) }
+            val gain = match?.gain ?: trusted?.gain
+            if (gain != null) {
+                // Weak render yields unreliable fitted gain. Use the trained gain
+                // and lag until enough reference energy is available to align again.
+                if (abs(gain) > MAX_ABS_GAIN) return unavailable()
+                val lag = if (match != null) subtractionLag else trusted?.lag ?: bestLag
+                subtract(input, output, count, reference, full.mean, lag, gain, match?.referenceMean)
                 if (evaluateEvidence) {
                     val residualMoments = moments(output, count, 1)
-                    for (peak in peaks) {
+                    val leakage = trusted?.leakageGain
+                    val residualPeaks = if (leakage != null && renderEnvelope != null &&
+                        sqrt(residualMoments.energy / count) >= residualFloor(renderEnvelope, leakage)
+                    ) coarsePeaks(output, count, reference, fit) else peaks
+                    for (peak in residualPeaks) {
                         for (lag in maxOf(0, peak.lag - COARSE_STEP)..minOf(MAX_DELAY_SAMPLES, peak.lag + COARSE_STEP)) {
                             computeFit(output, count, 1, residualMoments, reference, lag, fit)
                             if (!fit.score.isNaN() && fit.score > residualCoherence) {
@@ -198,7 +192,6 @@ internal class HandsFreeBargeInEcho {
                 residualLag = bestLag
             }
         }
-        val renderEnvelope = if (evaluateEvidence) snapshot.renderEnvelope(requiredFrames) else null
         val residualRms = if (evaluateEvidence) sqrt(moments(output, count, 1).energy / count) else 0.0
         return synchronized(lock) {
             if (generation != snapshot.generation ||
@@ -208,19 +201,18 @@ internal class HandsFreeBargeInEcho {
             } else {
                 output.copyInto(input, 0, 0, count)
                 if (evaluateEvidence) independentEvidence(
-                    snapshot, renderEnvelope, count, headFrame, sqrt(full.energy / count),
+                    renderEnvelope, count, headFrame, sqrt(full.energy / count),
                     residualRms, residualCoherence, residualLag, fittedEcho, fittedLag, observedPath
                 ) else HandsFreeBargeInEvidence.AMBIGUOUS
             }
         }
     }
 
-    /** Called under lock. Coherent far-end blocks train an upper echo envelope.
-     * Suspected near speech cannot teach the profile. An unmodeled block must
-     * exceed the envelope by a wide margin before it can reach speech detection.
+    /** Compare the current residual with errors measured on earlier coherent playback.
+     * Detect foreground before updating the profile, so overlapping speech cannot raise its own threshold.
      */
     private fun independentEvidence(
-        snapshot: Snapshot, renderEnvelope: Double?, count: Int, headFrame: Long, micRms: Double,
+        renderEnvelope: Double?, count: Int, headFrame: Long, micRms: Double,
         residualRms: Double, residualCoherence: Double, residualLag: Int, match: Fit?, lag: Int,
         observedPath: Fit?
     ): HandsFreeBargeInEvidence {
@@ -229,11 +221,7 @@ internal class HandsFreeBargeInEcho {
         quietReference = false
         val advance = if (previous == null) 0L else headFrame - previous
         if (previous != null && advance == 0L) return HandsFreeBargeInEvidence.AMBIGUOUS
-        if (advance < 0 || advance > count * 3L) {
-            profile = null
-            return HandsFreeBargeInEvidence.AMBIGUOUS
-        }
-        if (renderEnvelope == null) {
+        if (advance < 0 || advance > count * 3L || renderEnvelope == null) {
             profile = null
             return HandsFreeBargeInEvidence.AMBIGUOUS
         }
@@ -242,68 +230,66 @@ internal class HandsFreeBargeInEcho {
             return HandsFreeBargeInEvidence.INDEPENDENT
         }
 
-        // Speech consists of intermittent voiced syllables. A well-observed
-        // path survives short intervening unvoiced frames, but expires without
-        // enough recent observations for calibration.
         val learned = profile?.takeIf {
             headFrame - it.lastVerifiedHead <= PROFILE_RECENCY_FRAMES &&
                 (it.blocks >= PROFILE_BLOCKS || headFrame - it.firstVerifiedHead <= PROFILE_TRAIN_FRAMES)
         }
         profile = learned
-        if (match != null && match.score >= PROFILE_CORRELATION_SQUARED &&
-            match.referenceRms >= MIN_PROFILE_REFERENCE_RMS && micRms >= MIN_CALIBRATION_MIC_RMS) {
-            val gain = abs(match.gain)
-            val leakageGain = residualRms / match.referenceRms
-            if (learned != null && learned.compatible(lag, match.gain)) {
-                learned.maximumGain = maxOf(learned.maximumGain, gain)
-                learned.maximumLeakageGain = maxOf(learned.maximumLeakageGain, leakageGain)
-                learned.blocks = minOf(PROFILE_BLOCKS, learned.blocks + 1)
-                learned.lastVerifiedHead = headFrame
-                learned.alternateLag = null
-                learned.alternateBlocks = 0
-                return HandsFreeBargeInEvidence.AMBIGUOUS
-            }
-            if (learned == null || learned.blocks < PROFILE_BLOCKS) {
-                profile = EchoProfile(lag, match.gain, gain, leakageGain, headFrame)
-                return HandsFreeBargeInEvidence.AMBIGUOUS
-            }
-            // An unrelated voiced vowel can happen to fit a far-away render
-            // lag in a single 20 ms block. Move the learned path only when a
-            // changed lag persists, with close-fitting echo blocked meanwhile.
-            val alternate = learned.alternateLag
-            learned.alternateBlocks = if (alternate != null && abs(alternate - lag) <= MAX_PROFILE_LAG_DRIFT)
-                learned.alternateBlocks + 1 else 1
-            learned.alternateLag = lag
-            if (learned.alternateBlocks >= ALTERNATE_PATH_BLOCKS) {
-                profile = EchoProfile(lag, match.gain, gain, leakageGain, headFrame)
-                return HandsFreeBargeInEvidence.AMBIGUOUS
-            }
-            if (match.score >= ALMOST_EXACT_ECHO_SQUARED) return HandsFreeBargeInEvidence.AMBIGUOUS
-        } else if (learned != null) {
-            learned.alternateLag = null
-            learned.alternateBlocks = 0
+        val calibration = match?.takeIf {
+            it.score >= PROFILE_CORRELATION_SQUARED &&
+                it.referenceRms >= MIN_PROFILE_REFERENCE_RMS && micRms >= MIN_CALIBRATION_MIC_RMS
         }
-        if (learned == null || learned.blocks < PROFILE_BLOCKS) return HandsFreeBargeInEvidence.AMBIGUOUS
-        // A coherent but louder copy at the calibrated delay may be a volume or
-        // path change. Do not accept it as a foreground speaker.
+        if (learned == null || learned.blocks < PROFILE_BLOCKS) {
+            if (calibration != null) {
+                val leakage = residualRms / renderEnvelope
+                if (learned != null && learned.compatible(lag, calibration.gain)) {
+                    learned.verify(headFrame, calibration.gain, leakage)
+                } else {
+                    profile = EchoProfile(lag, calibration.gain, abs(calibration.gain), leakage, headFrame)
+                }
+            }
+            return HandsFreeBargeInEvidence.AMBIGUOUS
+        }
+
+        // A coherent gain increase at the calibrated delay is a playback/path change.
         if (observedPath != null && observedPath.score >= PATH_CHANGE_CORRELATION_SQUARED &&
             abs(observedPath.gain) > learned.maximumGain * MAX_GAIN_CHANGE) {
             profile = null
             return HandsFreeBargeInEvidence.AMBIGUOUS
         }
-        val pathEnvelope = snapshot.pathEnvelope(count, learned.lag)
-        val echoBound = pathEnvelope * learned.maximumGain + renderEnvelope * learned.maximumLeakageGain
-        // Real reflections stay at a physical delay. One coincidental match
-        // to another vowel can occur at an unrelated lag, often rising by
-        // nearly a frame every block as the reference and microphone advance.
+        val coherentPath = calibration != null && learned.compatible(lag, calibration.gain)
+        if (calibration != null && !coherentPath) {
+            // A strong fit at another lag may be a coincident vowel. Require it to persist
+            // before replacing the profile and veto a near-exact fit in the meantime.
+            val alternate = learned.alternateLag
+            learned.alternateBlocks = if (alternate != null && abs(alternate - lag) <= MAX_PROFILE_LAG_DRIFT)
+                learned.alternateBlocks + 1 else 1
+            learned.alternateLag = lag
+            if (learned.alternateBlocks >= ALTERNATE_PATH_BLOCKS) {
+                profile = EchoProfile(lag, calibration.gain, abs(calibration.gain), residualRms / renderEnvelope, headFrame)
+                return HandsFreeBargeInEvidence.AMBIGUOUS
+            }
+            if (calibration.score >= ALMOST_EXACT_ECHO_SQUARED) return HandsFreeBargeInEvidence.AMBIGUOUS
+        } else {
+            learned.alternateLag = null
+            learned.alternateBlocks = 0
+        }
+
+        // A newly visible reflection is coherent on its own or has a stable delay.
+        // Broad peaks of a foreground vowel may correlate briefly at unrelated lags.
         val persistentEcho = learned.observeResidual(residualLag, residualCoherence)
-        if (!persistentEcho &&
-            micRms >= maxOf(MIN_NEAR_RMS, echoBound * MIC_ECHO_MARGIN) &&
-            residualRms >= maxOf(MIN_NEAR_RMS, echoBound * RESIDUAL_ECHO_MARGIN)) {
+        val floor = residualFloor(renderEnvelope, learned.maximumLeakageGain)
+        if (residualRms >= floor && !persistentEcho && residualCoherence < STRONG_RESIDUAL_CORRELATION_SQUARED) {
             return HandsFreeBargeInEvidence.INDEPENDENT
+        }
+        if (residualRms < floor && coherentPath) {
+            learned.verify(headFrame, calibration.gain, residualRms / renderEnvelope)
         }
         return HandsFreeBargeInEvidence.AMBIGUOUS
     }
+
+    private fun residualFloor(renderEnvelope: Double, leakageGain: Double): Double =
+        maxOf(MIN_NEAR_RMS, renderEnvelope * leakageGain * LEAKAGE_MARGIN)
 
     private data class EchoProfile(
         val lag: Int, val gain: Double, var maximumGain: Double, var maximumLeakageGain: Double,
@@ -321,17 +307,22 @@ internal class HandsFreeBargeInEcho {
             return repeated
         }
 
-
-        fun compatible(lag: Int, gain: Double): Boolean {
-            val ratio = gain / this.gain
-            return abs(this.lag - lag) <= MAX_PROFILE_LAG_DRIFT &&
-                ratio in (1.0 / MAX_GAIN_CHANGE)..MAX_GAIN_CHANGE
+        fun verify(headFrame: Long, gain: Double, leakageGain: Double) {
+            maximumGain = maxOf(maximumGain, abs(gain))
+            maximumLeakageGain = maxOf(maximumLeakageGain, leakageGain)
+            blocks = minOf(PROFILE_BLOCKS, blocks + 1)
+            lastVerifiedHead = headFrame
         }
+
+        fun compatible(lag: Int, gain: Double): Boolean =
+            abs(this.lag - lag) <= MAX_PROFILE_LAG_DRIFT && compatibleGain(gain, this.gain)
     }
+
+    private data class TrustedPath(val lag: Int, val gain: Double, val leakageGain: Double)
 
     private data class Snapshot(
         val firstFrame: Long, val data: ShortArray, val valid: BooleanArray,
-        val generation: Long, val evidenceGeneration: Long, val trustedLag: Int?
+        val generation: Long, val evidenceGeneration: Long, val trustedPath: TrustedPath?
     ) {
         /** Highest 10 ms RMS over the full possible echo path. Render must be
          * known for the whole horizon, including any late reflections.
@@ -340,12 +331,6 @@ internal class HandsFreeBargeInEcho {
             if (data.size != requiredFrames || data.size < RENDER_ENVELOPE_FRAMES) return null
             if (!valid.all { it }) return null
             return envelope(0, data.size)
-        }
-
-        fun pathEnvelope(count: Int, lag: Int): Double {
-            val first = (data.size - ((count + lag + MAX_PROFILE_LAG_DRIFT) * 3 + 1) / 2).coerceAtLeast(0)
-            val end = data.size - (lag - MAX_PROFILE_LAG_DRIFT).coerceAtLeast(0) * 3 / 2
-            return envelope(first, end)
         }
 
         private fun envelope(first: Int, end: Int): Double {
@@ -387,6 +372,37 @@ internal class HandsFreeBargeInEcho {
         for (i in 0 until count step stride) { val x = input[i].toDouble(); sum += x; squares += x * x; samples++ }
         return Moments(sum, sum / samples, (squares - sum * sum / samples).coerceAtLeast(0.0), samples)
     }
+    private fun subtract(
+        input: ShortArray, output: ShortArray, count: Int, reference: DoubleArray,
+        inputMean: Double, lag: Int, gain: Double, referenceMean: Double?
+    ) {
+        val start = MAX_DELAY_SAMPLES - lag
+        val mean = referenceMean ?: (0 until count).sumOf { reference[start + it] } / count
+        if (mean.isNaN()) return
+        for (i in 0 until count) {
+            val residual = input[i] - inputMean - gain * (reference[start + i] - mean)
+            output[i] = residual.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+    }
+
+    private fun coarsePeaks(input: ShortArray, count: Int, reference: DoubleArray, fit: Fit): List<Peak> {
+        val sparse = moments(input, count, COARSE_STRIDE)
+        val peaks = ArrayList<Peak>(COARSE_PEAKS)
+        for (lag in 0..MAX_DELAY_SAMPLES step COARSE_STEP) {
+            computeFit(input, count, COARSE_STRIDE, sparse, reference, lag, fit)
+            if (fit.score.isNaN()) continue
+            val close = peaks.indexOfFirst { abs(it.lag - lag) < COARSE_PEAK_SEPARATION }
+            if (close >= 0) {
+                if (fit.score > peaks[close].score) peaks[close] = Peak(lag, fit.score)
+            } else if (peaks.size < COARSE_PEAKS) peaks.add(Peak(lag, fit.score))
+            else {
+                val weakest = peaks.indices.minByOrNull { peaks[it].score }!!
+                if (fit.score > peaks[weakest].score) peaks[weakest] = Peak(lag, fit.score)
+            }
+        }
+        return peaks
+    }
+
     private fun computeFit(
         input: ShortArray, count: Int, stride: Int, capture: Moments,
         reference: DoubleArray, lag: Int, result: Fit
@@ -410,6 +426,9 @@ internal class HandsFreeBargeInEcho {
     }
 
     companion object {
+        private fun compatibleGain(gain: Double, previous: Double) =
+            gain / previous in (1.0 / MAX_GAIN_CHANGE)..MAX_GAIN_CHANGE
+
         internal const val REFERENCE_FRAMES = 28800 // 1.2 s of mono 24 kHz PCM.
         private const val MAX_CAPTURE_FRAMES = 320 // 20 ms at 16 kHz.
         private const val MIN_CORRELATION_SAMPLES = 64
@@ -418,6 +437,7 @@ internal class HandsFreeBargeInEcho {
         private const val COARSE_STRIDE = 8
         private const val COARSE_PEAKS = 4
         private const val COARSE_PEAK_SEPARATION = 16
+        private const val TRUSTED_PATH_CORRELATION_SQUARED = .18
         private const val MIN_CORRELATION_SQUARED = 0.4225 // |correlation| >= .65.
         private const val MAX_ABS_GAIN = 4.0
         private const val RENDER_ENVELOPE_FRAMES = 240 // 10 ms at 24 kHz.
@@ -436,7 +456,7 @@ internal class HandsFreeBargeInEcho {
         private const val MAX_PROFILE_LAG_DRIFT = 64 // 4 ms of capture/playback-head jitter.
         private const val MAX_GAIN_CHANGE = 1.5
         private const val MIN_NEAR_RMS = 96.0
-        private const val MIC_ECHO_MARGIN = 1.65
-        private const val RESIDUAL_ECHO_MARGIN = 1.4
+        private const val LEAKAGE_MARGIN = 1.8
+        private const val STRONG_RESIDUAL_CORRELATION_SQUARED = .42
     }
 }

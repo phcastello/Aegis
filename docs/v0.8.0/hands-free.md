@@ -128,16 +128,15 @@ sem áudio registra o resultado, o fundo, o pico da detecção e o volume de
 mídia nas confirmações.
 
 Durante a resposta, o painel indica a preparação da escuta e quando é
-possível falar por cima. Com o microfone já aberto, **Interromper e falar**
-inicia o próximo pedido pelo toque. A resposta para, o app aguarda a cauda
-acústica e o painel mostra **Fale agora**. Use a voz normalmente nesse ponto.
+possível falar por cima. Quando a fala é confirmada, o painel exibe
+**Continue falando**. A pessoa pode concluir o pedido em andamento na
+mesma conversa, sem beep ou nova invocação.
 
-Ao confirmar fala por cima ou receber o toque, o AudioTrack descarta o áudio
-pendente e o cliente solicita o cancelamento daquele turno. A captura segue
-até o endpoint normal e envia o pedido para a mesma conversa, sem beep ou
-nova invocação. Se a captura aprovada terminar vazia, o painel concede uma
-nova janela curta de escuta na mesma conversa. Quando a captura concorrente
-está indisponível, a resposta continua sendo reproduzida.
+Ao confirmar fala por cima, o AudioTrack descarta o áudio pendente e o
+cliente solicita o cancelamento daquele turno. Se a captura aprovada
+terminar vazia, o painel concede uma nova janela curta de escuta na
+mesma conversa. Quando a captura concorrente está indisponível, a
+resposta continua sendo reproduzida.
 
 Após o fim real do AudioTrack, `continue` abre até dois segundos para **início**
 de fala; uma fala iniciada a tempo segue até o endpoint/limite normal. `close`,

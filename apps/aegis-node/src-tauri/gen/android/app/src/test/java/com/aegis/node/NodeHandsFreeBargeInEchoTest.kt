@@ -248,6 +248,39 @@ class NodeHandsFreeBargeInEchoTest {
         assertTrue(input.all { it == 0.toShort() })
     }
 
+    @Test fun quieterVoiceCanInterruptAfterLoudEchoHasBeenLearned() {
+        val pcm = broadbandReference(26400)
+        val filter = HandsFreeBargeInEcho()
+        val data = bytes(pcm)
+        filter.offer(data, 0, data.size, 0)
+        train(filter, pcm, 12000, 437, .72)
+
+        repeat(6) { n ->
+            val head = 15840L + n * 480
+            val voice = nearSpeech(head).map { (it * .23).roundToInt().toShort() }.toShortArray()
+            val direct = echo(pcm, head, 437, .72)
+            val input = mixed(voice, direct)
+            assertTrue("voice quieter than self playback", rms(voice) < rms(direct))
+            assertEquals(HandsFreeBargeInEvidence.INDEPENDENT, filter.inspect(input, input.size, head))
+            assertTrue("voice retained", projection(input, voice) > .9)
+        }
+    }
+
+    @Test fun foregroundEvidenceSurvivesLowEnergyInTheLearnedEchoPath() {
+        val head = 15840L
+        val pcm = broadbandReference(26400)
+        val first = (head - (320 + 437) * 3 / 2).toInt()
+        pcm.fill(3, first, first + 480)
+        val filter = HandsFreeBargeInEcho()
+        val data = bytes(pcm)
+        filter.offer(data, 0, data.size, 0)
+        train(filter, pcm, 12000, 437, .41)
+
+        val input = mixed(nearSpeech(head), echo(pcm, head, 437, .41))
+        assertEquals(HandsFreeBargeInEvidence.INDEPENDENT, filter.inspect(input, input.size, head))
+        assertTrue(filter.voicePathReady())
+    }
+
     @Test fun concurrentOfferSuppressAndClearAreBoundedAndDoNotThrow() {
         val filter = HandsFreeBargeInEcho(); val data = bytes(reference(26400))
         val failure = AtomicReference<Throwable?>(); val start = CountDownLatch(1)
