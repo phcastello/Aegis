@@ -31,6 +31,7 @@ internal class HandsFreeBargeInEcho {
     private var generation = 0L
     private var evidenceGeneration = 0L
     private var lastEvidenceHead: Long? = null
+    private var quietReference = false
     private var profile: EchoProfile? = null
 
     fun offer(bytes: ByteArray, offset: Int, count: Int, startFrame: Long) {
@@ -67,7 +68,16 @@ internal class HandsFreeBargeInEcho {
     fun resetEvidence() = synchronized(lock) {
         evidenceGeneration++
         lastEvidenceHead = null
+        quietReference = false
         profile = null
+    }
+
+    /** The reference can support voice detection on the latest inspected frame. */
+    fun voicePathReady(): Boolean = synchronized(lock) {
+        val head = lastEvidenceHead ?: return@synchronized false
+        quietReference || profile?.let {
+            it.blocks >= PROFILE_BLOCKS && head in it.lastVerifiedHead..(it.lastVerifiedHead + PROFILE_RECENCY_FRAMES)
+        } == true
     }
 
     fun inspect(input: ShortArray, count: Int, headFrame: Long): HandsFreeBargeInEvidence =
@@ -216,6 +226,7 @@ internal class HandsFreeBargeInEcho {
     ): HandsFreeBargeInEvidence {
         val previous = lastEvidenceHead
         lastEvidenceHead = headFrame
+        quietReference = false
         val advance = if (previous == null) 0L else headFrame - previous
         if (previous != null && advance == 0L) return HandsFreeBargeInEvidence.AMBIGUOUS
         if (advance < 0 || advance > count * 3L) {
@@ -226,7 +237,10 @@ internal class HandsFreeBargeInEcho {
             profile = null
             return HandsFreeBargeInEvidence.AMBIGUOUS
         }
-        if (renderEnvelope <= QUIET_RENDER_RMS) return HandsFreeBargeInEvidence.INDEPENDENT
+        if (renderEnvelope <= QUIET_RENDER_RMS) {
+            quietReference = true
+            return HandsFreeBargeInEvidence.INDEPENDENT
+        }
 
         // Speech consists of intermittent voiced syllables. A well-observed
         // path survives short intervening unvoiced frames, but expires without

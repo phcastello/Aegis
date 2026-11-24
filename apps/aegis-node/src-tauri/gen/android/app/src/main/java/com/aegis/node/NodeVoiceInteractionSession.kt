@@ -41,6 +41,9 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     private val main=Handler(Looper.getMainLooper())
     private var label:TextView?=null
     private var partial:TextView?=null
+    private var bargeInHint: TextView? = null
+    private var bargeInButton: Button? = null
+    private var bargeInTapPending = false
     private var card:View?=null
     private var visualizer:HandsFreePanelView?=null
     private var visible=false
@@ -83,6 +86,40 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             visibility=View.GONE;setPadding(0,dp(8),dp(8),0);contentDescription="Transcrição temporária"
             accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_NONE
         }.also{panel.addView(it)}
+        bargeInHint = TextView(context).apply {
+            setTextColor(0xffaab5ca.toInt())
+            textSize = 14f
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setPadding(0, dp(6), dp(8), 0)
+        }.also { panel.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)) }
+        bargeInButton = Button(context).apply {
+            text = "Interromper e falar"
+            isAllCaps = false
+            minHeight = dp(48)
+            visibility = View.GONE
+            setTextColor(0xffdbe3f4.toInt())
+            background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(-android.R.attr.state_enabled), GradientDrawable().apply {
+                    setColor(0xff202b40.toInt())
+                    cornerRadius = dp(20).toFloat()
+                })
+                addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
+                    setColor(0xff35435b.toInt())
+                    cornerRadius = dp(20).toFloat()
+                })
+                addState(intArrayOf(), GradientDrawable().apply {
+                    setColor(0xff253248.toInt())
+                    cornerRadius = dp(20).toFloat()
+                })
+            }
+            setOnClickListener { requestBargeIn() }
+        }.also {
+            panel.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, dp(8), dp(8), 0)
+            })
+        }
         root.addView(panel,FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM))
         ViewCompat.setOnApplyWindowInsetsListener(root){view,insets->
             val safe=insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -101,6 +138,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(args?.getBoolean("activation")==true && boundSession!=runtime.activeSessionToken()){finishQuietly();return}
         if(previousSession!=boundSession){displayedState="";partialRequestId=null;partial?.text="";partial?.visibility=View.GONE}
         presentation.begin(boundSession)
+        renderBargeInControls(null)
         current=this
         val decision=boundSession?.let{NodeVoiceInteractionService.current?.presentationDecision(it,args?.getBoolean("wakeScreen")==true || runtime.activationNeedsWake(it))}
             ?: HandsFreePresentationPolicy.Decision(false,false)
@@ -128,13 +166,50 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(view!=null && view.width>0){view.getLocationInWindow(location);outInsets.touchableRegion.set(location[0],location[1],location[0]+view.width,location[1]+view.height)}
         else outInsets.touchableRegion.setEmpty()
     }
-    internal fun refresh(state:String,@Suppress("UNUSED_PARAMETER") message:String) {
+    internal fun refresh(state:String,message:String) {
         if(!presentation.refresh(state))return
         if(displayedState!=state){partial?.text="";partial?.visibility=View.GONE;partialRequestId=null;HandsFreePanelSignal.reset(this)}
         displayedState=state
-        label?.text=presentation.state.label;visualizer?.state(presentation.state)
+        label?.text=presentation.label(message);visualizer?.state(presentation.state)
+        val token = boundSession
+        if (state == "speaking" && token != null) refreshBargeInControls(token)
+        else renderBargeInControls(null)
         updateScreenPolicy()
     }
+
+    internal fun refreshBargeInControls(token: String) {
+        if (!visible || boundSession != token || presentation.state != HandsFreePanelState.SPEAKING) return
+        val availability = NodeHandsFree.runtime(context).bargeInPanelAvailability(token)
+        renderBargeInControls(presentation.bargeInControls(token, availability))
+    }
+
+    private fun requestBargeIn() {
+        val token = boundSession ?: return
+        if (!visible || bargeInTapPending || presentation.state != HandsFreePanelState.SPEAKING) return
+        val runtime = NodeHandsFree.runtime(context)
+        val availability = runtime.bargeInPanelAvailability(token)
+        if (presentation.bargeInControls(token, availability)?.allowsTap == true && runtime.requestBargeIn(token)) {
+            bargeInTapPending = true
+            renderBargeInControls(availability)
+        } else {
+            refreshBargeInControls(token)
+        }
+    }
+
+    private fun renderBargeInControls(availability: HandsFreeBargeInPanelAvailability?) {
+        val showTap = availability?.allowsTap == true
+        if (!showTap) bargeInTapPending = false
+        bargeInHint?.apply {
+            val hint = if (bargeInTapPending) HANDSFREE_BARGE_IN_SETTLING else availability?.hint.orEmpty()
+            if (text.toString() != hint) text = hint
+            visibility = if (availability == null) View.GONE else View.VISIBLE
+        }
+        bargeInButton?.apply {
+            visibility = if (showTap) View.VISIBLE else View.GONE
+            isEnabled = showTap && !bargeInTapPending
+        }
+    }
+
     internal fun showPartial(token:String,requestId:String,text:String) {
         if(boundSession!=token || !visible || displayedState !in setOf("capturing","continuation"))return
         if(partialRequestId==null)partialRequestId=requestId
@@ -157,6 +232,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(boundSession!=token)return
         if(presentation.delayClose(immediate,failed)){
             partial?.text="";partial?.visibility=View.GONE;HandsFreePanelSignal.reset(this)
+            renderBargeInControls(null)
             label?.text=presentation.state.label;visualizer?.state(presentation.state)
             updateScreenPolicy()
             main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
@@ -167,7 +243,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         return Runnable{if(current===this && presentation.isCurrent(snapshot))finishQuietly()}
     }
     internal fun finishQuietly(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;finish()}
-    private fun stopVisuals(){presentation.end();main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
+    private fun stopVisuals(){presentation.end();renderBargeInControls(null);main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
     override fun onHide(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onHide()}
     override fun onDestroy(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onDestroy()}
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}

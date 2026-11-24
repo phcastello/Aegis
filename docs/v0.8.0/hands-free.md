@@ -118,7 +118,7 @@ O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
 AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
 
 O monitor estima o nível de fundo do microfone no início da reprodução.
-O barge-in exige fala acima desse fundo e evidência acústica independente
+O barge-in automático exige fala acima desse fundo e evidência acústica independente
 na comparação com o PCM já reproduzido. A confirmação acontece enquanto
 a resposta toca, sem alterar o volume ou interromper o AudioTrack por uma
 suspeita. Em trechos ambíguos, a resposta segue normalmente e o app
@@ -127,11 +127,17 @@ Uma fala curta ou baixa pode terminar antes da confirmação. O relatório
 sem áudio registra o resultado, o fundo, o pico da detecção e o volume de
 mídia nas confirmações.
 
-Ao confirmar fala, o AudioTrack descarta o áudio pendente e o cliente
-solicita o cancelamento daquele turno. A captura segue até o endpoint
-normal e envia o pedido para a mesma conversa, sem beep ou nova invocação.
-Se a captura concorrente estiver indisponível, a resposta continua sendo
-reproduzida.
+Durante a resposta, o painel indica a preparação da escuta e quando é
+possível falar por cima. Com o microfone já aberto, **Interromper e falar**
+inicia o próximo pedido pelo toque. A resposta para, o app aguarda a cauda
+acústica e o painel mostra **Fale agora**. Use a voz normalmente nesse ponto.
+
+Ao confirmar fala por cima ou receber o toque, o AudioTrack descarta o áudio
+pendente e o cliente solicita o cancelamento daquele turno. A captura segue
+até o endpoint normal e envia o pedido para a mesma conversa, sem beep ou
+nova invocação. Se a captura aprovada terminar vazia, o painel concede uma
+nova janela curta de escuta na mesma conversa. Quando a captura concorrente
+está indisponível, a resposta continua sendo reproduzida.
 
 Após o fim real do AudioTrack, `continue` abre até dois segundos para **início**
 de fala; uma fala iniciada a tempo segue até o endpoint/limite normal. `close`,

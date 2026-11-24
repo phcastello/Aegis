@@ -214,6 +214,16 @@ internal enum class HandsFreePanelState(val label:String,val animated:Boolean=fa
     }
 }
 
+internal const val HANDSFREE_BARGE_IN_SETTLING = "Interrompendo…"
+internal const val HANDSFREE_BARGE_IN_LISTENING = "Fale agora"
+
+internal enum class HandsFreeBargeInPanelAvailability(val hint: String, val allowsTap: Boolean = false) {
+    PREPARING("Preparando a escuta para interrupções…"),
+    VOICE("Fale por cima da resposta.", allowsTap = true),
+    TAP("Toque para interromper e espere aparecer “Fale agora”.", allowsTap = true),
+    UNAVAILABLE("Interrupção indisponível agora.")
+}
+
 /** Prevent display timeout only for the current visible conversation panel. */
 internal fun handsFreePanelKeepsScreenOn(state:HandsFreePanelState,visible:Boolean,hasSession:Boolean)=
     visible && hasSession && when(state) {
@@ -233,6 +243,14 @@ internal class HandsFreePanelPresentation {
     fun snapshot():Snapshot?=activeSnapshot
     fun isCurrent(snapshot:Snapshot)=activeSnapshot===snapshot
     fun end(){activeSnapshot=null}
+    fun label(message: String): String = when {
+        state == HandsFreePanelState.CAPTURING && message == HANDSFREE_BARGE_IN_SETTLING -> HANDSFREE_BARGE_IN_SETTLING
+        state == HandsFreePanelState.CAPTURING && message == HANDSFREE_BARGE_IN_LISTENING -> HANDSFREE_BARGE_IN_LISTENING
+        else -> state.label
+    }
+    fun bargeInControls(token: String, availability: HandsFreeBargeInPanelAvailability): HandsFreeBargeInPanelAvailability? =
+        availability.takeIf { state == HandsFreePanelState.SPEAKING && activeSnapshot?.session == token }
+
     fun refresh(status:String):Boolean {
         if(terminalError)return false
         state=HandsFreePanelState.fromRuntime(status)
