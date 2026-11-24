@@ -15,7 +15,8 @@ internal class HandsFreeWakeVerifier(
     melModel:ByteArray,
     embeddingModel:ByteArray,
     keywordModel:ByteArray,
-    seedEmbedding:ByteArray
+    seedEmbedding:ByteArray,
+    val threshold:Float=THRESHOLD
 ):AutoCloseable {
     companion object {
         const val THRESHOLD=0.5f

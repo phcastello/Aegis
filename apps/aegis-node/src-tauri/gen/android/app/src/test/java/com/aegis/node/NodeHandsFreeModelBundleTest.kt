@@ -17,6 +17,16 @@ class NodeHandsFreeModelBundleTest {
         assumeTrue("Private cascade fixture absent; supply AEGIS_WAKEWORD_CASCADE_BUNDLE_PATH",path.isFile)
         return path.readBytes()
     }
+    private fun retrainedBundle():ByteArray {
+        val path=System.getenv("AEGIS_WAKEWORD_RETRAINED_BUNDLE_PATH")?.let(::File)
+        assumeTrue("Private retrained fixture absent; supply AEGIS_WAKEWORD_RETRAINED_BUNDLE_PATH",path?.isFile==true)
+        return path!!.readBytes()
+    }
+    private fun retrainedPrimaryBundle():ByteArray {
+        val path=System.getenv("AEGIS_WAKEWORD_RETRAINED_PRIMARY_BUNDLE_PATH")?.let(::File)
+        assumeTrue("Private retrained primary fixture absent; supply AEGIS_WAKEWORD_RETRAINED_PRIMARY_BUNDLE_PATH",path?.isFile==true)
+        return path!!.readBytes()
+    }
     private fun baseline():ByteArray {
         val path=File(System.getenv("AEGIS_WAKEWORD_BASELINE_MODEL_PATH")
             ?: File(System.getProperty("user.home"),".cache/aegis-wakeword-tradeoff/frozen-v1/baseline/aegis.int8.tflite").path)
@@ -100,6 +110,66 @@ class NodeHandsFreeModelBundleTest {
         assertArrayEquals(before,path.readBytes())
         assertEquals(listOf(path.name),path.parentFile!!.list()!!.toList())
     }
+    @Test fun retrainedPackagePinsClassifierAndManifestTogetherAndPreservesLegacyImport()=target{path->
+        val oldBytes=bundle()
+        val newBytes=retrainedBundle()
+        val oldEntries=entries(oldBytes).toMap()
+        val newEntries=entries(newBytes).toMap()
+        assertEquals(oldEntries.keys,newEntries.keys)
+        for(name in oldEntries.keys - setOf("manifest.json","aegis.onnx"))
+            assertArrayEquals(oldEntries.getValue(name),newEntries.getValue(name))
+        assertFalse(oldEntries.getValue("aegis.onnx").contentEquals(newEntries.getValue("aegis.onnx")))
+        HandsFreeModel.decode(oldBytes).use{assertEquals(.5f,it.verifier!!.threshold,0f)}
+        val identity=HandsFreeModel.installPackage(path,ByteArrayInputStream(newBytes),
+            wakeRuntimeValidator={assertEquals(HandsFreeModel.STRONG,HandsFreeModel.identify(it))},
+            verifierRuntimeValidator={assets->
+                assertEquals(.0692f,assets.threshold,0f)
+                HandsFreeWakeVerifier(assets.melModel,assets.embeddingModel,assets.keywordModel,
+                    assets.seedEmbedding,assets.threshold).use{it.validate()}
+            })
+        assertEquals(HandsFreeModelBundle.RETRAINED_VERSION,identity.version)
+        assertEquals(handsFreeModelSha256(newBytes),identity.sha256)
+        HandsFreeModel.readPackage(path)!!.use{assertEquals(.0692f,it.verifier!!.threshold,0f)}
+        for((base,other) in listOf(newEntries to oldEntries,oldEntries to newEntries)) {
+            val crossed=base.map{(name,body)->name to if(name=="aegis.onnx")other.getValue(name) else body}
+            assertThrows(IllegalArgumentException::class.java){HandsFreeModel.identify(storedZip(crossed))}
+        }
+        val altered=entries(newBytes).map{(name,body)->
+            name to if(name=="manifest.json")body.copyOf().also{it[0]='!'.code.toByte()} else body
+        }
+        assertThrows(IllegalArgumentException::class.java){HandsFreeModel.identify(storedZip(altered))}
+        assertArrayEquals(newBytes,path.readBytes())
+    }
+
+    @Test fun retrainedPrimaryPackagePinsBothModelsAndKeepsOriginalVerifierV2()=target{path->
+        val previous=retrainedBundle()
+        val candidate=retrainedPrimaryBundle()
+        val previousEntries=entries(previous).toMap()
+        val candidateEntries=entries(candidate).toMap()
+        assertEquals(previousEntries.keys,candidateEntries.keys)
+        for(name in previousEntries.keys - setOf("manifest.json","aegis.int8.tflite"))
+            assertArrayEquals(previousEntries.getValue(name),candidateEntries.getValue(name))
+        val primary=candidateEntries.getValue("aegis.int8.tflite")
+        assertFalse(previousEntries.getValue("aegis.int8.tflite").contentEquals(primary))
+        assertThrows(IllegalArgumentException::class.java){HandsFreeModel.identify(primary)}
+        val identity=HandsFreeModel.installPackage(path,ByteArrayInputStream(candidate),
+            wakeRuntimeValidator={assertArrayEquals(primary,it)},
+            verifierRuntimeValidator={assets->
+                assertEquals(.0692f,assets.threshold,0f)
+                assertArrayEquals(previousEntries.getValue("aegis.onnx"),assets.keywordModel)
+            })
+        assertEquals(HandsFreeModelBundle.RETRAINED_PRIMARY_VERSION,identity.version)
+        assertEquals(handsFreeModelSha256(candidate),identity.sha256)
+        for((base,other) in listOf(candidateEntries to previousEntries,previousEntries to candidateEntries)) {
+            val crossed=base.map{(name,body)->name to if(name=="aegis.int8.tflite")other.getValue(name) else body}
+            assertThrows(IllegalArgumentException::class.java){HandsFreeModel.identify(storedZip(crossed))}
+        }
+        HandsFreeModel.readPackage(path)!!.use{assertEquals(identity,it.identity);assertArrayEquals(primary,it.wakeModel)}
+        assertEquals(HandsFreeModelBundle.RETRAINED_VERSION,HandsFreeModel.installPackage(path,
+            ByteArrayInputStream(previous),wakeRuntimeValidator={},verifierRuntimeValidator={}).version)
+        assertArrayEquals(previous,path.readBytes())
+    }
+
     @Test fun verifierRejectionKeepsInstalledBytesAndClearsRejectedAssetsBeforePause()=target{path->
         val before=baseline();path.writeBytes(before)
         var rejected:HandsFreeVerifierAssets?=null

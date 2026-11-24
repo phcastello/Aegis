@@ -764,7 +764,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             modelPackage=loadedPackage
             detector=MicroWakeWordNative.create(loadedPackage.wakeModel);check(detector!=0L){"model_runtime_incompatible"}
             wakeVerifier=loadedPackage.verifier?.let {
-                try { HandsFreeWakeVerifier(it.melModel,it.embeddingModel,it.keywordModel,it.seedEmbedding) }
+                try { HandsFreeWakeVerifier(it.melModel,it.embeddingModel,it.keywordModel,it.seedEmbedding,it.threshold) }
                 catch(error:Exception) { throw WakeVerificationUnavailable(error) }
             }
             val loaded=loadedPackage.identity
@@ -1099,7 +1099,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     val end=Debug.threadCpuTimeNanos()
                                     batteryDiagnostics.component("verifier",window.samples.size,SystemClock.elapsedRealtimeNanos()-wall,if(cpu>=0 && end>=cpu)end-cpu else -1L)
                                 }}
-                            })
+                            },threshold=wakeVerifier.threshold)
                         wakeCandidate=null
                     }
                     val pending=pendingVerification

@@ -18,7 +18,8 @@ internal class HandsFreePendingWakeVerification(
     private val startedAtMs:Long,
     private val clock:()->Long,
     verify:(HandsFreeVerificationWindow,()->Boolean)->Float,
-    private val timeoutMs:Long=2000L
+    private val timeoutMs:Long=2000L,
+    private val threshold:Float=HandsFreeWakeCandidate.THRESHOLD
 ):AutoCloseable {
     enum class Status { WAITING,ACCEPTED,REJECTED,TIMED_OUT,CANCELLED,FAILED,LIMIT_EXCEEDED }
     data class Outcome(val status:Status,val score:Float?=null)
@@ -79,7 +80,7 @@ internal class HandsFreePendingWakeVerification(
             val status=when {
                 completed.finishedAtMs<startedAtMs -> Status.FAILED
                 completed.finishedAtMs-startedAtMs>=timeoutMs -> Status.TIMED_OUT
-                completed.score>=HandsFreeWakeCandidate.THRESHOLD -> Status.ACCEPTED
+                completed.score>=threshold -> Status.ACCEPTED
                 else -> Status.REJECTED
             }
             return Outcome(status,completed.score).also { terminal=it }

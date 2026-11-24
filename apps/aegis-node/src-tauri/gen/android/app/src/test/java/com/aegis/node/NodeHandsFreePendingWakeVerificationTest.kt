@@ -62,6 +62,20 @@ class NodeHandsFreePendingWakeVerificationTest {
         }
     }
 
+    @Test fun packageThresholdAppliesToTheSameVerifierScore() {
+        fun outcome(score:Float,threshold:Float):HandsFreePendingWakeVerification.Status {
+            val executor=ManualExecutor()
+            return HandsFreePendingWakeVerification(candidate(),ring(),44800,executor,1000,{1200},
+                {_,_->score},threshold=threshold).use { pending->
+                executor.run()
+                pending.poll(1200).status
+            }
+        }
+        assertEquals(HandsFreePendingWakeVerification.Status.REJECTED,outcome(.0692f,.5f))
+        assertEquals(HandsFreePendingWakeVerification.Status.REJECTED,outcome(.0691f,.0692f))
+        assertEquals(HandsFreePendingWakeVerification.Status.ACCEPTED,outcome(.0692f,.0692f))
+    }
+
     @Test fun completionTimeDecidesTheDeadlineRatherThanTheLaterPoll() {
         for(finishedAt in listOf(2999L,3000L,900L)) {
             val executor=ManualExecutor()

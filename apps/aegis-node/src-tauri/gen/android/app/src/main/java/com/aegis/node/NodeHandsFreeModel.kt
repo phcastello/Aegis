@@ -11,7 +11,8 @@ internal class HandsFreeVerifierAssets(
     val melModel:ByteArray,
     val embeddingModel:ByteArray,
     val keywordModel:ByteArray,
-    val seedEmbedding:ByteArray
+    val seedEmbedding:ByteArray,
+    val threshold:Float
 ):AutoCloseable {
     override fun close(){melModel.fill(0);embeddingModel.fill(0);keywordModel.fill(0);seedEmbedding.fill(0)}
 }
@@ -52,7 +53,7 @@ internal object HandsFreeModel {
         MicroWakeWordNative.destroy(test)
     }
     private fun validateVerifierRuntime(assets:HandsFreeVerifierAssets) {
-        HandsFreeWakeVerifier(assets.melModel,assets.embeddingModel,assets.keywordModel,assets.seedEmbedding).use{it.validate()}
+        HandsFreeWakeVerifier(assets.melModel,assets.embeddingModel,assets.keywordModel,assets.seedEmbedding,assets.threshold).use{it.validate()}
     }
     fun readPackage(context:Context):HandsFreeModelPackage?=readPackage(file(context))
     @Synchronized internal fun readPackage(path:File):HandsFreeModelPackage? {
