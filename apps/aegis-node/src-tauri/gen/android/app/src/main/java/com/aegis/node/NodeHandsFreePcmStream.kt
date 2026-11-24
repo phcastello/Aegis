@@ -68,6 +68,32 @@ internal interface HandsFreePcmDevice : AutoCloseable {
     fun stop()
 }
 
+/** Moderate speech lift with a bounded, continuous soft knee. The mapping has no
+ * envelope state, so packet boundaries and short device writes cannot change it.
+ */
+internal object HandsFreePlaybackLevel {
+    fun amplify(source: ByteArray, offset: Int, count: Int, output: ByteArray) {
+        require(offset >= 0 && count >= 0 && count % 2 == 0 && offset <= source.size - count && count <= output.size)
+        for (index in 0 until count step 2) {
+            val sample = ((source[offset + index].toInt() and 255) or
+                (source[offset + index + 1].toInt() shl 8)).toShort().toInt()
+            // 1.6x (+4.08 dB) except for the relatively rare high peaks. Leave
+            // headroom for the device's resampler and avoid hard PCM clipping.
+            val magnitude = (kotlin.math.abs(sample) * 8 + 2) / 5
+            val limited = if (magnitude <= KNEE) magnitude else {
+                val excess = magnitude - KNEE
+                KNEE + (CEILING - KNEE) * excess / (CEILING - KNEE + excess)
+            }
+            val adjusted = if (sample < 0) -limited else limited
+            output[index] = adjusted.toByte()
+            output[index + 1] = (adjusted shr 8).toByte()
+        }
+    }
+
+    private const val KNEE = 26000
+    private const val CEILING = 30000
+}
+
 /** No application audio queue: blocking device writes provide bounded backpressure. */
 internal class HandsFreeStreamingPcmSink(
     private val createDevice: () -> HandsFreePcmDevice,
@@ -75,13 +101,15 @@ internal class HandsFreeStreamingPcmSink(
     private val onClosed: () -> Unit = {},
     private val onPlaybackEvent:(String)->Unit={},
     private val echo: HandsFreeBargeInEcho? = null,
-    private val onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {}
+    private val onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {},
+    boostSpeechVolume: Boolean = false
 ) : HandsFreePcmSink {
     private val cancelled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val finished = AtomicBoolean(false)
     private val creationLock = Any()
     private val completion = CountDownLatch(1)
+    private val boostedPcm = if (boostSpeechVolume) ByteArray(WRITE_CHUNK_BYTES) else null
     @Volatile private var device: HandsFreePcmDevice? = null
     @Volatile private var writtenFrames = 0L
     private var firstWriteObserved=false
@@ -115,23 +143,41 @@ internal class HandsFreeStreamingPcmSink(
         require(offset >= 0 && count > 0 && count % 2 == 0 && offset + count <= bytes.size)
         check(!finished.get()) { "pcm_stream_already_finished" }; checkCurrent()
         val target = output()
-        var consumed = 0
-        while (consumed < count) {
-            checkCurrent()
-            val chunk = minOf(8192, count - consumed)
-            // A blocking write can become audible before it returns. Offer its PCM
-            // now and let playback progress bound which samples the filter can use.
-            echo?.offer(bytes, offset + consumed, chunk, writtenFrames)
-            val written = target.write(bytes, offset + consumed, chunk)
-            check(written > 0 && written % 2 == 0 && written <= chunk) { "audio_playback_failed" }
-            consumed += written; writtenFrames += written / 2
-            if(!firstWriteObserved) {
-                firstWriteObserved=true
-                // A single observation, never a timer or playback polling loop.
-                if(target.playedFrames()>0)onPlaybackEvent("player_first_head_observed")
+        try {
+            var consumed = 0
+            while (consumed < count) {
+                checkCurrent()
+                val chunk = minOf(WRITE_CHUNK_BYTES, count - consumed)
+                val outputBytes = boostedPcm ?: bytes
+                val outputOffset = if (boostedPcm == null) offset + consumed else 0
+                if (boostedPcm != null) {
+                    HandsFreePlaybackLevel.amplify(bytes, offset + consumed, chunk, boostedPcm)
+                }
+                var chunkConsumed = 0
+                while (chunkConsumed < chunk) {
+                    checkCurrent()
+                    val remaining = chunk - chunkConsumed
+                    // A blocking write can become audible before it returns. The
+                    // echo reference must receive exactly the PCM given to the
+                    // device, including our speech gain and peak compression.
+                    val start = outputOffset + chunkConsumed
+                    echo?.offer(outputBytes, start, remaining, writtenFrames)
+                    val written = target.write(outputBytes, start, remaining)
+                    check(written > 0 && written % 2 == 0 && written <= remaining) { "audio_playback_failed" }
+                    chunkConsumed += written
+                    writtenFrames += written / 2
+                    if (!firstWriteObserved) {
+                        firstWriteObserved = true
+                        // A single observation, never a timer or playback polling loop.
+                        if (target.playedFrames() > 0) onPlaybackEvent("player_first_head_observed")
+                    }
+                }
+                consumed += chunk
             }
+            checkCurrent()
+        } finally {
+            boostedPcm?.fill(0)
         }
-        checkCurrent()
     }
     override fun finish() {
         check(finished.compareAndSet(false, true)); checkCurrent()
@@ -159,5 +205,9 @@ internal class HandsFreeStreamingPcmSink(
         if (!closed.compareAndSet(false, true)) return
         completion.countDown()
         synchronized(creationLock) { try { device?.close() } finally { device = null; onClosed() } }
+    }
+
+    companion object {
+        private const val WRITE_CHUNK_BYTES = 8192
     }
 }

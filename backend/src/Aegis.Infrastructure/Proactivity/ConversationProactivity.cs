@@ -15,7 +15,17 @@ public sealed class ConversationProactivity(AegisDbContext db) : IConversationPr
     public async Task<bool> MarkReadAsync(Guid conversationId, long sequence, CancellationToken ct) {
         if (sequence < 0) throw new ArgumentException("Invalid sequence.");
         // A read never touches history ordering and cannot overwrite a newer read on another device.
-        if (db.Database.IsNpgsql()) return await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE conversations SET \"ReadProactiveSequence\" = GREATEST(\"ReadProactiveSequence\", LEAST({sequence}, \"LastProactiveSequence\")) WHERE \"Id\" = {conversationId} AND \"DeletedAt\" IS NULL", ct) > 0;
+        if (db.Database.IsNpgsql())
+        {
+            var changed = await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE conversations SET \"ReadProactiveSequence\" = LEAST({sequence}, \"LastProactiveSequence\") WHERE \"Id\" = {conversationId} AND \"DeletedAt\" IS NULL AND \"ReadProactiveSequence\" < LEAST({sequence}, \"LastProactiveSequence\")", ct);
+            if (changed > 0)
+            {
+                db.RecordConversationChanges(conversationId);
+                return true;
+            }
+            // Preserve the existing success response for an already-acknowledged conversation.
+            return await db.Conversations.AnyAsync(c => c.Id == conversationId && c.DeletedAt == null, ct);
+        }
         var conversation = await db.Conversations.SingleOrDefaultAsync(c => c.Id == conversationId && c.DeletedAt == null, ct);
         if (conversation is null) return false;
         conversation.MarkProactiveRead(sequence); await db.SaveChangesAsync(ct); return true;

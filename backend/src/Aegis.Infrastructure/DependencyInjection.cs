@@ -35,8 +35,9 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("AegisDatabase")
             ?? throw new InvalidOperationException("Connection string 'AegisDatabase' was not found.");
 
-        services.AddDbContext<AegisDbContext>(options =>
-            options.UseNpgsql(connectionString));
+        services.AddSingleton<ConversationChangeCommitInterceptor>();
+        services.AddDbContext<AegisDbContext>((provider, options) =>
+            options.UseNpgsql(connectionString).AddInterceptors(provider.GetRequiredService<ConversationChangeCommitInterceptor>()));
 
         services.AddScoped<Aegis.Application.Nodes.INodeTransportHistory, Aegis.Infrastructure.Nodes.NodeTransportHistory>();
         services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();

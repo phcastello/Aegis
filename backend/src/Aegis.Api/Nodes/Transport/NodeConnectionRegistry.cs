@@ -35,6 +35,7 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
         internal DateTimeOffset UnknownResultWindow { get; set; } = now;
         internal int UnknownResults { get; set; }
         public bool Ready { get; internal set; }
+        internal bool ConversationChangesReady { get; set; }
         public DateTimeOffset LastSeenAt { get; internal set; } = now;
         public DateTimeOffset? LastHeartbeatAt { get; internal set; }
         public CancellationTokenSource Ended { get; } = new();
@@ -66,13 +67,64 @@ public sealed class NodeConnectionRegistry : INodeConnections, INodeLiveNotifica
         try { if (Lookup(lease.NodeId) != lease || lease.Ended.IsCancellationRequested) throw new OperationCanceledException(ct); await announce(); }
         finally { lease.Admission.Release(); }
     }
-    public async Task WriteAsync(Lease lease, string type, Guid messageId, object? payload, CancellationToken ct)
+    private static bool SupportsConversationSync(Lease lease) =>
+        lease.Capabilities.Any(c => c.Name == NodeCapabilityCatalog.ConversationSync && c.Version >= 1);
+
+    public Task AcknowledgeAsync(Lease lease, Guid messageId, CancellationToken ct)
+    {
+        var supportsSync = SupportsConversationSync(lease);
+        // Preserve the old acknowledgement exactly for clients which did not opt in.
+        object payload = supportsSync
+            ? new { heartbeatSeconds = options.HeartbeatSeconds, timeoutSeconds = options.TimeoutSeconds, conversationChanges = true }
+            : new { heartbeatSeconds = options.HeartbeatSeconds, timeoutSeconds = options.TimeoutSeconds };
+        return WriteAsync(lease, "hello_ack", messageId, payload, ct, supportsSync);
+    }
+
+    public async Task WriteAsync(Lease lease, string type, Guid messageId, object? payload, CancellationToken ct,
+        bool enableConversationChanges = false)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, lease.Ended.Token); deadline.CancelAfter(TimeSpan.FromSeconds(2));
         await lease.Writer.WaitAsync(deadline.Token);
-        try { if (Lookup(lease.NodeId) != lease || lease.Socket is null) throw new OperationCanceledException();
-            await NodeProtocol.SendAsync(lease.Socket, type, messageId, clock.GetUtcNow(), payload, deadline.Token); }
+        try
+        {
+            WebSocket socket;
+            lock (gate)
+            {
+                if (current.GetValueOrDefault(lease.NodeId) != lease || lease.Socket is not { } attached)
+                    throw new OperationCanceledException();
+                socket = attached;
+                // The writer already owns the socket. Once the subscription becomes visible,
+                // subsequent changes queue behind hello_ack. Reconciliation on hello covers
+                // commits preceding this point, including changes while admission was pending.
+                if (enableConversationChanges) lease.ConversationChangesReady = true;
+            }
+            await NodeProtocol.SendAsync(socket, type, messageId, clock.GetUtcNow(), payload, deadline.Token);
+        }
         finally { lease.Writer.Release(); }
+    }
+
+    public async Task BroadcastConversationChangedAsync(Guid? conversationId, CancellationToken ct)
+    {
+        Lease[] subscribers;
+        lock (gate)
+            subscribers = current.Values.Where(l => IsFresh(l) && l.ConversationChangesReady && l.Socket is not null).ToArray();
+        await Task.WhenAll(subscribers.Select(lease => NotifyConversationChangeAsync(lease, conversationId, ct)));
+    }
+
+    private async Task NotifyConversationChangeAsync(Lease lease, Guid? conversationId, CancellationToken ct)
+    {
+        try
+        {
+            await WriteAsync(lease, "conversation_changed", Guid.NewGuid(), new { conversationId }, ct);
+        }
+        catch (Exception exception) when (!ct.IsCancellationRequested)
+        {
+            // Missing an invalidation on a still-connected client could leave it stale forever.
+            // Only end the failed lease; reconnect forces a complete reconciliation.
+            Unregister(lease, "conversation_sync_failed");
+            logger.LogWarning("Conversation change notification failed NodeId={NodeId} ErrorType={ErrorType}",
+                lease.NodeId, exception.GetType().Name);
+        }
     }
     public Task<NodeLiveNotificationResult> SendAsync(Guid id, NodeNotificationCommand command, CancellationToken ct) =>
         SendCommandAsync(id, command.CommandId, command.Capability, command.CapabilityVersion, command.ExpiresAt, command, ct);

@@ -48,6 +48,33 @@ function foreground() {
   if (document.visibilityState !== 'visible' || foregroundTimer !== null) return;
   foregroundTimer = setTimeout(async () => { foregroundTimer = null; if (document.visibilityState !== 'visible') return; if (props.runtime.platform === 'android') { try { if (await invoke<boolean>('node_read_visibility')) conversationRecovery(); } catch { /* Next native visibility event retries. */ } } void updates.start(); try { const current = await transportServices.status(); if (current.transportState === 'offline') await transportServices.reconnect(); } catch { /* Native lifecycle also reconciles independently. */ } if (Date.now() - lastIdentityCheck > 30000) {void refreshIdentity();void refreshPendingActions();} }, 250);
 }
+const desktopConversationPush = ref(false);
+let desktopSyncListener: UnlistenFn | undefined;
+let desktopSyncRevision = 0;
+async function subscribeDesktopConversationSync() {
+  if (props.runtime.platform !== 'windows') return;
+  try {
+    const stop = await listen<unknown>('aegis-conversation-sync', event => {
+      if (disposed || !event.payload || typeof event.payload !== 'object') return;
+      const payload = event.payload as Record<string, unknown>;
+      if (payload.kind === 'status' && typeof payload.active === 'boolean') {
+        desktopSyncRevision++;
+        desktopConversationPush.value = payload.active;
+      } else if (payload.kind === 'changed') {
+        if (payload.conversationId === null) void chat.value?.reconcileConversations(true);
+        else if (typeof payload.conversationId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.conversationId))
+          chat.value?.conversationChanged(payload.conversationId, false);
+      }
+    });
+    if (disposed) { stop(); return; }
+    desktopSyncListener = stop;
+    // Subscribe first: a transition during this read takes precedence over the snapshot.
+    const revision = desktopSyncRevision;
+    const current = await transportServices.status();
+    if (!disposed && revision === desktopSyncRevision)
+      desktopConversationPush.value = current.transportState === 'online' && current.conversationChanges === true;
+  } catch { /* Legacy runtimes or APIs continue bounded foreground reconciliation. */ }
+}
 let changeSnapshotBusy = false; let changeSnapshotRequested = false;
 let changeRetryTimer: ReturnType<typeof setTimeout> | undefined; let changeRetry = 0;
 let changeGeneration: string | null = null;
@@ -116,11 +143,11 @@ let stopConversationListener: (() => void) | undefined;
 async function subscribeReminderOpen() { try { const stop = await listen<{conversationId:string}>('aegis-conversation-open', event => showConversation(event.payload.conversationId)); if (disposed) stop(); else stopConversationListener = stop; } catch {} try { const unlisten = await listen<{reminderId:string}>('aegis-reminder-open', event => showReminder(event.payload.reminderId)); if (disposed) unlisten(); else stopReminderListener = unlisten; } catch { /* Android DOM bridge remains available. */ } try { const pending = await invoke<{reminderId:string|null;conversationId?:string|null}>('node_consume_reminder_open'); if (!disposed) { showReminder(pending.reminderId); showConversation(pending.conversationId); } } catch { /* Older runtimes have no stored deep link. */ } }
 function syncNavigation() { void invoke('node_settings_open', { open: section.value !== null || hasNavigationLayer() }).catch(() => undefined); }
 watch(section, value => { syncNavigation(); if (value === 'updates') void updates.start(); });
-onMounted(() => { window.addEventListener('aegis-navigation-layer', syncNavigation); window.addEventListener('aegis-conversation-changed', nativeConversationChanged); window.addEventListener('aegis-app-visibility', foreground); window.addEventListener('online', conversationRecovery); void syncConversationChanges(); void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); window.addEventListener('aegis-conversation-open', openConversation); });
-onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNavigation); window.removeEventListener('aegis-conversation-changed', nativeConversationChanged); window.removeEventListener('aegis-app-visibility', foreground); window.removeEventListener('online', conversationRecovery); disposed = true; clearTimeout(changeRetryTimer); stopReminderListener?.(); stopConversationListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); window.removeEventListener('aegis-conversation-open', openConversation); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
+onMounted(() => { window.addEventListener('aegis-navigation-layer', syncNavigation); window.addEventListener('aegis-conversation-changed', nativeConversationChanged); window.addEventListener('aegis-app-visibility', foreground); window.addEventListener('online', conversationRecovery); void syncConversationChanges(); void subscribeDesktopConversationSync(); void subscribeReminderOpen(); void refreshIdentity(); void refreshPendingActions(); void updates.start(); document.addEventListener('visibilitychange', foreground); window.addEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.addEventListener('aegis-back', nativeBack); window.addEventListener('aegis-reminder-open', openReminder); window.addEventListener('aegis-conversation-open', openConversation); });
+onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNavigation); window.removeEventListener('aegis-conversation-changed', nativeConversationChanged); window.removeEventListener('aegis-app-visibility', foreground); window.removeEventListener('online', conversationRecovery); disposed = true; clearTimeout(changeRetryTimer); stopReminderListener?.(); stopConversationListener?.(); desktopSyncListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); window.removeEventListener('aegis-conversation-open', openConversation); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
 </script>
 <template>
-  <ChatView ref="chat" :app-version="runtime.version" @activity-changed="activity = $event">
+  <ChatView ref="chat" :app-version="runtime.version" :conversation-push-active="desktopConversationPush" @activity-changed="activity = $event">
     <template #global-navigation><SettingsTrigger @click="navigate('devices')" /></template>
     <template #notice><div v-if="pendingActions || actionStatusUnavailable" class="native-node-notice" role="status"><template v-if="actionStatusUnavailable">Consulta das ações locais temporariamente indisponível. Não foi possível confirmar as pendências.<template v-if="pendingActions"> Última leitura: {{ pendingActionLabel(pendingActions) }}.</template></template><template v-else>{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.</template><button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>{{ updates.update.value?.distributionKind === 'rollback' ? 'Atualização de recuperação da Aegis' : 'Atualização da Aegis' }}{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>

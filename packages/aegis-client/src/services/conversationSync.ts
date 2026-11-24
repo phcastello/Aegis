@@ -10,13 +10,16 @@ export class ConversationSyncQueue<T> {
   private epoch = 0;
   constructor(private readonly read: (id: string) => Promise<T>,
     private readonly apply: (id: string, value: T) => boolean,
-    private readonly blocked: (id: string) => boolean = () => false) {}
+    private readonly blocked: (id: string) => boolean = () => false,
+    private readonly settled: () => void = () => {}) {}
   invalidate(id: string): void {
     if (this.disposed) return;
     const row = this.entries.get(id) ?? { version: 0, busy: false, dirty: true };
     row.version++; row.dirty = true; this.entries.set(id, row);
   }
   pending(id: string): boolean { return this.entries.has(id); }
+  hasPending(): boolean { return this.entries.size !== 0; }
+  retryable(): boolean { return [...this.entries].some(([id, row]) => row.dirty && !row.busy && !this.blocked(id)); }
   flush(): Promise<void> {
     if (this.flushing) { this.flushRequested = true; return Promise.resolve(); }
     const epoch = this.epoch;
@@ -47,6 +50,7 @@ export class ConversationSyncQueue<T> {
     this.flushing = Promise.all([worker(), worker(), worker()]).then(() => undefined).finally(() => {
       this.flushing = undefined;
       if (this.flushRequested) { this.flushRequested = false; void this.flush(); }
+      this.settled();
     });
     return this.flushing;
   }

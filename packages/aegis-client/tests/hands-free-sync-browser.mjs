@@ -102,18 +102,27 @@ try{
   // A native process/identity epoch can restart its revision counter independently.
   await page.evaluate(()=>{window.fixtureJournal={generation:'80000000-0000-4000-8000-000000000008',changes:[]};});append(b,'Nova geração nativa.');await publish(b,{sequence:1});await visible('Nova geração nativa.').waitFor();equal(await visible('Nova geração nativa.').count(),1,'journal epoch reset accepts lower revision after restart');
   equal(errors.length,0,'no Vue/browser errors');
-  // A different device has no access to the local Android event journal. It discovers
-  // the same persisted rows through ordinary conversation APIs, including on reconnect.
+  // A different device has no access to the Android event journal. Simulate the
+  // authenticated native transport's push events and its negotiated status.
   await context.close();
   const desktop = await browser.newContext({viewport:{width:1280,height:900}});
   try {
     await desktop.addInitScript(origin=>{
       localStorage.setItem('aegis.voice.autoSpeak','false');
-      window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
+      const callbacks = new Map(), listeners = new Map(); let sequence = 0;
+      window.fixturePushOnline = true;
+      window.fixtureNativeSubscribed = name => [...listeners.values()].some(row => row.name === name);
+      window.fixtureNativeEmit = (name,payload) => {
+        for(const [id,row] of listeners) if(row.name===name) callbacks.get(row.callback)?.({event:name,id,payload});
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:(_name,id)=>listeners.delete(id)};
+      window.__TAURI_INTERNALS__={transformCallback:fn=>{const id=++sequence;callbacks.set(id,fn);return id;},invoke:async(command,args)=>{
+        if(command==='plugin:event|listen'){const id=++sequence;listeners.set(id,{name:args.event,callback:args.handler});return id;}
+        if(command==='plugin:event|unlisten'){listeners.delete(args.eventId);return;}
         if(command==='runtime_info')return {platform:'windows',backendUrl:origin,version:'0.8.0',processSessionId:'sync-desktop-test'};
         if(command==='node_hands_free')throw Error('Android journal unavailable on Windows');
         if(command==='node_status')return {state:'unpaired',node:null};
-        if(command==='node_transport_status')return {transportState:'online'};
+        if(command==='node_transport_status')return {transportState:'online',conversationChanges:window.fixturePushOnline};
         if(command==='node_notification_settings')return {granted:false,pushConfigured:false,pendingActions:0};
         if(command==='node_consume_reminder_open')return {reminderId:null,conversationId:null};
         if(command==='check_android_update')return null;
@@ -126,29 +135,75 @@ try{
     const desktopTitle=desktopPage.locator('.chat-header h1');
     const desktopMessage=text=>desktopPage.locator('.messages').getByText(text,{exact:true});
     const sidebarRow=title=>desktopPage.locator('.history-item__main').filter({hasText:title});
+    const desktopPush=payload=>desktopPage.evaluate(payload=>window.fixtureNativeEmit('aegis-conversation-sync',payload),payload);
     await desktopPage.goto(origin);await desktopComposer.waitFor();
+    await desktopPage.waitForFunction(()=>window.fixtureNativeSubscribed?.('aegis-conversation-sync'));
     await sidebarRow('Beta renomeada').click();await desktopMessage('Nova geração nativa.').waitFor();
     await desktopComposer.fill('Rascunho no computador');
     const fromPhone='40000000-0000-4000-8000-000000000004';
-    data.set(fromPhone,{id:fromPhone,title:'Criada em outro aparelho',titleSource:'generated',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),messages:[]});
+    data.set(fromPhone,{id:fromPhone,title:'Criada em outro aparelho',titleSource:'default',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),messages:[]});
     append(fromPhone,'Resposta em outro aparelho.');
-    // No DOM bridge event, focus event, reload or user action.
-    await sidebarRow('Criada em outro aparelho').waitFor();
+    // A push invalidation is enough; no periodic read, focus, reload or user action.
+    await desktopPush({kind:'changed',conversationId:fromPhone});
+    await sidebarRow('Criada em outro aparelho').waitFor({timeout:3000});
     equal((await desktopTitle.textContent()).trim(),'Beta renomeada','remote creation appears without navigating');
     equal(await desktopComposer.inputValue(),'Rascunho no computador','remote creation preserves the desktop draft');
     append(b,'Mensagem que chegou pelo celular.');
-    await desktopMessage('Mensagem que chegou pelo celular.').waitFor();
-    equal(await desktopMessage('Mensagem que chegou pelo celular.').count(),1,'periodic sync merges a selected remote message once');
+    await desktopPush({kind:'changed',conversationId:b});
+    await desktopMessage('Mensagem que chegou pelo celular.').waitFor({timeout:3000});
+    equal(await desktopMessage('Mensagem que chegou pelo celular.').count(),1,'push sync merges a selected remote message once');
+    // A committed streamed segment may expand the same message without touching
+    // the conversation timestamp or count.
+    data.get(b).messages.at(-1).content='Mensagem incremental atualizada pelo celular.';
+    await desktopPush({kind:'changed',conversationId:b});
+    await desktopMessage('Mensagem incremental atualizada pelo celular.').waitFor({timeout:3000});
+    equal(await desktopMessage('Mensagem incremental atualizada pelo celular.').count(),1,'push always refreshes persisted same-ID message content');
     equal(await desktopComposer.inputValue(),'Rascunho no computador','remote message preserves the desktop draft');
-    // An unchanged head does not trigger full history downloads.
-    const beforeQuietReads=reads,beforeQuietHeads=heads;
-    await desktopPage.waitForTimeout(5300);assert.ok(heads>beforeQuietHeads,'unchanged periodic head was fetched');
+    // The server sends another notification when the async title job commits.
+    // While the negotiated channel is quiet, no history requests are made at all.
     await delay(300);
-    equal(reads,beforeQuietReads,'unchanged periodic head avoids detail requests');
-    data.get(fromPhone).title='Título gerado no celular';data.get(fromPhone).updatedAt=new Date().toISOString();
-    await desktopPage.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    const beforeQuietReads=reads,beforeQuietHeads=heads;
+    await desktopPage.waitForTimeout(5500);
+    equal(heads,beforeQuietHeads,'healthy push channel has no periodic head fetch');
+    equal(reads,beforeQuietReads,'healthy push channel avoids title polling and detail requests');
+    data.get(fromPhone).title='Título gerado no celular';data.get(fromPhone).titleSource='generated';data.get(fromPhone).updatedAt=new Date().toISOString();
+    await desktopPush({kind:'changed',conversationId:fromPhone});
     await sidebarRow('Título gerado no celular').waitFor({timeout:3000});
-    equal(await sidebarRow('Título gerado no celular').count(),1,'focus refreshes remote generated titles immediately');
+    equal(await sidebarRow('Título gerado no celular').count(),1,'push refreshes remote generated titles immediately');
+    failReads=1;
+    append(b,'Recuperada após uma leitura push falhar.');
+    await desktopPush({kind:'changed',conversationId:b});
+    await until(()=>failReads===0,'failed push detail');
+    await desktopMessage('Recuperada após uma leitura push falhar.').waitFor({timeout:4000});
+    equal(await desktopMessage('Recuperada após uma leitura push falhar.').count(),1,'dirty retry recovers a failed push read');
+    data.delete(fromPhone);
+    await desktopPush({kind:'changed',conversationId:fromPhone});
+    await sidebarRow('Título gerado no celular').waitFor({state:'hidden',timeout:3000});
+    equal(await desktopComposer.inputValue(),'Rascunho no computador','remote deletion of another conversation preserves local draft');
+    // A global invalidation is the overflow/recovery signal, including a failed
+    // HTTP request while the WebSocket stays healthy.
+    failHeads=1;
+    const fromGlobal='50000000-0000-4000-8000-000000000005';
+    data.set(fromGlobal,{id:fromGlobal,title:'Descoberta por reconciliação',titleSource:'generated',createdAt:date,updatedAt:new Date().toISOString(),messages:[]});
+    await desktopPush({kind:'changed',conversationId:null});
+    await sidebarRow('Descoberta por reconciliação').waitFor({timeout:4000});
+    equal(failHeads,0,'global invalidation retries its failed head automatically');
+    // Disconnect/legacy negotiation alone temporarily restores the visible-only fallback.
+    await desktopPage.evaluate(()=>window.fixturePushOnline=false);
+    await desktopPush({kind:'status',active:false});
+    await delay(300);
+    const fallbackHeads=heads;
+    append(b,'Mensagem durante negociação legada.');
+    await desktopMessage('Mensagem durante negociação legada.').waitFor({timeout:7000});
+    assert.ok(heads>fallbackHeads,'legacy mode periodically reconciles');
+    // A commit without a per-chat push during reconnect is recovered by the status transition.
+    append(b,'Mensagem antes de reconectar.');
+    data.delete(fromGlobal);
+    await desktopPage.evaluate(()=>window.fixturePushOnline=true);
+    await desktopPush({kind:'status',active:true});
+    await desktopMessage('Mensagem antes de reconectar.').waitFor({timeout:3000});
+    await sidebarRow('Descoberta por reconciliação').waitFor({state:'hidden',timeout:3000});
+    equal(await desktopComposer.inputValue(),'Rascunho no computador','reconnect reconciles missed updates and deletions without changing the draft');
     failHeads=1;
     append(b,'Mensagem recuperada após a rede voltar.');
     await desktopPage.evaluate(()=>window.dispatchEvent(new Event('focus')));
@@ -156,7 +211,11 @@ try{
     await desktopPage.evaluate(()=>window.dispatchEvent(new Event('online')));
     await desktopMessage('Mensagem recuperada após a rede voltar.').waitFor({timeout:3000});
     equal(await desktopMessage('Mensagem recuperada após a rede voltar.').count(),1,'network recovery fetches changes after a failed head request');
+    data.delete(b);
+    await desktopPush({kind:'changed',conversationId:b});
+    await sidebarRow('Beta renomeada').waitFor({state:'hidden',timeout:3000});
+    equal(await desktopComposer.inputValue(),'Rascunho no computador','remote deletion of selected chat retains unsent text');
     equal(desktopErrors.length,0,'no errors during cross-device synchronization');
   }finally{await desktop.close();}
-  console.log(JSON.stringify({suite:'hands-free-sync-browser',assertions,result:'passed',evidence:'Chromium + Vue + HTTP, simulated Android journal and remote writes'}));
+  console.log(JSON.stringify({suite:'hands-free-sync-browser',assertions,result:'passed',evidence:'Chromium + Vue + HTTP, simulated Android journal and negotiated native push events'}));
 }finally{held?.release();await context.close();await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await vite.close();}

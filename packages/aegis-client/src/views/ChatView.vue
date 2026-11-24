@@ -16,6 +16,7 @@ import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../service
 import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
+  AegisApiError,
   deleteConversation,
   cancelTurn,
   completeTurnWithoutSpeech,
@@ -43,7 +44,7 @@ import type {
   SubmitMessageFeedbackRequest
 } from '../types/chat';
 
-defineProps<{ appVersion?: string }>();
+const props = defineProps<{ appVersion?: string; conversationPushActive?: boolean }>();
 const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
@@ -603,15 +604,46 @@ function mergeConversationSummary(summary: ConversationSummary): void {
   });
 }
 
-// Native invalidation never selects a chat, touches the composer or replaces a live turn.
-const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation; revision: number; summaryRevision: number }>(async id => {
+function applyRemoteConversationDeletion(id: string): void {
+  deletedConversations.add(id);
+  summaryRevisions.set(id, ++summaryRevision);
+  const owner = contexts.get(id);
+  contexts.delete(id);
+  conversations.value = conversations.value.filter(row => row.id !== id);
+  let recovery: ConversationContext | undefined;
+  if (owner?.draft.trim()) {
+    recovery = createConversationContext();
+    recovery.draft = owner.draft;
+    unsentConversations.value = [...unsentConversations.value.filter(context => context !== owner), recovery];
+  }
+  if (conversationId.value === id) {
+    startNewConversation(false);
+    if (recovery) {
+      selected.value = recovery;
+      resizeComposer();
+      restoreReadingPosition(recovery);
+    }
+  }
+  if (infoTarget.value?.id === id) infoTarget.value = null;
+  if (renameTarget.value?.id === id) renameTarget.value = null;
+  if (deleteTarget.value?.id === id) deleteTarget.value = null;
+}
+
+// Invalidation never navigates to an unrelated chat or replaces a live turn.
+const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation | null; revision: number; summaryRevision: number }>(async id => {
   const revision = contexts.get(id)?.revision ?? 0;
   const summaryRevision = summaryRevisions.get(id) ?? 0;
-  return { snapshot: await getConversation(id), revision, summaryRevision };
+  try {
+    return { snapshot: await getConversation(id), revision, summaryRevision };
+  } catch (error) {
+    if (error instanceof AegisApiError && error.status === 404) return { snapshot: null, revision, summaryRevision };
+    throw error;
+  }
 }, (id, { snapshot, revision, summaryRevision }) => {
   if (disposed || deletedConversations.has(id)) return true;
   const owner = contexts.get(id);
   if ((owner && owner.revision !== revision) || (summaryRevisions.get(id) ?? 0) !== summaryRevision) return false;
+  if (!snapshot) { applyRemoteConversationDeletion(id); return true; }
   mergeConversationSummary({ ...conversations.value.find(row => row.id === id), id,
     title: snapshot.title, titleSource: snapshot.titleSource, createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt, messageCount: snapshot.messages.length,
@@ -625,23 +657,26 @@ const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation; rev
     if (owner === selected.value) { resumeMemoryActivityPolling(); void nextTick(observeProactiveMessages); }
   }
   return true;
-}, id => disposed || [...activeTurns.values()].some(turn => turn.owner.id === id));
+}, id => disposed || [...activeTurns.values()].some(turn => turn.owner.id === id), schedulePushRecovery);
 let conversationSyncTimer: ReturnType<typeof setTimeout> | undefined;
 const conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 function flushConversationChanges(): void { void conversationSync.flush(); }
 function resetConversationChanges(): void {
-  conversationSync.reset(); clearTimeout(conversationSyncTimer);
+  conversationSync.reset(); clearTimeout(conversationSyncTimer); clearTimeout(pushRecoveryTimer); pushRecoveryTimer = undefined;
   for (const timer of conversationRetryTimers.values()) clearTimeout(timer);
   conversationRetryTimers.clear();
 }
-function conversationChanged(id: string): void {
+function conversationChanged(id: string, awaitTitle = true): void {
   if (deletedConversations.has(id)) return;
   conversationSync.invalidate(id);
   clearTimeout(conversationSyncTimer);
   conversationSyncTimer = setTimeout(flushConversationChanges, 120);
-  // Bounded targeted retries also observe the existing asynchronous title job.
+  // Legacy/native local invalidations need bounded title reconciliation; a server
+  // push announces the title commit separately, so retry only failed reads.
   const previous = conversationRetryTimers.get(id);
   if (previous !== undefined) clearTimeout(previous);
+  conversationRetryTimers.delete(id);
+  if (!awaitTitle) return;
   const retry = (attempt: number): void => {
     conversationRetryTimers.set(id, setTimeout(async () => {
       conversationRetryTimers.delete(id);
@@ -653,10 +688,14 @@ function conversationChanged(id: string): void {
   };
   retry(0);
 }
-async function reconcileConversations(): Promise<void> {
+async function reconcileConversations(allKnown = false): Promise<void> {
   if (disposed || document.visibilityState !== 'visible') return;
-  if (selected.value.id) conversationSync.invalidate(selected.value.id);
-  await Promise.allSettled([refreshConversationHead(), conversationSync.flush()]);
+  if (allKnown) for (const [id, owner] of contexts) {
+    if (owner.loaded && !deletedConversations.has(id)) conversationSync.invalidate(id);
+  }
+  if (selected.value.id && !conversationSync.pending(selected.value.id)) conversationSync.invalidate(selected.value.id);
+  await Promise.allSettled([refreshConversationHead(allKnown), conversationSync.flush()]);
+  schedulePushRecovery();
 }
 watch(() => [...activeTurns.values()].map(turn => turn.owner.id).filter((id): id is string => !!id), (current, previous) => {
   for (const id of new Set([...current, ...previous])) if (conversationSync.pending(id)) conversationSync.invalidate(id);
@@ -666,6 +705,10 @@ watch(() => [...activeTurns.values()].map(turn => turn.owner.id).filter((id): id
 let conversationHeadRead: Promise<void> | undefined;
 let conversationHeadAbort: AbortController | undefined;
 let conversationHeadTimer: ReturnType<typeof setTimeout> | undefined;
+let requestedReconciliation = 0;
+let completedReconciliation = 0;
+let pushRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let pushRecoveryDelay = 1000;
 
 function summaryUnchanged(previous: ConversationSummary | undefined, incoming: ConversationSummary): boolean {
   return previous !== undefined && previous.title === incoming.title && previous.titleSource === incoming.titleSource &&
@@ -674,9 +717,11 @@ function summaryUnchanged(previous: ConversationSummary | undefined, incoming: C
     previous.hasUnreadProactive === incoming.hasUnreadProactive;
 }
 
-function refreshConversationHead(): Promise<void> {
+function refreshConversationHead(allKnown = false): Promise<void> {
   if (disposed) return Promise.resolve();
+  if (allKnown) requestedReconciliation++;
   if (conversationHeadRead) return conversationHeadRead;
+  const reconcileRevision = requestedReconciliation;
   const controller = new AbortController();
   conversationHeadAbort = controller;
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -703,13 +748,47 @@ function refreshConversationHead(): Promise<void> {
           (messageCountChanged && owner.remoteMessageCount !== summary.messageCount)) &&
           !conversationSync.pending(summary.id)) conversationSync.invalidate(summary.id);
     }
+    if (reconcileRevision > completedReconciliation) {
+      completedReconciliation = reconcileRevision;
+      const incoming = new Set(page.items.map(row => row.id));
+      // Reconnection recovered the recent head; reconcile older rows already
+      // loaded in the sidebar too, including deletions missed while disconnected.
+      for (const id of previous.keys()) if (!incoming.has(id) && !deletedConversations.has(id) && !conversationSync.pending(id))
+        conversationSync.invalidate(id);
+    }
     flushConversationChanges();
   })().finally(() => {
     clearTimeout(timeout);
     conversationHeadRead = undefined;
     if (conversationHeadAbort === controller) conversationHeadAbort = undefined;
+    schedulePushRecovery();
   });
   return conversationHeadRead;
+}
+
+// Retry failed invalidations only. No timer remains once the push channel's
+// outstanding work is reconciled, even if a GET failed while the socket stayed online.
+function schedulePushRecovery(): void {
+  const headDirty = requestedReconciliation > completedReconciliation;
+  const active = props.conversationPushActive && !disposed && document.visibilityState === 'visible' && navigator.onLine;
+  const needsRetry = active && ((headDirty && !conversationHeadRead) || conversationSync.retryable());
+  if (!needsRetry) {
+    clearTimeout(pushRecoveryTimer);
+    pushRecoveryTimer = undefined;
+    if (!active || (!headDirty && !conversationSync.hasPending())) pushRecoveryDelay = 1000;
+    return;
+  }
+  if (pushRecoveryTimer !== undefined) return;
+  pushRecoveryTimer = setTimeout(async () => {
+    pushRecoveryTimer = undefined;
+    if (disposed || !props.conversationPushActive || document.visibilityState !== 'visible' || !navigator.onLine) { schedulePushRecovery(); return; }
+    pushRecoveryDelay = Math.min(pushRecoveryDelay * 2, 30000);
+    await Promise.allSettled([
+      requestedReconciliation > completedReconciliation ? refreshConversationHead() : Promise.resolve(),
+      conversationSync.flush()
+    ]);
+    schedulePushRecovery();
+  }, pushRecoveryDelay);
 }
 
 // Native Android writes already emit a targeted local invalidation. Poll less
@@ -717,9 +796,13 @@ function refreshConversationHead(): Promise<void> {
 function scheduleConversationHeadSync(immediate = false): void {
   clearTimeout(conversationHeadTimer);
   if (disposed || document.visibilityState !== 'visible' || !navigator.onLine) return;
+  if (props.conversationPushActive) {
+    if (immediate) void reconcileConversations(true);
+    return;
+  }
   const foreground = clientEnvironment().isForeground;
   conversationHeadTimer = setTimeout(async () => {
-    if (disposed || document.visibilityState !== 'visible') return;
+    if (disposed || document.visibilityState !== 'visible' || props.conversationPushActive) return;
     try {
       if (!foreground || await foreground()) await refreshConversationHead();
     } catch { /* The next bounded poll or reconnect retries. */ }
@@ -727,7 +810,15 @@ function scheduleConversationHeadSync(immediate = false): void {
   }, immediate ? 0 : foreground ? 15000 : 5000);
 }
 
-function conversationHeadForeground(): void { scheduleConversationHeadSync(true); }
+function conversationHeadForeground(): void { scheduleConversationHeadSync(true); schedulePushRecovery(); }
+watch(() => props.conversationPushActive, active => {
+  if (active) {
+    for (const timer of historyRefreshTimers.values()) clearTimeout(timer);
+    historyRefreshTimers.clear();
+  }
+  scheduleConversationHeadSync(true);
+  schedulePushRecovery();
+});
 
 async function loadConversationHistory(reset = false): Promise<void> {
   if (isLoadingHistory.value) {
@@ -775,6 +866,7 @@ async function loadConversationHistory(reset = false): Promise<void> {
 }
 
 function refreshHistoryAfterResponse(ownerId: string): void {
+  if (props.conversationPushActive) return;
   const existing = historyRefreshTimers.get(ownerId);
   if (existing !== undefined) window.clearTimeout(existing);
   const refresh = async (attempt: number): Promise<void> => {
@@ -782,7 +874,7 @@ function refreshHistoryAfterResponse(ownerId: string): void {
     if (disposed || deletedConversations.has(ownerId)) return;
     await loadConversationHistory(true);
     const title = conversations.value.find(c => c.id === ownerId)?.title?.trim();
-    if (disposed || attempt >= 4 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
+    if (disposed || props.conversationPushActive || attempt >= 4 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
     historyRefreshTimers.set(ownerId, window.setTimeout(() => { void refresh(attempt + 1); }, attempt === 0 ? 1800 : 3400));
   };
   void refresh(0);
@@ -1280,7 +1372,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true;
-  conversationSync.dispose(); clearTimeout(conversationSyncTimer); for (const timer of conversationRetryTimers.values()) clearTimeout(timer); conversationRetryTimers.clear();
+  conversationSync.dispose(); clearTimeout(conversationSyncTimer); clearTimeout(pushRecoveryTimer); for (const timer of conversationRetryTimers.values()) clearTimeout(timer); conversationRetryTimers.clear();
   healthController?.abort();
   clearTimeout(conversationHeadTimer);
   conversationHeadAbort?.abort();

@@ -7,8 +7,71 @@ using System.Data;
 
 namespace Aegis.Infrastructure.Persistence;
 
-public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : DbContext(options), IAegisDbContext
+public sealed class AegisDbContext(
+    DbContextOptions<AegisDbContext> options,
+    IConversationChangePublisher? conversationChanges = null) : DbContext(options), IAegisDbContext
 {
+    private Guid? conversationChangeTransaction;
+    private readonly HashSet<Guid> transactionConversationChanges = [];
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        var changed = CaptureConversationChanges();
+        var count = base.SaveChanges(acceptAllChangesOnSuccess);
+        if (count > 0) RecordConversationChanges(changed);
+        return count;
+    }
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        var changed = CaptureConversationChanges();
+        var count = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        if (count > 0) RecordConversationChanges(changed);
+        return count;
+    }
+
+    private Guid[] CaptureConversationChanges()
+    {
+        if (conversationChanges is null) return [];
+        return ChangeTracker.Entries()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(entry => entry.Entity switch
+            {
+                Conversation conversation => conversation.Id,
+                ChatMessage message => message.ConversationId,
+                _ => Guid.Empty
+            })
+            .Where(id => id != Guid.Empty).Distinct().ToArray();
+    }
+
+    // Also used by direct SQL/ExecuteUpdate paths which bypass tracked changes.
+    internal void RecordConversationChanges(params Guid[] ids)
+    {
+        if (conversationChanges is null || ids.Length == 0) return;
+        if (Database.IsRelational() && Database.CurrentTransaction is { } transaction)
+        {
+            if (conversationChangeTransaction != transaction.TransactionId)
+            {
+                transactionConversationChanges.Clear();
+                conversationChangeTransaction = transaction.TransactionId;
+            }
+            transactionConversationChanges.UnionWith(ids);
+            return;
+        }
+
+        foreach (var id in ids) conversationChanges.Publish(id);
+    }
+
+    internal void FinishConversationChanges(Guid transactionId, bool committed)
+    {
+        if (conversationChangeTransaction != transactionId) return;
+        if (committed && conversationChanges is not null)
+            foreach (var id in transactionConversationChanges)
+                conversationChanges.Publish(id);
+        transactionConversationChanges.Clear();
+        conversationChangeTransaction = null;
+    }
+
     public DbSet<NodePushRegistration> NodePushRegistrations => Set<NodePushRegistration>();
     public DbSet<NodeCapabilitySnapshot> NodeCapabilities => Set<NodeCapabilitySnapshot>();
     public DbSet<AegisNode> Nodes => Set<AegisNode>();
@@ -77,9 +140,11 @@ public sealed class AegisDbContext(DbContextOptions<AegisDbContext> options) : D
             conversation.SetGeneratedTitle(title, raw, now); await SaveChangesAsync(ct); return true;
         }
         // A manual rename that commits during model generation always wins.
-        return await Conversations.Where(c => c.Id == id && c.DeletedAt == null && c.TitleGeneratedAt == null && c.TitleSource != Conversation.ManualTitleSource)
+        var changed = await Conversations.Where(c => c.Id == id && c.DeletedAt == null && c.TitleGeneratedAt == null && c.TitleSource != Conversation.ManualTitleSource)
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.Title, title).SetProperty(c => c.TitleSource, Conversation.GeneratedTitleSource)
                 .SetProperty(c => c.TitleGeneratedAt, now).SetProperty(c => c.TitleGenerationRawResponse, raw).SetProperty(c => c.UpdatedAt, now), ct) > 0;
+        if (changed) RecordConversationChanges(id);
+        return changed;
     }
 
     public void AddConversation(Conversation conversation)

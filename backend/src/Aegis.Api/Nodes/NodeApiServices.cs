@@ -29,6 +29,9 @@ public static class NodeApiServices
         services.AddOptions<Transport.NodeTransportOptions>().Configure(options => configuration?.GetSection("NodeTransport").Bind(options))
             .Validate(o => o.IsValid(), "Invalid NodeTransport limits.").ValidateOnStart();
         services.AddSingleton<Transport.NodeConnectionRegistry>();
+        services.AddSingleton<Transport.ConversationChangeDispatcher>();
+        services.AddSingleton<Aegis.Application.Chat.IConversationChangePublisher>(p => p.GetRequiredService<Transport.ConversationChangeDispatcher>());
+        services.AddHostedService<Transport.ConversationChangeDispatcher>(p => p.GetRequiredService<Transport.ConversationChangeDispatcher>());
         services.AddSingleton<Aegis.Application.Nodes.INodeLiveNotifications>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Application.Nodes.INodeLiveDomainSignals>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());
         services.AddSingleton<Aegis.Application.Nodes.INodeConnections>(p => p.GetRequiredService<Transport.NodeConnectionRegistry>());

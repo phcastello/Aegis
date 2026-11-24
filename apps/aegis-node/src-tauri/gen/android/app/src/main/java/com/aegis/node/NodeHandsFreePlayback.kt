@@ -81,7 +81,8 @@ internal class HandsFreePlayback(
             onClosed = { active.compareAndSet(stream, null) },
             onPlaybackEvent = onPlaybackEvent,
             echo = echo,
-            onPlaybackReady = onPlaybackReady
+            onPlaybackReady = onPlaybackReady,
+            boostSpeechVolume = echo != null
         )
         active.getAndSet(stream)?.abort()
         if (generation.get() != token) { stream.abort(); active.compareAndSet(stream, null) }

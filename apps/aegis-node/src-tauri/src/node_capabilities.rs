@@ -26,6 +26,12 @@ impl CapabilityRegistry {
                             version: 1,
                         });
                     }
+                    if crate::platform::current() == crate::platform::Platform::Windows {
+                        capabilities.push(NodeCapability {
+                            name: "conversation.sync".into(),
+                            version: 1,
+                        });
+                    }
                     if matches!(
                         crate::platform::current(),
                         crate::platform::Platform::Android
@@ -96,6 +102,9 @@ mod tests {
                         ("reminder.notify", 1),
                         ("reminder.withdraw", 1),
                     ]);
+                    if crate::platform::current() == crate::platform::Platform::Windows {
+                        capabilities.push(("conversation.sync", 1));
+                    }
                     if crate::platform::current() == crate::platform::Platform::Android {
                         capabilities.extend([("location.current", 1), ("geofence.monitor", 1)]);
                     }

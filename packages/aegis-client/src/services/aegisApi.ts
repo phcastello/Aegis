@@ -20,6 +20,10 @@ function getApiBaseUrl(): string {
   return clientEnvironment().apiBaseUrl;
 }
 
+export class AegisApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 export async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...options,
@@ -40,7 +44,7 @@ export async function requestJson<T>(path: string, options?: RequestInit): Promi
       message = response.statusText || message;
     }
 
-    throw new Error(message);
+    throw new AegisApiError(message, response.status);
   }
 
   if (response.status === 204) {

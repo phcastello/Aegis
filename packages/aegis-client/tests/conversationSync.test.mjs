@@ -15,11 +15,20 @@ test('coalesces duplicates and discards an out-of-order snapshot before retrying
 test('active local turn defers reads, failures remain pending, and disposal rejects late results', async () => {
   let blocked=true, fail=true, reads=0;const applied=[];
   const queue=new ConversationSyncQueue(async () => {reads++;if(fail)throw Error();return 'persisted';},(_,row)=>{applied.push(row);return true;},()=>blocked);
-  queue.invalidate('a');await queue.flush();assert.equal(reads,0);
-  blocked=false;await queue.flush();assert.equal(reads,1);assert.equal(queue.pending('a'),true);
-  fail=false;await queue.flush();assert.deepEqual(applied,['persisted']);
+  queue.invalidate('a');await queue.flush();assert.equal(reads,0);assert.equal(queue.retryable(),false);
+  blocked=false;await queue.flush();assert.equal(reads,1);assert.equal(queue.pending('a'),true);assert.equal(queue.retryable(),true);
+  fail=false;await queue.flush();assert.deepEqual(applied,['persisted']);assert.equal(queue.retryable(),false);
   const held=deferred();const second=new ConversationSyncQueue(()=>held.promise,()=>{assert.fail('disposed result applied');});
   second.invalidate('b');const busy=second.flush();second.dispose();held.resolve('late');await busy;
+});
+test('a failed detached replay signals its dirty state for event-only retry', async () => {
+  const first=deferred(), observations=[];let reads=0;
+  let queue;
+  queue=new ConversationSyncQueue(async id=>{reads++;if(id==='first')return first.promise;throw Error('simulated');},()=>true,()=>false,()=>observations.push(queue.retryable()));
+  queue.invalidate('first');const busy=queue.flush();
+  queue.invalidate('second');await queue.flush();first.resolve('persisted');await busy;
+  for(let i=0;i<5;i++) await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(reads>=2);assert.equal(queue.pending('second'),true);assert.equal(observations.at(-1),true);
 });
 test('server message IDs merge incrementally, retain local objects and avoid duplicate accepted users', () => {
   const user={id:'local-user',conversationId:'a',role:'user',content:'Pedido',createdAt:'1',pending:false};

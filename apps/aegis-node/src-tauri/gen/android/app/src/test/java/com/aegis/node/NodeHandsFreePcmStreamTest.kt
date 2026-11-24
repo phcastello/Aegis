@@ -59,6 +59,89 @@ class NodeHandsFreePcmStreamTest {
         assertTrue(device.closed)
     }
 
+    @Test fun speechGainIsLinearAtOrdinaryLevelsAndMonotonicBoundedAtPeaks() {
+        val values = ShortArray(65536) { (it - 32768).toShort() }
+        val raw = encode(values)
+        val before = raw.copyOf()
+        val output = ByteArray(raw.size)
+        HandsFreePlaybackLevel.amplify(raw, 0, raw.size, output)
+        assertArrayEquals(before, raw)
+        val boosted = decode(output)
+        assertEquals(0, boosted[32768].toInt())
+        assertEquals(1600, boosted[33768].toInt())
+        assertEquals(-1600, boosted[31768].toInt())
+        assertEquals(16000, boosted[42768].toInt())
+        assertTrue(boosted.all { kotlin.math.abs(it.toInt()) < 30000 })
+        for (i in 1 until boosted.size) assertTrue(boosted[i] >= boosted[i - 1])
+        for (i in 1..32767) assertEquals(-boosted[32768 + i].toInt(), boosted[32768 - i].toInt())
+    }
+
+    @Test fun speechGainMatchesActualEchoReferenceAcrossFragmentsAndShortWrites() {
+        val echo = HandsFreeBargeInEcho()
+        val device = Device(autoPlay=true, capacityFrames=37)
+        val player = HandsFreePlayback { _ -> device }
+        val sink = player.openStream({ true }, {}, echo=echo)
+        val framer = HandsFreePcm16Framer(sink)
+        val source = encode(ShortArray(6100) { ((it * 977) % 55001 - 27500).toShort() })
+        val before = source.copyOf()
+        val lengths = intArrayOf(1, 3, 9505, 2, 9, 113)
+        var sent = 0
+        var index = 0
+        while (sent < source.size) {
+            val count = minOf(lengths[index++ % lengths.size], source.size - sent)
+            framer.accept(source.copyOfRange(sent, sent + count), count)
+            sent += count
+        }
+        framer.finish()
+        sink.close()
+        assertEquals(source.size / 2L, framer.samples)
+        assertEquals(source.size / 2L, device.playedFrames())
+        assertArrayEquals(before, source)
+        val expected = ByteArray(source.size)
+        HandsFreePlaybackLevel.amplify(source, 0, source.size, expected)
+        val actual = device.recorded.toByteArray()
+        assertArrayEquals(expected, actual)
+        assertTrue(device.maxWrite <= 74)
+        val played = decode(actual)
+        // Independently resample the actual emitted device bytes at multiple heads.
+        // Recomputing gain after the echo reference was offered fails these checks.
+        for (head in listOf(720L, 2411L, 5305L, 6100L)) {
+            val rendered = ShortArray(320)
+            assertTrue(echo.copyRender(rendered, head))
+            val expectedRender = ShortArray(rendered.size) { i ->
+                val halfFrame = head * 2 - (rendered.size - i) * 3L
+                val frame = (halfFrame / 2).toInt()
+                if (halfFrame % 2 == 0L) played[frame]
+                else ((played[frame].toInt() + played[frame + 1].toInt()) / 2).toShort()
+            }
+            assertArrayEquals(expectedRender, rendered)
+        }
+    }
+
+    @Test fun normalPlaybackWithoutEchoKeepsTheOriginalPcmAndOffset() {
+        val device = Device(autoPlay=true, capacityFrames=2)
+        val player = HandsFreePlayback { _ -> device }
+        val sink = player.openStream { true }
+        val raw = encode(shortArrayOf(7, -16000, 32767, -32768, 26000, -7))
+        val before = raw.copyOf()
+        sink.write(raw, 2, raw.size - 4)
+        sink.finish()
+        sink.close()
+        assertArrayEquals(before, raw)
+        assertArrayEquals(raw.copyOfRange(2, raw.size - 2), device.recorded.toByteArray())
+    }
+
+    private fun encode(values: ShortArray): ByteArray = ByteArray(values.size * 2).also { bytes ->
+        values.forEachIndexed { i, value ->
+            bytes[2 * i] = value.toByte()
+            bytes[2 * i + 1] = (value.toInt() shr 8).toByte()
+        }
+    }
+
+    private fun decode(bytes: ByteArray): ShortArray = ShortArray(bytes.size / 2) { i ->
+        ((bytes[2 * i].toInt() and 255) or (bytes[2 * i + 1].toInt() shl 8)).toShort()
+    }
+
     @Test fun oddEofAndEmptyPcmCannotCompletePlayback() {
         for(data in listOf(byteArrayOf(),byteArrayOf(1),byteArrayOf(1,2,3))) {
             val device=Device(autoPlay=true);val sink=HandsFreeStreamingPcmSink({device})

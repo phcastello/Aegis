@@ -71,6 +71,14 @@ impl NodeRuntime {
             });
         if let Some(config) = config.as_mut() {
             config.notifications = Some(crate::native_notifications::executor(&app));
+            #[cfg(windows)]
+            {
+                use tauri::Emitter;
+                let app = app.clone();
+                config.conversation_sync = Some(Arc::new(move |event| {
+                    let _ = app.emit("aegis-conversation-sync", event);
+                }));
+            }
         }
         Self {
             identity: Arc::new(tokio::sync::Mutex::new(identity)),
