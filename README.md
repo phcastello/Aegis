@@ -1,16 +1,15 @@
-# Aegis — It's Not Stalking. It's a Feature.
-
-*You're terrible at hiding.*
+# Aegis — I Miss the Peace and Quiet
 
 Aegis é uma assistente pessoal desenvolvida para uso próprio, com foco em privacidade, controle e uma personalidade própria. Reúne conversa por texto e voz, memória, integrações com Google, lembretes e ações nos dispositivos pareados.
 
 O backend e os dados são administrados pelo proprietário. Os modelos de linguagem são acessados por API; a Aegis não é uma IA inteiramente local nem um serviço público de cadastro.
 
-**Versão atual: v0.7.2.** [Notas do lançamento](https://github.com/phcastello/Aegis/releases/tag/v0.7.2)
+**v0.8.0.** [Notas do lançamento](docs/v0.8.0-release-notes.md)
 
 ## O que ela faz
 
 - **Conversa:** respostas em streaming, histórico, transcrição de voz e reprodução por TTS.
+- **Hands-free:** ativação local por “Aegis” no Android e Windows, continuidade de conversa, interrupção por voz e coordenação para um Node responder à chamada.
 - **Memória e integrações:** recuperação de informações pessoais e operações conversacionais com Gmail e Google Calendar.
 - **Lembretes:** avisos únicos ou recorrentes, reconhecimento e adiamento, com entrega aos dispositivos elegíveis.
 - **Lugares:** lembretes de chegada e saída no Android, considerando os locais cadastrados e o celular escolhido como fonte de localização.
@@ -22,25 +21,27 @@ Cada instalação nativa pareada é um **Node**: um dispositivo com identidade, 
 
 | Cliente | Disponível hoje |
 | --- | --- |
-| Android ARM64 | Chat, notificações nativas, lembretes e monitoramento geográfico em segundo plano. |
-| Windows x86_64 | Chat, notificações nativas, gerenciamento dos dispositivos e execução na bandeja. |
+| Android ARM64 | Chat, hands-free, notificações nativas, lembretes e monitoramento geográfico em segundo plano. |
+| Windows x86_64 | Chat, hands-free, notificações nativas, gerenciamento dos dispositivos e execução na bandeja. |
 
-Não há distribuição nativa para Linux, macOS ou iOS nesta versão. Na linha de desenvolvimento v0.8.0, o antigo chat Web/PWA é substituído por uma página web de downloads e retorno das autorizações Google; a conversa passa a ser feita nos aplicativos nativos.
+Não há distribuição nativa para Linux, macOS ou iOS nesta versão. Com a v0.8.0, o antigo chat Web/PWA dá lugar a uma página de downloads e retorno das autorizações Google; a conversa é feita nos aplicativos nativos.
 
 ## Baixar e atualizar
 
 | Plataforma | Instalador oficial |
 | --- | --- |
-| Android | [Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.7.2/Aegis-Android-arm64.apk) |
-| Windows | [Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.7.2/Aegis-Windows-x86_64-Setup.exe) |
+| Android | [Aegis-Android-arm64.apk](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0/Aegis-Android-arm64.apk) |
+| Windows | [Aegis-Windows-x86_64-Setup.exe](https://github.com/phcastello/Aegis/releases/download/node-v0.8.0/Aegis-Windows-x86_64-Setup.exe) |
 
-As assinaturas e os hashes estão na [distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.7.2). Os instaladores são configurados para o backend pessoal do projeto; baixá-los não cria uma instância independente.
+As assinaturas e os hashes acompanham a [distribuição nativa](https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0). Os instaladores são configurados para o backend pessoal do projeto; baixá-los não cria uma instância independente.
 
 **Atualize por Configurações → Atualizações ou instale sobre a versão existente. Não desinstale para atualizar.** O Android solicita confirmação para instalar o APK. No Windows, o SmartScreen pode indicar editor desconhecido: a assinatura do updater é independente de um certificado comercial de editor.
 
 ## Primeiro uso
 
 O chat pode ser usado sem pareamento. Para receber lembretes nativos, abra **Configurações → Dispositivos** e pareie a instalação com um código temporário gerado por outro Node ou pelo administrador do backend.
+
+Para usar hands-free, pareie o Node, importe o modelo de ativação privado em **Configurações → Áudio e voz → Hands-free**, conceda a permissão de microfone e ative a escuta. No Android, selecione a Aegis também como assistente do sistema. O modelo privado não acompanha os instaladores e não precisa ser reimportado quando já válido.
 
 Para lembretes geográficos, selecione o celular que fornece sua localização, conceda as permissões de localização precisa e em segundo plano e cadastre o lugar no mapa. Depois, crie a regra pela interface ou pelo chat:
 
@@ -66,7 +67,7 @@ O uso de APIs de modelos, transcrição, Google, mapas e notificações envolve 
 
 A localização usa eventos geográficos e aquisições temporárias, não GPS permanentemente ativo. Permissões, precisão e restrições do Android podem afetar a detecção. Com o backend inacessível, regras previamente sincronizadas podem notificar localmente; os requisitos de localização do Android continuam valendo. Ações pendentes são reconciliadas ao recuperar conexão.
 
-O comportamento de memória registrado na [issue #23](https://github.com/phcastello/Aegis/issues/23) permanece adiado. As verificações de voz e execução em segundo plano têm os limites descritos nas [notas da v0.7.2](docs/v0.7.2-release-notes.md#limitações-conhecidas).
+O comportamento de memória registrado na [issue #23](https://github.com/phcastello/Aegis/issues/23) permanece adiado. A referência experimental de mídia externa do Android continua na [issue #27](https://github.com/phcastello/Aegis/issues/27). As verificações de voz e execução em segundo plano têm os limites descritos nas [notas da v0.8.0](docs/v0.8.0-release-notes.md#limitações-conhecidas).
 
 ## Filosofia de desenvolvimento
 
@@ -82,6 +83,7 @@ O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.
 - [Funcionalidades introduzidas na v0.7.0](docs/v0.7.0-release-notes.md)
 - [Correção da v0.7.1](docs/v0.7.1-release-notes.md)
 - [Novidades e atualização da v0.7.2](docs/v0.7.2-release-notes.md)
+- [Novidades e atualização da v0.8.0](docs/v0.8.0-release-notes.md)
 - [Histórico técnico da implementação](docs/v0.7.0-completion.md)
 
 O [registro técnico da v0.7.2](docs/v0.7.2-implementation.md) preserva as etapas de desenvolvimento e suas evidências. Os relatos antigos ficam no [arquivo histórico](docs/arquivo/README-ate-v0.7.1.md).
