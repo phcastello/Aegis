@@ -52,6 +52,30 @@ A decisão de ignorar encerra o turno sem resposta registrada, extração de mem
 
 A primeira chamada, que pode resultar em descarte, usa `store=false`. Uma interação legítima não requer uma chamada de classificação adicional. A Luna continua responsável pelos títulos e pelos demais componentes que a usam. O contrato 204/ignored permanece válido; o sinal sonoro da ativação continua ocorrendo antes da transcrição.
 
+### Fragmentos isolados sem intenção
+
+Uma falsa ativação também pode produzir um fragmento estranho de STT que não se
+parece com fala dirigida a outra pessoa. Como defesa adicional, o próprio
+modelo de resposta recebe a orientação para ignorar silenciosamente apenas um
+fragmento isolado **sem intenção conversacional reconhecível e sem relação
+plausível com o contexto recente**. Não deve inventar uma intenção ou perguntar
+o significado de uma etiqueta solta sem propósito. A regra não usa lista de
+palavras, pontuação, idioma, quantidade de palavras ou limiar de confiança.
+Pedidos curtos (por exemplo, “pare”, “hora?”, “agenda”, “volume”), respostas,
+termos técnicos pertinentes à conversa e ditados continuam válidos. Quando há
+dúvida razoável de que exista uma interação plausível com a Aegis, mantém-se
+o atendimento.
+
+A orientação e a descrição de `hands_free_ignore` conservam o mesmo contrato
+de aceite: apenas no primeiro turno, para hands-free com descarte habilitado,
+sem nova chamada de classificação nem modificação do STT. Os testes de
+contrato verificam a orientação efetivamente enviada ao modelo, a ausência
+dela nos pedidos manuais/legados e a aceitação de uma resposta curta.
+Não comprovam a escolha semântica de um modelo real em cada exemplo; a regra
+não substitui a detecção acústica nem garante que toda alucinação de STT
+será ignorada. A investigação do STT e a salvaguarda para silêncio estão
+descritas em [STT realtime](hands-free-realtime-stt.md#salvaguarda-de-transcrição-sem-fala-44).
+
 ### Integração
 
 A suíte geral do backend passou com 827 testes aprovados, 101 condicionais ignorados e zero falhas. Os 56 casos focados passaram, incluindo descarte exclusivo, persistência, cancelamento e segmentos de voz incrementais.

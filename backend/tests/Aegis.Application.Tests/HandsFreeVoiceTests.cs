@@ -280,8 +280,27 @@ public sealed class HandsFreeVoiceTests
             Assert.Equal("done", events.Last().Type);
         }
         else Assert.NotNull(await chat.SendMessageAsync(request));
-        Assert.Equal(handsFree && optIn, model.Requests.Single().Tools.Any(t => t.Name == HandsFreeDirection.IgnoreToolName));
-        Assert.Single(model.Requests);
+        var modelRequest = Assert.Single(model.Requests);
+        var ignore = modelRequest.Tools.SingleOrDefault(t => t.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.Equal(handsFree && optIn, ignore is not null);
+        var inputTexts = modelRequest.Request.InputItems?
+            .Where(item => item.TryGetProperty("content", out var text) && text.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetProperty("content").GetString()!).ToArray() ?? [];
+        var direction = inputTexts.SingleOrDefault(text => text.Contains(HandsFreeDirection.Guidance, StringComparison.Ordinal));
+        Assert.Equal(handsFree && optIn, direction is not null);
+        if (direction is not null)
+        {
+            // This is a model-request contract regression, not a claim that
+            // the mock model semantically understands an utterance.
+            Assert.Contains("sem intenção conversacional reconhecível E sem relação plausível com o contexto recente", direction);
+            Assert.Contains("não exige esclarecimento", direction);
+            Assert.Contains("Não descarte pelo número de palavras, pela pontuação, pelo idioma ou pela presença de um termo técnico", direction);
+            Assert.Contains("'pare', 'hora?', 'agenda' e 'volume'", direction);
+            Assert.Contains("um termo isolado em resposta a uma pergunta ou em ditado devem ser atendidos", direction);
+            Assert.Contains("na dúvida razoável, atenda normalmente", direction);
+            Assert.Contains("sem intenção conversacional reconhecível e sem relação plausível com o contexto recente", ignore!.Description);
+            Assert.Contains("Não use para pedidos, respostas, relatos ou continuações plausíveis, mesmo curtos", ignore.Description);
+        }
         Assert.Single(await db.Conversations.ToListAsync());
         Assert.Equal(2, await db.ChatMessages.CountAsync());
     }
