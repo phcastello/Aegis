@@ -403,7 +403,11 @@ fn cycle(
         if text.is_empty() {
             return Ok(());
         }
-        let reply = backend.respond(session, destination, text)?;
+        let Some(reply) = backend.respond(session, destination, text)? else {
+            // End the interaction quietly. The paused media guard resumes media
+            // and the next cycle reopens the microphone for the wake word.
+            return Ok(());
+        };
         shared.publish("speaking");
         backend.speak(&reply)?;
         {

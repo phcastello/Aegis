@@ -1,5 +1,5 @@
 use crate::{node_commands::NodeRuntime, windows_voice_audio::Output, windows_voice_signal::wav};
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -182,10 +182,25 @@ impl Backend {
         session: Uuid,
         destination: Option<Uuid>,
         text: String,
-    ) -> Result<Reply> {
+    ) -> Result<Option<Reply>> {
         let turn = Uuid::new_v4();
         self.turn = Some(turn);
-        let result=self.json(self.post("/api/chat/messages",180).json(&json!({"turnId":turn,"conversationId":destination,"voiceSessionId":session,"origin":"hands_free","content":text})))?;
+        let response = self.send(self.post("/api/chat/messages", 180).json(&json!({
+            "turnId": turn,
+            "conversationId": destination,
+            "voiceSessionId": session,
+            "origin": "hands_free",
+            "content": text,
+            "allowSilentIgnore": true,
+        })))?;
+        if response.status() == StatusCode::NO_CONTENT {
+            // The server deliberately did not create a turn or assistant message.
+            // Clear the cleanup handle and finish without speech or a chat update.
+            self.turn = None;
+            self.current()?;
+            return Ok(None);
+        }
+        let result = self.json_response(response)?;
         let conversation = parse_uuid(&result["conversationId"])?;
         let message = &result["message"];
         if destination.is_some_and(|id| id != conversation)
@@ -194,11 +209,11 @@ impl Backend {
         {
             return Err("backend_response");
         }
-        Ok(Reply {
+        Ok(Some(Reply {
             conversation,
             message: parse_uuid(&message["id"])?,
             continuation: result["voiceContinuation"] == "continue",
-        })
+        }))
     }
     pub fn speak(&mut self, reply: &Reply) -> Result<()> {
         let mut output = None;

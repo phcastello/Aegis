@@ -56,6 +56,104 @@ class NodeHandsFreeBackendTest {
   private fun segmentPcmReply()=Reply(bytes=byteArrayOf(1,2,3,4),headers=mapOf(
     "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
 
+  @Test fun silentIgnoreEndsTheTurnWithoutAudioOrChatChangesInEitherMode() {
+    for (incremental in listOf(false, true)) for (destination in listOf(null, conversation)) {
+      val stages = CopyOnWriteArrayList<String>()
+      val changes = CopyOnWriteArrayList<String>()
+      val reported = CopyOnWriteArrayList<String>()
+      Fixture(transcript="Trecho de uma conversa de fundo",respond={request,normal->
+        when (request.path) {
+          "/api/chat/messages" -> Reply(204)
+          "/api/chat/messages/stream" -> Reply(bytes=(JSONObject().put("type","ignored")
+            .put("turnId",JSONObject(request.text()).getString("turnId")).toString()+"\n").toByteArray())
+          else -> normal
+        }
+      }).use { fixture ->
+        val sink = RecordingSink()
+        val turn = fixture.backend(onChanged={_,id->changes.add(id)},onStage={stage,_->stages.add(stage)})
+          .execute(wav(),session,destination,sink,null,incremental=incremental,onConversation={reported.add(it)})
+        assertEquals(HandsFreeTurn(destination,false,false,ignored=true),turn)
+        assertTrue(stages.contains("ignored"))
+        assertTrue(stages.none{it=="failed" || it.startsWith("tts_")})
+        assertTrue(changes.isEmpty())
+        assertTrue(reported.isEmpty())
+        assertTrue(sink.closed)
+        assertFalse(sink.aborted)
+        assertFalse(sink.finished)
+        assertEquals(0,sink.bytes.size())
+        val chatPath=if(incremental)"/api/chat/messages/stream" else "/api/chat/messages"
+        assertEquals(listOf("/api/voice/transcriptions",chatPath),fixture.requests.map{it.path})
+        val chat=JSONObject(fixture.requests.last().text())
+        assertTrue(chat.getBoolean("allowSilentIgnore"))
+        assertEquals(destination,chat.optString("conversationId").takeUnless{chat.isNull("conversationId")})
+      }
+    }
+  }
+
+  @Test fun shortCommandsAndLegacyResponseContinueToUseTheNormalVoicePath() {
+    for (incremental in listOf(false, true)) for (command in listOf("sim","pare","pode continuar")) {
+      Fixture(transcript=command,respond={request,normal->
+        when(request.path) {
+          "/api/chat/messages/stream" -> segmentedReply(request)
+          "/api/voice/speech/segments" -> segmentPcmReply()
+          else -> normal
+        }
+      }).use { fixture ->
+        val sink=RecordingSink()
+        val result=fixture.backend().execute(wav(),session,conversation,sink,null,incremental=incremental)
+        val chat=JSONObject(fixture.requests.first{it.path.startsWith("/api/chat/messages")}.text())
+        assertEquals(command,chat.getString("content"))
+        assertTrue(chat.getBoolean("allowSilentIgnore"))
+        assertFalse(result.ignored)
+        assertTrue(result.playedAudio)
+        assertTrue(sink.finished)
+      }
+    }
+  }
+
+  @Test fun aMalformedOrNonexclusiveIgnoreCannotCompleteAnInteraction() {
+    for(failure in listOf("turn","extra","before","after","duplicate","truncated")) {
+      val changes=CopyOnWriteArrayList<String>()
+      val reported=CopyOnWriteArrayList<String>()
+      Fixture(respond={request,normal->
+        if(request.path!="/api/chat/messages/stream")normal else {
+          val turn=JSONObject(request.text()).getString("turnId")
+          val ignored=JSONObject().put("type","ignored").put("turnId",if(failure=="turn")UUID.randomUUID().toString() else turn)
+          if(failure=="extra")ignored.put("conversationId",conversation)
+          val marker=JSONObject().put("type","tool_status").put("turnId",turn)
+          val conversationMarker=JSONObject().put("type","conversation").put("turnId",turn).put("conversationId",conversation)
+          val events=when(failure) {
+            "before" -> listOf(marker,ignored)
+            "after" -> listOf(ignored,conversationMarker)
+            "duplicate" -> listOf(ignored,ignored)
+            else -> listOf(ignored)
+          }
+          val bytes=(events.joinToString("\n")+"\n").toByteArray()
+          if(failure=="truncated")Reply(bytes=bytes+byteArrayOf(32),stream={out->out.write(bytes);out.flush()})
+          else Reply(bytes=bytes)
+        }
+      }).use{fixture->
+        val sink=RecordingSink()
+        assertThrows(Exception::class.java) {
+          fixture.backend(onChanged={_,id->changes.add(id)}).execute(wav(),session,null,sink,null,
+            incremental=true,onConversation={reported.add(it)})
+        }
+        assertTrue(failure,changes.isEmpty())
+        assertTrue(failure,reported.isEmpty())
+        assertTrue(failure,sink.closed)
+        assertTrue(failure,sink.aborted)
+        assertFalse(failure,fixture.requests.any{it.path.startsWith("/api/voice/speech")})
+      }
+    }
+  }
+
+  @Test fun emptySuccessfulHttpResponseIsNotAnIgnoreDecision() {
+    Fixture(respond={request,normal->if(request.path=="/api/chat/messages")Reply(200) else normal}).use {fixture ->
+      assertThrows(Exception::class.java){fixture.backend().runTurn(wav(),session,null)}
+      assertFalse(fixture.requests.any{it.path.startsWith("/api/voice/speech")})
+    }
+  }
+
   @Test fun conversationCallbackReportsOnceBeforeSegmentSpeechWithAndWithoutMarker() {
     for(markers in listOf(0,1,2)) {
       val destinations=CopyOnWriteArrayList<String>()

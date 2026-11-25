@@ -161,7 +161,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             NodeNativeSession.read(context)?.takeIf{sessionIdentity!=null && NodeNativeSession.fingerprint(it)==sessionIdentity}
         },onStage={stage,duration->
             if(stage in setOf("stt","chat","tts_fetch","tts_first_audio","tts_total","tts_playback"))metrics.timing(stage,duration,identity)
-            if(stage in setOf("transcribed","empty","failed"))metrics.addForIdentity("commands_${stage}",1,identity)
+            if(stage in setOf("transcribed","empty","ignored","failed"))metrics.addForIdentity("commands_${stage}",1,identity)
             if(stage in setOf("transcription_started","transcription_final","empty","tts_first_audio")) synchronized(lock) {
                 if(ownsTurn(generation,session,owner)) when(stage) {
                     "transcription_started"->transcriptionStatus="in_progress"
@@ -1072,7 +1072,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         interruptedPlayback = pendingInterruption?.second) { destination ->
                         response?.destination = destination
                     }
-                    if (turn.playedAudio) pendingInterruption = null
+                    if (turn.playedAudio || turn.ignored) pendingInterruption = null
                     command.fill(0)
                     synchronized(lock) {
                         if(!ownsTurn(generation,session,active))throw CancellationException()
@@ -1086,8 +1086,12 @@ internal class HandsFreeRuntime(private val context:Context) {
                         }
                         continuation=turn.continueListening && turn.playedAudio
                         continuationDeadline=(playbackCompletedAt?:SystemClock.elapsedRealtime())+2000
-                        turnOutcome=if(turn.playedAudio)"played" else "empty"
-                        if(!continuation){finishEvent(turnOutcome,if(turn.playedAudio)"session_completed" else "empty_command");endConversationSession(session,releaseMediaFocus=false)}
+                        turnOutcome=when { turn.ignored -> "ignored"; turn.playedAudio -> "played"; else -> "empty" }
+                        if(!continuation){
+                            val reason=when { turn.ignored -> "not_addressed"; turn.playedAudio -> "session_completed"; else -> "empty_command" }
+                            finishEvent(turnOutcome,reason)
+                            endConversationSession(session,releaseMediaFocus=false)
+                        }
                     }
                 }catch(error:Exception){
                     continuation=false

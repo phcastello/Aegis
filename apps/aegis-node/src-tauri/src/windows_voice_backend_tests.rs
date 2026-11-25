@@ -90,6 +90,7 @@ fn winner_transcribes_one_command_sends_it_to_fixed_conversation_and_decodes_str
         let body: Value = serde_json::from_slice(&p).unwrap();
         assert_eq!(body["content"], "continue de onde parou");
         assert_eq!(body["origin"], "hands_free");
+        assert_eq!(body["allowSilentIgnore"], true);
         assert_eq!(body["voiceSessionId"], id.to_string());
         assert_eq!(body["conversationId"], convo.to_string());
         let turn = body["turnId"].clone();
@@ -109,7 +110,7 @@ fn winner_transcribes_one_command_sends_it_to_fixed_conversation_and_decodes_str
     });
     assert!(backend.claim(id, Instant::now(), 0.9, Some(12.)).unwrap());
     let text = backend.transcribe(&[0i16; 64]).unwrap();
-    let reply = backend.respond(id, Some(convo), text).unwrap();
+    let reply = backend.respond(id, Some(convo), text).unwrap().unwrap();
     assert!(reply.continuation);
     let mut played = Vec::new();
     backend
@@ -169,5 +170,52 @@ fn cancellation_interrupts_pending_election_before_response() {
         backend.claim(id, Instant::now(), 0.8, None),
         Err("cancelled")
     );
+    worker.join().unwrap();
+}
+
+#[test]
+fn ignored_transcript_has_no_reply_or_cleanup_turn_and_next_request_still_works() {
+    let (mut backend, server) = fixture();
+    let session = Uuid::new_v4();
+    let convo = Uuid::new_v4();
+    let msg = Uuid::new_v4();
+    let worker = thread::spawn(move || {
+        for destination in [None, Some(convo)] {
+            let (mut s, p) = request(&server, "/api/chat/messages");
+            let body: Value = serde_json::from_slice(&p).unwrap();
+            assert_eq!(body["conversationId"], json!(destination));
+            assert_eq!(body["voiceSessionId"], json!(session));
+            assert_eq!(body["allowSilentIgnore"], true);
+            assert_eq!(body["origin"], "hands_free");
+            s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+        // The next request is still allowed in the same conversation. The
+        // legacy success JSON contains the existing assistant reply.
+        let (s, p) = request(&server, "/api/chat/messages");
+        let body: Value = serde_json::from_slice(&p).unwrap();
+        assert_eq!(body["conversationId"], json!(convo));
+        assert_eq!(body["content"], "sim");
+        answer(
+            s,
+            json!({"conversationId":convo,"message":{"id":msg,"role":"assistant","conversationId":convo},"voiceContinuation":"continue"}),
+        );
+    });
+    for destination in [None, Some(convo)] {
+        assert!(backend
+            .respond(session, destination, "Conversa ao fundo.".into())
+            .unwrap()
+            .is_none());
+        assert!(backend.turn.is_none());
+        assert!(backend.speech.is_none());
+    }
+    let reply = backend
+        .respond(session, Some(convo), "sim".into())
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply.conversation, convo);
+    assert_eq!(reply.message, msg);
+    assert!(reply.continuation);
+    backend.turn = None;
     worker.join().unwrap();
 }

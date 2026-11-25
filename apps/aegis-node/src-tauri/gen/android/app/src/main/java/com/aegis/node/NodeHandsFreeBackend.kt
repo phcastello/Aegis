@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** PCM uses the existing voice endpoint's format: signed little endian, mono, 24 kHz. */
-data class HandsFreeTurn(val conversationId: String?, val playedAudio: Boolean, val continueListening: Boolean)
+data class HandsFreeTurn(val conversationId: String?, val playedAudio: Boolean, val continueListening: Boolean,
+                         val ignored: Boolean = false)
 
 /** One instance belongs to one native session; it never reads the WebView's draft or destination. */
 class NodeHandsFreeBackend internal constructor(
@@ -68,7 +69,7 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   private fun request(path: String, body: ByteArray, contentType: String, limit: Int, timeoutSeconds: Int,
-                      pcm: HandsFreePcmSink? = null, onFirstPcm: () -> Unit = {}, method: String = "POST", cleanup: Boolean = false, onLine: ((JSONObject) -> Unit)? = null, pcmDeliveryMetrics:Boolean=true, onFirstByte:()->Unit={}, onPcmAvailable:()->Unit={}): ByteArray {
+                      pcm: HandsFreePcmSink? = null, onFirstPcm: () -> Unit = {}, method: String = "POST", cleanup: Boolean = false, onLine: ((JSONObject) -> Unit)? = null, pcmDeliveryMetrics:Boolean=true, onFirstByte:()->Unit={}, onPcmAvailable:()->Unit={}, onNoContent:(()->Unit)?=null): ByteArray {
     val pinned = scope ?: throw NodeNativeSession.IdentityUnavailable()
     require(path.startsWith("/api/") && !path.contains("..") && !path.contains("?"))
     if (!cleanup) checkCurrent()
@@ -99,6 +100,9 @@ class NodeHandsFreeBackend internal constructor(
       if (!cleanup) checkCurrent()
       call.execute().use { response ->
         if (!response.isSuccessful) throw NodeNativeSession.HttpFailure(response.code)
+        if (response.code == 204 && onNoContent != null) {
+          checkCurrent(); onNoContent(); return ByteArray(0)
+        }
         if (pcm != null) require(response.header("X-Aegis-Audio-Format") == "pcm_s16le" &&
           response.header("X-Aegis-Sample-Rate") == "24000" && response.header("X-Aegis-Channels") == "1")
         if (pcm != null) checkCurrent()
@@ -154,10 +158,14 @@ class NodeHandsFreeBackend internal constructor(
     } finally { activeCalls.remove(call); call.cancel() }
   }
 
-  private fun json(path: String, body: JSONObject): JSONObject {
+  private fun chatJson(body: JSONObject): JSONObject? {
     val bytes = body.toString().toByteArray(Charsets.UTF_8)
-    return try { JSONObject(String(request(path, bytes, "application/json", 262144, 120), Charsets.UTF_8)) }
-      finally { bytes.fill(0) }
+    return try {
+      var ignored = false
+      val response = request("/api/chat/messages", bytes, "application/json", 262144, 120, onNoContent = { ignored = true })
+      try { if (ignored) null else JSONObject(String(response, Charsets.UTF_8)) }
+      finally { response.fill(0) }
+    } finally { bytes.fill(0) }
   }
 
   private inline fun <T> timed(stage: String, action: () -> T): T {
@@ -249,10 +257,11 @@ class NodeHandsFreeBackend internal constructor(
       if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback, reportConversation)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
-        json("/api/chat/messages", JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
-          .put("content", command).put("origin", "hands_free").put("voiceSessionId", sessionId))
+        chatJson(JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
+          .put("content", command).put("origin", "hands_free").put("voiceSessionId", sessionId).put("allowSilentIgnore", true))
       }
       trace?.mark("chat_response_received")
+      if (result == null) return ignoredTurn(conversationId)
       val destination = result.getString("conversationId")
       require(UUID.fromString(destination).toString() == destination)
       require(conversationId == null || destination == conversationId)
@@ -312,6 +321,14 @@ class NodeHandsFreeBackend internal constructor(
     }
   }
 
+  private fun ignoredTurn(conversationId: String?): HandsFreeTurn {
+    checkCurrent()
+    turnId = null
+    latencyTrace?.mark("chat_ignored")
+    onStage("ignored", 0)
+    return HandsFreeTurn(conversationId, false, false, ignored = true)
+  }
+
   private fun transcribeBatch(wav:ByteArray):String {
     val trace=latencyTrace
     val transcriptionId = UUID.randomUUID().toString()
@@ -362,17 +379,30 @@ class NodeHandsFreeBackend internal constructor(
     }
     val bytes=JSONObject().put("turnId",id).put("conversationId",conversationId?:JSONObject.NULL)
       .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
+      .put("allowSilentIgnore",true)
       .apply { interruptedPlayback?.takeIf { it.conversationId == conversationId }?.let { put("interruptedPlayback", it.toJson()) } }
       .toString().toByteArray(Charsets.UTF_8)
     val reader=Thread({
       var persistedDestination=conversationId
       var persistedMessage:String?=null
       var persistedSequence=0
+      var hasEvent=false
+      var ignored=false
       try {
         trace?.mark("chat_request_started")
         request("/api/chat/messages/stream",bytes,"application/json",1048576,180,onLine={ event ->
           checkCurrent();require(event.getString("turnId")==id)
+          require(!ignored){"events_after_ignored"}
+          val firstEvent = !hasEvent
+          hasEvent = true
           when(event.getString("type")) {
+            "ignored" -> {
+              // A discarded utterance is the entire stream, before any persistent boundary.
+              require(firstEvent && event.length() == 2){"invalid_ignored_event"}
+              ignored = true
+              while(!stopped.get() && !events.offer(event,200,TimeUnit.MILLISECONDS)) checkNotCancelled()
+              if(stopped.get())throw CancellationException()
+            }
             "conversation" -> {
               val destination=event.getString("conversationId");requireUuid(destination)
               require(persistedDestination==null || persistedDestination==destination)
@@ -418,10 +448,11 @@ class NodeHandsFreeBackend internal constructor(
           if(event==null){check(reader.isAlive || events.isNotEmpty()){"incomplete_chat_stream"};continue}
           when(event.getString("type")) {
             "error" -> error("chat_stream_failed")
-            "done" -> {
-              require(sequence>0 && event.getString("conversationId")==destination && event.getString("assistantMessageId")==messageId)
+            "done","ignored" -> {
+              if(event.getString("type")=="ignored") require(sequence==0 && messageId==null)
+              else require(sequence>0 && event.getString("conversationId")==destination && event.getString("assistantMessageId")==messageId)
               trace?.mark("chat_response_received")
-              // done cannot conceal a truncated HTTP body or later stream failure.
+              // A terminal event cannot conceal a truncated HTTP body or later stream failure.
               reader.join(3000);check(!reader.isAlive){"chat_stream_did_not_finish"}
               readerFailure.get()?.let{throw it};require(events.isEmpty()){"events_after_done"}
               val terminal=SegmentDownload(event)
@@ -496,6 +527,7 @@ class NodeHandsFreeBackend internal constructor(
       onFirstUsefulPcmAvailable={frame->trace?.usefulFrame(frame);trace?.mark("tts_first_useful_pcm_available")},
       onFirstUsefulPcmDelivered={trace?.mark("tts_first_useful_pcm_delivered")})
     val block=ByteArray(8192)
+    var ignored = false
     try {
       while(true) {
         checkNotCancelled();schedulerFailure.get()?.let{throw it}
@@ -503,6 +535,9 @@ class NodeHandsFreeBackend internal constructor(
         val unit=units.poll(200,TimeUnit.MILLISECONDS)
         if(unit==null){check(scheduler.isAlive || units.isNotEmpty()){"incomplete_segment_queue"};continue}
         try {
+          if(unit.event.getString("type")=="ignored") {
+            return ignoredTurn(conversationId).also { ignored = true }
+          }
           if(unit.event.getString("type")=="done") {
             framer.verifyComplete();pcm.finish();trace?.mark("playback_finished");checkCurrent()
             val destination=unit.event.getString("conversationId")
@@ -533,7 +568,7 @@ class NodeHandsFreeBackend internal constructor(
       while(true){val abandoned=units.poll()?:break;abandoned.close()}
       val withinDeadline=deadlineArmed.getAndSet(false);deadline.cancel(false)
       if(!withinDeadline)requestCancellation()
-      onStage("tts_total",(System.nanoTime()-started)/1000000)
+      if(!ignored)onStage("tts_total",(System.nanoTime()-started)/1000000)
     }
   }
 
