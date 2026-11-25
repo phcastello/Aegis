@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createServer as createNetServer } from 'node:net';
 import { chromium } from 'playwright-core';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../../..');
 const requireNative=createRequire(join(root,'apps/aegis-node/package.json'));
-const {createServer}=await import(requireNative.resolve('vite'));
+const {createServer}=await import(pathToFileURL(requireNative.resolve('vite')).href);
+const ephemeralPort = () => new Promise((resolve, reject) => { const probe = createNetServer(); probe.once('error', reject); probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(error => error ? reject(error) : resolve(port)); }); });
 const a='10000000-0000-4000-8000-000000000001', b='20000000-0000-4000-8000-000000000002', c='30000000-0000-4000-8000-000000000003';
 const generation='90000000-0000-4000-8000-000000000009';
 const date='2026-10-01T12:00:00Z';
@@ -16,7 +18,7 @@ const summary=row=>({...row,messages:undefined,messageCount:row.messages.length,
 let hold=null, held=null, failReads=0, failHeads=0, stream=null, reads=0, heads=0;
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label){for(let i=0;i<200;i++){if(fn())return;await delay(20);}throw Error(`timeout: ${label}`);}
-const vite=await createServer({root:join(root,'apps/aegis-node'),resolve:{alias:{'@aegis/client':join(root,'packages/aegis-client/src')}},server:{host:'127.0.0.1',port:0,strictPort:false}});await vite.listen();
+const vite=await createServer({root:join(root,'apps/aegis-node'),resolve:{alias:{'@aegis/client':join(root,'packages/aegis-client/src')}},server:{host:'127.0.0.1',port:await ephemeralPort(),strictPort:false}});await vite.listen();
 const viteOrigin=`http://127.0.0.1:${vite.httpServer.address().port}`;
 const json=(res,value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 const server=http.createServer(async(req,res)=>{

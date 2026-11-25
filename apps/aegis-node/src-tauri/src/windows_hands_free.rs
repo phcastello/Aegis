@@ -640,6 +640,20 @@ fn monitor_turn(
                         announce_conversation(shared, announced, conversation);
                     }
                 },
+                |event| {
+                    let _guard = phase.lock().unwrap();
+                    // Cancellation and new capture already share the same
+                    // gate with state/navigation. Only cleanup for this old
+                    // turn may follow that boundary.
+                    if !worker_cancel.is_cancelled()
+                        || matches!(event.kind, "interrupted" | "error" | "ignored")
+                    {
+                        let _ =
+                            shared
+                                .app
+                                .emit_to("main", "aegis-windows-voice-chat-stream", event);
+                    }
+                },
                 || {
                     let mut output = Output::open()?;
                     output.observe_reference(worker_reference);

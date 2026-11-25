@@ -62,6 +62,56 @@ pub(crate) struct TurnReport {
     pub playback: Option<PlaybackInterruption>,
 }
 
+/// Local projection of validated, already committed chat events. Speech
+/// playback and server reconciliation remain independent of this observer.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VoiceChatStreamEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub turn_id: Uuid,
+    pub conversation_id: Option<Uuid>,
+    pub assistant_message_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+impl VoiceChatStreamEvent {
+    fn new(
+        kind: &'static str,
+        turn_id: Uuid,
+        conversation_id: Option<Uuid>,
+        assistant_message_id: Option<Uuid>,
+    ) -> Self {
+        Self {
+            kind,
+            turn_id,
+            conversation_id,
+            assistant_message_id,
+            segment_id: None,
+            sequence: None,
+            content: None,
+        }
+    }
+    fn segment(turn_id: Uuid, segment: &Segment, content: String) -> Self {
+        Self {
+            segment_id: Some(segment.id),
+            sequence: Some(segment.sequence),
+            content: Some(content),
+            ..Self::new(
+                "final_segment",
+                turn_id,
+                Some(segment.conversation),
+                Some(segment.assistant),
+            )
+        }
+    }
+}
+
 pub(crate) trait TurnAudio {
     fn write(&mut self, samples: &[i16], cancel: &CancellationToken) -> Result<()>;
     fn finish(&mut self, cancel: &CancellationToken) -> Result<()>;
@@ -130,6 +180,7 @@ impl PlaybackProgress {
 struct ChatProgress {
     conversation: Option<Uuid>,
     accepted: bool,
+    assistant: Option<Uuid>,
 }
 
 enum ChatEvent {
@@ -330,6 +381,7 @@ impl Backend {
         samples: &[i16],
         interruption: Option<&Interruption>,
         on_conversation: impl Fn(Uuid) + Send,
+        on_stream: impl Fn(VoiceChatStreamEvent) + Sync,
         open: impl FnOnce() -> Result<A>,
     ) -> TurnReport {
         let turn_id = Uuid::new_v4();
@@ -346,6 +398,16 @@ impl Backend {
             Ok(text) => text,
             Err(error) => {
                 report.result = Err(error);
+                on_stream(VoiceChatStreamEvent::new(
+                    if self.cancel.is_cancelled() {
+                        "interrupted"
+                    } else {
+                        "error"
+                    },
+                    turn_id,
+                    None,
+                    None,
+                ));
                 return report;
             }
         };
@@ -355,6 +417,7 @@ impl Backend {
                 ignored: true,
                 continuation: false,
             });
+            on_stream(VoiceChatStreamEvent::new("ignored", turn_id, None, None));
             return report;
         }
         report.transcript = Some(text.clone());
@@ -384,6 +447,7 @@ impl Backend {
         let progress = Arc::new(Mutex::new(ChatProgress {
             conversation: destination,
             accepted: false,
+            assistant: None,
         }));
         let mut output: Option<A> = None;
         let mut playback = PlaybackProgress::default();
@@ -414,6 +478,7 @@ impl Backend {
             }
         });
         report.result = thread::scope(|scope| {
+            let on_stream = &on_stream;
             let read = scope.spawn(move || {
                 let result = reader.read_chat(
                     turn_id,
@@ -422,6 +487,7 @@ impl Backend {
                     &reader_progress,
                     send,
                     on_conversation,
+                    on_stream,
                 );
                 if result.is_err() {
                     reader.cancel.cancel();
@@ -464,6 +530,20 @@ impl Backend {
         report.conversation = confirmed.conversation;
         report.accepted = confirmed.accepted;
         report.playback = position;
+        let terminal = match &report.result {
+            Ok(reply) if reply.ignored => Some("ignored"),
+            Ok(_) => None, // validated done was emitted at the stream's EOF
+            Err("cancelled") => Some("interrupted"),
+            Err(_) => Some("error"),
+        };
+        if let Some(kind) = terminal {
+            on_stream(VoiceChatStreamEvent::new(
+                kind,
+                turn_id,
+                confirmed.conversation.filter(|_| confirmed.accepted),
+                confirmed.assistant,
+            ));
+        }
         if report.result.is_ok() && !self.cancel.is_cancelled() {
             if !report.result.as_ref().unwrap().ignored {
                 // Completion is a best-effort acknowledgement after device drain.
@@ -492,6 +572,7 @@ impl Backend {
         progress: &Mutex<ChatProgress>,
         send: tokio::sync::mpsc::Sender<ChatEvent>,
         on_conversation: impl Fn(Uuid),
+        on_stream: &impl Fn(VoiceChatStreamEvent),
     ) -> Result<()> {
         let mut response = self.send(self.post("/api/chat/messages/stream", 180).json(&payload))?;
         let mut pending = Vec::new();
@@ -502,6 +583,7 @@ impl Backend {
         let mut assistant = None;
         let mut seen = HashSet::new();
         let mut any = false;
+        let mut accepted = false;
         let mut terminal = None;
         while let Some(chunk) = self.next(&mut response)? {
             total = total.checked_add(chunk.len()).ok_or("backend_response")?;
@@ -543,10 +625,20 @@ impl Backend {
                         *progress.lock().unwrap() = ChatProgress {
                             conversation,
                             accepted: true,
+                            assistant,
                         };
                         if reported != conversation {
                             on_conversation(next);
                             reported = conversation;
+                        }
+                        if !accepted {
+                            accepted = true;
+                            on_stream(VoiceChatStreamEvent::new(
+                                "conversation",
+                                turn,
+                                conversation,
+                                None,
+                            ));
                         }
                     }
                     "final_segment" | "done" => {
@@ -587,14 +679,34 @@ impl Backend {
                         *progress.lock().unwrap() = ChatProgress {
                             conversation,
                             accepted: true,
+                            assistant,
                         };
                         if reported != conversation {
                             on_conversation(next);
                             reported = conversation;
                         }
+                        if !accepted {
+                            accepted = true;
+                            on_stream(VoiceChatStreamEvent::new(
+                                "conversation",
+                                turn,
+                                conversation,
+                                None,
+                            ));
+                        }
                         if kind == "done" {
                             terminal = Some(validated);
                         } else {
+                            if let ChatEvent::Segment(segment) = &validated {
+                                // Only text belonging to a validated committed
+                                // segment is visible. Never expose speculative
+                                // tokens or unaccepted false activations.
+                                on_stream(VoiceChatStreamEvent::segment(
+                                    turn,
+                                    segment,
+                                    event["content"].as_str().unwrap().to_owned(),
+                                ));
+                            }
                             send_event(&send, validated, &self.cancel)?;
                             sequence += 1;
                         }
@@ -611,7 +723,16 @@ impl Backend {
             return Err("backend_response");
         }
         self.current()?;
-        send_event(&send, terminal.ok_or("backend_response")?, &self.cancel)
+        let terminal = terminal.ok_or("backend_response")?;
+        if matches!(terminal, ChatEvent::Done(_)) {
+            on_stream(VoiceChatStreamEvent::new(
+                "done",
+                turn,
+                conversation,
+                assistant,
+            ));
+        }
+        send_event(&send, terminal, &self.cancel)
     }
 
     /// Match the Android segmented pipeline: no more than two active synthesis

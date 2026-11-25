@@ -136,6 +136,7 @@ struct AudioFixture {
     played: Arc<Mutex<Vec<i16>>>,
     interrupt: bool,
     wait_for_prefetch: Option<std::sync::mpsc::Receiver<()>>,
+    first_write: Option<std::sync::mpsc::Sender<()>>,
 }
 impl TurnAudio for AudioFixture {
     fn write(&mut self, samples: &[i16], cancel: &CancellationToken) -> Result<()> {
@@ -144,6 +145,9 @@ impl TurnAudio for AudioFixture {
             "stale audio written after cancellation"
         );
         self.played.lock().unwrap().extend_from_slice(samples);
+        if let Some(sent) = self.first_write.take() {
+            sent.send(()).unwrap();
+        }
         if let Some(ready) = self.wait_for_prefetch.take() {
             ready
                 .recv_timeout(Duration::from_secs(3))
@@ -166,6 +170,105 @@ impl TurnAudio for AudioFixture {
         let n = self.played.lock().unwrap().len() as u64;
         Some(if self.interrupt { n.min(1) } else { n })
     }
+}
+
+fn chunk(socket: &mut TcpStream, bytes: &[u8]) {
+    write!(socket, "{:x}\r\n", bytes.len()).unwrap();
+    socket.write_all(bytes).unwrap();
+    socket.write_all(b"\r\n").unwrap();
+}
+
+#[test]
+fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finishes() {
+    let (mut backend, server) = fixture();
+    let conversation = Uuid::new_v4();
+    let message = Uuid::new_v4();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let (sent, heard) = std::sync::mpsc::channel();
+    let observed = Arc::new(Mutex::new(Vec::<VoiceChatStreamEvent>::new()));
+    let server_observed = observed.clone();
+    let worker = thread::spawn(move || {
+        transcript(&server, "Conte uma história");
+        let (mut chat, payload) = request(&server, "/api/chat/messages/stream");
+        let request_body: Value = serde_json::from_slice(&payload).unwrap();
+        let turn = &request_body["turnId"];
+        chat.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        for event in [
+            json!({"type":"conversation","turnId":turn,"conversationId":conversation}),
+            json!({"type":"token","turnId":turn,"content":"Never display uncommitted text."}),
+            segment_event(turn, conversation, message, first, 0),
+        ] {
+            chunk(&mut chat, format!("{event}\n").as_bytes());
+        }
+        let (mut speech, payload) = request(&server, "/api/voice/speech/segments");
+        let request_body: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(request_body["segmentId"], json!(first));
+        let speech_id = request_body["speechRequestId"].as_str().unwrap();
+        write!(speech,"HTTP/1.1 200 OK\r\nConnection: close\r\nX-Aegis-Speech-Request-Id: {speech_id}\r\nX-Aegis-Audio-Format: pcm_s16le\r\nX-Aegis-Sample-Rate: 24000\r\nX-Aegis-Channels: 1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        chunk(&mut speech, &[17, 0, 17, 0]);
+        // Neither server stream can terminate before real PCM has been
+        // submitted to the player. This fails for response-level buffering.
+        heard
+            .recv_timeout(Duration::from_secs(3))
+            .expect("audio waited for HTTP EOF");
+        {
+            let events = server_observed.lock().unwrap();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].kind, "conversation");
+            assert_eq!(
+                json!(events[1]),
+                json!({
+                    "type":"final_segment","turnId":turn,"conversationId":conversation,
+                    "assistantMessageId":message,"segmentId":first,"sequence":0,"content":"Resposta."
+                })
+            );
+        }
+        chunk(&mut speech, &[18, 0]);
+        speech.write_all(b"0\r\n\r\n").unwrap();
+        for event in [
+            segment_event(turn, conversation, message, second, 1),
+            done_event(turn, conversation, message, false),
+        ] {
+            chunk(&mut chat, format!("{event}\n").as_bytes());
+        }
+        chat.write_all(b"0\r\n\r\n").unwrap();
+        pcm(&server, turn, conversation, message, second, &[99]);
+        let (mut s, _) = request(
+            &server,
+            &format!("/api/chat/turns/{}/complete", turn.as_str().unwrap()),
+        );
+        s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let output = AudioFixture {
+        first_write: Some(sent),
+        ..Default::default()
+    };
+    let audio = output.played.clone();
+    let report = backend.run_turn(
+        Uuid::new_v4(),
+        Some(conversation),
+        &[0; 64],
+        None,
+        |_| panic!("existing conversation must not navigate again"),
+        |event| observed.lock().unwrap().push(event),
+        || Ok(output),
+    );
+    assert!(report.result.is_ok());
+    assert_eq!(*audio.lock().unwrap(), [17, 17, 18, 99]);
+    let events = observed.lock().unwrap();
+    assert_eq!(
+        events.iter().map(|e| e.kind).collect::<Vec<_>>(),
+        ["conversation", "final_segment", "final_segment", "done"]
+    );
+    assert_eq!(events[2].segment_id, Some(second));
+    assert_eq!(events[2].sequence, Some(1));
+    assert_eq!(events[3].assistant_message_id, Some(message));
+    assert!(events
+        .iter()
+        .all(|e| e.conversation_id == Some(conversation) && e.turn_id == report.turn_id));
+    worker.join().unwrap();
 }
 
 #[test]
@@ -226,6 +329,7 @@ fn winner_transcribes_one_command_streams_committed_segments_and_uses_native_pla
         &[0; 64],
         None,
         |_| panic!("destination did not change"),
+        |_| {},
         || Ok(audio),
     );
     let reply = report.result.unwrap();
@@ -302,16 +406,27 @@ fn ignored_transcript_has_no_output_or_cleanup_turn() {
         assert_eq!(body["conversationId"], json!(convo));
         stream(s, &[json!({"type":"ignored","turnId":body["turnId"]})]);
     });
+    let events = Mutex::new(Vec::new());
     let report = backend.run_turn::<AudioFixture>(
         session,
         Some(convo),
         &[0; 64],
         None,
         |_| panic!(),
+        |event| events.lock().unwrap().push(event),
         || panic!("ignored must never open output"),
     );
     assert!(report.result.unwrap().ignored);
     assert!(!report.accepted);
+    assert_eq!(
+        events.into_inner().unwrap(),
+        [VoiceChatStreamEvent::new(
+            "ignored",
+            report.turn_id,
+            None,
+            None
+        )]
+    );
     assert!(backend.turn.is_none() && backend.speech.is_none());
     worker.join().unwrap();
 }
@@ -334,6 +449,7 @@ fn thinking_interruption_retains_accepted_destination_and_prior_transcript() {
         write!(s,"HTTP/1.1 200 OK\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n",event.len(),event).unwrap();
         thread::sleep(Duration::from_millis(100)); // no terminal/model response before cancellation
     });
+    let events = Mutex::new(Vec::new());
     let report = backend.run_turn::<AudioFixture>(
         session,
         None,
@@ -343,6 +459,7 @@ fn thinking_interruption_retains_accepted_destination_and_prior_transcript() {
             assert_eq!(id, convo);
             cancel.cancel();
         },
+        |event| events.lock().unwrap().push(event),
         || panic!("no playback during reasoning"),
     );
     assert_eq!(report.result.err(), Some("cancelled"));
@@ -350,6 +467,15 @@ fn thinking_interruption_retains_accepted_destination_and_prior_transcript() {
     assert!(report.accepted && report.chat_started);
     assert_eq!(report.transcript.as_deref(), Some("Primeiro pedido"));
     assert!(report.playback.is_none());
+    assert_eq!(
+        events.into_inner().unwrap().last(),
+        Some(&VoiceChatStreamEvent::new(
+            "interrupted",
+            report.turn_id,
+            Some(convo),
+            None
+        ))
+    );
     worker.join().unwrap();
 }
 
@@ -367,12 +493,14 @@ fn interruption_before_acceptance_retains_generation_id_and_text_without_creatin
         cancel.cancel();
         thread::sleep(Duration::from_millis(100));
     });
+    let events = Mutex::new(Vec::new());
     let report = backend.run_turn::<AudioFixture>(
         session,
         None,
         &[0; 64],
         None,
         |_| panic!("no accepted event"),
+        |event| events.lock().unwrap().push(event),
         || panic!(),
     );
     assert_eq!(report.result.err(), Some("cancelled"));
@@ -383,6 +511,15 @@ fn interruption_before_acceptance_retains_generation_id_and_text_without_creatin
     assert!(report.chat_started && !report.accepted && report.conversation.is_none());
     assert_eq!(report.transcript.as_deref(), Some("Pedido anterior"));
     assert!(report.playback.is_none());
+    assert_eq!(
+        events.into_inner().unwrap(),
+        [VoiceChatStreamEvent::new(
+            "interrupted",
+            report.turn_id,
+            None,
+            None
+        )]
+    );
     worker.join().unwrap();
 }
 
@@ -403,6 +540,7 @@ fn interruption_during_transcription_leaves_no_started_chat_and_signals_pcm_rete
         &command,
         None,
         |_| panic!(),
+        |_| {},
         || panic!(),
     );
     assert_eq!(report.result.err(), Some("cancelled"));
@@ -461,7 +599,15 @@ fn playback_interruption_uses_heard_position_excludes_queued_frames_and_next_tur
         ..Default::default()
     };
     let heard = output.played.clone();
-    let first = backend.run_turn(session, Some(convo), &[0; 64], None, |_| {}, || Ok(output));
+    let first = backend.run_turn(
+        session,
+        Some(convo),
+        &[0; 64],
+        None,
+        |_| {},
+        |_| {},
+        || Ok(output),
+    );
     assert_eq!(first.result.err(), Some("cancelled"));
     let pointer = first.playback.unwrap();
     assert_eq!(pointer.played_frames_in_segment, 1);
@@ -476,6 +622,7 @@ fn playback_interruption_uses_heard_position_excludes_queued_frames_and_next_tur
         Some(convo),
         &[0; 64],
         Some(&Interruption::Playback(pointer)),
+        |_| {},
         |_| {},
         || panic!(),
     );
@@ -509,6 +656,7 @@ fn before_playback_handoff_sends_generation_id_and_text_exclusively() {
             previous_content: "Primeira fala".into(),
         }),
         |_| {},
+        |_| {},
         || panic!(),
     );
     assert!(report.result.unwrap().ignored);
@@ -538,6 +686,7 @@ fn invalid_stream_turn_id_and_extra_events_after_terminal_fail_without_audio() {
             &[0; 64],
             None,
             |_| panic!(),
+            |_| {},
             || panic!("invalid stream must not open output"),
         );
         assert!(report.result.is_err());
@@ -561,15 +710,26 @@ fn malformed_segment_cannot_announce_a_new_destination_or_open_output() {
         );
         stream(s, &[invalid]);
     });
+    let events = Mutex::new(Vec::new());
     let report = backend.run_turn::<AudioFixture>(
         Uuid::new_v4(),
         None,
         &[0; 64],
         None,
         |_| panic!("malformed segment must not announce conversation"),
+        |event| events.lock().unwrap().push(event),
         || panic!("malformed segment must not speak"),
     );
     assert!(report.result.is_err() && !report.accepted && report.conversation.is_none());
+    assert_eq!(
+        events.into_inner().unwrap(),
+        [VoiceChatStreamEvent::new(
+            "error",
+            report.turn_id,
+            None,
+            None
+        )]
+    );
     worker.join().unwrap();
 }
 

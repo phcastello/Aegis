@@ -46,17 +46,17 @@ const linkError = ref<string | null>(null);
 
 const renderedContent = computed(() => DOMPurify.sanitize(markdown.render(props.content)));
 
-const ANIMATION_DURATION_MS = 600;
+const ANIMATION_DURATION_MS = 180;
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-interface WordFragment {
+interface FadeFragment {
   start: number;
   end: number;
   startedAt: number;
 }
 
 let previousVisibleText = '';
-let wordFragments: WordFragment[] = [];
+let recentFragments: FadeFragment[] = [];
 
 watch(
   renderedContent,
@@ -72,22 +72,15 @@ watch(
       : findCommonPrefixLength(previousVisibleText, visibleText);
     const now = performance.now();
 
-    wordFragments = wordFragments.filter((fragment) => fragment.end <= stableLength);
-
-    if (props.animateChanges && visibleText.length > stableLength) {
-      const newText = visibleText.slice(stableLength);
-
-      for (const match of newText.matchAll(/\S+/gu)) {
-        const wordStart = stableLength + (match.index ?? 0);
-        wordFragments.push({
-          start: wordStart,
-          end: wordStart + match[0].length,
-          startedAt: now
-        });
-      }
+    // Only the recent revealed tail is faded. Old words are ordinary text nodes;
+    // no wrapper per word or per character, and no animation tree grows over time.
+    recentFragments = recentFragments.filter(fragment => fragment.end <= stableLength && now - fragment.startedAt < ANIMATION_DURATION_MS);
+    if (!props.animateChanges || prefersReducedMotion.matches) recentFragments = [];
+    else if (visibleText.length > stableLength && visibleText.slice(stableLength).trim()) {
+      recentFragments.push({ start: stableLength, end: visibleText.length, startedAt: now });
+      recentFragments = recentFragments.slice(-6);
     }
-
-    applyWordFragments(element, wordFragments, now);
+    if (recentFragments.length) applyWordFragments(element, recentFragments, now);
     previousVisibleText = visibleText;
   },
   { flush: 'post' }
@@ -106,7 +99,7 @@ function findCommonPrefixLength(previous: string, current: string): number {
 
 function applyWordFragments(
   element: HTMLElement,
-  fragments: WordFragment[],
+  fragments: FadeFragment[],
   now: number
 ): void {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -165,6 +158,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
     return;
   }
 
+  if (prefersReducedMotion.matches || elapsed >= ANIMATION_DURATION_MS) return;
   const wrapper = document.createElement('span');
   wrapper.className = 'stream-fade-fragment';
   animatedNode.parentNode?.replaceChild(wrapper, animatedNode);
@@ -174,7 +168,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
     const animation = wrapper.animate(
       [
         {
-          opacity: 0
+          opacity: 0.68
         },
         {
           opacity: 1
@@ -182,13 +176,16 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
       ],
       {
         duration: ANIMATION_DURATION_MS,
-        easing: 'cubic-bezier(0.18, 0.72, 0.28, 1)',
+        easing: 'ease-out',
         fill: 'both'
       }
     );
 
     animation.currentTime = Math.min(elapsed, ANIMATION_DURATION_MS);
-    animation.onfinish = () => animation.cancel();
+    animation.onfinish = () => {
+      animation.cancel();
+      if (wrapper.isConnected && wrapper.parentNode) wrapper.replaceWith(...Array.from(wrapper.childNodes));
+    };
   }
 }
 </script>
