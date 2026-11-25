@@ -7,146 +7,74 @@ namespace Aegis.Api.Nodes;
 public sealed record VoiceActivationClaim(Guid ActivationId, double? SnrDb = null, double? Confidence = null);
 public sealed record VoiceActivationDecision(Guid ActivationId, string Decision);
 
-// One private owner and one API process, matching the existing node connection registry.
-// Each round is for an acoustic activation, independent of the eventual chat/turn ID.
+// One private owner and one API process. Ownership covers an acoustic activation,
+// independently of the eventual chat/turn ID. No timer or participant inventory:
+// the first confirmed, authenticated claim wins atomically.
 public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
 {
-    // Recorded shared calls showed up to ~440ms of detector skew before
-    // inference and transport overhead on the mobile node.
-    public static readonly TimeSpan ElectionWindow = TimeSpan.FromMilliseconds(650);
     public const int MaximumDetectionAgeMs = 2000;
-    private const int MaximumAgeCreditMs = 300;
     public static readonly TimeSpan CatchUpWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromMinutes(2);
     private const int ReceiptCapacity = 4096;
 
-    // The preparation measured by the first confirmed claimant can overlap part
-    // of the comparison budget. Never eliminate the window or use a later claim
-    // to move an already opened deadline. Missing age retains the legacy policy.
-    private static TimeSpan WindowFor(int? detectionAgeMs) =>
-        ElectionWindow - TimeSpan.FromMilliseconds(Math.Min(MaximumAgeCreditMs, detectionAgeMs ?? 0));
-
-    private sealed class Candidate(Guid nodeId, VoiceActivationClaim claim, int priority, long received)
-    {
-        public Guid NodeId => nodeId;
-        public VoiceActivationClaim Claim => claim;
-        public int Priority => priority;
-        public long Received => received;
-        public int Waiters;
-        public TaskCompletionSource<bool> Decision { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    }
-
-    private sealed class Round(long opened, TimeSpan window)
-    {
-        public long Opened => opened;
-        public TimeSpan Window => window;
-        public Dictionary<Guid, Candidate> Candidates { get; } = new();
-        // A complete, conservative inventory permits a fast decision only after
-        // every possible participant answered. Never infer presence from a socket.
-        public HashSet<Guid>? ExpectedNodes { get; private set; }
-        public bool InventoryUnknown { get; private set; }
-
-        public void ObserveInventory(Guid claimant, IReadOnlyList<Guid>? participants)
-        {
-            if (InventoryUnknown) return;
-            if (participants is null || !participants.Contains(claimant))
-            {
-                InventoryUnknown = true;
-                ExpectedNodes = null;
-                return;
-            }
-            ExpectedNodes ??= new HashSet<Guid>();
-            // Keep the union: an identity disappearing/reappearing during a round
-            // is never used as evidence that it could not have heard the wakeword.
-            ExpectedNodes.UnionWith(participants);
-        }
-
-        public bool AllParticipantsClaimed => !InventoryUnknown && ExpectedNodes is { Count: > 0 } expected
-            && expected.All(Candidates.ContainsKey);
-    }
-
+    private sealed record Receipt(long Received, bool Granted);
     private readonly object gate = new();
-    private readonly Dictionary<(Guid Node, Guid Activation), Candidate> receipts = new();
-    private Round? current;
+    private readonly Dictionary<(Guid Node, Guid Activation), Receipt> receipts = new();
     private long? suppressSince;
+    private bool stopped;
 
     // A replacement process has no receipts from its predecessor. Quarantine
-    // inbound claims for one client request lifetime before admitting a new round.
+    // inbound claims for one client request lifetime before accepting a new winner.
     public Task StartAsync(CancellationToken ct)
     {
-        lock (gate) suppressSince = clock.GetTimestamp();
+        lock (gate)
+        {
+            receipts.Clear();
+            suppressSince = clock.GetTimestamp();
+            stopped = false;
+        }
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
-        lock (gate)
-        {
-            if (current is { } round)
-                foreach (var candidate in round.Candidates.Values)
-                    candidate.Decision.TrySetResult(false);
-            current = null;
-        }
+        lock (gate) stopped = true;
         return Task.CompletedTask;
     }
 
-    public async Task<VoiceActivationDecision> ClaimAsync(Guid node, VoiceActivationClaim claim, int priority, CancellationToken ct,
-        IReadOnlyList<Guid>? participants = null, int? detectionAgeMs = null)
+    public VoiceActivationDecision Claim(Guid node, VoiceActivationClaim claim, CancellationToken ct,
+        int? detectionAgeMs = null)
     {
         ct.ThrowIfCancellationRequested();
+        // Legacy clients still supply quality evidence and/or the optional age.
+        // Validate the unchanged wire contract, but never rank or wait on it.
         if (claim.ActivationId == Guid.Empty || claim.SnrDb is { } snr && (!double.IsFinite(snr) || snr is < -60 or > 100)
             || claim.Confidence is { } confidence && (!double.IsFinite(confidence) || confidence is < 0 or > 1)
             || detectionAgeMs is < 0 or > MaximumDetectionAgeMs)
             throw new NodeException("invalid_voice_activation", "Os dados da ativação de voz são inválidos.");
 
-        Candidate candidate;
         lock (gate)
         {
+            // A cancelled caller that was waiting for the lock must not take ownership.
+            ct.ThrowIfCancellationRequested();
             var now = clock.GetTimestamp();
             Advance(now);
             var key = (node, claim.ActivationId);
+            if (stopped) return new(claim.ActivationId, "suppressed");
             if (receipts.TryGetValue(key, out var cached))
             {
-                if (clock.GetElapsedTime(cached.Received, now) >= CatchUpWindow)
-                    return new(claim.ActivationId, "suppressed");
-                candidate = cached;
+                // Never revive an earlier grant after its request lifetime, even
+                // during a later winning activation (receipts outlive suppression).
+                var validGrant = cached.Granted && clock.GetElapsedTime(cached.Received, now) < CatchUpWindow;
+                return new(claim.ActivationId, validGrant ? "granted" : "suppressed");
             }
-            else
-            {
-                candidate = Remember(node, claim, priority, now);
-                if (suppressSince.HasValue || current?.Candidates.ContainsKey(node) == true)
-                    candidate.Decision.SetResult(false);
-                else
-                {
-                    var opened = current is null;
-                    var round = current ??= new Round(now, WindowFor(detectionAgeMs));
-                    round.ObserveInventory(node, participants);
-                    round.Candidates.Add(node, candidate);
-                    if (round.AllParticipantsClaimed)
-                        Close(round, now);
-                    else if (opened)
-                        _ = CloseAfterWindowAsync(round);
-                }
-            }
-            candidate.Waiters++;
-        }
-        try
-        {
-            var granted = await candidate.Decision.Task.WaitAsync(ct);
-            // Thread-pool stalls or a queued continuation must not revive an
-            // old grant. Clients apply the same deadline around the entire HTTP call.
-            lock (gate)
-                return new(claim.ActivationId, granted && clock.GetElapsedTime(candidate.Received) < CatchUpWindow
-                    ? "granted" : "suppressed");
-        }
-        finally
-        {
-            lock (gate)
-            {
-                candidate.Waiters--;
-                if (candidate.Waiters == 0 && !candidate.Decision.Task.IsCompleted)
-                    WithdrawPending(candidate);
-            }
+
+            var granted = !suppressSince.HasValue;
+            Remember(key, new(now, granted));
+            if (granted) suppressSince = now;
+            // If the client disconnects after commitment, it remains the sole
+            // winner. A lost response cannot transfer ownership to a late node.
+            return new(claim.ActivationId, granted ? "granted" : "suppressed");
         }
     }
 
@@ -158,72 +86,27 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
         {
             var now = clock.GetTimestamp();
             Advance(now);
-            if (!receipts.TryGetValue((node, activation), out var candidate))
-                // Cancellation can overtake the original request.
-                candidate = Remember(node, new(activation), 0, now);
-            WithdrawPending(candidate);
+            var key = (node, activation);
+            // Cancellation can overtake the POST. Preserve a rejected receipt in
+            // that case. Cancellation after commitment never revokes a grant or
+            // shortens catch-up suppression; otherwise two clients could emit cues.
+            if (!receipts.ContainsKey(key)) Remember(key, new(now, false));
         }
     }
 
-    private Candidate Remember(Guid node, VoiceActivationClaim claim, int priority, long now)
+    private void Remember((Guid Node, Guid Activation) key, Receipt receipt)
     {
         if (receipts.Count >= ReceiptCapacity)
             throw new NodeException("voice_activation_busy", "O coordenador de voz está ocupado.", 503);
-        var candidate = new Candidate(node, claim, priority, now);
-        receipts.Add((node, claim.ActivationId), candidate);
-        return candidate;
-    }
-
-    private void WithdrawPending(Candidate candidate)
-    {
-        if (!candidate.Decision.TrySetResult(false)) return;
-        if (current?.Candidates.GetValueOrDefault(candidate.NodeId) == candidate)
-            current.Candidates.Remove(candidate.NodeId);
+        receipts.Add(key, receipt);
     }
 
     private void Advance(long now)
     {
-        if (current is { } round && clock.GetElapsedTime(round.Opened, now) >= round.Window)
-            Close(round, now);
         if (suppressSince is { } start && clock.GetElapsedTime(start, now) >= CatchUpWindow)
             suppressSince = null;
         foreach (var entry in receipts)
             if (clock.GetElapsedTime(entry.Value.Received, now) >= ReceiptRetention)
                 receipts.Remove(entry.Key);
-    }
-
-    private async Task CloseAfterWindowAsync(Round round)
-    {
-        await Task.Delay(round.Window, clock, CancellationToken.None);
-        lock (gate)
-            if (ReferenceEquals(round, current)) Close(round, clock.GetTimestamp());
-    }
-
-    private void Close(Round round, long now)
-    {
-        current = null;
-        // A suspended or overloaded server can miss the entire lifetime of a
-        // round. In that case release all waiters silently instead of granting late.
-        var eligible = round.Candidates.Values.Where(c => clock.GetElapsedTime(c.Received, now) < CatchUpWindow).ToArray();
-        if (eligible.Length > 0)
-        {
-            // Compare like-for-like evidence only. 3 dB of SNR and 0.05 of
-            // detector confidence are tie bands, not distance estimates.
-            if (eligible.All(c => c.Claim.SnrDb.HasValue))
-            {
-                var best = eligible.Max(c => c.Claim.SnrDb!.Value);
-                eligible = eligible.Where(c => c.Claim.SnrDb >= best - 3).ToArray();
-            }
-            if (eligible.All(c => c.Claim.Confidence.HasValue))
-            {
-                var best = eligible.Max(c => c.Claim.Confidence!.Value);
-                eligible = eligible.Where(c => c.Claim.Confidence >= best - 0.05).ToArray();
-            }
-            var winner = eligible.OrderByDescending(c => c.Priority).ThenBy(c => c.NodeId).First();
-            winner.Decision.SetResult(true);
-            suppressSince = now;
-        }
-        foreach (var candidate in round.Candidates.Values)
-            candidate.Decision.TrySetResult(false);
     }
 }

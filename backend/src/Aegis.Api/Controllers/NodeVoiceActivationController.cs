@@ -11,17 +11,17 @@ namespace Aegis.Api.Controllers;
 
 [ApiController, Route("api/nodes/me/voice-activations"), Authorize(Policy = "NodeManagement")]
 [ServiceFilter(typeof(NodeApiFilter)), EnableRateLimiting("node-voice-activation"), RequestSizeLimit(1024)]
-public sealed class NodeVoiceActivationController(VoiceActivationArbiter arbiter, INodeRegistry nodes) : ControllerBase
+public sealed class NodeVoiceActivationController(VoiceActivationArbiter arbiter) : ControllerBase
 {
     public const string DetectionAgeHeader = "X-Aegis-Detection-Age-Ms";
     public const string ElectionWaitHeader = "X-Aegis-Election-Wait-Ms";
+    public const string NodeAuthHeader = "X-Aegis-Node-Auth-Ms";
 
     private Guid NodeId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     [HttpPost("claim")]
-    public async Task<VoiceActivationDecision> Claim(VoiceActivationClaim request, CancellationToken ct)
+    public VoiceActivationDecision Claim(VoiceActivationClaim request, CancellationToken ct)
     {
-        var priority = int.Parse(User.FindFirstValue(NodeAuthenticationHandler.TargetPriorityClaim)!, CultureInfo.InvariantCulture);
         int? detectionAgeMs = null;
         if (Request.Headers.TryGetValue(DetectionAgeHeader, out var values))
         {
@@ -30,11 +30,20 @@ public sealed class NodeVoiceActivationController(VoiceActivationArbiter arbiter
                 throw new NodeException("invalid_voice_activation", "Os dados da ativação de voz são inválidos.");
             detectionAgeMs = age;
         }
-        var participants = await nodes.ListVoiceActivationParticipantsAsync(ct);
         var started = Stopwatch.GetTimestamp();
-        var decision = await arbiter.ClaimAsync(NodeId, request, priority, ct, participants, detectionAgeMs);
+        var decision = arbiter.Claim(NodeId, request, ct, detectionAgeMs);
         Response.Headers[ElectionWaitHeader] = ((long)Stopwatch.GetElapsedTime(started).TotalMilliseconds).ToString(CultureInfo.InvariantCulture);
+        if (HttpContext.Items.TryGetValue(NodeAuthenticationHandler.VoiceAuthenticationTimingKey, out var auth) && auth is long authMs)
+            SetOptionalTiming(NodeAuthHeader, authMs);
         return decision;
+    }
+
+    // Do not report impossible times or synthesize a bounded value from them.
+    // These measurements are diagnostic only and never affect the election.
+    private void SetOptionalTiming(string header, long ms)
+    {
+        if (ms is >= 0 and <= VoiceActivationArbiter.MaximumDetectionAgeMs)
+            Response.Headers[header] = ms.ToString(CultureInfo.InvariantCulture);
     }
 
     [HttpDelete("{activationId:guid}")]
@@ -43,4 +52,5 @@ public sealed class NodeVoiceActivationController(VoiceActivationArbiter arbiter
         arbiter.Abandon(NodeId, activationId);
         return NoContent();
     }
+
 }

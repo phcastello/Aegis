@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Aegis.Application.Nodes;
@@ -5,6 +6,7 @@ using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 namespace Aegis.Application.Tests;
 
@@ -128,6 +130,67 @@ public sealed class NodeIdentityTests
         Assert.Equal("node_authentication_required", (await Registry.AuthenticateAsync(NodeSecrets.NewCredential(pc.Node.Id))).Error);
         Assert.Equal("node_authentication_required", (await Registry.AuthenticateAsync(NodeSecrets.NewCredential(Guid.NewGuid()))).Error);
         Assert.Equal("node_authentication_required", (await Registry.AuthenticateAsync("bad")).Error);
+    }
+    [Fact] public async Task AuthenticationReadsFreshNodeAndCredentialStateTogether()
+    {
+        var pc = await Paired(); var mobile = await Paired(pc.Node.Id);
+        await Registry.SetTargetPriorityAsync(pc.Node.Id, mobile.Node.Id, 42);
+        var active = await Registry.AuthenticateAsync(mobile.Credential);
+        Assert.True(active.Authenticated);
+        Assert.Equal(42, active.Node!.TargetPriority);
+        await Registry.SetEnabledAsync(pc.Node.Id, mobile.Node.Id, false);
+        var wrong = NodeSecrets.NewCredential(mobile.Node.Id);
+        Assert.Equal(new NodeAuthentication(null, "node_authentication_required"), await Registry.AuthenticateAsync(wrong));
+        Assert.Equal("node_disabled", (await Registry.AuthenticateAsync(mobile.Credential)).Error);
+        await Registry.SetEnabledAsync(pc.Node.Id, mobile.Node.Id, true);
+        // A revoked credential must still be rejected if the node itself is enabled.
+        var stored = await db.NodeCredentials.SingleAsync(c => c.NodeId == mobile.Node.Id);
+        stored.Revoke(clock.Now); await db.SaveChangesAsync();
+        Assert.True((await db.Nodes.SingleAsync(n => n.Id == mobile.Node.Id)).Enabled);
+        Assert.Equal("node_revoked", (await Registry.AuthenticateAsync(mobile.Credential)).Error);
+        Assert.Equal(new NodeAuthentication(null, "node_authentication_required"), await Registry.AuthenticateAsync(wrong));
+    }
+    // Capture the actual relational authentication command without opening any database.
+    // This verifies provider translation as well as the old two-table data contract.
+    private sealed class OfflineConnection : DbConnectionInterceptor
+    {
+        public override ValueTask<InterceptionResult> ConnectionOpeningAsync(DbConnection connection, ConnectionEventData eventData,
+            InterceptionResult result, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(InterceptionResult.Suppress());
+    }
+    private sealed class SqlCaptured : Exception { }
+    private sealed class AuthenticationQuery : DbCommandInterceptor
+    {
+        public string? Sql { get; private set; }
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            Sql = command.CommandText;
+            throw new SqlCaptured();
+        }
+    }
+    [Fact] public async Task AuthenticationUsesSingleJoinedPostgresSelect()
+    {
+        var capture = new AuthenticationQuery();
+        await using var relational = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>()
+            .UseNpgsql("Host=127.0.0.1;Port=1;Database=unused;Username=unused;Password=unused;Timeout=1")
+            .AddInterceptors(new OfflineConnection(), capture).Options);
+        var id = Guid.NewGuid(); var credential = NodeSecrets.NewCredential(id);
+        // The historical reads require two statements; the actual production method
+        // must now request both records in its first statement.
+        var beforeCredentialSql = relational.NodeCredentials.AsNoTracking().Where(c => c.NodeId == id).ToQueryString();
+        var beforeNodeSql = relational.Nodes.AsNoTracking().Where(n => n.Id == id).ToQueryString();
+        Assert.DoesNotContain("JOIN", beforeCredentialSql);
+        Assert.DoesNotContain("JOIN", beforeNodeSql);
+        await Assert.ThrowsAsync<SqlCaptured>(() => new NodeRegistry(relational, clock).AuthenticateAsync(credential));
+        Assert.NotNull(capture.Sql);
+        Assert.Contains("FROM node_credentials", capture.Sql);
+        Assert.Contains("INNER JOIN aegis_nodes", capture.Sql);
+        Assert.Contains("\"SecretHash\"", capture.Sql);
+        Assert.Contains("\"RevokedAt\"", capture.Sql);
+        Assert.Contains("\"Enabled\"", capture.Sql);
+        Assert.Contains("LIMIT 2", capture.Sql);
+        Assert.DoesNotContain(credential, capture.Sql);
     }
     [Fact] public async Task RenameIsBackendOwnedAndPersistsAcrossRegistryInstances()
     {

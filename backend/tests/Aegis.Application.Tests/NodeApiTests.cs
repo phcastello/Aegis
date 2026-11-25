@@ -32,6 +32,23 @@ public sealed class NodeApiTests
         var request = NodeIdentityTests.Request((await registry.CreateCodeAsync(null)).Code);
         var receipt = await registry.PairAsync(request); return (await registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)), receipt.Credential);
     }
+    private static void AssertNoVoiceTimings(HttpResponseMessage response)
+    {
+        Assert.False(response.Headers.Contains(NodeVoiceActivationController.ElectionWaitHeader));
+        Assert.False(response.Headers.Contains(NodeVoiceActivationController.NodeAuthHeader));
+        Assert.False(response.Headers.Contains("X-Aegis-Election-Inventory-Ms"));
+    }
+    private static void AssertVoicePreparationTimings(HttpResponseMessage response)
+    {
+        Assert.True(response.Headers.TryGetValues(NodeVoiceActivationController.NodeAuthHeader, out var values));
+        Assert.True(long.TryParse(Assert.Single(values), NumberStyles.None, CultureInfo.InvariantCulture, out var duration));
+        Assert.InRange(duration, 0, VoiceActivationArbiter.MaximumDetectionAgeMs);
+        Assert.False(response.Headers.Contains("X-Aegis-Election-Inventory-Ms"));
+        Assert.True(response.Headers.TryGetValues(NodeVoiceActivationController.ElectionWaitHeader, out var election));
+        Assert.True(long.TryParse(Assert.Single(election), NumberStyles.None, CultureInfo.InvariantCulture, out var wait));
+        // Allow scheduler latency, but not the former artificial 350–650ms wait.
+        Assert.InRange(wait, 0, 299);
+    }
     [Fact] public async Task PublicCodeCreationAndManagementAreDeniedChatRemainsIndependent()
     {
         var (app, client, _) = await Host(); await using var dispose = app;
@@ -51,6 +68,7 @@ public sealed class NodeApiTests
         var boundary = await client.GetFromJsonAsync<JsonElement>("/existing-chat-boundary");
         Assert.False(boundary.GetProperty("authenticated").GetBoolean());
         var list = await client.GetAsync("/api/nodes"); Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        AssertNoVoiceTimings(list);
         Assert.DoesNotContain(receipt.Credential, await list.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.OK, (await client.PatchAsJsonAsync("/api/nodes/" + receipt.NodeId, new { name = "PC renamed" })).StatusCode);
         Assert.Equal("PC renamed", (await client.GetFromJsonAsync<NodeView>("/api/nodes/me"))!.Name);
@@ -72,11 +90,11 @@ public sealed class NodeApiTests
         const string path = "/api/nodes/me/voice-activations/claim";
         var desktop = await Pair(registry);
         var phone = await Pair(registry);
-        // No live socket is required for a potential listener to participate.
-        Assert.Equal(new[] { desktop.Node.Id, phone.Node.Id }.Order(), (await registry.ListVoiceActivationParticipantsAsync())!.Order());
         var pcClaim = new VoiceActivationClaim(Guid.NewGuid(), 7, 0.98);
         var phoneClaim = new VoiceActivationClaim(Guid.NewGuid(), 22, 0.83);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, pcClaim)).StatusCode);
+        using var unauthenticated = await client.PostAsJsonAsync(path, pcClaim);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+        AssertNoVoiceTimings(unauthenticated);
         using var pcHttp = app.GetTestClient();
         using var phoneHttp = app.GetTestClient();
         pcHttp.DefaultRequestHeaders.Add("Authorization", "AegisNode " + desktop.Secret);
@@ -94,12 +112,17 @@ public sealed class NodeApiTests
             Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
             Assert.True(response.Headers.TryGetValues(NodeVoiceActivationController.ElectionWaitHeader, out var values));
             Assert.True(long.TryParse(Assert.Single(values), NumberStyles.None, CultureInfo.InvariantCulture, out _));
+            AssertVoicePreparationTimings(response);
         });
-        Assert.Equal(new(pcClaim.ActivationId, "suppressed"), await replies[0].Content.ReadFromJsonAsync<VoiceActivationDecision>());
-        Assert.Equal(new(phoneClaim.ActivationId, "granted"), await replies[1].Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        var pcDecision = (await replies[0].Content.ReadFromJsonAsync<VoiceActivationDecision>())!;
+        var phoneDecision = (await replies[1].Content.ReadFromJsonAsync<VoiceActivationDecision>())!;
+        Assert.Equal(pcClaim.ActivationId, pcDecision.ActivationId);
+        Assert.Equal(phoneClaim.ActivationId, phoneDecision.ActivationId);
+        Assert.Equal(new[] { "granted", "suppressed" }, new[] { pcDecision.Decision, phoneDecision.Decision }.Order());
         await registry.SetEnabledAsync(null, phone.Node.Id, false);
-        Assert.Equal(HttpStatusCode.Forbidden, (await phoneHttp.PostAsJsonAsync(path, phoneClaim)).StatusCode);
-        Assert.Equal(new[] { desktop.Node.Id }, await registry.ListVoiceActivationParticipantsAsync());
+        using var disabled = await phoneHttp.PostAsJsonAsync(path, phoneClaim);
+        Assert.Equal(HttpStatusCode.Forbidden, disabled.StatusCode);
+        AssertNoVoiceTimings(disabled);
     }
 
     [Fact]
@@ -109,18 +132,19 @@ public sealed class NodeApiTests
         await using var dispose = app;
         const string path = "/api/nodes/me/voice-activations/claim";
         var phone = await Pair(registry);
-        _ = await Pair(registry); // A possible second listener makes the timer necessary.
+        // Even several other registered, enabled listeners cannot delay a grant.
+        for (var i = 0; i < 8; i++) _ = await Pair(registry);
         var claim = new VoiceActivationClaim(Guid.NewGuid(), 22, 0.83);
         using (var unauthenticated = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(claim) })
         {
             Assert.True(unauthenticated.Headers.TryAddWithoutValidation(NodeVoiceActivationController.DetectionAgeHeader, "300"));
             using var denied = await client.SendAsync(unauthenticated);
             Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
-            Assert.False(denied.Headers.Contains(NodeVoiceActivationController.ElectionWaitHeader));
+            AssertNoVoiceTimings(denied);
         }
         client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + phone.Secret);
         // HttpClient/TestServer omits an empty header entirely, so it is equivalent
-        // to absent (legacy full window). Exercise malformed values sent on the wire.
+        // to absent (legacy client). Exercise malformed values sent on the wire.
         foreach (var invalidValues in new[] { new[] { "-1" }, new[] { "2001" }, new[] { "1.5" }, new[] { "+1" }, new[] { "NaN" }, new[] { "1", "2" } })
         {
             using var invalid = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(claim) };
@@ -128,7 +152,7 @@ public sealed class NodeApiTests
             using var reply = await client.SendAsync(invalid);
             Assert.True(reply.StatusCode == HttpStatusCode.BadRequest, $"Header [{string.Join(", ", invalidValues.Select(v => $"\"{v}\""))}] returned {reply.StatusCode}");
             Assert.Contains("invalid_voice_activation", await reply.Content.ReadAsStringAsync());
-            Assert.False(reply.Headers.Contains(NodeVoiceActivationController.ElectionWaitHeader));
+            AssertNoVoiceTimings(reply);
         }
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, new { claim.ActivationId, detectionAgeMs = 300 })).StatusCode);
         await Task.Delay(VoiceActivationArbiter.CatchUpWindow);
@@ -136,15 +160,50 @@ public sealed class NodeApiTests
         Assert.True(valid.Headers.TryAddWithoutValidation(NodeVoiceActivationController.DetectionAgeHeader, "300"));
         using var granted = await client.SendAsync(valid);
         Assert.Equal(HttpStatusCode.OK, granted.StatusCode);
+        AssertVoicePreparationTimings(granted);
         Assert.True(granted.Headers.TryGetValues(NodeVoiceActivationController.ElectionWaitHeader, out var values));
         Assert.True(long.TryParse(Assert.Single(values), NumberStyles.None, CultureInfo.InvariantCulture, out var waitedMs));
-        // This real HTTP test tolerates scheduler delays; deterministic tests check
-        // the exact 350 ms deadline. A header that always reports zero must fail.
-        Assert.True(waitedMs >= 300, $"Expected timer wait, reported {waitedMs} ms");
+        Assert.InRange(waitedMs, 0, 299);
         using var body = JsonDocument.Parse(await granted.Content.ReadAsStringAsync());
         Assert.Equal(new[] { "activationId", "decision" }, body.RootElement.EnumerateObject().Select(p => p.Name).Order());
         Assert.Equal(claim.ActivationId, body.RootElement.GetProperty("activationId").GetGuid());
         Assert.Equal("granted", body.RootElement.GetProperty("decision").GetString());
+    }
+
+    [Fact]
+    public async Task VoiceActivationGrantsFirstAuthenticatedClaimAndCancellationDoesNotTransferOwnership()
+    {
+        var (app, client, registry) = await Host();
+        await using var dispose = app;
+        const string path = "/api/nodes/me/voice-activations";
+        var phone = await Pair(registry);
+        var desktop = await Pair(registry);
+        using var pcHttp = app.GetTestClient();
+        client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + phone.Secret);
+        pcHttp.DefaultRequestHeaders.Add("Authorization", "AegisNode " + desktop.Secret);
+        await Task.Delay(VoiceActivationArbiter.CatchUpWindow);
+        var cancelled = new VoiceActivationClaim(Guid.NewGuid(), 10);
+        using var cancellation = await client.DeleteAsync(path + "/" + cancelled.ActivationId);
+        Assert.Equal(HttpStatusCode.NoContent, cancellation.StatusCode);
+        AssertNoVoiceTimings(cancellation);
+        using var tombstoned = await client.PostAsJsonAsync(path + "/claim", cancelled);
+        Assert.Equal(new(cancelled.ActivationId, "suppressed"), await tombstoned.Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        var first = new VoiceActivationClaim(Guid.NewGuid(), 1, .2);
+        using var granted = await client.PostAsJsonAsync(path + "/claim", first);
+        Assert.Equal(new(first.ActivationId, "granted"), await granted.Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        AssertVoicePreparationTimings(granted);
+        using var lostResponseCleanup = await client.DeleteAsync(path + "/" + first.ActivationId);
+        Assert.Equal(HttpStatusCode.NoContent, lostResponseCleanup.StatusCode);
+        AssertNoVoiceTimings(lostResponseCleanup);
+        var strongerLater = new VoiceActivationClaim(Guid.NewGuid(), 40, 1);
+        using var suppressed = await pcHttp.PostAsJsonAsync(path + "/claim", strongerLater);
+        Assert.Equal(new(strongerLater.ActivationId, "suppressed"), await suppressed.Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        using var replay = await client.PostAsJsonAsync(path + "/claim", first);
+        Assert.Equal(new(first.ActivationId, "granted"), await replay.Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        await registry.RevokeAsync(phone.Node.Id, desktop.Node.Id);
+        using var revoked = await pcHttp.PostAsJsonAsync(path + "/claim", strongerLater);
+        Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+        AssertNoVoiceTimings(revoked);
     }
 
     [Fact] public async Task AnonymousPairingIsRateLimitedAndDoesNotTrustForwardedHeader()

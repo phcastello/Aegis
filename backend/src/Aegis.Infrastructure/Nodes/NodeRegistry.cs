@@ -129,10 +129,15 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
     {
         var id = NodeSecrets.CredentialNodeId(credential);
         if (id is null) return new(null, "node_authentication_required");
-        var stored = await db.NodeCredentials.AsNoTracking().SingleOrDefaultAsync(c => c.NodeId == id, ct);
+        // Both sides have a unique key on the node ID. Read credential and identity
+        // together in one database statement; no cached or tracked authority state.
+        var stored = await (from c in db.NodeCredentials.AsNoTracking()
+                            join n in db.Nodes.AsNoTracking() on c.NodeId equals n.Id
+                            where c.NodeId == id
+                            select new { c.SecretHash, c.RevokedAt, Node = n }).SingleOrDefaultAsync(ct);
+        // Only a matching secret is allowed to learn the identity's status.
         if (stored is null || !NodeSecrets.Matches(stored.SecretHash, credential)) return new(null, "node_authentication_required");
-        var node = await db.Nodes.AsNoTracking().SingleOrDefaultAsync(n => n.Id == id, ct);
-        if (node is null) return new(null, "node_authentication_required");
+        var node = stored.Node;
         var error = node.RevokedAt is not null || stored.RevokedAt is not null ? "node_revoked" : !node.Enabled ? "node_disabled" : null;
         return new(View(node), error);
     }
@@ -152,8 +157,6 @@ public sealed class NodeRegistry(AegisDbContext db, TimeProvider clock, INodeCon
             result.Add(await SnapshotView(node, ct));
         return result;
     }
-    public async Task<IReadOnlyList<Guid>?> ListVoiceActivationParticipantsAsync(CancellationToken ct = default)
-        => await db.Nodes.AsNoTracking().Where(n => n.Enabled && n.RevokedAt == null).Select(n => n.Id).ToArrayAsync(ct);
     public Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default) => Locked(async () =>
     {
         await Active(actor, ct); var node = await Target(target, ct);

@@ -6,300 +6,191 @@ namespace Aegis.Application.Tests;
 
 public sealed class VoiceActivationTests
 {
-    // Deterministic race tests advance monotonic time, then submit another HTTP-like
-    // operation to force deadline processing. The API integration test covers the timer.
     private sealed class Clock : TimeProvider
     {
         private long timestamp;
-        public TimeSpan? ScheduledDelay { get; private set; }
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => timestamp;
         public void Advance(TimeSpan amount) => timestamp += amount.Ticks;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            ScheduledDelay = dueTime;
-            return new Timer(callback, state, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        }
+            => throw new InvalidOperationException("First-confirmed ownership must not schedule a timer.");
     }
 
     private static readonly Guid Phone = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private static readonly Guid Desktop = Guid.Parse("00000000-0000-0000-0000-000000000002");
 
-    private static Task<VoiceActivationDecision> Claim(VoiceActivationArbiter arbiter, Guid node, Guid? activation = null,
-        double? snr = null, double? confidence = null, int priority = 0, CancellationToken ct = default, int? detectionAgeMs = null) =>
-        arbiter.ClaimAsync(node, new(activation ?? Guid.NewGuid(), snr, confidence), priority, ct, detectionAgeMs: detectionAgeMs);
+    private static VoiceActivationDecision Claim(VoiceActivationArbiter arbiter, Guid node, Guid? activation = null,
+        double? snr = null, double? confidence = null, CancellationToken ct = default, int? detectionAgeMs = null) =>
+        arbiter.Claim(node, new(activation ?? Guid.NewGuid(), snr, confidence), ct, detectionAgeMs);
 
-    private static void Settle(Clock clock, VoiceActivationArbiter arbiter)
+    [Fact]
+    public void FirstValidClaimWinsWithoutWaitingEvenForMuchStrongerLaterSignal()
     {
-        clock.Advance(VoiceActivationArbiter.ElectionWindow);
-        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid());
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        // No clock advancement or timer is required to grant the first candidate.
+        var first = Claim(arbiter, Phone, snr: 5, confidence: .4, detectionAgeMs: 300);
+        Assert.Equal("granted", first.Decision);
+        var later = Claim(arbiter, Desktop, snr: 40, confidence: 1, detectionAgeMs: 0);
+        Assert.Equal("suppressed", later.Decision);
+        Assert.Equal(0, clock.GetTimestamp());
     }
 
     [Fact]
-    public async Task StrongerLaterNodeWinsOnceAndExactRetriesShareTheSameDecision()
+    public async Task ConcurrentClaimsFromManyNodesReturnExactlyOneWinner()
     {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var commonId = Guid.NewGuid(); // key is (authenticated node, local activation)
-        var first = Claim(arbiter, Phone, commonId, snr: 5, confidence: 1, priority: 100);
-        var second = Claim(arbiter, Desktop, commonId, snr: 15, confidence: 0.8);
-        var concurrentRetry = Claim(arbiter, Desktop, commonId, snr: -40);
-        Assert.Equal("suppressed", (await Claim(arbiter, Desktop, snr: 80)).Decision);
-        Settle(clock, arbiter);
-        Assert.Equal("suppressed", (await first).Decision);
-        Assert.Equal("granted", (await second).Decision);
-        Assert.Equal(await second, await concurrentRetry);
-        Assert.Equal(await second, await Claim(arbiter, Desktop, commonId));
-        arbiter.Abandon(Desktop, commonId);
-        Assert.Equal("suppressed", (await Claim(arbiter, Phone)).Decision);
-        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
-        Assert.Equal("suppressed", (await Claim(arbiter, Desktop, commonId)).Decision);
-        var next = Claim(arbiter, Phone);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await next).Decision);
-    }
-
-    [Fact]
-    public async Task ASingleKnownPairedNodeReceivesItsGrantWithoutWaitingForTheWindow()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var activation = Guid.NewGuid();
-        var only = arbiter.ClaimAsync(Phone, new(activation), 0, default, [Phone]);
-        Assert.True(only.IsCompletedSuccessfully);
-        Assert.Equal("granted", (await only).Decision);
-        Assert.Equal("granted", (await arbiter.ClaimAsync(Phone, new(activation), 0, default, [Phone])).Decision);
-        Assert.Equal("suppressed", (await arbiter.ClaimAsync(Desktop, new(Guid.NewGuid()), 0, default, [Phone, Desktop])).Decision);
-    }
-
-    [Fact]
-    public async Task EarlyDecisionWaitsForEveryKnownNodeAndRetainsTheQualityRanking()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        Guid[] participants = [Phone, Desktop];
-        var desktop = arbiter.ClaimAsync(Desktop, new(Guid.NewGuid(), 6), 0, default, participants);
-        Assert.False(desktop.IsCompleted);
-        clock.Advance(TimeSpan.FromMilliseconds(400));
-        var phone = arbiter.ClaimAsync(Phone, new(Guid.NewGuid(), 20), 0, default, participants);
-        // No clock advancement to the 650 ms deadline is needed.
-        Assert.Equal("granted", (await phone.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal("suppressed", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal("suppressed", (await Claim(arbiter, Guid.NewGuid(), snr: 100)).Decision);
-    }
-
-    [Fact]
-    public async Task OfflineOrUncertainInventoryRetainsTheFullElectionWindow()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var pending = arbiter.ClaimAsync(Desktop, new(Guid.NewGuid(), 6), 0, default, [Phone, Desktop]);
-        Assert.False(pending.IsCompleted);
-        // A new snapshot that omits the phone cannot erase its possible claim.
-        var third = Guid.NewGuid();
-        var another = arbiter.ClaimAsync(third, new(Guid.NewGuid(), 10), 0, default, [Desktop, third]);
-        Assert.False(another.IsCompleted);
-        Assert.False(pending.IsCompleted);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await another).Decision);
-        Assert.Equal("suppressed", (await pending).Decision);
-        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
-        var unknown = arbiter.ClaimAsync(Phone, new(Guid.NewGuid()), 0, default, null);
-        Assert.False(unknown.IsCompleted);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await unknown).Decision);
-    }
-
-    [Fact]
-    public async Task StrongerNodeWithMeasuredDetectorSkewRemainsEligibleUntilDeadline()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var desktop = Claim(arbiter, Desktop, snr: 6);
-        var measuredSkew = TimeSpan.FromMilliseconds(440);
-        clock.Advance(measuredSkew);
-        var phone = Claim(arbiter, Phone, snr: 20, detectionAgeMs: 450);
-        Assert.False(phone.IsCompleted);
-        clock.Advance(VoiceActivationArbiter.ElectionWindow - measuredSkew);
-        var late = await Claim(arbiter, Guid.NewGuid(), snr: 40);
-        Assert.Equal("suppressed", late.Decision);
-        Assert.Equal("suppressed", (await desktop).Decision);
-        Assert.Equal("granted", (await phone).Decision);
-    }
-
-    [Theory]
-    [InlineData(null, 650)]
-    [InlineData(0, 650)]
-    [InlineData(100, 550)]
-    [InlineData(299, 351)]
-    [InlineData(300, 350)]
-    [InlineData(2000, 350)]
-    public async Task FirstConfirmedClaimSetsBoundedWindowAndTimer(int? detectionAgeMs, int expectedWindowMs)
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var first = Claim(arbiter, Phone, snr: 1, detectionAgeMs: detectionAgeMs);
-        Assert.Equal(TimeSpan.FromMilliseconds(expectedWindowMs), clock.ScheduledDelay);
-        clock.Advance(TimeSpan.FromMilliseconds(expectedWindowMs - 1));
-        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid()); // Force deadline processing.
-        Assert.False(first.IsCompleted);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
-        Assert.Equal("suppressed", (await Claim(arbiter, Desktop, snr: 100).WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal("granted", (await first.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-    }
-
-    [Fact]
-    public async Task StrongerLaterCandidateWithinReducedWindowStillWinsAndLateCandidateCannotTakeOver()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var phone = Claim(arbiter, Phone, snr: 5, detectionAgeMs: 310);
-        clock.Advance(TimeSpan.FromMilliseconds(349));
-        var desktop = Claim(arbiter, Desktop, snr: 25);
-        Assert.False(phone.IsCompleted);
-        Assert.False(desktop.IsCompleted);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
-        Assert.Equal("suppressed", (await Claim(arbiter, Guid.NewGuid(), snr: 90).WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal("suppressed", (await phone.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal("granted", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-    }
-
-    [Fact]
-    public async Task LaterAgeAndExactRetryCannotShortenOrExtendFirstCandidatesWindow()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var id = Guid.NewGuid();
-        var first = Claim(arbiter, Phone, id, snr: 20, detectionAgeMs: 100);
-        var retry = Claim(arbiter, Phone, id, snr: 20, detectionAgeMs: 2000);
-        var desktop = Claim(arbiter, Desktop, snr: 25, detectionAgeMs: 0);
-        Assert.Equal(TimeSpan.FromMilliseconds(550), clock.ScheduledDelay);
-        clock.Advance(TimeSpan.FromMilliseconds(549));
-        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid());
-        Assert.False(first.IsCompleted);
-        Assert.False(retry.IsCompleted);
-        Assert.False(desktop.IsCompleted);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
-        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid());
-        Assert.Equal("suppressed", (await first.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-        Assert.Equal(await first, await retry.WaitAsync(TimeSpan.FromSeconds(1)));
-        Assert.Equal("granted", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
-    }
-
-    [Fact]
-    public async Task InvalidDetectionAgesCannotOpenRoundOrConsumeReceipt()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var id = Guid.NewGuid();
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: -1));
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: 2001));
-        Assert.Null(clock.ScheduledDelay);
-        var valid = arbiter.ClaimAsync(Phone, new(id), 0, default, [Phone], 2000);
-        Assert.True(valid.IsCompletedSuccessfully);
-        Assert.Equal("granted", (await valid).Decision);
-    }
-
-    [Fact]
-    public async Task AnyNumberOfNodesCanCompeteAndOnlyOneReceivesAGrant()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
+        var arbiter = new VoiceActivationArbiter(new Clock());
+        var launch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var nodes = Enumerable.Range(0, 32).Select(_ => Guid.NewGuid()).ToArray();
-        var requests = nodes.Select((node, i) => Claim(arbiter, node, priority: i)).ToArray();
-        Settle(clock, arbiter);
+        var requests = nodes.Select(async (node, i) => {
+            await launch.Task;
+            return (node, decision: Claim(arbiter, node, snr: i));
+        }).ToArray();
+        launch.SetResult();
         var decisions = await Task.WhenAll(requests);
-        Assert.Single(decisions, decision => decision.Decision == "granted");
-        Assert.Equal("granted", decisions[^1].Decision);
-        Assert.Equal("suppressed", (await Claim(arbiter, Guid.NewGuid())).Decision);
-    }
-
-    [Theory]
-    [InlineData(10.0, 12.0, 0.9, 0.6, 0, 10, true)]
-    [InlineData(10.0, 12.0, 0.9, 0.89, -2, 10, false)]
-    [InlineData(null, 24.0, null, 0.99, 0, 0, true)]
-    public async Task SimilarOrUnavailableAcousticsUseConfidenceThenPriorityThenStableNodeId(
-        double? phoneSnr, double? pcSnr, double? phoneConfidence, double? pcConfidence,
-        int phonePriority, int pcPriority, bool phoneWins)
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        var pc = Claim(arbiter, Desktop, snr: pcSnr, confidence: pcConfidence, priority: pcPriority);
-        var phone = Claim(arbiter, Phone, snr: phoneSnr, confidence: phoneConfidence, priority: phonePriority);
-        Settle(clock, arbiter);
-        Assert.Equal(phoneWins ? "granted" : "suppressed", (await phone).Decision);
-        Assert.Equal(phoneWins ? "suppressed" : "granted", (await pc).Decision);
+        var winner = Assert.Single(decisions, item => item.decision.Decision == "granted");
+        Assert.Equal(winner.decision, Claim(arbiter, winner.node, winner.decision.ActivationId));
+        foreach (var loser in decisions.Where(item => item.node != winner.node))
+        {
+            Assert.Equal("suppressed", loser.decision.Decision);
+            Assert.Equal(loser.decision, Claim(arbiter, loser.node, loser.decision.ActivationId));
+        }
     }
 
     [Fact]
-    public async Task CancelDoesNotRetireAnotherNodesClaimOrAnotherWaiterAndAbandonMayArriveFirst()
+    public void ReceiptsAreScopedToNodeAndActivationAndNeverRegrantExpiredClaims()
     {
         var clock = new Clock();
         var arbiter = new VoiceActivationArbiter(clock);
+        var sameId = Guid.NewGuid();
+        var first = Claim(arbiter, Phone, sameId, snr: 1);
+        Assert.Equal("granted", first.Decision);
+        Assert.Equal(first, Claim(arbiter, Phone, sameId, snr: 40));
+        var loser = Claim(arbiter, Desktop, sameId);
+        Assert.Equal("suppressed", loser.Decision);
+        Assert.Equal(loser, Claim(arbiter, Desktop, sameId));
+        Assert.Equal("suppressed", Claim(arbiter, Phone).Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal("suppressed", Claim(arbiter, Phone, sameId).Decision);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop, sameId).Decision);
+        var next = Claim(arbiter, Desktop);
+        Assert.Equal("granted", next.Decision);
+        Assert.Equal("suppressed", Claim(arbiter, Phone, sameId).Decision);
+        Assert.Equal(next, Claim(arbiter, Desktop, next.ActivationId));
+    }
+
+    [Fact]
+    public void LateClaimsDoNotExtendCatchUpWindow()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        Assert.Equal("granted", Claim(arbiter, Phone).Decision);
+        clock.Advance(TimeSpan.FromMilliseconds(1999));
+        var late = Claim(arbiter, Desktop);
+        Assert.Equal("suppressed", late.Decision);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(late, Claim(arbiter, Desktop, late.ActivationId));
+        Assert.Equal("granted", Claim(arbiter, Desktop).Decision);
+    }
+
+    [Fact]
+    public void CancellationBeforePostCreatesTombstoneButCancellingWinnerNeverTransfersOwnership()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var id = Guid.NewGuid();
+        arbiter.Abandon(Desktop, id);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop, id).Decision);
+        // Another node's same local ID is independent.
+        var winner = Claim(arbiter, Phone, id);
+        Assert.Equal("granted", winner.Decision);
+        arbiter.Abandon(Phone, id);
+        Assert.Equal(winner, Claim(arbiter, Phone, id));
+        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal("suppressed", Claim(arbiter, Phone, id).Decision);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop, id).Decision);
+        Assert.Equal("granted", Claim(arbiter, Desktop).Decision);
+    }
+
+    [Fact]
+    public void AlreadyCancelledRequestCannotConsumeOwnershipOrReceipt()
+    {
+        var arbiter = new VoiceActivationArbiter(new Clock());
+        var id = Guid.NewGuid();
         using var stop = new CancellationTokenSource();
-        var attempt = Guid.NewGuid();
-        var first = Claim(arbiter, Phone, attempt, ct: stop.Token);
-        var retry = Claim(arbiter, Phone, attempt);
-        arbiter.Abandon(Desktop, attempt);
-        Assert.Equal("suppressed", (await Claim(arbiter, Desktop, attempt)).Decision);
         stop.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await retry).Decision);
+        Assert.Throws<OperationCanceledException>(() => Claim(arbiter, Phone, id, ct: stop.Token));
+        Assert.Equal("granted", Claim(arbiter, Phone, id).Decision);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
     }
 
     [Fact]
-    public async Task WithdrawnOrDisconnectedWinnerCannotStealTheElection()
-    {
-        var clock = new Clock();
-        var arbiter = new VoiceActivationArbiter(clock);
-        using var stop = new CancellationTokenSource();
-        var first = Claim(arbiter, Phone, snr: 50, ct: stop.Token);
-        var fallback = Claim(arbiter, Desktop, snr: 3);
-        stop.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await fallback).Decision);
-    }
-
-    [Fact]
-    public async Task RestartAndExpiredRequestsFailClosed()
+    public async Task StartupAndShutdownFailClosedAndQuarantineNewProcess()
     {
         var clock = new Clock();
         var arbiter = new VoiceActivationArbiter(clock);
         await arbiter.StartAsync(default);
-        Assert.Equal("suppressed", (await Claim(arbiter, Desktop)).Decision);
-        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
         var stale = Claim(arbiter, Desktop);
-        clock.Advance(TimeSpan.FromSeconds(5)); // simulate stalled backend
-        var fresh = Claim(arbiter, Phone);
-        Settle(clock, arbiter);
-        Assert.Equal("suppressed", (await stale).Decision);
-        Assert.Equal("granted", (await fresh).Decision);
+        Assert.Equal("suppressed", stale.Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal(stale, Claim(arbiter, Desktop, stale.ActivationId));
+        var winner = Claim(arbiter, Phone);
+        Assert.Equal("granted", winner.Decision);
+        await arbiter.StopAsync(default);
+        Assert.Equal("suppressed", Claim(arbiter, Phone, winner.ActivationId).Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        await arbiter.StartAsync(default);
+        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal("granted", Claim(arbiter, Desktop).Decision);
     }
 
-    [Fact]
-    public async Task BoundsEvidenceAndRefusesPressureWithoutEvictingLiveReceipts()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(299)]
+    [InlineData(300)]
+    [InlineData(2000)]
+    public void ValidLegacyDetectionAgeIsAcceptedWithoutDelay(int? age)
     {
         var clock = new Clock();
         var arbiter = new VoiceActivationArbiter(clock);
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, Guid.Empty));
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, snr: double.NaN));
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, confidence: 1.01));
-        var real = Claim(arbiter, Phone);
-        NodeException? busy = null;
-        for (var i = 0; i < 10_000; i++)
-        {
-            try { arbiter.Abandon(Desktop, Guid.NewGuid()); }
-            catch (NodeException ex) { busy = ex; break; }
-        }
-        Assert.Equal(503, busy?.Status);
-        clock.Advance(VoiceActivationArbiter.ElectionWindow);
-        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone));
-        Assert.Equal("granted", (await real).Decision);
-        clock.Advance(TimeSpan.FromMinutes(3));
-        var another = Claim(arbiter, Desktop);
-        Settle(clock, arbiter);
-        Assert.Equal("granted", (await another).Decision);
+        Assert.Equal("granted", Claim(arbiter, Phone, detectionAgeMs: age).Decision);
+        Assert.Equal(0, clock.GetTimestamp());
+    }
+
+    [Fact]
+    public void InvalidEvidenceCannotReserveOwnershipOrReceipt()
+    {
+        var arbiter = new VoiceActivationArbiter(new Clock());
+        var id = Guid.NewGuid();
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, Guid.Empty));
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, id, snr: double.NaN));
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, id, snr: 101));
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, id, confidence: 1.01));
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: -1));
+        Assert.Throws<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: 2001));
+        Assert.Throws<NodeException>(() => arbiter.Abandon(Phone, Guid.Empty));
+        Assert.Equal("granted", Claim(arbiter, Phone, id).Decision);
+    }
+
+    [Fact]
+    public void ReceiptCapacityFailsClosedWithoutEvictingLiveDecisionsAndRecoversAfterRetention()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var winner = Claim(arbiter, Phone);
+        Assert.Equal("granted", winner.Decision);
+        for (var i = 0; i < 4095; i++) arbiter.Abandon(Desktop, Guid.NewGuid());
+        var busy = Assert.Throws<NodeException>(() => Claim(arbiter, Desktop));
+        Assert.Equal(503, busy.Status);
+        Assert.Equal(winner, Claim(arbiter, Phone, winner.ActivationId));
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        Assert.Equal("suppressed", Claim(arbiter, Phone, winner.ActivationId).Decision);
+        Assert.Equal(503, Assert.Throws<NodeException>(() => Claim(arbiter, Desktop)).Status);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal("granted", Claim(arbiter, Desktop).Decision);
     }
 }
