@@ -21,7 +21,9 @@ class NodeHandsFreeWakeElectionTest {
         assertNull(HandsFreeWakeElection.signalToNoiseDb(HandsFreeVerificationWindow(samples, 23999)))
     }
 
-    private class Coordinator(val timingHeaders: List<String> = emptyList(), val respond: (JSONObject) -> String) : AutoCloseable {
+    private class Coordinator(val timingHeaders: List<String> = emptyList(),
+        val authHeaders: List<String> = emptyList(),
+        val respond: (JSONObject) -> String) : AutoCloseable {
         private val socket = ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))
         private val worker = Executors.newSingleThreadExecutor()
         val session = NodeNativeSession.Session("http://127.0.0.1:${socket.localPort}", "node", "fixture")
@@ -47,7 +49,8 @@ class NodeHandsFreeWakeElectionTest {
                 val request = JSONObject(String(chars))
                 payload.set(request)
                 val text = respond(request)
-                val timing = timingHeaders.joinToString("") { "X-Aegis-Election-Wait-Ms: $it\r\n" }
+                val timing = timingHeaders.joinToString("") { "X-Aegis-Election-Wait-Ms: $it\r\n" } +
+                    authHeaders.joinToString("") { "X-Aegis-Node-Auth-Ms: $it\r\n" }
                 client.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + timing +
                     "Connection: close\r\nContent-Length: ${text.toByteArray().size}\r\n\r\n$text").toByteArray())
             }
@@ -115,6 +118,64 @@ class NodeHandsFreeWakeElectionTest {
                 }
             }
         }
+    }
+
+    @Test fun authenticationTimingIsOptionalBoundedAndIndependentOfGrant() {
+        val cases = listOf(
+            listOf("15") to HandsFreeWakeElection.CoordinatorTiming(0, 750, 15),
+            listOf("15", "16") to HandsFreeWakeElection.CoordinatorTiming(0, 750),
+            listOf("751") to HandsFreeWakeElection.CoordinatorTiming(0, 750),
+            listOf("-5") to HandsFreeWakeElection.CoordinatorTiming(0, 750),
+            emptyList<String>() to HandsFreeWakeElection.CoordinatorTiming(0, 750))
+        for ((auth, expected) in cases) {
+            val now = AtomicLong(1000)
+            Coordinator(listOf("0"), auth) { q -> now.set(1750); result(q, "granted") }.use { server ->
+                HandsFreeWakeElection({server.session}, now::get, 2750, {true}, true).use { election ->
+                    assertEquals(HandsFreeWakeElection.Decision.GRANTED, election.claim(window, .75f))
+                    assertEquals(expected, election.coordinatorTiming)
+                    assertEquals(false, election.transportTiming?.reused)
+                    assertNotNull(election.transportTiming?.connectMs)
+                    assertNotNull(election.transportTiming?.requestToHeadersMs)
+                    assertTrue(election.canActivate())
+                }
+            }
+        }
+    }
+
+    @Test fun transportObservationReusesTheSamePoolWithoutCreatingIdleTraffic() {
+        val socket = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val worker = Executors.newSingleThreadExecutor()
+        val serverJob = worker.submit {
+            socket.accept().use { client ->
+                client.soTimeout = 4000
+                val input = client.getInputStream().bufferedReader(Charsets.UTF_8)
+                repeat(2) { index ->
+                    assertEquals("POST /api/nodes/me/voice-activations/claim HTTP/1.1", input.readLine())
+                    val headers = generateSequence { input.readLine()?.takeIf { it.isNotEmpty() } }.associate {
+                        it.substringBefore(':').lowercase() to it.substringAfter(':').trim()
+                    }
+                    val chars = CharArray(headers.getValue("content-length").toInt())
+                    var read = 0
+                    while (read < chars.size) {
+                        val n = input.read(chars, read, chars.size-read); check(n > 0); read += n
+                    }
+                    val text = result(JSONObject(String(chars)), "granted")
+                    client.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                        "Connection: ${if(index == 0) "keep-alive" else "close"}\r\n" +
+                        "Content-Length: ${text.toByteArray().size}\r\n\r\n$text").toByteArray())
+                }
+            }
+        }
+        try {
+            val session = NodeNativeSession.Session("http://127.0.0.1:${socket.localPort}", "node", "fixture")
+            repeat(2) { index ->
+                HandsFreeWakeElection({session}, {1000L}, 3000, {true}, false).use { election ->
+                    assertEquals(HandsFreeWakeElection.Decision.GRANTED, election.claim(window, .75f))
+                    assertEquals(index == 1, election.transportTiming?.reused)
+                }
+            }
+            serverJob.get(4, TimeUnit.SECONDS)
+        } finally { socket.close(); worker.shutdownNow() }
     }
 
     @Test fun loserMalformedAndForeignDecisionsStaySilent() {

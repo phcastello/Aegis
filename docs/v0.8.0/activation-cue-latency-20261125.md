@@ -1,5 +1,11 @@
 # Latência do aviso de ativação — Android
 
+Este documento registra as mudanças de cadência e transporte das prévias até
+a `.40`. A política posterior de eleição imediata e as medições físicas estão
+em [latência do aviso: medição no S20 FE](activation-cue-latency-20261125-field.md).
+O tempo de detecção e o prazo de validade da candidatura continuam protegidos;
+o servidor atual não abre mais uma janela de comparação com outros nós.
+
 ## Diagnóstico
 
 O aviso sonoro de 40 ms é local. A rede não precisa entregar o som e o STT é iniciado **depois** da solicitação do aviso. O `AudioRecord` permanece capturando durante toda a decisão: a fronteira da palavra reconhecida, o áudio que já pertence ao comando e a janela do verificador não são reiniciados. A espera observada antes do aviso inclui outras etapas:

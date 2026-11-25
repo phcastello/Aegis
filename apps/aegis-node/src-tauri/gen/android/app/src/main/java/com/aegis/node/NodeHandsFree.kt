@@ -1625,9 +1625,23 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     outcome.finishedAtMs?.let{finishedAt->
                                         metrics.timing("wake_coordinator_wait",finishedAt-verifiedAt,identity)
                                         metrics.timing("wake_grant_observation_wait",grantObservedAt-finishedAt,identity)
-                                        verifiedPending?.election?.coordinatorTiming?.let { timing ->
-                                            metrics.timing("wake_server_election_wait",timing.serverWaitMs,identity)
-                                            metrics.timing("wake_coordinator_transport_overhead",timing.transportOverheadMs,identity)
+                                        verifiedPending?.election?.let { election ->
+                                            election.coordinatorTiming?.let { timing ->
+                                                metrics.timing("wake_server_election_wait",timing.serverWaitMs,identity)
+                                                metrics.timing("wake_coordinator_transport_overhead",timing.transportOverheadMs,identity)
+                                                timing.authenticationMs?.let{metrics.timing("wake_server_authentication",it,identity)}
+                                            }
+                                            election.transportTiming?.let { timing ->
+                                                timing.dnsMs?.let{metrics.timing("wake_network_dns",it,identity)}
+                                                timing.connectMs?.let{metrics.timing("wake_network_connect_including_tls",it,identity)}
+                                                timing.tlsMs?.let{metrics.timing("wake_network_tls",it,identity)}
+                                                timing.requestToHeadersMs?.let{metrics.timing("wake_network_request_to_headers",it,identity)}
+                                                timing.responseBodyMs?.let{metrics.timing("wake_network_response_body",it,identity)}
+                                                timing.reused?.let{metrics.add(if(it)"wake_network_connection_reused" else "wake_network_connection_new")}
+                                            }
+                                            metrics.timing("wake_identity_before_claim",election.identityPreparationMs,identity)
+                                            metrics.timing("wake_identity_response_recheck",election.identityResponseRecheckMs,identity)
+                                            metrics.timing("wake_identity_activation_recheck",election.identityActivationRecheckMs,identity)
                                         }
                                     }
                                 }

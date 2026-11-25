@@ -61,6 +61,27 @@ class NodeHandsFreeVerifierTest {
         assertEquals(0f,HandsFreeWakeVerifier.maximumScore(floatArrayOf(),0),0f)
     }
 
+    @Test fun boundedReplayUsesEveryScoredFrameAndEveryEmbeddingItDependsOn() {
+        val block=HandsFreeWakeVerifier.BLOCK_SAMPLES
+        val counts=listOf(0,1,1279,1280,6399,6400,7679,7680,10000,32000,42560)
+        for(count in counts) {
+            for(candidate in (0..count step 127).toList()+count) {
+                val expected=(0 until count/block).filter { frame->
+                    val end=(frame+1)*block
+                    frame>=5 && end>=candidate-7680 && end<=candidate+2560
+                }
+                val actual=HandsFreeWakeVerifier.scoredFrames(count,candidate)
+                assertEquals("count=$count candidate=$candidate",expected,actual.toList())
+                if(expected.isNotEmpty())
+                    assertEquals(maxOf(0,expected.first()-15),HandsFreeWakeVerifier.firstRequiredEmbedding(actual))
+            }
+        }
+        val full=HandsFreeWakeVerifier.scoredFrames(42560,40000)
+        assertEquals(25..32,full)
+        assertEquals(10,HandsFreeWakeVerifier.firstRequiredEmbedding(full))
+        assertFalse(HandsFreeWakeVerifier.supportsBoundedReplay(ByteArray(1),ByteArray(1),ByteArray(1)))
+    }
+
     @Test fun privateRecordedWindowsMatchUpstreamFramesOnTheProductionOrtRuntime() {
         val root=fixtureRoot()
         val names=File(root,"cases.txt").readLines().filter(String::isNotBlank)
@@ -78,6 +99,10 @@ class NodeHandsFreeVerifierTest {
                 val candidate=details.getProperty("candidateSample").toInt()
                 val expectedMaximum=HandsFreeWakeVerifier.maximumScore(expected,candidate)
                 val actualMaximum=detector.score(samples,samples.size,candidate)
+                // Compare full and bounded replay with the same native runtime,
+                // even if a tiny upstream/reference rounding difference is allowed.
+                val fullMaximum=HandsFreeWakeVerifier.maximumScore(actual,candidate)
+                assertEquals("$name: optimized maximum must be bit-identical",fullMaximum.toRawBits(),actualMaximum.toRawBits())
                 assertEquals("$name: verification decision",expectedMaximum>=HandsFreeWakeVerifier.THRESHOLD,
                     actualMaximum>=HandsFreeWakeVerifier.THRESHOLD)
                 assertArrayEquals("$name: input PCM must remain unchanged",original,samples)

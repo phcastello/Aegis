@@ -6,6 +6,7 @@ import ai.onnxruntime.OrtSession
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.security.MessageDigest
 
 /** Bounded second-stage verifier. Called only after a microWakeWord candidate.
  * Models and deterministic noise state are imported privately, never APK assets.
@@ -26,6 +27,26 @@ internal class HandsFreeWakeVerifier(
         const val SCORE_LOOKBACK_SAMPLES=7680
         const val MAX_INPUT_SAMPLES=PRE_SAMPLES+POST_SAMPLES
         const val SEED_BYTES=16*96*4
+        private const val FEATURE_HISTORY_FRAMES=16
+        private const val SUPPRESSED_FRAMES=5
+
+        // These exact feed-forward graphs were checked against full replay.
+        // A different graph keeps full replay until its equivalence is established.
+        private fun matchesHash(bytes:ByteArray,hash:String)=
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it)}==hash
+        internal fun supportsBoundedReplay(mel:ByteArray,embedding:ByteArray,keyword:ByteArray)=
+            mel.size==1087958 && embedding.size==1326578 && keyword.size==414743 &&
+            matchesHash(mel,"ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f") &&
+            matchesHash(embedding,"70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f") &&
+            matchesHash(keyword,"f8972e52ef82db7735132ff54a725e69c0462ebda2bff14446a612633aa46c8b")
+
+        internal fun scoredFrames(count:Int,candidateSample:Int):IntRange {
+            val first=maxOf(SUPPRESSED_FRAMES,(candidateSample-SCORE_LOOKBACK_SAMPLES+BLOCK_SAMPLES-1)/BLOCK_SAMPLES-1)
+            val last=minOf(count,candidateSample+POST_SAMPLES)/BLOCK_SAMPLES-1
+            return first..last
+        }
+
+        internal fun firstRequiredEmbedding(scored:IntRange)=maxOf(0,scored.first-FEATURE_HISTORY_FRAMES+1)
 
         internal fun decodeInitialState(bytes:ByteArray):FloatArray {
             require(bytes.size==SEED_BYTES){"wake_verifier_invalid_seed"}
@@ -48,6 +69,7 @@ internal class HandsFreeWakeVerifier(
     }
 
     private val initialState=decodeInitialState(seedEmbedding)
+    private val boundedReplay=supportsBoundedReplay(melModel,embeddingModel,keywordModel)
     private val environment=OrtEnvironment.getEnvironment()
     // Options must outlive all sessions using them (ORT Java API contract).
     private val options=OrtSession.SessionOptions()
@@ -82,24 +104,27 @@ internal class HandsFreeWakeVerifier(
               cancelled:()->Boolean={Thread.currentThread().isInterrupted}):Float {
         check(!closed){"wake_verifier_closed"}
         validateWindow(samples.size,count,candidateSample)
-        return maximumScore(frameScoresLocked(samples,count,cancelled),candidateSample)
+        val scored=if(boundedReplay)scoredFrames(count,candidateSample) else null
+        return maximumScore(frameScoresLocked(samples,count,cancelled,scored),candidateSample)
     }
 
     /** Import-time graph and output-contract check, before replacing private files. */
-    fun validate() { score(ShortArray(BLOCK_SAMPLES),BLOCK_SAMPLES,BLOCK_SAMPLES) }
+    fun validate() { frameScores(ShortArray(BLOCK_SAMPLES)) }
 
     @Synchronized
     internal fun frameScores(samples:ShortArray,count:Int=samples.size):FloatArray {
         check(!closed){"wake_verifier_closed"}
         validateWindow(samples.size,count,count)
-        return frameScoresLocked(samples,count){Thread.currentThread().isInterrupted}
+        return frameScoresLocked(samples,count,{Thread.currentThread().isInterrupted})
     }
 
-    private fun frameScoresLocked(samples:ShortArray,count:Int,cancelled:()->Boolean):FloatArray {
+    private fun frameScoresLocked(samples:ShortArray,count:Int,cancelled:()->Boolean,
+                                  scored:IntRange?=null):FloatArray {
         if(cancelled())throw InterruptedException("wake_verifier_cancelled")
         val melHistory=FloatArray(76*32){1f}
         val featureHistory=initialState.copyOf()
         val scores=FloatArray(count/BLOCK_SAMPLES)
+        val firstEmbedding=scored?.let(::firstRequiredEmbedding)?:0
         for(frame in scores.indices) {
             if(cancelled())throw InterruptedException("wake_verifier_cancelled")
             val end=(frame+1)*BLOCK_SAMPLES
@@ -110,13 +135,19 @@ internal class HandsFreeWakeVerifier(
             require(mel.isNotEmpty() && mel.size%32==0 && mel.size<=8*32){"wake_verifier_invalid_mel_shape"}
             for(i in mel.indices)mel[i]=mel[i]/10f+2f
             append(melHistory,mel)
+            // Earlier embeddings have fallen out of the 16-entry history at
+            // the first used prediction. Always advance the mel history.
+            if(scored!=null && (scored.isEmpty() || frame<firstEmbedding || frame>scored.last))continue
             val embedding=run(sessions[1],"input_1",melHistory,longArrayOf(1,76,32,1))
             require(embedding.size==96){"wake_verifier_invalid_embedding_shape"}
             append(featureHistory,embedding)
+            // Predictions never update either history. For the verified
+            // feed-forward graph, omit only those that cannot affect maximumScore.
+            if(scored!=null && frame !in scored)continue
             val prediction=run(sessions[2],"features",featureHistory,longArrayOf(1,16,96))
             require(prediction.size==1 && prediction[0] in 0f..1f){"wake_verifier_invalid_prediction"}
             // Upstream suppresses the first five model predictions after reset.
-            scores[frame]=if(frame<5)0f else prediction[0]
+            scores[frame]=if(frame<SUPPRESSED_FRAMES)0f else prediction[0]
         }
         return scores
     }
