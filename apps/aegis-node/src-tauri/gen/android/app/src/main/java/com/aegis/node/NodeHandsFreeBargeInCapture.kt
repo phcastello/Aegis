@@ -45,6 +45,9 @@ internal class HandsFreeBargeInOnset(
     private val windowMask = (1 shl windowFrames) - 1
     private val ring=HandsFreeRing(preSamples+windowFrames*HandsFreeVad.FRAME_SAMPLES)
     private var independent = false
+    private val mechanicalNoiseGate = HandsFreeMechanicalNoiseGate()
+    var mechanicalVetoFrames = 0
+        private set
     private val independentClassifier = HandsFreeSpeechClassifier { frame ->
         val voiced = classifier.isSpeech(frame)
         independent && voiced
@@ -62,9 +65,11 @@ internal class HandsFreeBargeInOnset(
             if(received>0)reset()
             return null
         }
-        independent = evidence==HandsFreeBargeInEvidence.INDEPENDENT
+        val mechanicalNoise = mechanicalNoiseGate.observe(frame)
+        if (mechanicalNoise && evidence==HandsFreeBargeInEvidence.INDEPENDENT) mechanicalVetoFrames++
+        independent = evidence==HandsFreeBargeInEvidence.INDEPENDENT && !mechanicalNoise
         // Give the classifier time to adapt without forwarding uncertain echo to STT.
-        ring.append(if (retain) frame else SILENCE,frame.size)
+        ring.append(if (retain && !mechanicalNoise) frame else SILENCE,frame.size)
         received+=frame.size
         val active = if (learnedEvidence) independent else {
             vad.process(frame,frame.size)
@@ -82,6 +87,7 @@ internal class HandsFreeBargeInOnset(
     }
     /** One repeated playback-head reading provides no additional evidence. */
     fun omitFrame() {
+        mechanicalNoiseGate.reset()
         ring.append(SILENCE, HandsFreeVad.FRAME_SAMPLES)
         received += HandsFreeVad.FRAME_SAMPLES
         addObservation(false)
@@ -93,6 +99,7 @@ internal class HandsFreeBargeInOnset(
     }
 
     fun reset() {
+        mechanicalNoiseGate.reset()
         ring.clear()
         resetClassifier()
         vad=HandsFreeVad(independentClassifier)
@@ -102,7 +109,7 @@ internal class HandsFreeBargeInOnset(
     }
 
     fun clearVotes() { history = 0 }
-    fun clear(){ring.clear()}
+    fun clear(){ring.clear();mechanicalNoiseGate.reset()}
     companion object {
         const val PRE_SAMPLES=1920
         const val DUPLEX_PRE_SAMPLES=4800 // 300 ms of screened, processed lead-in.
@@ -173,7 +180,8 @@ internal data class HandsFreeBargeInCaptureSummary(
     val voiceReadyFrames: Int,
     val independentFrames: Int,
     val levelRejectedFrames: Int,
-    val commandFrames: Int
+    val commandFrames: Int,
+    val mechanicalVetoFrames: Int
 )
 
 /** One microphone, owned only for the current response and its accepted new utterance.
@@ -593,7 +601,8 @@ internal class HandsFreeBargeInCapture internal constructor(
             try {
                 onCaptureSummary(HandsFreeBargeInCaptureSummary(
                     outcome, accepted.get(), timestampFrames, playbackHeadFrames, timingResets,
-                    referenceUnavailableFrames, voiceReadyFrames, independentFrames, levelRejectedFrames, commandFrames
+                    referenceUnavailableFrames, voiceReadyFrames, independentFrames, levelRejectedFrames, commandFrames,
+                    onset?.mechanicalVetoFrames ?: 0
                 ))
             } catch (_: Exception) { }
         }

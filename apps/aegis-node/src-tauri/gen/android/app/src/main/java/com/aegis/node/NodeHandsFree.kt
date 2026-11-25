@@ -862,7 +862,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                             metrics.event("barge_in_processing_capture",JSONObject()
                                 .put("outcome",summary.outcome.name.lowercase()).put("accepted",summary.accepted)
                                 .put("voiceReadyFrames",summary.voiceReadyFrames).put("independentFrames",summary.independentFrames)
-                                .put("levelRejectedFrames",summary.levelRejectedFrames).put("commandFrames",summary.commandFrames))
+                                .put("levelRejectedFrames",summary.levelRejectedFrames).put("commandFrames",summary.commandFrames)
+                                .put("mechanicalVetoFrames",summary.mechanicalVetoFrames))
                         },
                         onMediaFilterClosed={referenceSamples,filteredReads->
                             metrics.add("external_media_barge_reference_samples",referenceSamples)
@@ -1018,6 +1019,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                     .put("voiceReadyFrames", summary.voiceReadyFrames)
                     .put("independentFrames", summary.independentFrames)
                     .put("levelRejectedFrames", summary.levelRejectedFrames)
+                    .put("mechanicalVetoFrames", summary.mechanicalVetoFrames)
                     .put("detectorPeakPercent", (processor.peakSpeechScore * 100).toInt())
                     .put("nativeQualityFrames", processor.qualifiedNativeFrames)
                     .put("commandFrames", summary.commandFrames))
