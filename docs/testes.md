@@ -24,7 +24,9 @@ o worker de aposentadoria; seus testes são independentes dos aplicativos.
 `check-docs.mjs` confere scripts npm documentados, alvos dos runners e links locais;
 não executa builds.
 
-A API requer .NET SDK 8. Os testes PostgreSQL só são exercitados quando
+A API requer .NET SDK 8; o `global.json` da raiz seleciona a versão estável
+mais recente do SDK 8 instalada, inclusive no CI com SDKs preview pré-instalados.
+Os testes PostgreSQL só são exercitados quando
 `AEGIS_NODE_TEST_DATABASE`, `AEGIS_REMINDER_TEST_DATABASE` e
 `AEGIS_MEMORY_TEST_DATABASE` apontam para banco **descartável**. Sem essas variáveis,
 os testes de integração são ignorados; isso não comprova migrations nem persistência.

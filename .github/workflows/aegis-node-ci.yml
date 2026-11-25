@@ -145,6 +145,7 @@ jobs:
       - name: Real authenticated transport through two Nginx proxy hops
         run: |
           npm ci --prefix scripts/node-transport-probe
+          node --test scripts/node-transport-probe/fixture-readiness.test.mjs
           AEGIS_PROBE_NOTIFICATIONS=true node scripts/node-transport-probe/proxy-chain.mjs
       - name: Immutable native fixture command replay and bounded cache
         timeout-minutes: 2
