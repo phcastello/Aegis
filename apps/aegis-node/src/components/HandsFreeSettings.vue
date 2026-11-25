@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { batteryRateDifference, batteryRunsForComparison, latestBatteryRuns, type HandsFreeBatteryMode } from '../services/handsFree';
+import { batteryRateDifference, batteryRunsForComparison, latestBatteryRuns, type HandsFreeBatteryMode, type HandsFreeMediaReferenceStatus } from '../services/handsFree';
 import { useHandsFreeSettings } from '../composables/useHandsFreeSettings';
 
 const { state, busy, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, automationSupported, automationLive, canStartBattery, startBattery, finishBattery, canStartAuto, startAuto, cancelAuto, exportBattery } = useHandsFreeSettings();
+const mediaReferenceMessage: Record<HandsFreeMediaReferenceStatus,string> = {
+  unsupported: 'Disponível a partir do Android 10.',
+  off: 'Desativada.', requesting: 'Aguardando autorização do Android.', starting: 'Preparando referência de áudio.',
+  waiting: 'Autorizada; aguardando reprodução de mídia.', warming: 'Preparando áudio de referência.',
+  ready: 'Referência de mídia disponível.', unavailable: 'Áudio de referência indisponível; a escuta continua pelo microfone.',
+  denied: 'Autorização não concedida.', blocked: 'Escuta hands-free indisponível.',
+  stopped: 'Sessão encerrada pelo Android. Autorize novamente para usar.'
+};
+const canStartMediaReference = computed(() => Boolean(canConfigure.value && state.value?.enabled && !state.value?.diagnostic && state.value?.modelReady && state.value?.assistantSelected && state.value?.permissionGranted));
 const battery = computed(() => state.value?.batteryDiagnostics);
 const automation = computed(() => battery.value?.automation);
 const comparisonVisible = computed(() => !automation.value || (automation.value.status === 'completed' && !automation.value.validation));
@@ -34,7 +43,7 @@ function isValidationRun(id: string): boolean { return Boolean(automation.value?
 const deleteArmed = ref(false);
 let collectionRefresh: ReturnType<typeof setInterval> | undefined;
 function foreground() { if (document.visibilityState === 'visible') void refresh(); }
-onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
+onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.mediaReference?.session || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
 onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); });
 </script>
 <template>
@@ -54,6 +63,16 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
       <p class="settings-muted">A seleção de assistente é feita na tela oficial do Android. O modelo pessoal deve ser importado uma vez, com a escuta desligada.</p>
       <label class="audio-preference"><input type="checkbox" :checked="state.diagnostic" :disabled="!canConfigure" @change="run('configure', undefined, ($event.target as HTMLInputElement).checked)" /> Diagnóstico: detectar chamadas sem enviar comandos</label>
       <div class="settings-actions"><button type="button" :disabled="!canConfigure" @click="run('cancel')">Cancelar interação</button><button type="button" :disabled="!canConfigure" @click="run('export')">Exportar métricas e ativações (ZIP)</button></div>
+      <fieldset v-if="state.mediaReference" class="media-reference-settings">
+        <legend>Cancelamento de áudio de mídia (experimental)</legend>
+        <p>Autorize o áudio de músicas, vídeos e jogos para melhorar a escuta enquanto outras mídias tocam. A referência é processada localmente em memória e descartada; a Aegis não grava a tela.</p>
+        <p class="settings-muted">A autorização é temporária e o Android pode encerrá-la ao bloquear a tela. Aplicativos podem impedir a captura de seu áudio.</p>
+        <p role="status">{{ mediaReferenceMessage[state.mediaReference.status] }}</p>
+        <div v-if="state.mediaReference.supported" class="settings-actions">
+          <button v-if="state.mediaReference.session" type="button" :disabled="!canAct" @click="run('mediaReferenceStop')">Desativar referência de mídia</button>
+          <button v-else type="button" :disabled="!canStartMediaReference" @click="run('mediaReferenceStart')">Autorizar áudio de mídia</button>
+        </div>
+      </fieldset>
       <fieldset v-if="battery" class="battery-settings">
         <legend>Investigar consumo de bateria</legend>
         <template v-if="automation">
@@ -143,4 +162,4 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
     <div class="settings-actions"><button type="button" :disabled="busy" @click="refresh">{{ error && !state ? 'Tentar novamente' : 'Atualizar estado' }}</button></div>
   </section>
 </template>
-<style scoped>.hands-free-settings { margin-top: 24px; border-top: 1px solid var(--border-color, #444); padding-top: 18px; }.hands-free-settings p { margin: 12px 0; }.collection-settings { margin-top:20px; border:1px solid var(--border-color, #444); border-radius:12px; padding:16px; }.collection-settings select { margin-left:12px; }.battery-settings { margin-top:20px; padding:16px; border:1px solid var(--border-color, #444); border-radius:12px; min-width:0; }.battery-start-actions { flex-wrap:wrap; }.battery-start-actions button { flex:1 1 150px; }.battery-table-scroll { overflow-x:auto; }.battery-table { width:100%; border-collapse:collapse; font-size:.9rem; }.battery-table th,.battery-table td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--border-color, #444); }.battery-table caption { text-align:left; padding-bottom:10px; }.battery-result { border-top:1px solid var(--border-color, #444); padding-top:8px; margin-top:12px; }.battery-cpu { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }.battery-cpu dd { margin:0; }.battery-advanced { margin:16px 0; }.battery-advanced summary { cursor:pointer; padding:10px 0; }.battery-history summary { cursor:pointer; padding:10px 0; }</style>
+<style scoped>.hands-free-settings { margin-top: 24px; border-top: 1px solid var(--border-color, #444); padding-top: 18px; }.hands-free-settings p { margin: 12px 0; }.collection-settings { margin-top:20px; border:1px solid var(--border-color, #444); border-radius:12px; padding:16px; }.collection-settings select { margin-left:12px; }.battery-settings, .media-reference-settings { margin-top:20px; padding:16px; border:1px solid var(--border-color, #444); border-radius:12px; min-width:0; }.battery-start-actions { flex-wrap:wrap; }.battery-start-actions button { flex:1 1 150px; }.battery-table-scroll { overflow-x:auto; }.battery-table { width:100%; border-collapse:collapse; font-size:.9rem; }.battery-table th,.battery-table td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--border-color, #444); }.battery-table caption { text-align:left; padding-bottom:10px; }.battery-result { border-top:1px solid var(--border-color, #444); padding-top:8px; margin-top:12px; }.battery-cpu { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }.battery-cpu dd { margin:0; }.battery-advanced { margin:16px 0; }.battery-advanced summary { cursor:pointer; padding:10px 0; }.battery-history summary { cursor:pointer; padding:10px 0; }</style>

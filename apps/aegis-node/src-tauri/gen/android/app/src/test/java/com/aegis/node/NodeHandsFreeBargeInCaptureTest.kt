@@ -34,6 +34,7 @@ class NodeHandsFreeBargeInCaptureTest {
         var stopGate:CountDownLatch?=null
         var silenced=false
         var takeSample:(Int,Short)->Short={_,sample->sample}
+        var preprocess:(ShortArray)->Unit={}
         val starts=AtomicInteger();val stops=AtomicInteger();val closes=AtomicInteger()
         @Volatile var offset=0
         override fun start(){starts.incrementAndGet()}
@@ -49,6 +50,7 @@ class NodeHandsFreeBargeInCaptureTest {
             this.offset+=n
             clock.set(this.offset*1000L/16000);return n
         }
+        override fun preprocessFrame(frame: ShortArray) = preprocess(frame)
         override fun silenced()=silenced
         override fun stop(){stops.incrementAndGet();stopGate?.await();stopped.countDown();proceed.countDown()}
         override fun close(){releasing.countDown();releaseGate?.await();closes.incrementAndGet()}
@@ -111,6 +113,32 @@ class NodeHandsFreeBargeInCaptureTest {
         assertEquals(1,input.stops.get());assertEquals(1,input.closes.get())
         assertNull(capture.awaitCommand())
     }
+    @Test fun externalMediaPreprocessingRunsOnWholeFramesBeforeOwnEchoInspectionAndCommandCapture() {
+        val quiet = List(12) { frame(200) }
+        val speech = List(22) { frame(1400) }
+        val tail = List(40) { frame(200) }
+        val input = Input(flatten(quiet + speech + tail), AtomicLong(), 73)
+        val inspected = AtomicInteger()
+        val preprocessed = AtomicInteger()
+        val approved = CountDownLatch(1)
+        input.preprocess = { samples ->
+            assertEquals(320, samples.size)
+            preprocessed.incrementAndGet()
+            for (i in samples.indices) samples[i] = (samples[i].toInt() / if (abs(samples[i].toInt()) >= 1000) 2 else 200).toShort()
+        }
+        val capture = capture(input, inspect = { samples, _, _ ->
+            assertTrue(samples.all { abs(it.toInt()) in setOf(1, 700) })
+            inspected.incrementAndGet()
+            INDEPENDENT
+        }, speech = { approved.countDown(); true })
+        try {
+            assertTrue(capture.start()); input.proceed.countDown(); await(approved)
+            val result = checkNotNull(capture.awaitCommand())
+            assertArrayEquals(flatten(List(6){frame(1)} + List(22){frame(700)} + List(40){frame(1)}), pcm(result.wav))
+            assertTrue(preprocessed.get() > inspected.get()) // Also ran while capturing the new command.
+        } finally { capture.close(); assertTrue(capture.awaitClosed(1000)) }
+    }
+
     @Test fun confirmedInterruptedSpeechEndpointsAfterEightHundredMillisecondsWithoutNewVoice() {
         val warmup = List(12) { frame(0) }
         val speech = List(7) { frame(2000 + it) }

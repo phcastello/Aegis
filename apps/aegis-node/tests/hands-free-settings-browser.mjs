@@ -27,6 +27,10 @@ try {
         try {
           if (f.hold) { f.hold = false; return await new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; }); }
           if (f.fail) throw { code: f.fail, message: 'private exception must never be rendered' };
+          if (args.operation === 'mediaReferenceStart') f.initial.mediaReference = f.mediaGrant
+            ? { supported: true, session: true, status: 'ready' }
+            : { supported: true, session: false, status: 'denied' };
+          if (args.operation === 'mediaReferenceStop') f.initial.mediaReference = { supported: true, session: false, status: 'off' };
           if (args.operation === 'batteryStart') f.initial.batteryDiagnostics.active = { id: 'study_1', mode: args.batteryMode, startedAt: '2026-11-16T10:00:00-03:00', elapsedMs: 60000 };
           if (args.operation === 'batteryFinish') { f.initial.batteryDiagnostics.active = null; f.initial.batteryDiagnostics.requiresResume = false; }
           if (args.operation === 'batteryAutoStart' || args.operation === 'batteryAutoValidate') f.initial.batteryDiagnostics.automation = { id: 'auto_sequence_1', status: 'waiting_screen_off', mode: 'off', stageDurationMs: args.operation === 'batteryAutoValidate' ? 60000 : 1800000, validation: args.operation === 'batteryAutoValidate', remainingEstimateMs: args.operation === 'batteryAutoValidate' ? 180000 : 5400000, runIds: [], alarmPrecision: 'inexact', delayMs: 0, issue: null };
@@ -109,6 +113,43 @@ try {
   await hf.getByText('Estado mais recente.', { exact: true }).waitFor();
   assert.equal(await hf.getByText('Resultado desmontado.', { exact: true }).count(), 0);
   assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), false);
+  // Consent is separate from ordinary hands-free; querying or a denied result
+  // never retries projection authorization automatically.
+  await page.evaluate(() => {
+    Object.assign(window.hfFixture.initial, {
+      enabled: true, modelReady: true, assistantSelected: true, permissionGranted: true,
+      mediaReference: { supported: true, session: false, status: 'off' }
+    });
+  });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  const mediaReference = hf.locator('.media-reference-settings');
+  const authorize = mediaReference.getByRole('button', { name: 'Autorizar áudio de mídia', exact: true });
+  await authorize.waitFor();
+  assert.equal(await authorize.isEnabled(), true);
+  assert.equal(await page.evaluate(() => window.hfFixture.calls.filter(call => call.operation === 'mediaReferenceStart').length), 0);
+  await authorize.click();
+  await mediaReference.getByText('Autorização não concedida.', { exact: true }).waitFor();
+  assert.equal(await authorize.isEnabled(), true);
+  assert.equal(await page.evaluate(() => window.hfFixture.calls.filter(call => call.operation === 'mediaReferenceStart').length), 1);
+  await page.evaluate(() => { window.hfFixture.mediaGrant = true; });
+  await authorize.click();
+  await mediaReference.getByText('Referência de mídia disponível.', { exact: true }).waitFor();
+  const stopReference = mediaReference.getByRole('button', { name: 'Desativar referência de mídia', exact: true });
+  assert.equal(await stopReference.isEnabled(), true);
+  await stopReference.click();
+  await mediaReference.getByText('Desativada.', { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.hfFixture.calls.filter(call => call.operation.startsWith('mediaReference'))), [
+    { operation: 'mediaReferenceStart' }, { operation: 'mediaReferenceStart' }, { operation: 'mediaReferenceStop' }
+  ]);
+  await page.evaluate(() => {
+    window.hfFixture.initial.enabled = false;
+    window.hfFixture.initial.mediaReference = { supported: false, session: false, status: 'unsupported' };
+  });
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  await mediaReference.getByText('Disponível a partir do Android 10.', { exact: true }).waitFor();
+  assert.equal(await authorize.count(), 0);
+  await page.evaluate(() => { delete window.hfFixture.initial.mediaReference; });
+
   // Battery study uses the real Vue controls with a fixture of the closed native contract.
   await page.evaluate(() => {
     window.hfFixture.initial.batteryDiagnostics = { schema: 1, active: null, requiresResume: false, latest: null, runs: [] };

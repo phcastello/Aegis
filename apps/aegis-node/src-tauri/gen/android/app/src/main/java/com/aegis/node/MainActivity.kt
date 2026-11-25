@@ -173,6 +173,6 @@ class MainActivity : TauriActivity() {
   fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)
   fun handsFreeCollectionConfigure(payload:String):String=NodeHandsFree.configureCollection(this,payload)
   fun handsFreeCollectionDelete(payload:String):String=NodeHandsFree.deleteCollection(this)
-  override fun onDestroy(){NodeManualSpeech.cancel();super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
+  override fun onDestroy(){NodeExternalPlaybackReference.cancelPendingConsent();NodeManualSpeech.cancel();super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
 
 }

@@ -42,6 +42,23 @@ test('invalid state payloads are rejected instead of becoming invented setup sta
   }
 });
 
+test('media reference state is optional and consent controls use only closed operations', async () => {
+  const calls = [];
+  const mediaReference = { supported: true, session: true, status: 'ready' };
+  mockIPC((command, args) => { calls.push({ command, args }); return { ...initial, mediaReference }; });
+  assert.deepEqual((await handsFree('mediaReferenceStart')).mediaReference, mediaReference);
+  assert.deepEqual((await handsFree('mediaReferenceStop')).mediaReference, mediaReference);
+  assert.deepEqual(calls, ['mediaReferenceStart', 'mediaReferenceStop'].map(operation => ({ command:'node_hands_free', args:{operation} })));
+  for (const invalid of [
+    { supported: false, session: true, status: 'ready' },
+    { supported: true, session: true, status: 'arbitrary' },
+    { supported: true, session: 'yes', status: 'waiting' }
+  ]) {
+    mockIPC(() => ({ ...initial, mediaReference: invalid }));
+    await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+  }
+});
+
 test('model identity from native state survives baseline, strong, rollback and absent-model responses', async () => {
   globalThis.window = {};
   const baseline = { modelName: 'Baseline', modelVersion: 'aegis-mww-fleurs-dev-2026-10-31', modelSha256: 'f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514' };

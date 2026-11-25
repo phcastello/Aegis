@@ -33,7 +33,7 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
       if (owns()) {
         const safe = handsFreeError(reason); error.value = safe.message; diagnosticCode.value = safe.code;
         // A lost reply does not cancel a native start/finish. Read ownership before any retry.
-        if (['batteryStart', 'batteryFinish', 'batteryAutoStart', 'batteryAutoValidate', 'batteryAutoCancel'].includes(operation)) refreshQueued = true;
+        if (['batteryStart', 'batteryFinish', 'batteryAutoStart', 'batteryAutoValidate', 'batteryAutoCancel', 'mediaReferenceStart', 'mediaReferenceStop'].includes(operation)) refreshQueued = true;
       }
     } finally {
       if (owns()) {
@@ -44,7 +44,7 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   }
   const refresh = () => request('state');
   async function run(operation: Exclude<HandsFreeOperation, 'state'>, enabled?: boolean, diagnostic?: boolean): Promise<void> {
-    if (!canAct.value || !state.value || batteryLocked.value) return;
+    if (!canAct.value || !state.value || (batteryLocked.value && operation !== 'mediaReferenceStop')) return;
     await request(operation, operation === 'configure' ? {
       enabled: enabled ?? state.value.enabled,
       diagnostic: diagnostic ?? state.value.diagnostic

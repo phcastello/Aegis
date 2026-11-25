@@ -54,6 +54,7 @@ object NodeHandsFree {
     internal fun batteryAlarm(context:Context,token:HandsFreeBatteryAutomation.Token,leaseDeadlineMs:Long,onComplete:()->Unit) {
         try{runtime(context).queueBatteryTransition(token,leaseDeadlineMs,onComplete)}catch(_:Throwable){onComplete()}
     }
+    internal fun externalReferenceAllowed(context: Context): Boolean = runtime(context).externalReferenceAllowed()
     internal fun permission(context:Context)=context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
     internal fun selected(context:Context)=VoiceInteractionService.isActiveService(context,ComponentName(context,NodeVoiceInteractionService::class.java))
 }
@@ -118,7 +119,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     @Volatile internal var screenInteractive=true
     private var continuationDeadline=0L
     private val ownAudioSessions=java.util.LinkedHashSet<Int>()
-    internal fun isOwnAudioSession(id:Int):Boolean=synchronized(lock){ownAudioSessions.contains(id)}
+    internal fun isOwnAudioSession(id:Int):Boolean=NodeExternalPlaybackReference.ownsAudioSession(id) || synchronized(lock){ownAudioSessions.contains(id)}
     private var failures=0
     @Volatile private var retryNotBefore=0L
     @Volatile private var retriesExhausted=false
@@ -186,6 +187,12 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
     }
 
+    private val sessionMediaFocus=HandsFreeSessionMediaFocus(context,
+        onLoss={token->cancelSession(token,"audio_focus_lost")},
+        observe={outcome->metrics.event("media_focus",JSONObject().put("outcome",outcome))})
+    private val mediaFocusRelease=HandsFreeMediaFocusRelease(sessionMediaFocus::release,sessionMediaFocus::releaseAll) { expire ->
+        main.postDelayed({expire()},2000)
+    }
     private val playback=HandsFreePlayback(context)
     private val activationCue=HandsFreeActivationCue{metrics.add("beep_failures")}
     // Retain the registration for this process singleton's lifetime; no identity is persisted.
@@ -197,14 +204,16 @@ internal class HandsFreeRuntime(private val context:Context) {
         conversationContinuity.identityChanged(identity)
         if(active!=null && active.identity!=identity) {
             continuityActivation=null;pendingActivation=false;sessionCancelled=true
-            closeResponseCapture();playback.cancel();activationCue.cancel();cancelBackend();closePanel(sessionId,true)
+            closeResponseCapture();playback.cancel();activationCue.cancel();cancelBackend();mediaFocusRelease.releaseWhenSafe(sessionId);closePanel(sessionId,true)
             metrics.event("session_identity_changed")
         }
     }
-    private fun endConversationSession(token:String?,close:Boolean=true)=synchronized(lock) {
+    private fun endConversationSession(token:String?,close:Boolean=true,releaseMediaFocus:Boolean=true)=synchronized(lock) {
         if(sessionId!=token)return@synchronized
         conversationContinuity.end(continuityActivation);continuityActivation=null
-        conversationId=null;sessionId=null;backend=null;if(close)closePanel(token)
+        conversationId=null;sessionId=null;backend=null
+        if(releaseMediaFocus)sessionMediaFocus.release(token)
+        if(close)closePanel(token)
     }
     init {
         modelReady=try{HandsFreeModel.readPackage(context)?.use { model->
@@ -216,7 +225,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     internal fun detach(value:NodeVoiceInteractionService) {
         if(service!==value)return
         interruptBatteryStudy("assistant_unavailable")
-        service=null;stop("assistant_unavailable","Selecione a Aegis como assistente e retome o hands-free.");metrics.event("assistant_shutdown")
+        service=null;NodeExternalPlaybackReference.stop(context);stop("assistant_unavailable","Selecione a Aegis como assistente e retome o hands-free.");metrics.event("assistant_shutdown")
     }
     private fun recordIdentity()=synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
@@ -228,6 +237,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     fun state():JSONObject {
         // Never hold the audio/control lock while a platform snapshot is in flight.
         val batteryView=batteryState()
+        val mediaReference=NodeExternalPlaybackReference.state()
         return synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
         val info=context.packageManager.getPackageInfo(context.packageName,0)
@@ -240,9 +250,11 @@ internal class HandsFreeRuntime(private val context:Context) {
             .put("modelSha256",model?.sha256?:JSONObject.NULL)
             .put("collection",collection.state())
             .put("batteryDiagnostics",batteryView)
+            .put("mediaReference",mediaReference)
         }
     }
     fun configure(value:Boolean,diagnosticValue:Boolean):JSONObject {
+        if (!value || diagnosticValue) NodeExternalPlaybackReference.stop(context)
         interruptBatteryStudy("configuration_changed")
         val changed=enabled!=value || diagnostic!=diagnosticValue
         if(!changed){if(value)recoverFromSystem();return state()}
@@ -262,6 +274,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                     check(!modelChanging && manualLease==null && !pendingActivation && sessionId==null &&
                         status !in setOf("capturing","processing","speaking","continuation")){"model_import_busy"}
                     modelChanging=true;paused=true
+                    NodeExternalPlaybackReference.stop(context)
                     stop("starting","Preparando troca do modelo local.");worker
                 }
                 if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
@@ -290,8 +303,8 @@ internal class HandsFreeRuntime(private val context:Context) {
             else stop("disabled","Hands-free desligado.")
             return
         }
-        if(!NodeHandsFree.selected(context)){stop("assistant_unavailable","Selecione a Aegis como assistente padrão.");return}
-        if(!NodeHandsFree.permission(context)){stop("permission_missing","Permita o microfone para habilitar a escuta.");return}
+        if(!NodeHandsFree.selected(context)){NodeExternalPlaybackReference.stop(context);stop("assistant_unavailable","Selecione a Aegis como assistente padrão.");return}
+        if(!NodeHandsFree.permission(context)){NodeExternalPlaybackReference.stop(context);stop("permission_missing","Permita o microfone para habilitar a escuta.");return}
         if(!modelReady && batteryDiagnostics.activeMode()!="capture_only"){stop("model_missing","Importe o modelo privado Aegis selecionado na PoC.");return}
         if(manualLease!=null){setState("manual_audio","Áudio em uso pelo chat.");return}
         val host=service?:run{setState("assistant_unavailable","Aguardando o serviço de assistente do Android. Se necessário, selecione novamente a Aegis.");return}
@@ -302,6 +315,11 @@ internal class HandsFreeRuntime(private val context:Context) {
             worker=Thread({run(generation)},"AegisHandsFreeAudio").apply{isDaemon=true;start()}
         }
     }
+    internal fun externalReferenceAllowed(): Boolean = enabled && !diagnostic && modelReady &&
+        !modelChanging && !batteryChanging && !batteryBlocksNormal() && manualLease == null && service != null &&
+        NodeHandsFree.permission(context) && NodeHandsFree.selected(context) &&
+        !context.getSystemService(AudioManager::class.java).isMicrophoneMute
+
     private fun batteryBlocksNormal()=batterySuspended || batteryDiagnostics.blocksNormal() || batteryAutomation.blocksNormal()
     private fun batteryState():JSONObject = batteryDiagnostics.state().also {
         if((batterySuspended || batteryAutomation.blocksNormal()) && it.isNull("active"))it.put("requiresResume",true)
@@ -337,6 +355,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             releaseSessionPower(sessionPowerToken)
             try{recorder?.stop()}catch(_:Exception){}
             cancelBackend()
+            mediaFocusRelease.releaseWhenSafe(sessionId)
             conversationContinuity.invalidate();continuityActivation=null
             conversationId=null;sessionId=null;setState(value,text)
             epoch
@@ -350,6 +369,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             manualLease=lease;manualAudioKind=kind;metrics.event("manual_audio_acquired",JSONObject().put("kind",if(kind=="playback")"playback" else "capture"))
             epochCounter.incrementAndGet();try{recorder?.stop()}catch(_:Exception){}
         }
+        NodeExternalPlaybackReference.stop(context)
         val active=worker
         if(active!=null && active!==Thread.currentThread())active.join(1500)
         if(active?.isAlive==true){manualLease=null;manualAudioKind=null;metrics.event("manual_audio_acquire_timeout");return false}
@@ -367,7 +387,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         reconcile()
     }
     internal fun releaseActivityAudio(){manualLease?.let{manualRelease(it)}}
-    fun cancelSession(expectedSession:String?=null) {
+    fun cancelSession(expectedSession:String?=null,reason:String="explicit_cancel") {
         val panelCancellation=if(expectedSession==null)NodeVoiceInteractionSession.current?.cancellationSnapshot() else null
         synchronized(lock) {
             if(expectedSession!=null && expectedSession!=sessionId)return
@@ -379,13 +399,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                 return
             }
             val captureActive=status=="capturing"
-            pendingActivation=false;cancelledAt=HandsFreeTurnLatency.now();sessionCancelled=true;endReason="explicit_cancel";playback.cancel();activationCue.cancel();cancelBackend();metrics.add("sessions_cancelled")
+            pendingActivation=false;cancelledAt=HandsFreeTurnLatency.now();sessionCancelled=true;endReason=reason;playback.cancel();activationCue.cancel();cancelBackend();metrics.add("sessions_cancelled")
             closeResponseCapture()
             // Capture owns its last in-flight read and FIFO finalization. A pending manual
             // activation has no capture yet and must persist its empty WAVs immediately.
-            if(!captureActive)finishEvent("cancelled","explicit_cancel")
+            if(!captureActive)finishEvent(if(reason=="explicit_cancel")"cancelled" else "interrupted",reason)
             conversationContinuity.end(continuityActivation);continuityActivation=null
-            val token=sessionId;sessionId=null;conversationId=null;closePanel(token,true)
+            val token=sessionId;sessionId=null;conversationId=null;mediaFocusRelease.releaseWhenSafe(token);closePanel(token,true)
         }
     }
     internal fun activateFromAssistant():String? = synchronized(lock) {
@@ -426,6 +446,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             // A failure in that storage cannot restore an old enabled=true preference.
             check(prefs.edit().putBoolean("batteryStudySuspended",true).commit()){"battery_storage"}
             batterySuspended=true;batteryChanging=true;batteryStopRequested=false;batteryAbortPending=false
+            NodeExternalPlaybackReference.stop(context)
             batteryStudyGeneration.incrementAndGet()
             try {
                 val info=context.packageManager.getPackageInfo(context.packageName,0)
@@ -447,6 +468,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         try {
             if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
             if(previous?.isAlive==true)batteryDiagnostics.interrupt("capture_shutdown_timeout")
+            else if(NodeExternalPlaybackReference.recording())batteryDiagnostics.interrupt("media_reference_shutdown_timeout")
             metrics.event("battery_study_started",JSONObject().put("mode",mode));powerMonitors.request()
         }finally{batteryChanging=false}
         reconcile();state()
@@ -526,6 +548,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         batteryAutomationPrerequisites()
         check(prefs.edit().putBoolean("batteryStudySuspended",true).commit()){"battery_storage"}
         batterySuspended=true;batteryChanging=true;batteryStopRequested=true;batteryAbortPending=false
+        NodeExternalPlaybackReference.stop(context)
         batteryStudyGeneration.incrementAndGet()
         try {
             batteryAutomation.arm(validation)
@@ -533,6 +556,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             val previous=worker
             if(previous!=null && previous!==Thread.currentThread())previous.join(1500)
             check(previous?.isAlive!=true){"capture_shutdown_timeout"}
+            check(!NodeExternalPlaybackReference.recording()){"media_reference_shutdown_timeout"}
         }catch(error:Throwable){
             stop("battery_interrupted","Não foi possível preparar a comparação. Encerre o teste para retomar.")
             batteryAutomation.interrupt("preparation_failed")
@@ -833,6 +857,10 @@ internal class HandsFreeRuntime(private val context:Context) {
             inputUsable = ::nativeUsable,
             releaseAudio = { if (native != null) native.closeRecorder() else audio.release() },
             onInputFailure = { if (native != null) response.nativeFailed = true },
+            onMediaFilterClosed = { referenceSamples, filteredReads ->
+                metrics.add("external_media_barge_reference_samples", referenceSamples)
+                metrics.add("external_media_barge_filtered_reads", filteredReads)
+            },
             stillCurrent = { ownsSession(generation,session) && responseCapture===listener },
             onSpeech = ::acceptInterruption,
             onProbeResult = { outcome, floorRms, peakRms ->
@@ -996,25 +1024,45 @@ internal class HandsFreeRuntime(private val context:Context) {
                                 }
                                 if (response.model == null || nativeRejectedSession == session) false
                                 else {
-                                    response.native = HandsFreeConversationAudio.tryOpen(context, ::microphoneBlocked,
-                                        ::registerOwnedAudioSession) { reason ->
-                                        response.nativeFailed = true
-                                        metrics.event("barge_in_audio_path", JSONObject().put("outcome",reason))
+                                    val preparing = synchronized(lock) {
+                                        if (!ownsTurn(generation,session,active)) false
+                                        else { mediaFocusRelease.routePreparing(session); true }
                                     }
-                                    response.native != null
+                                    if (!preparing) false else try {
+                                        response.native = HandsFreeConversationAudio.tryOpen(context, ::microphoneBlocked,
+                                            ::registerOwnedAudioSession) { reason ->
+                                            response.nativeFailed = true
+                                            metrics.event("barge_in_audio_path", JSONObject().put("outcome",reason))
+                                        }
+                                        response.native != null
+                                    } finally {
+                                        if (response.native == null) mediaFocusRelease.routeClosed(session)
+                                    }
                                 }
                             }
                         },
                         onCommunicationFailed = {
                             response?.let {
                                 it.nativeFailed = true
-                                it.native?.close()
-                                it.native = null
+                                try { it.native?.close() }
+                                finally { it.native = null; mediaFocusRelease.routeClosed(session) }
                                 metrics.event("barge_in_audio_path", JSONObject().put("outcome","native_aec_playback_failed"))
                             }
                         },
                         onPlaybackReady = { head ->
                             if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
+                        },
+                        sessionFocus = if (response == null) null else {
+                            {
+                                synchronized(lock) {
+                                    if (!ownsTurn(generation,session,active)) throw CancellationException()
+                                    when (sessionMediaFocus.acquire(session,retryUnavailable=true)) {
+                                        HandsFreeSessionFocusResult.ACQUIRED -> true
+                                        HandsFreeSessionFocusResult.UNAVAILABLE -> false
+                                        HandsFreeSessionFocusResult.LOST -> throw CancellationException()
+                                    }
+                                }
+                            }
                         }
                     )
                     val turn=active.execute(command,session,conversationId,sink,trace,incremental=true,
@@ -1036,7 +1084,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         continuation=turn.continueListening && turn.playedAudio
                         continuationDeadline=(playbackCompletedAt?:SystemClock.elapsedRealtime())+2000
                         turnOutcome=if(turn.playedAudio)"played" else "empty"
-                        if(!continuation){finishEvent(turnOutcome,if(turn.playedAudio)"session_completed" else "empty_command");endConversationSession(session)}
+                        if(!continuation){finishEvent(turnOutcome,if(turn.playedAudio)"session_completed" else "empty_command");endConversationSession(session,releaseMediaFocus=false)}
                     }
                 }catch(error:Exception){
                     continuation=false
@@ -1067,7 +1115,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                                 }
                                 else -> {
                                     captured?.wav?.fill(0)
-                                    endConversationSession(session)
+                                    endConversationSession(session,releaseMediaFocus=false)
                                     "closed"
                                 }
                             }
@@ -1078,7 +1126,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         val cancelled=!current(generation) || sessionCancelled || error is CancellationException
                         turnOutcome=if(cancelled)"cancelled" else "failed"
                         synchronized(lock){finishEvent(turnOutcome,endReason?:if(cancelled)"operation_cancelled" else if(transcriptionStatus=="in_progress")"transcription_failed" else "session_processing_failed")}
-                        metrics.addForIdentity(if(cancelled)"turns_cancelled" else "sessions_failed",1,turnIdentity);cancelBackend();endConversationSession(session,false)
+                        metrics.addForIdentity(if(cancelled)"turns_cancelled" else "sessions_failed",1,turnIdentity);cancelBackend();endConversationSession(session,false,releaseMediaFocus=false)
                         if(current(generation) && !cancelled)setState("session_failed","Não foi possível concluir o pedido. Diga Aegis para tentar novamente.")
                         closePanel(session,failed=!cancelled)
                     }
@@ -1095,7 +1143,14 @@ internal class HandsFreeRuntime(private val context:Context) {
                         }
                     } finally {
                         try { response?.native?.close() }
-                        finally { response?.echo?.clear() }
+                        finally {
+                            try { response?.echo?.clear() }
+                            finally {
+                                // Let media resume only after the response has released its communication route.
+                                mediaFocusRelease.routeClosed(session)
+                                synchronized(lock) { if (sessionId != session || sessionCancelled) sessionMediaFocus.release(session) }
+                            }
+                        }
                         if (response?.nativeFailed == true) nativeRejectedSession = session
                     }
                     trace?.let{it.mark("turn_ended");metrics.turnLatency(it,turnOutcome,turnIdentity)}
@@ -1104,6 +1159,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(!MicroWakeWordNative.reset(detector))error("detector_reset")
             }
         }catch(error:Throwable) {
+            if (error is MicrophoneUnavailable) NodeExternalPlaybackReference.stop(context)
             if(batteryMode!=null && current(generation)) {
                 metrics.add("battery_study_capture_failures")
                 val issue=if(error is MicrophoneUnavailable)"microphone_unavailable" else "capture_failure"
@@ -1193,6 +1249,10 @@ internal class HandsFreeRuntime(private val context:Context) {
         capturedTurnLatency=null
         val audio=openRecorder();recorder=audio
         val buffer=ShortArray(3200) // One 200ms microphone read, shared by all local consumers.
+        val mediaFilter = if (!batteryStudy && !diagnostic) HandsFreeMicrophoneMediaFilter(audio) { referenceSamples, filteredReads ->
+            metrics.add("external_media_reference_samples", referenceSamples)
+            metrics.add("external_media_filtered_reads", filteredReads)
+        } else null
         val ring=HandsFreeRing(if(wakeVerifier==null)40000 else HandsFreeWakeCandidate.RING_CAPACITY)
         var wakeCandidate:HandsFreeWakeCandidate?=null
         var pendingVerification:HandsFreePendingWakeVerification?=null
@@ -1256,9 +1316,10 @@ internal class HandsFreeRuntime(private val context:Context) {
                 val readReturnedAtMs=HandsFreeTurnLatency.now()
                 if(!current(generation)){retainCancellationPrefix(count,readReturnedAtMs);return null}
                 val now=SystemClock.elapsedRealtime()
-                if(count<=0)throw MicrophoneUnavailable()
+                if(count<=0 || silenced.get())throw MicrophoneUnavailable()
+                mediaFilter?.advance(count)
+                mediaFilter?.filter(buffer, count)
                 if(captured || continuation)HandsFreePanelSignal.capture(sessionId,buffer,count,now)
-                if(silenced.get())throw MicrophoneUnavailable()
                 if(startup!=null && !measureBlock(audio)){receivedAt=now;continue}
                 captureConfirmed=true;lastAudioReadMs=now
                 if(now-checkedAt>=5000) {
@@ -1501,6 +1562,10 @@ internal class HandsFreeRuntime(private val context:Context) {
                         }
                         val activeTrace=HandsFreeTurnLatency().also{it.mark("wake_accepted")};trace=activeTrace
                         val session=checkNotNull(sessionId)
+                        if(!continuation && sessionMediaFocus.acquire(session)==HandsFreeSessionFocusResult.LOST) {
+                            cancelSession(session,"audio_focus_lost")
+                            return ByteArray(0)
+                        }
                         metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession()
                         if(!continuation)cueCompletion=beep()
                         val activeBackend=backend?:newBackend(generation,session).also{backend=it}
@@ -1533,6 +1598,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             trace=null
             captureConfirmed=false;recorder=null
             if(Build.VERSION.SDK_INT>=29 && recordingCallbackRegistered && recordingCallback!=null)try{audio.unregisterAudioRecordingCallback(recordingCallback)}catch(_:Exception){}
+            mediaFilter?.close()
             try{audio.stop()}catch(_:Exception){};audio.release()
             classifier?.close()
             buffer.fill(0);command.fill(0);ring.clear()

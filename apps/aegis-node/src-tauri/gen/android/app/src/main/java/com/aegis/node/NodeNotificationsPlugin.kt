@@ -90,6 +90,28 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   requestPermissionForAlias("handsFreeAudio",invoke,"handsFreePermissionCallback")
  }
  @PermissionCallback private fun handsFreePermissionCallback(invoke:Invoke){NodeHandsFree.runtime(activity).recoverFromSystem();invoke.resolve(JSObject(NodeHandsFree.state(activity)))}
+ // Tauri invokes the ActivityCallback with the original Invoke instance.
+ private val mediaConsentRequests=java.util.WeakHashMap<Invoke,Long>()
+ @Command fun requestHandsFreeMediaReference(invoke:Invoke) {
+  if(Build.VERSION.SDK_INT<29 || !NodeHandsFree.externalReferenceAllowed(activity)){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
+  val id=NodeExternalPlaybackReference.beginConsent(activity)
+  if(id==null){invoke.resolve(JSObject(NodeHandsFree.state(activity)));return}
+  synchronized(mediaConsentRequests){mediaConsentRequests[invoke]=id}
+  try {
+   val manager=activity.getSystemService(android.media.projection.MediaProjectionManager::class.java)
+   startActivityForResult(invoke,manager.createScreenCaptureIntent(),"handsFreeMediaReferenceCallback")
+  }catch(_:RuntimeException){synchronized(mediaConsentRequests){mediaConsentRequests.remove(invoke)};NodeExternalPlaybackReference.finish(id,"unavailable");invoke.resolve(JSObject(NodeHandsFree.state(activity)))}
+ }
+ @ActivityCallback private fun handsFreeMediaReferenceCallback(invoke:Invoke,result:ActivityResult) {
+  val id=synchronized(mediaConsentRequests){mediaConsentRequests.remove(invoke)}
+  if(id!=null)NodeExternalPlaybackReference.finishConsent(activity,id,result.resultCode,result.data)
+  invoke.resolve(JSObject(NodeHandsFree.state(activity)))
+ }
+ @Command fun stopHandsFreeMediaReference(invoke:Invoke) {
+  synchronized(mediaConsentRequests){mediaConsentRequests.clear()}
+  NodeExternalPlaybackReference.stop(activity)
+  invoke.resolve(JSObject(NodeHandsFree.state(activity)))
+ }
  @Command fun selectHandsFreeAssistant(invoke:Invoke) {
   val intent=if(Build.VERSION.SDK_INT>=29) {
    val roles=activity.getSystemService(android.app.role.RoleManager::class.java)

@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Explicit assistant permission and visible microphone foreground service. -->
@@ -47,6 +48,8 @@
           <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
           <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction_service" />
         </service>
+        <!-- Explicit opt-in playback reference; never starts from a receiver or boot. -->
+        <service android:name=".NodeExternalPlaybackReferenceService" android:exported="false" android:foregroundServiceType="mediaProjection" android:stopWithTask="true" />
         <service android:name=".NodeVoiceInteractionSessionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" />
         <service android:name=".NodeRecognitionService" android:exported="true" android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE">
           <intent-filter><action android:name="android.speech.RecognitionService" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>

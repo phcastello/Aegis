@@ -23,6 +23,7 @@ internal interface HandsFreeBargeInInput:AutoCloseable {
     fun start()
     fun read(samples:ShortArray,offset:Int,count:Int):Int
     fun timestamp(): HandsFreeAudioTimestamp? = null
+    fun preprocessFrame(frame: ShortArray) = Unit
     fun discontinuity(): Long = 0
     fun stop()
     fun silenced():Boolean=false
@@ -218,8 +219,9 @@ internal class HandsFreeBargeInCapture internal constructor(
         onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {},
         inputUsable: () -> Boolean = { true },
         releaseAudio: () -> Unit = { audio.release() },
-        onInputFailure: () -> Unit = {}
-    ):this(AndroidInput(audio, inputUsable, releaseAudio),processor::inspect,playedFrames,mediaVolume,processor::reset,stillCurrent,onSpeech,{
+        onInputFailure: () -> Unit = {},
+        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> }
+    ):this(AndroidInput(audio, inputUsable, releaseAudio, onMediaFilterClosed),processor::inspect,playedFrames,mediaVolume,processor::reset,stillCurrent,onSpeech,{
             val native=NativeHandsFreeSpeechClassifier()
             object:HandsFreeBargeInClassifier {
                 override fun isSpeech(frame:ShortArray)=native.isSpeech(frame)
@@ -402,6 +404,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                 consumedFrames += count
                 if(pending<frame.size)continue
                 pending=0
+                input.preprocessFrame(frame)
                 val now=clock()
                 if(!accepted.get()) {
                     if (framesUntilVolumeRead==0) {
@@ -575,13 +578,15 @@ internal class HandsFreeBargeInCapture internal constructor(
     private class AndroidInput(
         private val audio:AudioRecord,
         private val inputUsable: () -> Boolean,
-        private val releaseAudio: () -> Unit
+        private val releaseAudio: () -> Unit,
+        onMediaFilterClosed: (Long, Long) -> Unit
     ):HandsFreeBargeInInput {
         private val silenced=AtomicBoolean(false)
         private var registered=false
         private var routingRegistered = false
         private var framesUntilInputCheck = 0
         private val audioTimestamp = AudioTimestamp()
+        private val mediaFilter = HandsFreeMicrophoneMediaFilter(audio, onMediaFilterClosed)
         private val routeChanges = AtomicLong()
         private val routing = AudioRouting.OnRoutingChangedListener { routeChanges.incrementAndGet() }
         private val callback=if(Build.VERSION.SDK_INT>=29)object:AudioManager.AudioRecordingCallback(){
@@ -593,7 +598,10 @@ internal class HandsFreeBargeInCapture internal constructor(
             routingRegistered = true
             audio.startRecording();check(audio.recordingState==AudioRecord.RECORDSTATE_RECORDING)
         }
-        override fun read(samples:ShortArray,offset:Int,count:Int)=audio.read(samples,offset,count,AudioRecord.READ_BLOCKING)
+        override fun read(samples:ShortArray,offset:Int,count:Int)=audio.read(samples,offset,count,AudioRecord.READ_BLOCKING).also {
+            if (it > 0) mediaFilter.advance(it)
+        }
+        override fun preprocessFrame(frame: ShortArray) { mediaFilter.filter(frame, frame.size) }
         override fun timestamp() =
             if (audio.getTimestamp(audioTimestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS)
                 HandsFreeAudioTimestamp(audioTimestamp.framePosition, audioTimestamp.nanoTime) else null
@@ -608,7 +616,7 @@ internal class HandsFreeBargeInCapture internal constructor(
         override fun close(){
             if(Build.VERSION.SDK_INT>=29 && registered && callback!=null)try{audio.unregisterAudioRecordingCallback(callback)}catch(_:Exception){}
             if (routingRegistered) try { audio.removeOnRoutingChangedListener(routing) } catch (_: Exception) { }
-            releaseAudio()
+            try { mediaFilter.close() } finally { releaseAudio() }
         }
     }
     companion object {

@@ -118,6 +118,33 @@ test('native first-event score observations survive JNI and R8 without exposing 
   assert.doesNotMatch(bridge, /"(?:activationScores|readRecording|uploadRecording|readModel|setThreshold|train|setWeights)"\s*=>/);
 });
 
+test('exclusive media focus starts only at an accepted conversation and survives turns until final cleanup', () => {
+  const focus = androidSource('NodeHandsFreeMediaFocus');
+  const runtime = androidSource('NodeHandsFree');
+  const playback = androidSource('NodeHandsFreePlayback');
+  assert.match(focus, /AudioFocusRequest\.Builder\(AudioManager\.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE\)/);
+  assert.match(focus, /setAcceptsDelayedFocusGain\(false\)/);
+  assert.match(focus, /abandonAudioFocusRequest\(request\)/);
+  assert.doesNotMatch(focus, /dispatchMediaKeyEvent|setStreamVolume|adjustStreamVolume/);
+  const capture = runtime.slice(runtime.indexOf('private fun capture(generation:'));
+  const acquisition = capture.indexOf('sessionMediaFocus.acquire(session)');
+  assert.ok(acquisition > capture.indexOf('if(diagnostic)'));
+  assert.ok(acquisition > capture.indexOf('if(batteryStudy)'));
+  assert.ok(acquisition < capture.indexOf('cueCompletion=beep()'));
+  assert.match(capture.slice(acquisition - 32, acquisition), /!continuation/);
+  assert.equal(capture.match(/sessionMediaFocus\.acquire\(/g)?.length, 1);
+  const run = runtime.slice(runtime.indexOf('private fun run(generation:'), runtime.indexOf('private fun capture('));
+  assert.match(run, /sessionFocus = if \(response == null\) null else/);
+  assert.match(run, /sessionMediaFocus\.acquire\(session,retryUnavailable=true\)/);
+  assert.match(run, /sessionMediaFocus.release\(session\)/);
+  assert.match(runtime, /onLoss=\{token->cancelSession\(token,"audio_focus_lost"\)\}/);
+  assert.ok(runtime.includes('sessionMediaFocus::releaseAll'));
+  assert.match(runtime, /mediaFocusRelease.releaseWhenSafe\(sessionId\)/);
+  assert.match(run, /mediaFocusRelease.routeClosed\(session\)/);
+  assert.match(playback, /val borrowedFocus = sessionFocus\?\.invoke\(\) == true/);
+  assert.match(playback, /if \(!borrowedFocus\) \{\s*val focus/);
+});
+
 test('cancellation after endpoint closes the persistent event before creating or sending a backend turn', () => {
   const runtime=androidSource('NodeHandsFree');
   const run=runtime.slice(runtime.indexOf('private fun run(generation:'),runtime.indexOf('private fun capture('));

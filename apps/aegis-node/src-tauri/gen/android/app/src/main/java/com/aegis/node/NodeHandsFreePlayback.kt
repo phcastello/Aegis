@@ -33,10 +33,11 @@ internal fun handsFreeMediaSpeakerAnticipated(manager: AudioManager, attributes:
 
 /** A fresh, lazily opened stream per turn. AudioTrack's fixed buffer supplies backpressure. */
 internal class HandsFreePlayback(
-    private val createDevice: (Boolean, () -> Unit) -> HandsFreePcmDevice
+    private val createDevice: (Boolean, Boolean, () -> Unit) -> HandsFreePcmDevice
 ) {
-    constructor(createDevice: (() -> Unit) -> HandsFreePcmDevice) : this({ _, onFocusLoss -> createDevice(onFocusLoss) })
-    constructor(context: Context) : this({ nativeCapture, onFocusLoss -> openDevice(context, nativeCapture, onFocusLoss) })
+    constructor(createDevice: (() -> Unit) -> HandsFreePcmDevice) : this({ _, _, onFocusLoss -> createDevice(onFocusLoss) })
+    constructor(createDevice: (Boolean, () -> Unit) -> HandsFreePcmDevice) : this({ nativeCapture, _, onFocusLoss -> createDevice(nativeCapture, onFocusLoss) })
+    constructor(context: Context) : this({ nativeCapture, borrowedFocus, onFocusLoss -> openDevice(context, nativeCapture, borrowedFocus, onFocusLoss) })
     private val generation = AtomicInteger()
     private val active = AtomicReference<HandsFreePcmSink?>()
     fun cancel() { generation.incrementAndGet(); active.getAndSet(null)?.abort() }
@@ -48,7 +49,8 @@ internal class HandsFreePlayback(
         echo: HandsFreeBargeInEcho? = null,
         prepareCommunication: () -> Boolean = { false },
         onCommunicationFailed: () -> Unit = {},
-        onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {}
+        onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {},
+        sessionFocus: (() -> Boolean)? = null
     ): HandsFreePcmSink {
         val token = generation.incrementAndGet()
         lateinit var stream: HandsFreeStreamingPcmSink
@@ -63,18 +65,21 @@ internal class HandsFreePlayback(
                     }
                     Unit
                 }
+                // Use the conversation's focus across capture, responses and barge-in.
+                val borrowedFocus = sessionFocus?.invoke() == true
+                if (generation.get() != token || !stillCurrent()) throw java.util.concurrent.CancellationException()
                 val nativeCapture = prepareCommunication()
                 if (generation.get() != token || !stillCurrent()) {
                     if (nativeCapture) onCommunicationFailed()
                     throw java.util.concurrent.CancellationException()
                 }
-                if (!nativeCapture) createDevice(false, focusLost)
+                if (!nativeCapture) createDevice(false, borrowedFocus, focusLost)
                 else try {
-                    createDevice(true, focusLost)
+                    createDevice(true, borrowedFocus, focusLost)
                 } catch (_: Exception) {
                     onCommunicationFailed()
                     if (generation.get() != token || !stillCurrent()) throw java.util.concurrent.CancellationException()
-                    createDevice(false, focusLost)
+                    createDevice(false, borrowedFocus, focusLost)
                 }
             },
             stillCurrent = { generation.get() == token && stillCurrent() },
@@ -90,7 +95,7 @@ internal class HandsFreePlayback(
     }
 
     companion object {
-    private fun openDevice(context: Context, nativeCapture: Boolean,
+    private fun openDevice(context: Context, nativeCapture: Boolean, borrowedFocus: Boolean,
                            onFocusLoss: () -> Unit): HandsFreePcmDevice {
         val manager = context.getSystemService(AudioManager::class.java)
         val attributes = handsFreeSpeechMediaAttributes()
@@ -101,7 +106,7 @@ internal class HandsFreePlayback(
         }
         val handler = Handler(Looper.getMainLooper())
         val listener = AudioManager.OnAudioFocusChangeListener { if (it < 0) onFocusLoss() }
-        val request = if (Build.VERSION.SDK_INT >= 26) AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        val request = if (!borrowedFocus && Build.VERSION.SDK_INT >= 26) AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(attributes).setOnAudioFocusChangeListener(listener, handler).build() else null
         var granted = false
         var output: AudioTrack? = null
@@ -112,9 +117,11 @@ internal class HandsFreePlayback(
             else @Suppress("DEPRECATION") manager.abandonAudioFocus(listener)
         }
         try {
-            val focus = if (request != null) manager.requestAudioFocus(request)
-                else @Suppress("DEPRECATION") manager.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-            check(focus == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio_focus_unavailable" }; granted = true
+            if (!borrowedFocus) {
+                val focus = if (request != null) manager.requestAudioFocus(request)
+                    else @Suppress("DEPRECATION") manager.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                check(focus == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio_focus_unavailable" }; granted = true
+            }
             val minimum = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             check(minimum > 0)
             val track = AudioTrack.Builder().setAudioAttributes(attributes)

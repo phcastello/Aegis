@@ -101,6 +101,23 @@ pub async fn node_hands_free(
             #[cfg(not(target_os = "android"))]
             { let _ = payload; return Err(HandsFreeError::new("unsupported")); }
         }
+        "mediaReferenceStart" | "mediaReferenceStop" => {
+            #[cfg(target_os = "android")]
+            {
+                use tauri::Manager;
+                let method = if operation == "mediaReferenceStart" {
+                    "requestHandsFreeMediaReference"
+                } else {
+                    "stopHandsFreeMediaReference"
+                };
+                let bridge = app.try_state::<crate::native_notifications::AndroidBridge>()
+                    .ok_or_else(|| HandsFreeError::new("bridge_unavailable"))?;
+                let result: Result<Value, _> = bridge.0.run_mobile_plugin_async(method, ()).await;
+                return result.map_err(|_| HandsFreeError::new("native_failure"));
+            }
+            #[cfg(not(target_os = "android"))]
+            return Err(HandsFreeError::new("unsupported"));
+        }
         "permission" | "assistant" | "import" | "export" | "batteryExport" => {
             #[cfg(target_os = "android")]
             {
