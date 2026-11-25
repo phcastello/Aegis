@@ -232,12 +232,6 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(openAi.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds + 2));
         });
-        services.AddHttpClient<IHandsFreeUtteranceClassifier, OpenAiHandsFreeUtteranceClassifier>((provider, client) =>
-        {
-            var openAi = provider.GetRequiredService<IOptions<OpenAIOptions>>().Value;
-            client.BaseAddress = new Uri(openAi.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(3);
-        });
         services.AddHostedService<ConversationTitleWorker>();
         services.AddOptions<ReminderOptions>().Configure(o =>
         {

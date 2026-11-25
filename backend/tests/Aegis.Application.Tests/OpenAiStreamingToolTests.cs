@@ -67,7 +67,56 @@ public sealed class OpenAiStreamingToolTests
         Assert.Equal("low", payload.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
     }
 
-    private sealed class SegmentsHandler(bool changeFinal) : HttpMessageHandler
+    [Fact]
+    public async Task FirstVoiceSegmentAcceptsBeforeCompletionAndUsesSingleFunctionContract()
+    {
+        var handler = new SegmentsHandler(false);
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var model = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions {
+            ApiKey = "fake", StoreResponses = true }), metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var accepted = 0;
+        await using var stream = loop.StreamAsync(new("prompt", "pedido"),
+            new(Guid.NewGuid(), Guid.NewGuid(), "pedido", "hands_free", Guid.NewGuid(), true,
+                _ => { accepted++; return Task.CompletedTask; })).GetAsyncEnumerator();
+        Assert.True(await stream.MoveNextAsync());
+        Assert.Equal("Pois é, o Dr. Silva chegou às 15:30.", stream.Current.FinalSpeechSegment);
+        Assert.Equal(1, accepted);
+        Assert.True(await stream.MoveNextAsync());
+        Assert.True(await stream.MoveNextAsync());
+        Assert.True(stream.Current.IsDone);
+        Assert.Equal(1, accepted);
+        Assert.False(await stream.MoveNextAsync());
+        using var payload = JsonDocument.Parse(handler.Body!);
+        Assert.False(payload.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
+        Assert.False(payload.RootElement.GetProperty("store").GetBoolean());
+        var tools = payload.RootElement.GetProperty("tools").EnumerateArray().ToArray();
+        var ignore = Assert.Single(tools, tool => tool.GetProperty("name").GetString() == HandsFreeDirection.IgnoreToolName);
+        Assert.True(ignore.GetProperty("strict").GetBoolean());
+    }
+
+    [Fact]
+    public async Task LateIgnoreViolatesSingleFunctionContractAfterIrrevocableSegment()
+    {
+        var handler = new SegmentsHandler(false, lateIgnore: true);
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var model = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var accepted = 0;
+        await using var stream = loop.StreamAsync(new("prompt", "pedido"),
+            new(Guid.NewGuid(), Guid.NewGuid(), "pedido", "hands_free", Guid.NewGuid(), true,
+                _ => { accepted++; return Task.CompletedTask; })).GetAsyncEnumerator();
+        Assert.True(await stream.MoveNextAsync());
+        Assert.NotNull(stream.Current.FinalSpeechSegment);
+        Assert.Equal(1, accepted);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await stream.MoveNextAsync());
+        Assert.Equal(1, accepted);
+    }
+
+    private sealed class SegmentsHandler(bool changeFinal, bool lateIgnore = false) : HttpMessageHandler
     {
         public string? Body;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -82,6 +131,8 @@ public sealed class OpenAiStreamingToolTests
                 new { type = "response.completed", response = new { id = "response-1", model = "gpt-6-luna", output = new[] { new { type = "function_call", call_id = "call-1", name = FinalSpeechSegments.ToolName,
                     arguments = JsonSerializer.Serialize(changeFinal ? new { segments = new[] { "Texto substituído.", "Quer mais alguma coisa?" }, continuation = "continue" } : args) } } } }
             };
+            if (lateIgnore)
+                lines.Insert(2, new { type = "response.output_item.added", item = new { type = "function_call", id = "item-2", name = HandsFreeDirection.IgnoreToolName } });
             var body = string.Concat(lines.Select(line => "data: " + JsonSerializer.Serialize(line) + "\n\n"));
             return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
         }

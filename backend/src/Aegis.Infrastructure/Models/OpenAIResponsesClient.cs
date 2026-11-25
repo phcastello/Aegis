@@ -493,7 +493,7 @@ public sealed class OpenAIResponsesClient(
             prompt_cache_options = new { mode = "implicit" },
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
-            store = openAIOptions.StoreResponses,
+            store = openAIOptions.StoreResponses && !(tools?.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName) ?? false),
             previous_response_id = string.IsNullOrWhiteSpace(previousResponseId) ? null : previousResponseId,
             service_tier = string.IsNullOrWhiteSpace(openAIOptions.ServiceTier)
                 ? null
@@ -505,7 +505,7 @@ public sealed class OpenAIResponsesClient(
                 name = tool.Name,
                 description = tool.Description,
                 parameters = tool.ParametersSchema,
-                strict = tool.Name == FinalSpeechSegments.ToolName
+                strict = tool.Name is FinalSpeechSegments.ToolName or HandsFreeDirection.IgnoreToolName
             }),
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null

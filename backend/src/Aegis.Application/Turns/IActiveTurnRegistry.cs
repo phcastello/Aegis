@@ -2,6 +2,7 @@ namespace Aegis.Application.Turns;
 
 public interface IActiveTurnRegistry
 {
+    IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation);
     ActiveTurn Register(Guid turnId, Guid conversationId);
     TurnRegistrationInfo RegisterAndGetSuperseded(Guid turnId, Guid conversationId);
     ActiveTurn? Find(Guid turnId);

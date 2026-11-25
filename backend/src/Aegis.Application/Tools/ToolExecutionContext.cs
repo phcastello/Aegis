@@ -6,4 +6,5 @@ public sealed record ToolExecutionContext(
     string UserContent,
     string? Origin = null,
     Guid? VoiceSessionId = null,
-    bool VoiceSegments = false);
+    bool VoiceSegments = false,
+    Func<CancellationToken, Task>? AcceptVoiceTurn = null);

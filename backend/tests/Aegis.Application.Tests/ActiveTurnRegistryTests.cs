@@ -185,5 +185,65 @@ public sealed class ActiveTurnRegistryTests
         Assert.True(registry.IsCurrent(conversationId, registration.Turn.TurnId));
     }
 
+    [Fact]
+    public void PendingDiscardLeavesTheCurrentTurnUntouchedAndReleasesReservation()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid();
+        var active = registry.Register(Guid.NewGuid(), conversation);
+        var pendingId = Guid.NewGuid();
+        using var cancellation = new CancellationTokenSource();
+
+        using (registry.TrackPendingTurn(pendingId, conversation, cancellation))
+        {
+            Assert.True(registry.IsCurrent(conversation, active.TurnId));
+            Assert.Null(registry.Find(pendingId));
+            Assert.False(cancellation.IsCancellationRequested);
+        }
+
+        using var second = registry.TrackPendingTurn(pendingId, conversation, cancellation);
+        Assert.True(registry.IsCurrent(conversation, active.TurnId));
+    }
+
+    [Fact]
+    public void NewAcceptedTurnCancelsOlderCandidatesInItsConversationOnly()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid();
+        using var oldCancellation = new CancellationTokenSource();
+        using var newerCancellation = new CancellationTokenSource();
+        using var otherCancellation = new CancellationTokenSource();
+        var oldId = Guid.NewGuid();
+        var newerId = Guid.NewGuid();
+        using var old = registry.TrackPendingTurn(oldId, conversation, oldCancellation);
+        using var newer = registry.TrackPendingTurn(newerId, conversation, newerCancellation);
+        using var other = registry.TrackPendingTurn(Guid.NewGuid(), Guid.NewGuid(), otherCancellation);
+
+        var accepted = registry.Register(newerId, conversation);
+        Assert.True(oldCancellation.IsCancellationRequested);
+        Assert.False(newerCancellation.IsCancellationRequested);
+        Assert.False(otherCancellation.IsCancellationRequested);
+        Assert.Equal(TurnStatus.Cancelled, registry.Register(oldId, conversation).Status);
+        Assert.True(registry.IsCurrent(conversation, accepted.TurnId));
+    }
+
+    [Fact]
+    public void CancelPendingTurnInterruptsCandidateAndKeepsCurrentTurn()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid();
+        var active = registry.Register(Guid.NewGuid(), conversation);
+        var pendingId = Guid.NewGuid();
+        using var cancellation = new CancellationTokenSource();
+        using var reservation = registry.TrackPendingTurn(pendingId, conversation, cancellation);
+
+        registry.CancelAndGetInfo(pendingId, "user_stop");
+
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversation, active.TurnId));
+        Assert.Equal(TurnStatus.Cancelled, registry.Register(pendingId, conversation).Status);
+        Assert.True(registry.IsCurrent(conversation, active.TurnId));
+    }
+
     private static ActiveTurnRegistry CreateRegistry() => new(new AegisMetrics());
 }

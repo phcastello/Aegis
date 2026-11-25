@@ -43,20 +43,31 @@ public sealed class AegisToolLoop(
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
+        var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = await TurnLatencyProfile.MeasureAsync("model.round", () => modelClient.RespondWithToolsAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
+                new ModelToolRequest(request, decisionPending ? [.. tools, HandsFreeDirection.IgnoreDefinition] :
+                    iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
                     AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken));
             responses.Add(response);
             TurnLatencyProfile.Mark("model.round_completed", iteration);
             TurnLatencyProfile.Mark("model.tool_calls", response.ToolCalls.Count);
 
+            if (HandsFreeDirection.Requested(response.ToolCalls))
+            {
+                if (!decisionPending) throw new InvalidOperationException("Descarte fora da decisão inicial.");
+                // Even a malformed mixed batch containing ignore is suppressed before tools or persistence.
+                TurnLatencyProfile.Mark("chat.voice_ignored");
+                return response with { Content = string.Empty, ToolCalls = [], Ignored = true };
+            }
+
             if (handsFree && HandsFreeReply.TryRead(response.ToolCalls, out var speech, out var continuation))
             {
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
                 stopwatch.Stop();
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
                 return response with
@@ -66,6 +77,12 @@ public sealed class AegisToolLoop(
                     VoiceContinuation = continuation,
                     AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
                 };
+            }
+
+            if (decisionPending)
+            {
+                await context.AcceptVoiceTurn!(cancellationToken);
+                decisionPending = false;
             }
 
             if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
@@ -136,6 +153,7 @@ public sealed class AegisToolLoop(
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
+        var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
@@ -144,7 +162,8 @@ public sealed class AegisToolLoop(
             var finalSegments = new List<string>();
             var bufferedVoice = handsFree ? new StringBuilder() : null;
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : handsFree ? [terminal] : [],
+                new ModelToolRequest(request, decisionPending ? [.. tools, HandsFreeDirection.IgnoreDefinition] :
+                    iteration <= DefaultMaxIterations ? tools : handsFree ? [terminal] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
                     AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken))
             {
@@ -156,6 +175,14 @@ public sealed class AegisToolLoop(
                 if (chunk.FinalSpeechSegment is { } finalSegment)
                 {
                     if (!segmented) throw new InvalidOperationException("Unexpected speech segment.");
+                    FinalSpeechSegments.Validate(finalSegment);
+                    if (decisionPending)
+                    {
+                        // The provider enforces a single function call per round. A validated segment
+                        // from the terminal speech call is an irrevocable decision to attend.
+                        await context.AcceptVoiceTurn!(cancellationToken);
+                        decisionPending = false;
+                    }
                     finalSegments.Add(finalSegment);
                     yield return new ModelStreamChunk(null, false, FinalSpeechSegment: finalSegment);
                 }
@@ -173,11 +200,20 @@ public sealed class AegisToolLoop(
             responses.Add(completed);
             TurnLatencyProfile.Mark("model.round_completed", iteration);
             TurnLatencyProfile.Mark("model.tool_calls", completed.ToolCalls.Count);
+            if (HandsFreeDirection.Requested(completed.ToolCalls))
+            {
+                if (!decisionPending) throw new InvalidOperationException("Descarte fora da decisão inicial.");
+                TurnLatencyProfile.Mark("chat.voice_ignored");
+                yield return new ModelStreamChunk(null, true, Ignored: true);
+                yield break;
+            }
+
             if (segmented && completed.ToolCalls.Any(c => c.Name == FinalSpeechSegments.ToolName))
             {
                 var validated = FinalSpeechSegments.Read(completed.ToolCalls, out var segmentDecision);
                 if (!validated.Take(finalSegments.Count).SequenceEqual(finalSegments) || validated.Length < finalSegments.Count)
                     throw new InvalidOperationException("Final speech units were changed by the provider.");
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
                 foreach (var segment in validated.Skip(finalSegments.Count))
                     yield return new ModelStreamChunk(null, false, FinalSpeechSegment: segment);
                 stopwatch.Stop();
@@ -189,6 +225,7 @@ public sealed class AegisToolLoop(
             if (finalSegments.Count > 0) throw new InvalidOperationException("Incomplete terminal speech response.");
             if (handsFree && HandsFreeReply.TryRead(completed.ToolCalls, out var speech, out var continuation))
             {
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
                 stopwatch.Stop();
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
                 if (segmented) yield return new ModelStreamChunk(null, false, FinalSpeechSegment: speech);
@@ -198,6 +235,11 @@ public sealed class AegisToolLoop(
                     CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
                     VoiceContinuation: continuation);
                 yield break;
+            }
+            if (decisionPending)
+            {
+                await context.AcceptVoiceTurn!(cancellationToken);
+                decisionPending = false;
             }
             inputItems.AddRange(completed.OutputItems);
             auditInputItems.AddRange(completed.OutputItems.Select(RedactMemoryCall));

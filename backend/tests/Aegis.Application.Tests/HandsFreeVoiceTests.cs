@@ -165,18 +165,24 @@ public sealed class HandsFreeVoiceTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task IgnoringBackgroundCreatesNoTurnOrSideEffects(bool streaming, bool existingConversation)
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public async Task IgnoringBackgroundCreatesNoTurnOrSideEffects(bool streaming, bool existingConversation, bool mixedBatch)
     {
         using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         using var metrics = new AegisMetrics();
         using var registry = new ActiveTurnRegistry(metrics);
-        var classifier = new Classifier { Ignore = true };
+        var tool = new BenignTool();
+        var ignore = new ModelToolCall("ignore", HandsFreeDirection.IgnoreToolName, JsonSerializer.SerializeToElement(new { }));
+        var model = new Model([Response(mixedBatch
+            ? [ignore, new("unwanted-action", tool.Name, JsonSerializer.SerializeToElement(new { }))]
+            : [ignore], mixedBatch ? "Texto indevido" : "")]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, metrics);
         var priorTurnId = Guid.NewGuid();
         Guid? conversationId = null;
+        DateTimeOffset? priorUpdatedAt = null;
         if (existingConversation)
         {
             var conversation = new Aegis.Domain.Entities.Conversation("Conversa de teste");
@@ -185,10 +191,11 @@ public sealed class HandsFreeVoiceTests
             db.AddChatMessage(conversation.AddMessage(Aegis.Domain.ChatRoles.User, "Minha agenda"));
             db.AddChatMessage(conversation.AddMessage(Aegis.Domain.ChatRoles.Assistant, new string('x', 700) + "Quer que eu liste?"));
             await db.SaveChangesAsync();
+            priorUpdatedAt = conversation.UpdatedAt;
             registry.Register(priorTurnId, conversation.Id);
         }
-        var chat = new ChatService(db, null!, null!, null!, registry, null!,
-            automaticMemory: new() { Enabled = true }, utteranceClassifier: classifier);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, null!, registry, null!,
+            automaticMemory: new() { Enabled = true });
         var request = new SendMessageRequest { TurnId = Guid.NewGuid(), ConversationId = conversationId, Origin = "hands_free",
             VoiceSessionId = Guid.NewGuid(), AllowSilentIgnore = true, Content = "Aegis, João, fecha a porta" };
 
@@ -205,14 +212,19 @@ public sealed class HandsFreeVoiceTests
         else Assert.Null(await chat.SendMessageAsync(request));
 
         Assert.Null(registry.Find(request.TurnId!.Value));
-        Assert.Equal("João, fecha a porta", classifier.Transcript);
-        Assert.Equal(existingConversation ? 2 : 0, classifier.Context.Count);
+        Assert.Equal(0, tool.Calls);
+        var modelRequest = Assert.Single(model.Requests);
+        Assert.Equal("João, fecha a porta", modelRequest.Request.Input);
+        Assert.Contains(modelRequest.Tools, definition => definition.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.Contains(modelRequest.Request.InputItems!, item => item.ToString().Contains("hands_free_ignore"));
         if (existingConversation)
         {
-            Assert.Equal(600, classifier.Context.Last().Content.Length);
-            Assert.EndsWith("Quer que eu liste?", classifier.Context.Last().Content);
+            Assert.Contains(modelRequest.Request.InputItems!, item => item.ToString().Contains("Quer que eu liste?"));
             Assert.True(registry.IsCurrent(conversationId!.Value, priorTurnId));
         }
+        await db.SaveChangesAsync(); // Even a later save on the same context cannot persist a discarded turn.
+        if (existingConversation)
+            Assert.Equal(priorUpdatedAt, (await db.Conversations.SingleAsync()).UpdatedAt);
         Assert.Equal(existingConversation ? 1 : 0, await db.Conversations.CountAsync());
         Assert.Equal(existingConversation ? 2 : 0, await db.ChatMessages.CountAsync());
         Assert.Empty(await db.MemoryExtractionJobs.ToListAsync());
@@ -224,8 +236,7 @@ public sealed class HandsFreeVoiceTests
     [InlineData(true)]
     public async Task WakeOnlyOptInIsSilentWithoutCallingModel(bool streaming)
     {
-        var classifier = new Classifier { Ignore = false };
-        var chat = new ChatService(null!, null!, null!, null!, null!, null!, utteranceClassifier: classifier);
+        var chat = new ChatService(null!, null!, null!, null!, null!, null!);
         var request = new SendMessageRequest { TurnId = Guid.NewGuid(), Origin = "hands_free",
             VoiceSessionId = Guid.NewGuid(), AllowSilentIgnore = true, Content = "Aegis?!" };
         if (streaming)
@@ -235,7 +246,6 @@ public sealed class HandsFreeVoiceTests
             Assert.Equal("ignored", Assert.Single(events).Type);
         }
         else Assert.Null(await chat.SendMessageAsync(request));
-        Assert.Null(classifier.Transcript);
     }
 
     [Theory]
@@ -256,8 +266,8 @@ public sealed class HandsFreeVoiceTests
         ((Proxy)(object)titles).Call = (_, _) => ValueTask.CompletedTask;
         var model = new Model([Response([], "Resposta normal")]);
         var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
-        var classifier = new Classifier();
-        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, titles, registry, voice, utteranceClassifier: classifier);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, titles, registry, voice);
+        model.OnRespond = () => Assert.Equal(handsFree && optIn ? 0 : 1, db.ChatMessages.Count());
         var request = new SendMessageRequest { TurnId = Guid.NewGuid(), Origin = handsFree ? "hands_free" : null,
             VoiceSessionId = handsFree ? Guid.NewGuid() : null, AllowSilentIgnore = optIn, Content = "Sim" };
         if (streaming)
@@ -267,7 +277,7 @@ public sealed class HandsFreeVoiceTests
             Assert.Equal("done", events.Last().Type);
         }
         else Assert.NotNull(await chat.SendMessageAsync(request));
-        Assert.Equal(handsFree && optIn ? "Sim" : null, classifier.Transcript);
+        Assert.Equal(handsFree && optIn, model.Requests.Single().Tools.Any(t => t.Name == HandsFreeDirection.IgnoreToolName));
         Assert.Single(model.Requests);
         Assert.Single(await db.Conversations.ToListAsync());
         Assert.Equal(2, await db.ChatMessages.CountAsync());
@@ -276,7 +286,7 @@ public sealed class HandsFreeVoiceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task TurnCancelledDuringClassifierNeverPersists(bool streaming)
+    public async Task TurnCancelledDuringFirstResponseNeverPersists(bool streaming)
     {
         using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         using var metrics = new AegisMetrics();
@@ -284,8 +294,9 @@ public sealed class HandsFreeVoiceTests
         var voice = DispatchProxy.Create<IVoiceService, Proxy>();
         ((Proxy)(object)voice).Call = (_, args) => Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!));
         var turn = Guid.NewGuid();
-        var classifier = new Classifier { OnClassify = () => registry.CancelAndGetInfo(turn, "test") };
-        var chat = new ChatService(db, null!, null!, null!, registry, voice, utteranceClassifier: classifier);
+        var model = new Model([Reply("close")]) { OnRespond = () => registry.CancelAndGetInfo(turn, "test") };
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, null!, registry, voice);
         var request = new SendMessageRequest { TurnId = turn, Origin = "hands_free", VoiceSessionId = Guid.NewGuid(),
             AllowSilentIgnore = true, Content = "Sim" };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
@@ -298,20 +309,74 @@ public sealed class HandsFreeVoiceTests
         Assert.Empty(await db.ChatMessages.ToListAsync());
     }
 
-    private sealed class Classifier : IHandsFreeUtteranceClassifier
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcceptedToolFirstRoundPersistsBeforeActionAndNeverReoffersIgnore(bool streaming)
     {
-        public bool Ignore { get; init; }
-        public Action? OnClassify { get; init; }
-        public string? Transcript { get; private set; }
-        public IReadOnlyList<HandsFreeContextTurn> Context { get; private set; } = [];
-        public Task<bool> ShouldIgnoreAsync(string transcript, IReadOnlyList<HandsFreeContextTurn> context,
-            CancellationToken cancellationToken = default)
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var voice = DispatchProxy.Create<IVoiceService, Proxy>();
+        ((Proxy)(object)voice).Call = (_, args) => Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!));
+        var titles = DispatchProxy.Create<IConversationTitleJobQueue, Proxy>();
+        ((Proxy)(object)titles).Call = (_, _) => ValueTask.CompletedTask;
+        var tool = new BenignTool { OnExecute = context =>
         {
-            Transcript = transcript;
-            Context = context;
-            OnClassify?.Invoke();
-            return Task.FromResult(Ignore);
+            Assert.Single(db.Conversations);
+            Assert.Equal(context.UserMessageId, db.ChatMessages.Single().Id);
+        }};
+        var model = new Model([Response([new("act", tool.Name, JsonSerializer.SerializeToElement(new { }))]), Reply("close")]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([tool]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, titles, registry, voice);
+        var request = new SendMessageRequest { TurnId = Guid.NewGuid(), Origin = "hands_free", VoiceSessionId = Guid.NewGuid(),
+            AllowSilentIgnore = true, Content = "Me diga a agenda" };
+        if (streaming)
+        {
+            var events = new List<ChatStreamEvent>();
+            await foreach (var item in chat.StreamMessageAsync(request)) events.Add(item);
+            Assert.Equal("conversation", events[0].Type);
+            Assert.Equal("done", events[^1].Type);
         }
+        else Assert.NotNull(await chat.SendMessageAsync(request));
+
+        Assert.Equal(1, tool.Calls);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Contains(model.Requests[0].Tools, t => t.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.DoesNotContain(model.Requests[1].Tools, t => t.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.Equal(2, await db.ChatMessages.CountAsync());
+    }
+
+    [Fact]
+    public async Task SegmentedAcceptedFirstRoundStillStreamsBeforeModelCompletion()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var voice = DispatchProxy.Create<IVoiceService, Proxy>();
+        ((Proxy)(object)voice).Call = (_, args) => Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!));
+        var titles = DispatchProxy.Create<IConversationTitleJobQueue, Proxy>();
+        ((Proxy)(object)titles).Call = (_, _) => ValueTask.CompletedTask;
+        var model = new Model([Response([new("speak", FinalSpeechSegments.ToolName,
+            JsonSerializer.SerializeToElement(new { segments = new[] { "Primeira.", "Segunda." }, continuation = "close" }))])])
+            { EarlySegment = "Primeira." };
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, titles, registry, voice);
+        var request = new SendMessageRequest { TurnId = Guid.NewGuid(), Origin = "hands_free", VoiceSessionId = Guid.NewGuid(),
+            VoiceSegments = true, AllowSilentIgnore = true, Content = "Conte uma história longa" };
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in chat.StreamMessageAsync(request))
+        {
+            events.Add(item);
+            if (item.Type == "final_segment" && events.Count == 2)
+            {
+                Assert.False(model.Completed);
+                Assert.Equal(2, db.ChatMessages.Count());
+            }
+        }
+        Assert.Equal(new[] { "conversation", "final_segment", "final_segment", "done" }, events.Select(x => x.Type));
+        Assert.Single(model.Requests);
+        Assert.Equal(2, db.ChatMessages.Count());
     }
 
     private static async Task<(string Content, string? Decision)> Run(Model model, bool streaming, BenignTool? tool = null)
@@ -339,16 +404,22 @@ public sealed class HandsFreeVoiceTests
     private sealed class Model(IReadOnlyList<ModelToolResponse> responses) : IAegisModelClient
     {
         public List<ModelToolRequest> Requests { get; } = [];
+        public Action? OnRespond { get; set; }
+        public string? EarlySegment { get; init; }
+        public bool Completed { get; private set; }
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
         {
             var response = responses[Requests.Count];
             Requests.Add(request);
+            OnRespond?.Invoke();
             return Task.FromResult(response);
         }
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             var response = await RespondWithToolsAsync(request, cancellationToken);
             if (response.Content.Length > 0) yield return new(response.Content, false, [], []);
+            if (EarlySegment is not null) yield return new(null, false, [], [], FinalSpeechSegment: EarlySegment);
+            Completed = true;
             yield return new(null, true, response.ToolCalls, response.OutputItems, response.ResponseId, response.Provider,
                 response.Model, response.Purpose, response.MetadataJson, response.AuditData);
         }
@@ -357,6 +428,7 @@ public sealed class HandsFreeVoiceTests
     private sealed class BenignTool : IAegisTool
     {
         public int Calls;
+        public Action<ToolExecutionContext>? OnExecute { get; init; }
         public ToolExecutionContext? LastContext;
         public string Name => "test_read";
         public string Description => "Leitura sintética";
@@ -365,6 +437,7 @@ public sealed class HandsFreeVoiceTests
         {
             Calls++;
             LastContext = context;
+            OnExecute?.Invoke(context);
             return Task.FromResult(new AegisToolResult(true, "{}"));
         }
     }

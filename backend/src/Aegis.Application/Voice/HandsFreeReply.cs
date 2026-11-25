@@ -60,6 +60,7 @@ public static class HandsFreeReply
             context = context.Replace("hands_free_reply como única chamada, com speech contendo a resposta final",
                 "hands_free_reply_segments como única chamada, com segments contendo unidades finais ordenadas da resposta");
         context += " Memória semântica é consultada sob demanda nesta rodada: quando um fato pessoal necessário não estiver no histórico ou contexto, use memory_search; não adivinhe. Considere também referências indiretas, preferências pertinentes, correções e validade temporal. Para comparar o presente com o passado, consulte cada instante separadamente, usando asOf na busca histórica; ausência na busca atual não prova ausência histórica. Se as buscas pertinentes não trouxerem evidência, reconheça a ausência e não use fatos de outra pessoa como substitutos.";
+        if (request.AllowSilentIgnore) context += " " + HandsFreeDirection.Guidance;
         var item = JsonSerializer.SerializeToElement(new { role = "developer", content = context });
         return prompt with
         {

@@ -13,4 +13,5 @@ public sealed record ModelToolResponse(
     string? ResponseId,
     string? MetadataJson,
     LlmRequestAuditData AuditData,
-    string? VoiceContinuation = null);
+    string? VoiceContinuation = null,
+    bool Ignored = false);

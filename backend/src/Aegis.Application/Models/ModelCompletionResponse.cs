@@ -9,4 +9,5 @@ public sealed record ModelCompletionResponse(
     ModelPurpose Purpose,
     string? MetadataJson,
     LlmRequestAuditData AuditData,
-    string? VoiceContinuation = null);
+    string? VoiceContinuation = null,
+    bool Ignored = false);

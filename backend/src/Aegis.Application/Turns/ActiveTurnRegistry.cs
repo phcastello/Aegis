@@ -13,6 +13,8 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     private readonly Dictionary<Guid, Guid> currentByConversation = [];
     private readonly Dictionary<Guid, Guid> turnBySpeechRequest = [];
     private readonly Dictionary<Guid, DateTimeOffset> cancelledBeforeRegistration = [];
+    private readonly Dictionary<Guid, PendingTurn> pendingTurns = [];
+    private long turnSequence;
     private readonly Timer cleanupTimer;
     private readonly AegisMetrics metrics;
     private bool stopping;
@@ -21,6 +23,41 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     {
         this.metrics = metrics;
         cleanupTimer = new(_ => Cleanup(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    // A speculative voice turn can be cancelled without making it the active turn.
+    // A silent discard simply disposes the reservation, leaving the current turn untouched.
+    public IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation)
+    {
+        if (turnId == Guid.Empty || conversationId == Guid.Empty)
+            throw new ArgumentException("Turn and conversation identifiers are required.");
+        lock (gate)
+        {
+            ThrowIfStopping();
+            CleanupUnsafe();
+            if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
+                throw new InvalidOperationException("The turn identifier has already been used.");
+            if (pendingTurns.Count >= MaxTurns)
+                throw new InvalidOperationException("Too many pending turns.");
+            if (cancelledBeforeRegistration.ContainsKey(turnId)) cancellation.Cancel();
+            var pending = new PendingTurn(conversationId, ++turnSequence, cancellation);
+            pendingTurns.Add(turnId, pending);
+            return new PendingRegistration(this, turnId, pending);
+        }
+    }
+
+    private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation);
+
+    private sealed class PendingRegistration(ActiveTurnRegistry registry, Guid turnId, PendingTurn pending) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (registry.gate)
+            {
+                if (registry.pendingTurns.TryGetValue(turnId, out var tracked) && ReferenceEquals(tracked, pending))
+                    registry.pendingTurns.Remove(turnId);
+            }
+        }
     }
 
     public ActiveTurn Register(Guid turnId, Guid conversationId)
@@ -42,13 +79,24 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
                 throw new InvalidOperationException("The turn identifier has already been used.");
             }
 
+            pendingTurns.TryGetValue(turnId, out var pending);
+            if (pending is not null && pending.ConversationId != conversationId)
+                throw new InvalidOperationException("The pending turn belongs to another conversation.");
+            pendingTurns.Remove(turnId);
             var turn = new ActiveTurn(turnId, conversationId);
-            if (cancelledBeforeRegistration.Remove(turnId))
+            if (cancelledBeforeRegistration.Remove(turnId) || pending?.Cancellation.IsCancellationRequested == true)
             {
                 CancelUnsafe(turn, "cancelled_before_registration");
                 turns.Add(turnId, turn);
                 return new TurnRegistrationInfo(turn, null);
             }
+
+            // Only an accepted turn cancels older speculative candidates. A newer
+            // reservation by itself does not interrupt speech or an active text turn.
+            var acceptedSequence = pending?.Sequence ?? ++turnSequence;
+            foreach (var candidate in pendingTurns.Values.Where(candidate =>
+                candidate.ConversationId == conversationId && candidate.Sequence < acceptedSequence).ToList())
+                candidate.Cancellation.Cancel();
 
             string? supersededNativeSpeechRequestId = null;
             IReadOnlyList<string>? supersededSegments = null;
@@ -284,6 +332,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             {
                 cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
                 TrimCancelledBeforeRegistrationUnsafe();
+                if (pendingTurns.TryGetValue(turnId, out var pending)) pending.Cancellation.Cancel();
                 return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
             }
 
@@ -302,6 +351,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         lock (gate)
         {
             stopping = true;
+            foreach (var pending in pendingTurns.Values.ToList()) pending.Cancellation.Cancel();
             var cancellations = new List<TurnCancellationInfo>();
             foreach (var turn in turns.Values.Where(IsActiveUnsafe).ToList())
             {
@@ -334,6 +384,8 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             currentByConversation.Clear();
             turnBySpeechRequest.Clear();
             cancelledBeforeRegistration.Clear();
+            foreach (var pending in pendingTurns.Values.ToList()) pending.Cancellation.Cancel();
+            pendingTurns.Clear();
         }
     }
 

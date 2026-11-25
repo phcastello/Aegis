@@ -12,4 +12,5 @@ public sealed record ModelStreamChunk(
     LlmRequestAuditData? AuditData = null,
     ToolStatus? ToolStatus = null,
     string? VoiceContinuation = null,
-    string? FinalSpeechSegment = null);
+    string? FinalSpeechSegment = null,
+    bool Ignored = false);
