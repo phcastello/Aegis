@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {adbFailure,frameworkCleanup,waitForAndroidFrameworkReady,ensureAndroidFrameworkRoot,AdbOperationError,handsFreeWebViewEvidence} from './android-framework-host.mjs';
 
 test('hands-free always requires real native IPC and the matching visible UI evidence',()=>{
@@ -11,6 +12,19 @@ test('hands-free always requires real native IPC and the matching visible UI evi
   for(const major of [107,140])assert.equal(handsFreeWebViewEvidence([version(major),ipc,setup].join('\n')).expected,'hands_free_real_setup_ui');
   for(const invalid of [[version(69),warning],[version(69),ipc],[version(69),ipc,setup],[version(140),ipc,warning],[version(140),ipc,setup,warning],[version(69),version(140),ipc,setup],[ipc,setup]])
     assert.throws(()=>handsFreeWebViewEvidence(invalid.join('\n')),/hands_free_webview_/);
+});
+
+test('real concurrent reminder database checkpoint survives emulator reboot and remains mandatory',()=>{
+  const host=readFileSync(new URL('./android-notification-framework.mjs',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+  const executed=host.indexOf("instrumentation('NodeReminderDatabaseConcurrencyFrameworkTest');");
+  const collected=host.indexOf("preservedCheckpoints.add('reminder_database_concurrent_open');");
+  const reboot=host.indexOf("run(['reboot']);");
+  assert.ok(executed>0 && executed<collected && collected<reboot,'Read and preserve evidence before any real reboot');
+  assert.match(host.slice(executed,collected),/const databasePhase='phase=reminder_database_concurrent_open errorType=Checkpoint';[\s\S]+assert\(run\(\['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','\*:S'\]\)\.split\(\/\\r\?\\n\/\)\.includes\(databasePhase\)/);
+  assert.match(host,/crash\+='\\n'\+\[\.\.\.preservedCheckpoints\]\.map\(phase=>`AegisNodeNativeTest phase=\$\{phase\} errorType=Checkpoint`\)\.join\('\\n'\)/);
+  const loops=[...host.matchAll(/for\(const phase of \[([^\]]*)\]\)if\(crash\.includes\(`phase=\$\{phase\} errorType=Checkpoint`\)\) \{([\s\S]*?)\n  \}/g)];
+  assert.ok(loops.some(([,names,body])=>names.includes("'reminder_database_concurrent_open'")&&body.includes('phases.add(phase)')),'Closed final checkpoint parser must recognize the preserved phase');
+  assert.match(host,/if\(!primaryError\) \{[\s\S]+assert\(phases\.has\('reminder_database_concurrent_open'\)/);
 });
 
 test('adb failures expose only a closed operation and reason',()=>{

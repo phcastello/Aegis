@@ -236,7 +236,7 @@ try {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
-  for(const phase of [...handsFreeWebViewPhases,'hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of [...handsFreeWebViewPhases,'reminder_database_concurrent_open','hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
