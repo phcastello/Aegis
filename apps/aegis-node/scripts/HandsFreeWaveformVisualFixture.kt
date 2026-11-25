@@ -48,6 +48,7 @@ object HandsFreeWaveformVisualFixture {
         val owner=Any()
         val session="synthetic-visual-fixture"
         val bars=FloatArray(HandsFreePanelSignal.BAR_COUNT)
+        val playbackDisplay=HandsFreePlaybackSpectrum.Display()
         val thoughts=FloatArray(6)
         HandsFreeThinkingMotion.sample(0L,thoughts)
         val frames=StringBuilder(320000)
@@ -60,7 +61,7 @@ object HandsFreeWaveformVisualFixture {
         HandsFreePlaybackSpectrum.attach(owner,session)
         try {
             frames.append("{\"scope\":\"Production Kotlin signal; synthetic PCM; host visualization, not Android physical\",")
-            frames.append("\"fps\":60,\"barCount\":${HandsFreePanelSignal.BAR_COUNT},\"windowMs\":${HandsFreePanelSignal.WINDOW_MS},")
+            frames.append("\"fps\":60,\"barCount\":${HandsFreePanelSignal.BAR_COUNT},\"playbackBarCount\":${HandsFreePlaybackSpectrum.DISPLAY_BAND_COUNT},\"windowMs\":${HandsFreePanelSignal.WINDOW_MS},")
             frames.append("\"historyMs\":${HandsFreePanelSignal.HISTORY_MS},\"presentationDelayMs\":${HandsFreePanelSignal.PRESENTATION_DELAY_MS},")
             frames.append("\"thinkingStill\":[${thoughts.joinToString(",")}],\"frames\":[")
             for(frame in 0..780) {
@@ -89,14 +90,14 @@ object HandsFreeWaveformVisualFixture {
                         playback.offer(bytes,0,bytes.size,offeredFrames)
                         offeredFrames+=HandsFreePlaybackSpectrum.WINDOW_FRAMES
                     }
-                    HandsFreePlaybackSpectrum.render(owner,bars,now*1000000L)
+                    playbackDisplay.render(owner,true,now*1000000L)
                 } else {
-                    if(playbackStarted){playback.close();playbackStarted=false}
+                    if(playbackStarted){playback.close();playbackStarted=false;playbackDisplay.clear()}
                     HandsFreePanelSignal.render(owner,now.toLong(),bars)
                 }
                 if(frame>0)frames.append(',')
                 frames.append("{\"atMs\":$now,\"state\":\"$state\",\"active\":$active,\"bars\":[")
-                bars.forEachIndexed { i,value->if(i>0)frames.append(',');frames.append(value) }
+                (if(state=="speaking")playbackDisplay.levels else bars).forEachIndexed { i,value->if(i>0)frames.append(',');frames.append(value) }
                 frames.append(']')
                 if(state=="processing") {
                     HandsFreeThinkingMotion.sample(now-9600L,thoughts)

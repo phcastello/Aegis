@@ -188,4 +188,70 @@ class NodeHandsFreePlaybackSpectrumTest {
             HandsFreePlaybackSpectrum.detach(owner)
         }
     }
+
+    @Test fun displayMergesMeasuredPairsAndSoftensPeaksWithoutSyntheticMotion() {
+        val display = HandsFreePlaybackSpectrum.Display()
+        val high = FloatArray(32).also { it[6] = .8f; it[7] = 1f; it[23] = .2f }
+        val low = FloatArray(32).also { it[7] = .1f; it[23] = .2f }
+        display.update(high, 1000, true)
+        assertEquals(16, display.levels.size)
+        val first = display.levels[3]
+        assertTrue(first > .39f && first < .43f)
+        assertEquals(2, display.levels.count { it > 0f })
+        display.update(high, 1040, true)
+        val second = display.levels[3]
+        assertTrue(second > first && second < 1f)
+        display.update(low, 1080, true)
+        assertTrue(display.levels[3] < second && display.levels[3] > first)
+        display.update(high, 1120, false)
+        assertEquals(1f, display.levels[3], 0f)
+        assertEquals(.2f, display.levels[11], 0f)
+        display.update(FloatArray(32), 1160, true)
+        val released = display.levels[3]
+        assertTrue(released > 0f && released < 1f)
+        display.update(FloatArray(32), 1200, true)
+        assertTrue(display.levels[3] < released)
+        display.update(FloatArray(32), 1240, true)
+        assertTrue(display.levels.all { it == 0f })
+        display.update(low, 1320, true)
+        assertTrue(display.levels[3] < .1f)
+        display.clear()
+        assertTrue(display.levels.all { it == 0f })
+    }
+
+    @Test fun displayClearsOnStreamObserverReplacementAndStalledPlayback() {
+        val owner = Any()
+        val display = HandsFreePlaybackSpectrum.Display()
+        val stream = HandsFreePlaybackSpectrum.Stream("session")
+        val next = HandsFreePlaybackSpectrum.Stream("session")
+        var head = 0L
+        val low = asBytes(tone(10))
+        val high = asBytes(tone(160))
+        HandsFreePlaybackSpectrum.attach(owner, "session")
+        try {
+            stream.start(HandsFreePlaybackClock({ head }))
+            stream.offer(low, 0, low.size, 0)
+            assertTrue(display.render(owner, true, 1_000_000L))
+            assertTrue(display.levels.all { it == 0f })
+            head = size.toLong()
+            assertTrue(display.render(owner, true, 41_000_000L))
+            val oldPeak = display.levels.indices.maxBy { display.levels[it] }
+            assertTrue(display.levels[oldPeak] > .3f)
+            next.start(HandsFreePlaybackClock({ head }))
+            next.offer(high, 0, high.size, 0)
+            assertTrue(display.render(owner, true, 81_000_000L))
+            assertTrue(display.levels.indices.maxBy { display.levels[it] } > oldPeak)
+            val expectedHigh = analyze(tone(160)).let { raw -> maxOf(raw[oldPeak * 2], raw[oldPeak * 2 + 1]) }
+            assertEquals(expectedHigh * (1 - kotlin.math.exp(-40.0 / 75)).toFloat(), display.levels[oldPeak], .0001f)
+            assertFalse(display.render(owner, true, 600_000_000L))
+            assertTrue(display.levels.all { it == 0f })
+            HandsFreePlaybackSpectrum.detach(owner)
+            assertFalse(display.render(owner, true))
+            assertTrue(display.levels.all { it == 0f })
+        } finally {
+            stream.close()
+            next.close()
+            HandsFreePlaybackSpectrum.detach(owner)
+        }
+    }
 }

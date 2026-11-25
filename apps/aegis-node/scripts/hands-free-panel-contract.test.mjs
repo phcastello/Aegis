@@ -95,7 +95,11 @@ test('processing uses an animated cluster and playback the measured spectrum wit
   assert.match(processing, /3\.5f\*density,paint/);
   assert.doesNotMatch(processing, /FloatArray\(|now%1800/);
   assert.match(processing, /if\(motion\)scheduleFrame\(\)/);
-  assert.match(playback, /HandsFreePlaybackSpectrum\.render\(owner,amplitudes\)/);
+  assert.match(panel, /private val playbackDisplay=HandsFreePlaybackSpectrum\.Display\(\)/);
+  assert.match(playback, /playbackDisplay\.render\(owner,motion\)/);
+  assert.match(playback, /val playbackBands=playbackDisplay\.levels/);
+  assert.match(playback, /amplitude\*\(height\*\.54f\)/);
+  assert.match(panel, /playbackDisplay\.clear\(\)/);
   assert.match(playback, /canvas\.drawRoundRect/);
   assert.match(playback, /if\(active\)schedulePlaybackFrame\(\)/);
   assert.doesNotMatch(playback, /canvas\.drawArc|kotlin\.math\.sin|HandsFreePanelSignal\.render/);

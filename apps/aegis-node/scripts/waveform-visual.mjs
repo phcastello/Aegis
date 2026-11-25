@@ -13,7 +13,8 @@ assert.ok(args.frames && args.output,'Use --frames <production-frames.json> --ou
 const output=resolve(args.output);mkdirSync(output,{recursive:false,mode:0o700});
 const png=join(output,'frames');mkdirSync(png,{mode:0o700});
 const data=JSON.parse(readFileSync(args.frames,'utf8'));
-assert.equal(data.fps,60);assert.equal(data.barCount,32);
+assert.equal(data.fps,60);assert.equal(data.barCount,32);assert.equal(data.playbackBarCount,16);
+assert.ok(data.frames.every(frame=>frame.bars.length===(frame.state==='speaking'?data.playbackBarCount:data.barCount)));
 assert.equal(data.thinkingStill.length,6);
 assert.ok(data.frames.filter(frame=>frame.state==='processing').every(frame=>frame.thinking.length===6));
 const require=createRequire(import.meta.url);
@@ -57,12 +58,12 @@ window.drawFrame=function(index,reduced=false){
       ctx.beginPath();ctx.arc(cx+points[i*2]*1.75,cy+points[i*2+1]*1.75,3.5,0,Math.PI*2);ctx.fill();
     }
   }else if(frame.state==='speaking'){
-    const base=y+height*.89;
+    const base=y+height*.89,slot=(right-left)/DATA.playbackBarCount,bar=Math.min(5.2,slot*.46);
     if(frame.bars.every(value=>value<=.002)){
       ctx.strokeStyle='rgba(145,169,238,'+(24/255)+')';ctx.lineWidth=1;
       ctx.beginPath();ctx.moveTo(left,base);ctx.lineTo(right,base);ctx.stroke();
     }
-    frame.bars.forEach((amp,i)=>{if(amp<=.002)return;const h=.65+amp*height*.80;
+    frame.bars.forEach((amp,i)=>{if(amp<=.002)return;const h=.65+amp*height*.54;
       ctx.fillStyle='rgba(145,169,238,'+(Math.trunc(102+153*amp)/255)+')';
       roundRect(left+(i+.5)*slot-bar/2,base-h,bar,h,bar/2);
     });

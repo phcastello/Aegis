@@ -197,6 +197,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
     private val density=resources.displayMetrics.density
     private val main=Handler(Looper.getMainLooper())
     private val amplitudes=FloatArray(HandsFreePanelSignal.BAR_COUNT)
+    private val playbackDisplay=HandsFreePlaybackSpectrum.Display()
     private val wakePosted=AtomicBoolean(false)
     @Volatile private var shown=false
     private var owner:Any?=null
@@ -249,7 +250,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
                 HandsFreePanelSignal.reset(it,now)
                 HandsFreePlaybackSpectrum.phaseChanged(it,state,next)
             }
-            amplitudes.fill(0f)
+            amplitudes.fill(0f);playbackDisplay.clear()
         }
         state=next
         removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
@@ -294,7 +295,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
             HandsFreePanelSignal.setListener(it,null);HandsFreePanelSignal.detach(it)
             HandsFreePlaybackSpectrum.setListener(it,null);HandsFreePlaybackSpectrum.detach(it)
         }
-        signalBound=false;amplitudes.fill(0f)
+        signalBound=false;amplitudes.fill(0f);playbackDisplay.clear()
         if(scaleObserved){context.contentResolver.unregisterContentObserver(scaleChanged);scaleObserved=false}
     }
     private fun updateMotion() {
@@ -304,6 +305,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
         // Do not turn useful live audio feedback into 200ms jumps because of it.
         val animations=handsFreePanelMotionAllowed(scale,platformEnabled)
         reduceMotion=!animations
+        playbackDisplay.clear()
         removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
         removeCallbacks(playbackFrame);playbackFramePending=false
         if(canRender()) {
@@ -357,19 +359,20 @@ internal class HandsFreePanelView(context:Context):View(context) {
                 if(motion)scheduleFrame()
             }
             HandsFreePanelState.SPEAKING->{
-                val active=HandsFreePlaybackSpectrum.render(owner,amplitudes)
+                val active=playbackDisplay.render(owner,motion)
+                val playbackBands=playbackDisplay.levels
                 val left=width*.06f;val right=width*.94f
-                val slot=(right-left)/amplitudes.size
-                val bar=minOf(3.2f*density,slot*.46f)
+                val slot=(right-left)/playbackBands.size
+                val bar=minOf(5.2f*density,slot*.46f)
                 val base=height*.89f
                 var hasVoice=false
-                for(index in amplitudes.indices) {
-                    val amplitude=amplitudes[index]
+                for(index in playbackBands.indices) {
+                    val amplitude=playbackBands[index]
                     if(amplitude<=.002f)continue
                     hasVoice=true
                     val x=left+(index+.5f)*slot
                     paint.alpha=(102+153*amplitude).toInt().coerceIn(0,255)
-                    bounds.set(x-bar/2,base-.65f*density-amplitude*(height*.80f),x+bar/2,base)
+                    bounds.set(x-bar/2,base-.65f*density-amplitude*(height*.54f),x+bar/2,base)
                     canvas.drawRoundRect(bounds,bar/2,bar/2,paint)
                 }
                 if(!hasVoice) {

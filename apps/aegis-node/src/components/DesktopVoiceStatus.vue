@@ -2,6 +2,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { handsFree } from '../services/handsFree';
+import { PlaybackSpectrumDisplay } from '../services/playbackSpectrum';
 import './thinking-motion.css';
 
 const labels = new Map([
@@ -12,6 +13,9 @@ const labels = new Map([
 ]);
 const barCount = 32;
 const staleMs = 1600;
+const playbackStaleMs = 500;
+const playbackQuietClearMs = 120;
+const playback = new PlaybackSpectrumDisplay();
 const status = ref('');
 const label = computed(() => labels.get(status.value));
 const inputPhase = computed(() => status.value === 'capturing' || status.value === 'continuation');
@@ -25,8 +29,10 @@ let stopState: UnlistenFn | undefined;
 let stopWave: UnlistenFn | undefined;
 
 function barHeight(level: number) {
-  return level > 0.002 ? 1.3 + level * 28.8 : 0;
+  return level > 0.002 ? 1.3 + level * (inputPhase.value ? 28.8 : 19.5) : 0;
 }
+const slotWidth = computed(() => 140.8 / (inputPhase.value ? barCount : PlaybackSpectrumDisplay.bandCount));
+const barWidth = computed(() => inputPhase.value ? 2 : 3.2);
 
 function validGeneration(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -35,6 +41,7 @@ function validGeneration(value: unknown): value is number {
 function clearWaveform() {
   clearTimeout(expiry);
   expiry = undefined;
+  playback.clear();
   if (levels.value.length) levels.value = [];
 }
 
@@ -50,13 +57,16 @@ function updateWaveform(payload: { status?: unknown; generation?: unknown; level
       !payload || payload.status !== status.value || !validGeneration(payload.generation) ||
       payload.generation !== generation || !Array.isArray(payload.levels) || payload.levels.length !== barCount ||
       !payload.levels.every((level: unknown) => typeof level === 'number' && Number.isFinite(level) && level >= 0 && level <= 1)) return;
-  if (!payload.levels.some(level => level > 0.002)) {
+  const quiet = !payload.levels.some(level => level > 0.002);
+  if (inputPhase.value && quiet) {
     clearWaveform();
     return;
   }
   clearTimeout(expiry);
-  levels.value = payload.levels;
-  expiry = setTimeout(clearWaveform, staleMs);
+  levels.value = inputPhase.value ? payload.levels : playback.update(payload.levels, performance.now(),
+    !window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  if (levels.value.length) expiry = setTimeout(clearWaveform, inputPhase.value ? staleMs
+    : quiet ? playbackQuietClearMs : playbackStaleMs);
 }
 
 async function readCurrentStatus() {
@@ -113,9 +123,9 @@ onBeforeUnmount(() => {
         <svg class="desktop-voice-waveform" :data-meter="inputPhase ? 'input' : 'output'" viewBox="0 0 160 36" aria-hidden="true" preserveAspectRatio="none">
           <line v-if="!levels.length" class="desktop-voice-baseline" x1="9.6" :y1="inputPhase ? 18 : 32" x2="150.4" :y2="inputPhase ? 18 : 32" />
           <rect v-for="(level, index) in levels" :key="index"
-            :x="9.6 + (index + .5) * 4.4 - 1"
+            :x="9.6 + (index + .5) * slotWidth - barWidth / 2"
             :y="inputPhase ? 18 - barHeight(level) / 2 : 32 - barHeight(level)"
-            width="2" :height="barHeight(level)" rx="1"
+            :width="barWidth" :height="barHeight(level)" :rx="barWidth / 2"
             :opacity="level > 0.002 ? 0.4 + 0.6 * level : 0" />
         </svg>
       </template>

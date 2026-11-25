@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReferenceArray
 import kotlin.math.PI
 import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -18,6 +19,7 @@ import kotlin.math.sqrt
  */
 internal object HandsFreePlaybackSpectrum {
     const val BAR_COUNT = 32
+    const val DISPLAY_BAND_COUNT = 16
     const val WINDOW_FRAMES = 1024
     const val STALE_CLEAR_MS = 500L
     private const val SAMPLE_RATE = 24000
@@ -174,6 +176,73 @@ internal object HandsFreePlaybackSpectrum {
     fun render(owner: Any?, output: FloatArray, nowNanos: Long = System.nanoTime()): Boolean {
         require(output.size >= BAR_COUNT)
         return active.get()?.render(owner, output, nowNanos) ?: run { output.fill(0f); false }
+    }
+
+    /** Presentation-only reduction and smoothing of already played PCM frames.
+     * Kept separate from the FFT/clock so measurement and audio playback stay intact.
+     */
+    internal class Display {
+        private val measured = FloatArray(BAR_COUNT)
+        val levels = FloatArray(DISPLAY_BAND_COUNT)
+        private var previousMs: Long? = null
+        private var quietSinceMs: Long? = null
+        private val quietStart = FloatArray(DISPLAY_BAND_COUNT)
+        private var lastStream: Stream? = null
+        private var lastObserver: Observer? = null
+
+        private fun clearEnvelope() { levels.fill(0f); previousMs = null; quietSinceMs = null }
+        fun clear() {
+            clearEnvelope()
+            lastStream = null; lastObserver = null
+        }
+
+        internal fun update(raw: FloatArray, nowMs: Long, smooth: Boolean) {
+            // Pool adjacent measured bands by maximum magnitude, without fabricating
+            // new frequency information. A valid quiet frame can release for at
+            // most 120 ms; stale streams and ownership changes clear immediately.
+            val quiet = raw.none { it > .002f }
+            if (quiet) {
+                val since = quietSinceMs ?: (previousMs ?: nowMs).also {
+                    quietSinceMs = it
+                    levels.copyInto(quietStart)
+                }
+                val progress = ((nowMs - since) / 120f).coerceIn(0f, 1f)
+                if (!smooth || progress >= 1 || levels.none { it > .002f }) {
+                    clearEnvelope()
+                    return
+                }
+                // A bounded ease-out reaches zero instead of an abrupt exponential cutoff.
+                val gain = (1 - progress) * (1 - progress)
+                previousMs = nowMs
+                for (index in levels.indices) levels[index] = quietStart[index] * gain
+                return
+            }
+            quietSinceMs = null
+            val elapsed = (previousMs?.let { nowMs - it } ?: 40L).coerceIn(0L, 120L)
+            previousMs = nowMs
+            for (index in levels.indices) {
+                val target = maxOf(raw[index * 2], raw[index * 2 + 1])
+                val current = levels[index]
+                val tau = if (target > current) 75.0 else 150.0
+                levels[index] = if (smooth) (current + (target - current) * (1 - exp(-elapsed / tau))).toFloat() else target
+            }
+        }
+
+        fun render(owner: Any?, smooth: Boolean, nowNanos: Long = System.nanoTime()): Boolean {
+            val stream = active.get()
+            val currentObserver = observer.get()
+            // A reply/observer may be replaced without a neutral frame in between.
+            if (stream !== lastStream || currentObserver !== lastObserver) {
+                clearEnvelope()
+                lastStream = stream; lastObserver = currentObserver
+            }
+            if (stream?.render(owner, measured, nowNanos) != true) {
+                clear()
+                return false
+            }
+            update(measured, nowNanos / 1_000_000L, smooth)
+            return true
+        }
     }
 
     /** In-place radix-2 FFT, Hann window, fixed dBFS calibration. Bands are
