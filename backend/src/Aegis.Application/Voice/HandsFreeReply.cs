@@ -39,7 +39,10 @@ public static class HandsFreeReply
         if (content.StartsWith("Aegis", StringComparison.OrdinalIgnoreCase) &&
             (content.Length == 5 || !char.IsLetterOrDigit(content[5])))
             content = content[5..].TrimStart(' ', '\t', '\r', '\n', ',', '.', ':', ';', '!', '?', '—', '-');
-        if (string.IsNullOrWhiteSpace(content)) throw new ArgumentException("Nenhum pedido foi reconhecido.");
+        if (string.IsNullOrWhiteSpace(content) && !request.AllowSilentIgnore)
+            throw new ArgumentException("Nenhum pedido foi reconhecido.");
+        if (request.AllowSilentIgnore && (request.TurnId is null || request.TurnId == Guid.Empty))
+            throw new ArgumentException("Uma identificação de turno válida é necessária.");
         return content;
     }
 

@@ -34,7 +34,7 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         try
         {
             var response = await chatService.SendMessageAsync(request, cancellationToken);
-            return Ok(response);
+            return response is null ? NoContent() : Ok(response);
         }
         catch (ArgumentException exception)
         {

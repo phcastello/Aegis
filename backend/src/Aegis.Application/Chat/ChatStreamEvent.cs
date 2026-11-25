@@ -19,6 +19,8 @@ public sealed record ChatStreamEvent(
     Guid? SegmentId = null,
     int? Sequence = null)
 {
+    public static ChatStreamEvent Ignored(Guid turnId) => new("ignored", turnId);
+
     public static ChatStreamEvent Conversation(Guid turnId, Guid conversationId) =>
         new("conversation", turnId, ConversationId: conversationId);
 

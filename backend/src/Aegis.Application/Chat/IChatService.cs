@@ -2,7 +2,7 @@ namespace Aegis.Application.Chat;
 
 public interface IChatService
 {
-    Task<SendMessageResponse> SendMessageAsync(
+    Task<SendMessageResponse?> SendMessageAsync(
         SendMessageRequest request,
         CancellationToken cancellationToken = default);
 

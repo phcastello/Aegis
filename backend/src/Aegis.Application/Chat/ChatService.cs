@@ -30,12 +30,13 @@ public sealed class ChatService(
     AegisMetrics? metrics = null,
     MemoryHybridRetriever? hybrid = null,
     IMemoryActivityStore? activity = null,
-    ILogger<ChatService>? logger = null) : IChatService
+    ILogger<ChatService>? logger = null,
+    IHandsFreeUtteranceClassifier? utteranceClassifier = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
 
-    public async Task<SendMessageResponse> SendMessageAsync(
+    public async Task<SendMessageResponse?> SendMessageAsync(
         SendMessageRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -47,11 +48,16 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
+        if (await ShouldIgnoreAsync(request, userContent, cancellationToken))
+            return null;
+        cancellationToken.ThrowIfCancellationRequested();
         var conversation = await TurnLatencyProfile.MeasureAsync("chat.conversation_load", () => GetOrCreateConversationAsync(request.ConversationId, cancellationToken));
         var turn = await TurnLatencyProfile.MeasureAsync("chat.turn_register", () => voiceService.RegisterTurnAsync(effectiveTurnId, conversation.Id, cancellationToken));
-        turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
+        if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
+            throw new OperationCanceledException(turn.Cancellation.Token);
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
+        turnToken.ThrowIfCancellationRequested();
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
         turn.UserMessageId = userMessage.Id;
@@ -142,6 +148,12 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
+        if (await ShouldIgnoreAsync(request, userContent, cancellationToken))
+        {
+            yield return ChatStreamEvent.Ignored(turnId);
+            yield break;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         var conversation = await TurnLatencyProfile.MeasureAsync("chat.conversation_load", () => GetOrCreateConversationAsync(request.ConversationId, cancellationToken));
         var turn = await TurnLatencyProfile.MeasureAsync("chat.turn_register", () => voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken));
         if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
@@ -151,6 +163,7 @@ public sealed class ChatService(
 
         using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
         var turnToken = turnCancellation.Token;
+        turnToken.ThrowIfCancellationRequested();
         var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
         VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
         turn.UserMessageId = userMessage.Id;
@@ -368,6 +381,29 @@ public sealed class ChatService(
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return true;
+    }
+
+    private async Task<bool> ShouldIgnoreAsync(SendMessageRequest request, string transcript,
+        CancellationToken cancellationToken)
+    {
+        if (!request.IsHandsFree || !request.AllowSilentIgnore) return false;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (transcript.Length == 0) return true;
+        if (utteranceClassifier is null) return false;
+
+        IReadOnlyList<HandsFreeContextTurn> context = [];
+        if (request.ConversationId is { } conversationId)
+        {
+            var recent = await dbContext.GetRecentMessagesAsync(conversationId, 2, cancellationToken);
+            // Only the preceding turn is needed; keep the end of a long reply, where a follow-up question is likely.
+            context = recent.Where(message => message.Role is ChatRoles.User or ChatRoles.Assistant)
+                .Select(message => new HandsFreeContextTurn(message.Role,
+                    message.Content.Length <= 600 ? message.Content : message.Content[^600..]))
+                .ToArray();
+        }
+
+        return await TurnLatencyProfile.MeasureAsync("chat.voice_direction",
+            () => utteranceClassifier.ShouldIgnoreAsync(transcript, context, cancellationToken));
     }
 
     private async Task<Conversation> GetOrCreateConversationAsync(
