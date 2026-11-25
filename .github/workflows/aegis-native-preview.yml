@@ -187,7 +187,7 @@ jobs:
           keytool -genkeypair -keystore "$ANDROID_KEYSTORE_PATH" -storetype PKCS12 -alias preview \
             -storepass:env ANDROID_KEYSTORE_PASSWORD -keypass:env ANDROID_KEY_PASSWORD \
             -dname CN=Disposable-preview-build -keyalg RSA -keysize 2048 -validity 2
-          npm run build:android:release
+          node "$GITHUB_WORKSPACE/trusted/.github/scripts/retry-gradle.mjs" npm run build:android:release
           node "$GITHUB_WORKSPACE/trusted/apps/aegis-node/scripts/package-artifacts.mjs" android
           cp src-tauri/gen/android/app/build/generated/source/buildConfig/universal/release/com/aegis/node/BuildConfig.java release-assets/BuildConfig.java
       - if: matrix.android == 'false'

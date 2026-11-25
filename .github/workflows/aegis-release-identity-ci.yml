@@ -170,7 +170,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Build the actual Android UI in a development APK without framework fixtures
-        run: npm run tauri -- android build --debug --apk --target x86_64
+        run: node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run tauri -- android build --debug --apk --target x86_64
       - name: Observe real Tauri IPC and capture drawer and About in Android WebView
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:

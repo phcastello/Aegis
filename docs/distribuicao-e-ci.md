@@ -358,6 +358,21 @@ serviço privilegiado nesta etapa.
 
 ## Verificação e limites
 
+### Resolução de dependências Android em CI
+
+Os runners Android efêmeros reaproveitam as dependências Gradle e a distribuição
+do wrapper pelo cache da ação oficial [setup-java](https://github.com/actions/setup-java#caching-packages-dependencies),
+indexado pelos arquivos Gradle, propriedades e versão do wrapper. Isso evita
+downloads repetidos conforme o [cache de dependências do Gradle](https://docs.gradle.org/current/userguide/dependency_caching.html).
+Uma falha de configuração do repositório de plugins por HTTP 429 do Maven
+Central foi observada durante a integração da v0.8.0.
+`retry-gradle.mjs` repete o mesmo comando somente se ele falhar e o log
+confirmar um GET/HEAD ao Maven Central com status 429: no máximo três novas
+tentativas, com esperas de 30, 60 e 120 segundos e pequena variação aleatória.
+Outros erros ou novas falhas após o limite conservam o código de saída; os
+testes, verificações de artefatos e assinatura não são ignorados. A execução
+de preview usa a cópia confiável do script na `main`.
+
 ```bash
 node --test .github/scripts/*.test.mjs
 python3 -m unittest discover -s .github/scripts -p '*_test.py'
