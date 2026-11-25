@@ -17,8 +17,12 @@ fn power(samples: &[i16]) -> f64 {
 // dBFS, 40 ms attack, 150 ms release. Display only; never affects detection,
 // the transmitted command, or the microphone's gain.
 const WAVEFORM_BARS: usize = 32;
+const WAVEFORM_WINDOW: Duration = Duration::from_millis(20);
 const WAVEFORM_STEP: Duration = Duration::from_millis(40);
+const WAVEFORM_DELAY: Duration = WAVEFORM_STEP;
 const WAVEFORM_GAP: Duration = Duration::from_millis(400);
+const WAVEFORM_CAPACITY: usize = 80; // 1.6 s: 1.28 s history plus presentation delay.
+const WAVEFORM_QUIET: f64 = 0.002;
 
 fn waveform_level(samples: &[i16]) -> f64 {
     let rms = power(samples).sqrt() / 32768.0;
@@ -29,14 +33,14 @@ fn waveform_level(samples: &[i16]) -> f64 {
     }
 }
 
-/// Capture delivers fixed 20 ms blocks. Retain only normalized envelope
-/// levels, taking one history point per two blocks (32 bars = 1.28 seconds).
-/// Throttle delivery by wall time even when capture's pre-roll is drained
-/// faster than real time. No PCM is retained by the visualization.
+/// Capture delivers fixed 20 ms blocks. Retain only normalized envelopes and
+/// their estimated acquisition times, even when queued blocks arrive together.
+/// Presentation resamples the real history (32 bars spaced 40 ms apart),
+/// delayed by 40 ms to absorb normal recording/delivery jitter. No PCM is
+/// retained, and no audio or capture decisions depend on the visual timeline.
 #[derive(Default)]
 pub(crate) struct Waveform {
-    levels: [f32; WAVEFORM_BARS],
-    pending: bool,
+    points: VecDeque<(Instant, f64)>,
     envelope: f64,
     silence_start: f64,
     silent_frames: u32,
@@ -50,6 +54,7 @@ impl Waveform {
         samples: &[i16],
         visible: bool,
         now: Instant,
+        queued_blocks: usize,
     ) -> Option<[f32; WAVEFORM_BARS]> {
         if !visible {
             // Reset once when the app is hidden. Avoid even computing RMS
@@ -67,6 +72,28 @@ impl Waveform {
         }
         self.last_frame = Some(now);
         debug_assert_eq!(samples.len(), BLOCK);
+
+        // The driver returns complete, ordered 20 ms blocks; the completed
+        // buffers still queued behind this block represent its age. Anchor
+        // their timeline once and retain sample cadence, not read cadence.
+        let age = WAVEFORM_WINDOW * queued_blocks.min(125) as u32;
+        let estimate = now.checked_sub(age).unwrap_or(now);
+        let captured_at = if let Some(&(previous, _)) = self.points.back() {
+            let next = previous + WAVEFORM_WINDOW;
+            // Real acquisition/delivery gaps decay rather than extending the
+            // previous measurement through missing time; smaller variations
+            // in the driver's return time don't distort the sample spacing.
+            if estimate.saturating_duration_since(next) > WAVEFORM_STEP {
+                let gap_ms = estimate.saturating_duration_since(next).as_secs_f64() * 1000.;
+                self.envelope *= (-gap_ms / 150.).exp();
+                self.silent_frames = 0;
+                estimate
+            } else {
+                next
+            }
+        } else {
+            estimate
+        };
         let level = waveform_level(samples);
         if level == 0.0 {
             if self.silent_frames == 0 {
@@ -80,23 +107,74 @@ impl Waveform {
             let time_constant = if level > self.envelope { 40.0 } else { 150.0 };
             self.envelope = level + (self.envelope - level) * (-20.0 / time_constant as f64).exp();
         }
-        if self.envelope < 0.002 {
+        if self.envelope < WAVEFORM_QUIET {
             self.envelope = 0.0;
         }
-        self.pending = !self.pending;
-        if self.pending {
+        if self.points.len() == WAVEFORM_CAPACITY {
+            self.points.pop_front();
+        }
+        self.points.push_back((captured_at, self.envelope));
+
+        // Do not send a partially drained pre-roll as a current frame. Once
+        // the delayed head is covered, publish at most once per 20 ms source
+        // window: a half-bar interpolation at the intermediate times moves
+        // the wider history smoothly without creating another timer or input.
+        if age > WAVEFORM_DELAY {
             return None;
         }
-        self.levels.rotate_left(1);
-        self.levels[WAVEFORM_BARS - 1] = self.envelope as f32;
         if self
             .last_emitted
-            .is_some_and(|previous| now.saturating_duration_since(previous) < WAVEFORM_STEP)
+            .is_some_and(|previous| now.saturating_duration_since(previous) < WAVEFORM_WINDOW)
         {
             return None;
         }
         self.last_emitted = Some(now);
-        Some(self.levels)
+        Some(self.history(now))
+    }
+
+    fn history(&self, now: Instant) -> [f32; WAVEFORM_BARS] {
+        std::array::from_fn(|index| {
+            now.checked_sub(WAVEFORM_DELAY + WAVEFORM_STEP * (WAVEFORM_BARS - 1 - index) as u32)
+                .map_or(0., |at| {
+                    let level = self.sample(at);
+                    if level < WAVEFORM_QUIET {
+                        0.
+                    } else {
+                        level as f32
+                    }
+                })
+        })
+    }
+
+    fn sample(&self, at: Instant) -> f64 {
+        let Some(&(first_time, first_level)) = self.points.front() else {
+            return 0.;
+        };
+        if at < first_time {
+            let fraction =
+                1. - first_time.duration_since(at).as_secs_f64() / WAVEFORM_WINDOW.as_secs_f64();
+            return first_level * fraction.clamp(0., 1.);
+        }
+        let decay = |level: f64, age: Duration| level * (-age.as_secs_f64() / 0.150).exp();
+        let (mut left_time, mut left_level) = (first_time, first_level);
+        for &(right_time, right_level) in self.points.iter().skip(1) {
+            if at <= right_time {
+                let span = right_time.duration_since(left_time);
+                if span > WAVEFORM_WINDOW + WAVEFORM_STEP {
+                    let start = right_time - WAVEFORM_WINDOW;
+                    if at < start {
+                        return decay(left_level, at.duration_since(left_time));
+                    }
+                    left_level = decay(left_level, start.duration_since(left_time));
+                    left_time = start;
+                }
+                let fraction = at.duration_since(left_time).as_secs_f64()
+                    / right_time.duration_since(left_time).as_secs_f64();
+                return left_level + (right_level - left_level) * fraction.clamp(0., 1.);
+            }
+            (left_time, left_level) = (right_time, right_level);
+        }
+        decay(left_level, at.duration_since(left_time))
     }
 }
 
@@ -427,69 +505,141 @@ mod tests {
         let mut meter = Waveform::default();
         for index in 0..20 {
             let now = start + Duration::from_millis(index * 20);
-            if let Some(levels) = meter.push(&[0; BLOCK], true, now) {
+            if let Some(levels) = meter.push(&[0; BLOCK], true, now, 0) {
                 assert_eq!(levels, [0.; WAVEFORM_BARS]);
             }
         }
-        assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(400))
-            .is_none());
+        // A fixed 40 ms presentation delay; the capture data itself isn't delayed.
+        assert_eq!(
+            meter.push(&[10000; BLOCK], true, start + Duration::from_millis(400), 0),
+            Some([0.; WAVEFORM_BARS])
+        );
+        assert_eq!(
+            meter.push(&[10000; BLOCK], true, start + Duration::from_millis(420), 0),
+            Some([0.; WAVEFORM_BARS])
+        );
         let first = meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(420))
+            .push(&[10000; BLOCK], true, start + Duration::from_millis(440), 0)
             .unwrap();
         assert!(first[..31].iter().all(|level| *level == 0.));
         assert!(first[31] > 0. && first[31] < 1.);
-        assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(440))
-            .is_none());
+        let intermediate = meter
+            .push(&[10000; BLOCK], true, start + Duration::from_millis(460), 0)
+            .unwrap();
         let second = meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(460))
+            .push(&[10000; BLOCK], true, start + Duration::from_millis(480), 0)
             .unwrap();
         assert_eq!(second[30], first[31]);
-        assert!(second[31] > first[31]);
-        for index in 24..110 {
-            meter.push(&[0; BLOCK], true, start + Duration::from_millis(index * 20));
+        assert!(second[31] > intermediate[31]);
+        assert!(intermediate[31] > first[31]);
+        for index in 25..110 {
+            meter.push(
+                &[0; BLOCK],
+                true,
+                start + Duration::from_millis(index * 20),
+                0,
+            );
         }
-        assert_eq!(meter.levels, [0.; WAVEFORM_BARS]);
+        assert_eq!(
+            meter.history(start + Duration::from_millis(2180)),
+            [0.; WAVEFORM_BARS]
+        );
     }
 
     #[test]
-    fn waveform_throttles_bursts_and_resets_when_hidden_or_stalled() {
+    fn waveform_queued_pre_roll_matches_real_time_history_without_emission_burst() {
+        let start = Instant::now() + Duration::from_secs(3);
+        let count = 48;
+        let end = start + WAVEFORM_WINDOW * (count - 1) as u32;
+        let mut live = Waveform::default();
+        let mut queued = Waveform::default();
+        let mut emitted = vec![];
+        // Two synthetic syllables at different levels with silence between.
+        for index in 0..count {
+            let block = [match index {
+                10..=15 => 1200,
+                28..=33 => 6000,
+                _ => 0,
+            }; BLOCK];
+            live.push(&block, true, start + WAVEFORM_WINDOW * index as u32, 0);
+            if let Some(frame) = queued.push(&block, true, end, count - index - 1) {
+                assert!(
+                    count - index - 1 <= 2,
+                    "never publish a partially drained pre-roll"
+                );
+                emitted.push(frame);
+            }
+        }
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(queued.points.len(), count);
+        assert_eq!(queued.points, live.points);
+        assert_eq!(emitted[0], live.history(end));
+        assert!(emitted[0].iter().any(|level| *level > 0.));
+    }
+
+    #[test]
+    fn waveform_read_jitter_preserves_measurements_and_bounded_update_cadence() {
+        let start = Instant::now();
+        let jitter = [0, 5, 1, 6, 2, 7, 3, 0];
+        let mut meter = Waveform::default();
+        let mut emitted = vec![];
+        for index in 0..64 {
+            let now =
+                start + Duration::from_millis(index as u64 * 20 + jitter[index % jitter.len()]);
+            if meter
+                .push(&[if index % 8 < 3 { 3000 } else { 0 }; BLOCK], true, now, 0)
+                .is_some()
+            {
+                emitted.push(now);
+            }
+        }
+        assert_eq!(meter.points.len(), 64);
+        assert!(meter
+            .points
+            .iter()
+            .enumerate()
+            .all(|(i, (at, _))| *at == start + WAVEFORM_WINDOW * i as u32));
+        assert!(emitted.len() >= 32);
+        assert!(emitted.windows(2).all(|pair| {
+            let span = pair[1].duration_since(pair[0]);
+            span >= WAVEFORM_WINDOW && span <= Duration::from_millis(47)
+        }));
+    }
+
+    #[test]
+    fn waveform_gap_decays_and_hidden_or_stalled_capture_clears_history() {
         let start = Instant::now();
         let mut meter = Waveform::default();
-        assert!(meter.push(&[10000; BLOCK], true, start).is_none());
-        assert!(meter.push(&[10000; BLOCK], true, start).is_some());
-        for _ in 0..80 {
-            assert!(meter
-                .push(&[10000; BLOCK], true, start + Duration::from_millis(39))
-                .is_none());
+        for index in 0..5 {
+            meter.push(&[10000; BLOCK], true, start + WAVEFORM_WINDOW * index, 0);
         }
+        let before = meter.sample(start + Duration::from_millis(80));
+        meter.push(&[10000; BLOCK], true, start + Duration::from_millis(280), 0);
+        let gap = meter.sample(start + Duration::from_millis(180));
+        assert!(
+            gap > 0. && gap < before * 0.55,
+            "a gap isn't sustained speech"
+        );
         assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(40))
+            .push(
+                &[10000; BLOCK],
+                false,
+                start + Duration::from_millis(300),
+                0
+            )
             .is_none());
-        assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(40))
-            .is_some());
-        for _ in 0..100 {
-            assert!(meter
-                .push(&[10000; BLOCK], false, start + Duration::from_millis(41))
-                .is_none());
-        }
-        assert_eq!(meter.levels, [0.; WAVEFORM_BARS]);
+        assert!(meter.points.is_empty());
         assert!(meter.last_frame.is_none());
-        assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(50))
-            .is_none());
-        assert!(meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(70))
-            .is_some());
-        assert!(meter
-            .push(&[0; BLOCK], true, start + Duration::from_millis(500))
-            .is_none());
-        let levels = meter
-            .push(&[0; BLOCK], true, start + Duration::from_millis(520))
-            .unwrap();
-        assert_eq!(levels, [0.; WAVEFORM_BARS]);
+        assert_eq!(
+            meter.push(&[0; BLOCK], true, start + Duration::from_millis(320), 0),
+            Some([0.; WAVEFORM_BARS])
+        );
+        meter.push(&[10000; BLOCK], true, start + Duration::from_millis(340), 0);
+        assert_eq!(
+            meter.push(&[0; BLOCK], true, start + Duration::from_millis(800), 0),
+            Some([0.; WAVEFORM_BARS])
+        );
+        assert_eq!(meter.points.len(), 1);
     }
 
     #[test]

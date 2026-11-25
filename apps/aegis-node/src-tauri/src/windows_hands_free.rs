@@ -131,8 +131,14 @@ impl Shared {
         samples: &[i16],
         status: &'static str,
         generation: u64,
+        queued_blocks: usize,
     ) {
-        if let Some(levels) = waveform.push(samples, self.waveform_visible(), Instant::now()) {
+        if let Some(levels) = waveform.push(
+            samples,
+            self.waveform_visible(),
+            Instant::now(),
+            queued_blocks,
+        ) {
             let _ = self.app.emit_to(
                 "main",
                 "aegis-windows-voice-waveform",
@@ -477,7 +483,7 @@ fn cycle(
         let status = if first { "capturing" } else { "continuation" };
         let samples = loop {
             let block = mic.read(cancel)?;
-            shared.publish_waveform(&mut waveform, &block, status, generation);
+            shared.publish_waveform(&mut waveform, &block, status, generation, mic.pending());
             match endpoint.push(&block) {
                 Capture::More => {}
                 Capture::Empty => return Ok(()),

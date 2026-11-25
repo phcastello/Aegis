@@ -333,6 +333,12 @@ try {
   console.log('Battery UI: three modes, explicit silent study, active/recovery controls, manual finish, visible-only polling and signed device comparisons PASS (mock IPC)');
   console.log('Hands-free UI: initial failure, accessible retry, setup without prerequisites/backend, stale state, recovery, serialized events and unmount PASS (mock IPC; no native ACL claim)');
   const desktop = await context.newPage();
+  const waveformConversation = { id: 'waveform-fixture', title: 'Conversa para medir o layout',
+    createdAt: '2026-11-25T00:00:00Z', updatedAt: '2026-11-25T00:00:00Z', messageCount: 0, messages: [] };
+  await desktop.route('**/api/chat/conversations?*', route => route.fulfill({
+    json: { items: [waveformConversation], hasMore: false }
+  }));
+  await desktop.route('**/api/chat/conversations/waveform-fixture', route => route.fulfill({ json: waveformConversation }));
   await desktop.goto(origin + '?windows');
   const indicator = desktop.locator('.chat-header .desktop-voice-indicator');
   await desktop.waitForFunction(() => window.hfFixture.calls.some(c => c.operation === 'state'));
@@ -374,8 +380,58 @@ try {
   assert.notEqual(fill, 'none');
   await desktop.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
   await desktop.setViewportSize({ width: 1180, height: 800 });
+  await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
+  const sidebar = desktop.locator('#conversation-sidebar');
+  await sidebar.getByRole('button', { name: 'Fechar histórico', exact: true }).click();
+  await historyTrigger.waitFor({ state: 'visible' });
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
-  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png` });
+  const wideIndicator = await indicator.boundingBox();
+  const wideMeter = await meter.boundingBox();
+  const frame = await desktop.locator('.chat-panel').boundingBox();
+  assert.ok(wideIndicator && wideMeter && frame && wideIndicator.width > frame.width * .8 && wideMeter.width > frame.width * .7,
+    'microphone waveform occupies the available horizontal chat header instead of a small card');
+  assert.equal(wideMeter.height, 40, 'the input waveform grows vertically as well');
+  const wideBars = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
+  assert.ok(wideBars[31].x - wideBars[0].x > wideMeter.width * .8, 'the 32 measured bars span the meter width');
+  assert.ok(wideBars.every(bar => bar.width <= 8.01), 'wide layouts never stretch bars into blocks');
+  assert.equal(await indicator.evaluate(el => getComputedStyle(el.closest('.chat-voice-controls')).pointerEvents), 'none',
+    'the expanded area does not intercept clicks');
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png`, animations: 'disabled' });
+  // A real desktop sidebar occupies a column. Opening it, selecting a conversation and
+  // starting another one do not hide the active microphone display or block controls.
+  await historyTrigger.click();
+  await sidebar.getByRole('button', { name: waveformConversation.title, exact: true }).click();
+  const menuTrigger = desktop.getByRole('button', { name: 'Menu da conversa', exact: true });
+  await menuTrigger.waitFor({ state: 'visible' });
+  const sidebarBounds = await sidebar.boundingBox();
+  const chatBounds = await desktop.locator('.chat-panel').boundingBox();
+  const inputBounds = await indicator.boundingBox();
+  const menuBounds = await menuTrigger.boundingBox();
+  assert.ok(sidebarBounds && chatBounds && inputBounds && menuBounds
+    && inputBounds.x >= sidebarBounds.x + sidebarBounds.width
+    && inputBounds.x + inputBounds.width <= menuBounds.x
+    && inputBounds.width > chatBounds.width * .75,
+    'expanded microphone layout stays inside the chat column and leaves the conversation menu free');
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing-sidebar.png`, animations: 'disabled' });
+  await menuTrigger.click();
+  await desktop.getByRole('menuitem', { name: 'Informações', exact: true }).waitFor();
+  await desktop.keyboard.press('Escape');
+  await desktop.setViewportSize({ width: 320, height: 844 });
+  await desktop.locator('#conversation-sidebar[aria-hidden="true"]').waitFor({ state: 'attached' });
+  const activeNarrowBounds = await indicator.boundingBox();
+  const activeNavBounds = await historyTrigger.boundingBox();
+  const activeMenuBounds = await menuTrigger.boundingBox();
+  assert.ok(activeNarrowBounds && activeNavBounds && activeMenuBounds
+    && activeNarrowBounds.x >= activeNavBounds.x + activeNavBounds.width
+    && activeNarrowBounds.x + activeNarrowBounds.width < activeMenuBounds.x,
+    'even a narrow active conversation leaves history and menu visible');
+  await desktop.setViewportSize({ width: 1180, height: 800 });
+  await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
+  await sidebar.getByRole('button', { name: 'Nova conversa', exact: true }).click();
+  await menuTrigger.waitFor({ state: 'detached' });
+  await indicator.and(desktop.locator('[data-phase="capturing"]')).waitFor();
+  await sidebar.getByRole('button', { name: 'Fechar histórico', exact: true }).click();
   await desktop.setViewportSize({ width: 390, height: 844 });
   await desktop.locator('#conversation-sidebar[aria-hidden="true"]').waitFor({ state: 'attached' });
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
@@ -384,6 +440,9 @@ try {
   const box = await indicator.boundingBox();
   const navBox = await historyTrigger.boundingBox();
   assert.ok(box && navBox && box.x >= navBox.x + navBox.width, 'indicator does not cover navigation in narrow layout');
+  const narrowMeter = await meter.boundingBox();
+  assert.ok(narrowMeter && box && narrowMeter.width > box.width * .8 && narrowMeter.width >= 100,
+    'the caption stacks at narrow widths and leaves generous room for the microphone');
   assert.equal(await desktop.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await desktop.setViewportSize({ width: 390, height: 844 });
   await desktop.evaluate(() => window.hfFixture.voiceEvent('continuation'));

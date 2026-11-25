@@ -29,10 +29,17 @@ let stopState: UnlistenFn | undefined;
 let stopWave: UnlistenFn | undefined;
 
 function barHeight(level: number) {
-  return level > 0.002 ? 1.3 + level * (inputPhase.value ? 28.8 : 19.5) : 0;
+  return level > 0.002 ? 1.3 + level * (inputPhase.value ? 34.7 : 19.5) : 0;
 }
 const slotWidth = computed(() => 140.8 / (inputPhase.value ? barCount : PlaybackSpectrumDisplay.bandCount));
-const barWidth = computed(() => inputPhase.value ? 2 : 3.2);
+const barWidth = computed(() => inputPhase.value ? 4 : 3.2);
+
+function barPosition(index: number) {
+  // Input history uses actual pixel height and relative horizontal positions.
+  // Keep the 32 real samples but never stretch their thickness with the viewport.
+  return inputPhase.value ? `${6 + (index + .5) * (88 / barCount)}%`
+    : 9.6 + (index + .5) * slotWidth.value - barWidth.value / 2;
+}
 
 function validGeneration(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -116,15 +123,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <span class="desktop-voice-status" role="status" aria-atomic="true">
+  <span class="desktop-voice-status" :data-expanded="label && inputPhase ? 'input' : undefined" role="status" aria-atomic="true">
     <span v-if="label" class="desktop-voice-indicator" :data-phase="status">
       <span>{{ label }}</span>
       <template v-if="meterPhase">
-        <svg class="desktop-voice-waveform" :data-meter="inputPhase ? 'input' : 'output'" viewBox="0 0 160 36" aria-hidden="true" preserveAspectRatio="none">
-          <line v-if="!levels.length" class="desktop-voice-baseline" x1="9.6" :y1="inputPhase ? 18 : 32" x2="150.4" :y2="inputPhase ? 18 : 32" />
+        <svg class="desktop-voice-waveform" :data-meter="inputPhase ? 'input' : 'output'" :viewBox="inputPhase ? undefined : '0 0 160 36'" aria-hidden="true" preserveAspectRatio="none">
+          <line v-if="!levels.length" class="desktop-voice-baseline" :x1="inputPhase ? '6%' : 9.6" :y1="inputPhase ? 20 : 32" :x2="inputPhase ? '94%' : 150.4" :y2="inputPhase ? 20 : 32" />
           <rect v-for="(level, index) in levels" :key="index"
-            :x="9.6 + (index + .5) * slotWidth - barWidth / 2"
-            :y="inputPhase ? 18 - barHeight(level) / 2 : 32 - barHeight(level)"
+            :x="barPosition(index)"
+            :y="inputPhase ? 20 - barHeight(level) / 2 : 32 - barHeight(level)"
             :width="barWidth" :height="barHeight(level)" :rx="barWidth / 2"
             :opacity="level > 0.002 ? 0.4 + 0.6 * level : 0" />
         </svg>
@@ -160,6 +167,23 @@ onBeforeUnmount(() => {
   line-height: 1.4;
   white-space: nowrap;
 }
+.desktop-voice-status[data-expanded="input"] {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.desktop-voice-status[data-expanded="input"] .desktop-voice-indicator {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  flex-direction: row;
+  gap: 14px;
+}
+.desktop-voice-status[data-expanded="input"] .desktop-voice-indicator > span {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .desktop-voice-state-icon { width: 34px; height: 34px; color: var(--accent-strong); }
 .desktop-voice-thoughts circle { animation: 10334ms linear infinite; }
 .desktop-voice-thoughts circle:nth-child(1) { animation-name: aegis-thought-dot-1; }
@@ -167,15 +191,45 @@ onBeforeUnmount(() => {
 .desktop-voice-thoughts circle:nth-child(3) { animation-name: aegis-thought-dot-3; }
 @media (prefers-reduced-motion: reduce) { .desktop-voice-thoughts circle { animation: none; } }
 .desktop-voice-waveform { display: block; width: 100%; height: 34px; fill: var(--accent); }
+.desktop-voice-waveform[data-meter="input"] {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 40px;
+}
+.desktop-voice-waveform[data-meter="input"] rect {
+  width: clamp(1px, 1.35%, 8px);
+  transform-box: fill-box;
+  transform: translateX(-50%);
+}
 .desktop-voice-baseline { stroke: var(--accent); stroke-opacity: .24; stroke-width: 1; }
 @media (max-width: 520px) {
   .desktop-voice-indicator { width: 134px; padding: 3px 6px; font-size: .75rem; }
   .desktop-voice-waveform { height: 26px; }
+  .desktop-voice-status[data-expanded="input"] .desktop-voice-indicator { flex-direction: column; gap: 0; }
+  .desktop-voice-waveform[data-meter="input"] { flex: 0 0 40px; height: 40px; }
   .desktop-voice-state-icon { width: 26px; height: 26px; }
 }
 @media (forced-colors: active) {
   .desktop-voice-waveform { fill: CanvasText; }
   .desktop-voice-waveform rect { opacity: 1; }
   .desktop-voice-baseline { stroke: CanvasText; stroke-opacity: 1; }
+}
+</style>
+
+<!-- The voice-status slot exists only in the Windows app. Expand its parent only
+     during input, leaving the shared chat and other phases unchanged. -->
+<style>
+.chat-header > .chat-voice-controls:has(> .desktop-voice-status[data-expanded="input"]) {
+  left: max(72px, calc(env(safe-area-inset-left) + 56px));
+  pointer-events: none;
+}
+.chat-header > .chat-voice-controls:has(> .desktop-voice-status[data-expanded="input"]) > :not(.desktop-voice-status) {
+  flex-shrink: 0;
+  pointer-events: auto;
+}
+@media (min-width: 901px) {
+  .hideout-shell--sidebar-open .chat-header > .chat-voice-controls:has(> .desktop-voice-status[data-expanded="input"]) {
+    left: 16px;
+  }
 }
 </style>
