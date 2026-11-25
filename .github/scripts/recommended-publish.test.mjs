@@ -139,11 +139,24 @@ test('rollback is rebuilt under a new version/code with exact restored source re
 test('promotion admits only successful main manual v2 runs with both complete platforms', async () => {
   const plan = { schema: 2, runId: '123', controlSha: 'b'.repeat(40), platform: 'both' };
   const run = { event: 'workflow_dispatch', head_branch: 'main', conclusion: 'success', path: '.github/workflows/aegis-native-preview.yml',
-    head_repository: { full_name: 'phcastello/Aegis' }, head_sha: plan.controlSha };
+    head_repository: { full_name: 'phcastello/Aegis' }, head_sha: plan.controlSha,run_attempt:1 };
   const state = { api: async () => run, read: async () => ({ ledger: { reservations: [plan] } }) };
   assert.deepEqual(await verifyPromotion('123', { state }), plan);
   for (const [field, value] of [['head_branch', 'fix/untrusted'], ['event', 'push'], ['conclusion', 'failure'], ['head_sha', 'c'.repeat(40)]]) {
     const previous = run[field]; run[field] = value; await assert.rejects(verifyPromotion('123', { state })); run[field] = previous;
   }
+  run.run_attempt=2;await assert.rejects(verifyPromotion('123',{state}),/exact reserved workflow attempt/);run.run_attempt=1;
   plan.platform = 'android'; await assert.rejects(verifyPromotion('123', { state }));
+});
+test('promotion of a new stable retry requires the signed attempt and rejects earlier or later artifacts', async()=>{
+  const plan={schema:2,runId:'123',controlSha:'b'.repeat(40),platform:'both',version:'0.8.0',runAttempt:2};
+  const run={event:'workflow_dispatch',head_branch:'main',conclusion:'success',path:'.github/workflows/aegis-native-preview.yml',head_repository:{full_name:'phcastello/Aegis'},head_sha:plan.controlSha,run_attempt:2};
+  const signer={name:'sign',head_sha:plan.controlSha,status:'completed',conclusion:'success'};
+  const state={api:async path=>path.includes('/attempts/2/jobs')?{jobs:[signer]}:run,read:async()=>({ledger:{reservations:[plan]}})};
+  assert.deepEqual(await verifyPromotion('123',{state}),plan);
+  for(const attempt of [1,3]) {run.run_attempt=attempt;await assert.rejects(verifyPromotion('123',{state}),/exact reserved workflow attempt/);}
+  run.run_attempt=2;
+  signer.conclusion='failure';await assert.rejects(verifyPromotion('123',{state}),/did not complete trusted signing/);signer.conclusion='success';
+  signer.name='not-sign';await assert.rejects(verifyPromotion('123',{state}),/must contain the trusted signing job/);signer.name='sign';
+  signer.head_sha='c'.repeat(40);await assert.rejects(verifyPromotion('123',{state}));
 });

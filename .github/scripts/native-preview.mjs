@@ -20,11 +20,38 @@ export function parameters({ sha, branch, number, platform }) {
   return { sha, branch, number: Number(number), platform };
 }
 
-export function assertTrustedDispatch(context) {
+export function assertTrustedDispatch(context, { stable = false } = {}) {
   assert.equal(context.eventName, 'workflow_dispatch', 'Preview requires explicit manual dispatch.');
   assert.equal(context.ref, 'refs/heads/main', 'Run the trusted workflow from main.');
   assert.equal(context.workflowRef, `${context.repository}/.github/workflows/aegis-native-preview.yml@refs/heads/main`, 'Untrusted workflow reference.');
-  assert.equal(Number(context.attempt ?? 1), 1, 'Start a new run with a new preview number; reruns cannot replace a signed version.');
+  const attempt = Number(context.attempt ?? 1);
+  assert.ok(Number.isSafeInteger(attempt) && attempt >= 1, 'Invalid workflow run attempt.');
+  assert.ok(attempt === 1 || stable, 'Start a new run with a new preview number; reruns cannot replace a signed version.');
+  return attempt;
+}
+
+const dispatchContext = () => ({ eventName: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
+  workflowRef: process.env.GITHUB_WORKFLOW_REF, repository: process.env.GITHUB_REPOSITORY, attempt: process.env.GITHUB_RUN_ATTEMPT });
+
+export function reservedRunAttempt(plan) {
+  const attempt = plan.runAttempt ?? 1; // Existing immutable reservations predate this field.
+  assert.ok(Number.isSafeInteger(attempt) && attempt >= 1, 'Invalid reserved run attempt.');
+  assert.ok(attempt === 1 || parseDistributionVersion(plan.version).stable, 'Only stable pre-reservation retries are supported.');
+  return attempt;
+}
+
+export function assertPlanAttempt(plan, context = dispatchContext(), runId = process.env.GITHUB_RUN_ID, controlSha = process.env.GITHUB_SHA) {
+  const attempt = assertTrustedDispatch(context, { stable: parseDistributionVersion(plan.version).stable });
+  assert.equal(plan.repository, context.repository);
+  assert.equal(plan.runId, runId, 'Build/sign run differs from reservation.');
+  assert.equal(plan.controlSha, controlSha, 'Build/sign control SHA differs from reservation.');
+  assert.equal(reservedRunAttempt(plan), attempt, 'Reservation belongs to a different attempt; never rebuild or re-sign it.');
+}
+
+export async function verifyReservedAttempt(plan, { state = new DistributionState(), context = dispatchContext(), runId = process.env.GITHUB_RUN_ID, controlSha = process.env.GITHUB_SHA } = {}) {
+  assertPlanAttempt(plan, context, runId, controlSha);
+  const snapshot = await state.read();
+  assert.deepEqual(snapshot.ledger.reservations.find(item => item.runId === runId), plan, 'Signing requires the exact current durable reservation.');
 }
 
 export function assertEnvironment(environment, policies) {
@@ -80,6 +107,46 @@ async function pages(path, field) {
     if (values.length < 100) return result;
   }
 }
+
+// The provider keeps the original dispatch, SHA and ref on reruns. Only an
+// unreserved stable acceptance may use those immutable results. The ledger
+// is authoritative even if a previous plan failed after allocating its code.
+async function assertStableRetry({ snapshot, version, attempt, reserve }) {
+  const runId = process.env.GITHUB_RUN_ID;
+  const controlSha = process.env.GITHUB_SHA;
+  assert.match(runId ?? '', /^[1-9]\d*$/);
+  assert.match(controlSha ?? '', /^[a-f0-9]{40}$/);
+  assert.ok(!snapshot.ledger.reservations.some(item => item.runId === runId || item.version === version), 'Stable rerun already reserved this run or version; never replace signed bytes.');
+  const run = await api(`actions/runs/${runId}`);
+  assert.equal(String(run.id), runId);
+  assert.equal(run.run_attempt, attempt, 'Workflow API reports a different current attempt.');
+  assert.equal(run.event, 'workflow_dispatch');
+  assert.equal(run.head_branch, 'main');
+  assert.equal(run.head_sha, controlSha);
+  assert.equal(run.path, '.github/workflows/aegis-native-preview.yml');
+  assert.equal(run.head_repository?.full_name, process.env.GITHUB_REPOSITORY);
+  assert.equal(run.actor?.login, process.env.GITHUB_ACTOR);
+  assert.equal(run.triggering_actor?.login, process.env.GITHUB_TRIGGERING_ACTOR);
+  await assertAuthorizedActor(process.env.GITHUB_TRIGGERING_ACTOR);
+  for (let prior = 1; prior < attempt; prior++) {
+    const jobs = await pages(`actions/runs/${runId}/attempts/${prior}/jobs`, 'jobs');
+    assert.ok(jobs.length > 0, 'Missing earlier attempt evidence.');
+    // GitHub materializes skipped/cancelled downstream jobs with an empty
+    // steps array. A completed plan or any executed build/sign is not retryable.
+    assert.ok(!jobs.some(job => job.name === 'plan' && (job.conclusion === 'success' ||
+      job.steps?.some(step => step.name === 'Verify protected signing environment, source and version reservation' && step.conclusion === 'success'))), 'An earlier attempt already reserved the version.');
+    assert.ok(!jobs.some(job => /^(?:build(?: \(|$)|sign$)/.test(job.name) &&
+      (job.conclusion === 'success' || !Array.isArray(job.steps) || job.steps.length > 0)), 'An earlier attempt reached build/signing.');
+  }
+  if (reserve) {
+    const jobs = await pages(`actions/runs/${runId}/attempts/${attempt}/jobs`, 'jobs');
+    const gates = jobs.filter(job => job.name === 'acceptance / Aegis Release Acceptance result');
+    assert.equal(gates.length, 1, 'Retry requires the complete release acceptance gate in this attempt.');
+    assert.equal(gates[0].head_sha, controlSha);
+    assert.equal(gates[0].status, 'completed');
+    assert.equal(gates[0].conclusion, 'success', 'Retry release acceptance did not pass.');
+  }
+}
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -129,11 +196,10 @@ export async function publishedManifest(version) {
 }
 
 export async function resolvePreview({ reserve = true } = {}) {
-  assertTrustedDispatch({ eventName: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
-    workflowRef: process.env.GITHUB_WORKFLOW_REF, repository: process.env.GITHUB_REPOSITORY, attempt: process.env.GITHUB_RUN_ATTEMPT });
-  await assertAuthorizedActor(process.env.GITHUB_ACTOR);
   const version = process.env.PREVIEW_VERSION ?? '';
   const requested = parseDistributionVersion(version);
+  const runAttempt = assertTrustedDispatch(dispatchContext(), { stable: requested.stable });
+  await assertAuthorizedActor(process.env.GITHUB_ACTOR);
   assert.equal(requested.kind, process.env.DISTRIBUTION_KIND ?? 'normal', 'Version does not match the requested distribution kind.');
   const args = parameters({ sha: process.env.PREVIEW_SHA, branch: process.env.PREVIEW_BRANCH,
     number: requested.preview ?? 1, platform: process.env.PREVIEW_PLATFORM });
@@ -169,6 +235,7 @@ export async function resolvePreview({ reserve = true } = {}) {
   const [releases, runs] = await Promise.all([pages('releases'), pages('actions/workflows/aegis-native-preview.yml/runs', 'workflow_runs')]);
   const state = new DistributionState();
   const snapshot = await state.read();
+  if (runAttempt > 1) await assertStableRetry({ snapshot, version, attempt: runAttempt, reserve });
   let deployment;
   if (process.env.PUBLISH_DEV === 'true') {
     assert.equal(requested.kind, 'normal');
@@ -213,7 +280,7 @@ export async function resolvePreview({ reserve = true } = {}) {
   }
   const identity = { schema: 2, ...args, version, kind: requested.kind, sourceCommit: args.sha, sourceVersion,
     compatibility: { api: 1, nodeData: 1 }, ...(deployment ? { deployment } : {}), ...recovery, publishedAt: new Date().toISOString(), repository: process.env.GITHUB_REPOSITORY,
-    runId: process.env.GITHUB_RUN_ID, controlSha: process.env.GITHUB_SHA,
+    runId: process.env.GITHUB_RUN_ID, runAttempt, controlSha: process.env.GITHUB_SHA,
     limits: deployment ? 'Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.'
       : 'Build/signing only; publication requires explicit promotion. No backend deployment or physical acceptance.' };
   let plan;
@@ -235,6 +302,7 @@ export async function resolvePreview({ reserve = true } = {}) {
   for (const name of ['sha', 'version', 'versionCode']) output(name, plan[name]);
   output('sourceVersion', sourceVersion);
   output('stable', String(requested.stable));
+  output('runAttempt', runAttempt);
   output('matrix', JSON.stringify({ include: [
     ...(args.platform !== 'windows' ? [{ platform: 'Android-arm64', android: 'true', os: 'ubuntu-24.04' }] : []),
     ...(args.platform !== 'android' ? [{ platform: 'Windows-x86_64', android: 'false', os: 'windows-2022' }] : [])
@@ -268,6 +336,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'resolve') await resolvePreview();
   else if (command === 'preflight-stable') await resolvePreview({ reserve: false });
+  else if (command === 'verify-attempt') assertPlanAttempt(json(args[0]));
+  else if (command === 'verify-reservation-attempt') await verifyReservedAttempt(json(args[0]));
   else if (command === 'prepare') prepareCandidate(resolve(args[0]), resolve(args[1]), args[2], args[3]);
   else if (command === 'manifest') manifest(resolve(args[0]), json(args[1]), args[2], args[3] === 'signed');
   else if (command === 'verify-input') verifyInput(resolve(args[0]), json(args[1]), args[2]);

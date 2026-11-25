@@ -114,6 +114,7 @@ jobs:
       versionCode: ${{ steps.plan.outputs.versionCode }}
       matrix: ${{ steps.plan.outputs.matrix }}
       stable: ${{ steps.plan.outputs.stable }}
+      runAttempt: ${{ steps.plan.outputs.runAttempt }}
       sourceVersion: ${{ steps.plan.outputs.sourceVersion }}
     steps:
       - name: Require registered trusted main workflow
@@ -127,7 +128,11 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/main
           test "$WORKFLOW_REF" = "$EXPECTED_WORKFLOW"
-          test "$GITHUB_RUN_ATTEMPT" = 1
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+            test "$KIND" = normal
+            test "$PUBLISH_DEV" != true
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          fi
           if [ "$PUBLISH_DEV" = true ]; then
             test "$PLATFORM" = both
             test "$KIND" = normal
@@ -178,6 +183,10 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Build only in the attempt that allocated the immutable reservation
+        env:
+          RESERVED_ATTEMPT: ${{ needs.plan.outputs.runAttempt }}
+        run: test "$GITHUB_RUN_ATTEMPT" = "$RESERVED_ATTEMPT"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -197,6 +206,7 @@ jobs:
           PREVIEW_VERSION: ${{ needs.plan.outputs.version }}
           PREVIEW_VERSION_CODE: ${{ needs.plan.outputs.versionCode }}
         run: |
+          node trusted/.github/scripts/native-preview.mjs verify-attempt preview-plan/preview.json
           test "$(git rev-parse HEAD)" = "$PREVIEW_SHA"
           node trusted/.github/scripts/native-preview.mjs prepare "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/trusted" "$PREVIEW_VERSION" "$PREVIEW_VERSION_CODE"
       # Only main's reviewed composite action controls toolchain setup/caches.
@@ -204,6 +214,8 @@ jobs:
         with:
           android: ${{ matrix.android }}
           cache-variant: preview-build
+          gradle-cache-variant: ${{ needs.plan.outputs.stable == 'true' && 'stable-build-arm64' || 'preview-arm64' }}
+          gradle-cache-seed-variant: ${{ needs.plan.outputs.stable == 'true' && 'arm64-full' || '' }}
       - name: Essential interface and distribution contracts
         working-directory: apps/aegis-node
         run: npm run check && npm test && npm run test:release
@@ -259,8 +271,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - name: Never replace a previously signed preview on rerun
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
+      - name: Never rebuild or sign a reservation in another workflow attempt
+        env:
+          RESERVED_ATTEMPT: ${{ needs.plan.outputs.runAttempt }}
+        run: test "$GITHUB_RUN_ATTEMPT" = "$RESERVED_ATTEMPT"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
@@ -272,6 +286,10 @@ jobs:
         with:
           name: Preview-plan-${{ github.run_id }}
           path: preview-plan
+      - name: Verify current attempt against durable reservation before any key is available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/native-preview.mjs verify-reservation-attempt preview-plan/preview.json
       - if: inputs.platform != 'windows'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:

@@ -120,7 +120,8 @@ códigos novos. Não editar códigos de APKs históricos.
 
 A branch de estado `aegis-distribution` contém `ledger.json` e, após primeira
 publicação, `latest.json`. Cada reserva é adicionada ao ledger com versão,
-código, SHA, run, controle confiável e procedência. Não há serviço ou banco novo.
+código, SHA, run, tentativa do run (`runAttempt`), controle confiável e procedência.
+Reservas históricas sem esse campo pertencem à tentativa 1. Não há serviço ou banco novo.
 O piso inclui releases e runs admitidos anteriores, inclusive o primeiro run.
 
 A reserva é gravada **antes** da compilação. Na distribuição estável, a fonte
@@ -128,12 +129,24 @@ já integrada à `main` e a elegibilidade da versão são verificadas em um job
 somente de leitura; a matriz completa de aceite testa esse SHA exato antes
 de reservar. Se o aceite falhar ou for cancelado, nenhuma versão/código é
 consumido: um novo run pode verificar novamente a mesma versão ainda livre.
+Também é possível reexecutar somente os jobs que falharam de uma **estável
+sem reserva** (`gh run rerun <run-id> --failed --repo phcastello/Aegis`),
+preservando os jobs aprovados do SHA imutável. O
+[GitHub mantém o SHA e a ref originais](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+na reexecução. O controle confere a identidade do run, os atores original e
+da reexecução, a ausência de reserva e de build/assinatura em tentativas
+anteriores, e exige o gate completo de aceite aprovado na tentativa que vai
+reservar. Preflight continua somente leitura. Previews e recuperações não
+podem usar reexecuções; precisam de uma nova distribuição.
 O plano confiável revalida fonte e ledger após o aceite, e só então reserva a
 estável antes de compilar. Previews e recuperações continuam a reservar sem
 esse aceite completo. Uma falha após a reserva não devolve a versão nem o
-código. Nova tentativa de build usa nova distribuição;
-não reexecutar assinatura com o mesmo nome para produzir bytes diferentes.
-A promoção pode ser repetida com os mesmos artefatos assinados.
+código. Nova tentativa de build usa nova distribuição. Os jobs de build e
+assinatura só podem rodar na tentativa que alocou o plano; o assinador também
+compara o plano com a reserva durável antes de ter acesso às chaves. Isso impede
+que uma reexecução de jobs pule o plano e gere outros bytes com a mesma versão.
+A promoção pode ser repetida com os mesmos artefatos assinados, mas confere
+se o run de origem concluiu com sucesso na tentativa registrada.
 
 O contador avança a partir do maior código conhecido, preservando o slot
 histórico `999` das estáveis. Prereleases não o consomem; se esgotarem os códigos
@@ -392,10 +405,30 @@ serviço privilegiado nesta etapa.
 
 ### Resolução de dependências Android em CI
 
-Os runners Android efêmeros reaproveitam as dependências Gradle e a distribuição
-do wrapper pelo cache da ação oficial [setup-java](https://github.com/actions/setup-java#caching-packages-dependencies),
-indexado pelos arquivos Gradle, propriedades e versão do wrapper. Isso evita
-downloads repetidos conforme o [cache de dependências do Gradle](https://docs.gradle.org/current/userguide/dependency_caching.html).
+Os runners Android efêmeros usam Java 17 via `setup-java` e o cache oficial
+[actions/cache](https://github.com/actions/cache#usage), com versão da ação
+fixada por SHA. O cache do wrapper continua independente e indexado pelas suas
+propriedades. O cache de dependências contém somente os diretórios de módulos
+resolvidos (artefatos, metadados e recursos), sem o arquivo de lock e o estado de
+limpeza do diretório pai, conforme a [portabilidade do cache Gradle](https://docs.gradle.org/current/userguide/dependency_caching.html).
+Não guarda o keystore, propriedades pessoais do Gradle nem saídas dos builds.
+
+A chave de dependências distingue OS, arquitetura, JDK, wrapper e trabalho
+realizado: ARM64 completo, ARM64 focado em distribuição, framework por API
+(contratos ou aceite com medições idle), identidade WebView, build de preview
+e build estável. O fingerprint inclui arquivos Gradle, `buildSrc`, arquivos de
+lock/verificação, wrapper e manifests de dependências dos clientes, além dos
+workflows que determinam as tarefas. Um cache compatível anterior da mesma
+variante pode ser restaurado; quando a chave exata não existe, o novo cache é
+salvo apenas depois do sucesso do job. As APIs 26/35 com os mesmos contratos
+podem se servir de seed entre si, e o aceite com idle pode partir dos contratos
+da API 35. O ARM64 focado pode partir do ARM64 completo, jamais o inverso.
+O cache comum antigo de `setup-java`
+serve somente como seed de leitura na ausência de outro cache, com a mesma
+chave/path legados; não é regravado. O build estável pode aproveitar as
+dependências de um aceite ARM64 completo, mas não usa o cache de previews nem
+grava a chave do aceite. Cada build continua resolvendo e verificando as
+dependências pelo Gradle, sem modo offline nem alteração de repositórios.
 Uma falha de configuração do repositório de plugins por HTTP 429 do Maven
 Central foi observada durante a integração da v0.8.0.
 `retry-gradle.mjs` repete o mesmo comando somente se ele falhar e o log

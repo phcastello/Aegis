@@ -163,6 +163,7 @@ jobs:
         with:
           android: 'true'
           cache-variant: release-identity-x86_64
+          gradle-cache-variant: release-identity-x86_64
       - name: Prepare emulator target and KVM
         run: |
           rustup target add x86_64-linux-android
