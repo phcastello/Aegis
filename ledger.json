@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "highWaterMark": 8000041,
+  "highWaterMark": 8000042,
   "reservations": [
     {
       "schema": 2,
@@ -1534,6 +1534,36 @@
       "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
       "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
       "versionCode": 8000041
+    },
+    {
+      "schema": 2,
+      "sha": "c08ea5921c7ee851c9931c6ea204680a61ec705c",
+      "branch": "feat/v0.8.0-hands-free-windows-multino",
+      "number": 42,
+      "platform": "both",
+      "version": "0.8.0-unstable.42",
+      "kind": "normal",
+      "sourceCommit": "c08ea5921c7ee851c9931c6ea204680a61ec705c",
+      "sourceVersion": "0.8.0",
+      "compatibility": {
+        "api": 1,
+        "nodeData": 1
+      },
+      "deployment": {
+        "sourceCommit": "c08ea5921c7ee851c9931c6ea204680a61ec705c",
+        "backend": "c08ea5921c7ee851c9931c6ea204680a61ec705c",
+        "pwa": "c08ea5921c7ee851c9931c6ea204680a61ec705c",
+        "compatibility": {
+          "api": 1,
+          "nodeData": 1
+        }
+      },
+      "publishedAt": "2026-11-25T07:44:06.136Z",
+      "repository": "phcastello/Aegis",
+      "runId": "45570403345",
+      "controlSha": "8607dc009b20fda001f69b43e506b18bbfa837be",
+      "limits": "Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.",
+      "versionCode": 8000042
     }
   ],
   "recommended": {
