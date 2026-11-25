@@ -32,12 +32,13 @@ class NodeHandsFreeBargeInCaptureTest {
         val stopped=CountDownLatch(1);val releasing=CountDownLatch(1)
         var releaseGate:CountDownLatch?=null
         var stopGate:CountDownLatch?=null
+        var startGate:CountDownLatch?=null
         var silenced=false
         var takeSample:(Int,Short)->Short={_,sample->sample}
         var preprocess:(ShortArray)->Unit={}
         val starts=AtomicInteger();val stops=AtomicInteger();val closes=AtomicInteger()
         @Volatile var offset=0
-        override fun start(){starts.incrementAndGet()}
+        override fun start(){starts.incrementAndGet();startGate?.await()}
         override fun read(samples:ShortArray,offset:Int,count:Int):Int {
             proceed.await()
             if(stopped.count==0L)return -1
@@ -60,9 +61,9 @@ class NodeHandsFreeBargeInCaptureTest {
         volume:()->Int={8},resetEvidence:()->Unit={},speech:()->Boolean={true},
         result: (String, Int, Int) -> Unit = { _, _, _ -> },
         onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false },
-        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {}) =
+        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {}, beforePlayback:Boolean=false) =
         HandsFreeBargeInCapture(input,inspect,head,volume,resetEvidence,current,speech,{classifier},{input.clock.get()},
-            result, onAvailabilityChanged, voicePathReady, onCaptureSummary = onCaptureSummary)
+            result, onAvailabilityChanged, voicePathReady, onCaptureSummary = onCaptureSummary,beforePlayback=beforePlayback)
     private fun pcm(wav:ByteArray):ShortArray {
         val b=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);b.position(44)
         return ShortArray((wav.size-44)/2){b.short}
@@ -112,6 +113,53 @@ class NodeHandsFreeBargeInCaptureTest {
         assertTrue(capture.awaitClosed(500));capture.close()
         assertEquals(1,input.stops.get());assertEquals(1,input.closes.get())
         assertNull(capture.awaitCommand())
+    }
+
+    @Test fun processingInterruptsWithoutPlaybackReferenceAndRetainsAllOfShortSpeech() {
+        val quiet=List(12){frame(it%5+5)}
+        val speech=List(6){frame(1400+it)}
+        val tail=List(40){frame(0)}
+        val input=Input(flatten(quiet+speech+tail),AtomicLong(),73)
+        val accepted=CountDownLatch(1)
+        val listener=capture(input,head={error("processing_has_no_playback_head")},
+            inspect={_,_,_->error("processing_has_no_assistant_echo")},volume={error("processing_has_no_tts_volume")},
+            beforePlayback=true,voicePathReady={true},speech={accepted.countDown();true})
+        try {
+            assertTrue(listener.start());input.proceed.countDown();await(accepted)
+            val command=checkNotNull(listener.awaitCommand())
+            assertArrayEquals(flatten(quiet+speech+tail),pcm(command.wav))
+            assertTrue(listener.awaitClosed(1000))
+        }finally{listener.close()}
+    }
+
+    @Test fun processingRejectsCalibrationNoiseAndSeparatedTransientClicksWithoutPlayback() {
+        val stationary=List(20){frame(250+it%7)}
+        val clicks=List(12){listOf(frame(2200),frame(2200))+List(6){frame(250)}}.flatten()
+        val input=Input(flatten(stationary+clicks),AtomicLong())
+        val approvals=AtomicInteger()
+        val listener=capture(input,Classifier{true},head={null},beforePlayback=true,voicePathReady={true},
+            speech={approvals.incrementAndGet();true})
+        try {
+            assertTrue(listener.start());input.proceed.countDown();await(input.exhausted)
+            assertEquals(0,approvals.get())
+            assertNull(listener.awaitCommand())
+            assertTrue(listener.awaitClosed(1000))
+        }finally{listener.close()}
+    }
+
+    @Test fun processingStartupDoesNotWaitForMicrophoneAndRetiredListenerCannotAccept() {
+        val input=Input(flatten(List(12){frame(0)}+List(20){frame(1600)}),AtomicLong())
+        val ready=CountDownLatch(1);input.startGate=ready
+        val approvals=AtomicInteger()
+        val listener=capture(input,beforePlayback=true,voicePathReady={true},speech={approvals.incrementAndGet();true})
+        try {
+            assertTrue(listener.startAsync()) // Recorder start is still gated.
+            listener.close() // Playback won before the microphone was usable.
+            ready.countDown();input.proceed.countDown()
+            assertTrue(listener.awaitClosed(1000))
+            assertEquals(0,approvals.get());assertNull(listener.awaitCommand())
+            assertEquals(1,input.closes.get())
+        }finally{ready.countDown();listener.close()}
     }
     @Test fun externalMediaPreprocessingRunsOnWholeFramesBeforeOwnEchoInspectionAndCommandCapture() {
         val quiet = List(12) { frame(200) }

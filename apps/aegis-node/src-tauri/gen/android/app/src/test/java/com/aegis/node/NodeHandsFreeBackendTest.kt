@@ -235,6 +235,60 @@ class NodeHandsFreeBackendTest {
     }
   }
 
+  @Test fun processingInterruptionCancelsWithoutPlaybackAndCarriesPriorTurnBeforeConversationMarker() {
+    val firstChat=CountDownLatch(1)
+    val finishOld=CountDownLatch(1)
+    val chatCalls=AtomicInteger()
+    val transcriptionCalls=AtomicInteger()
+    Fixture(respond={request,normal->when(request.path) {
+      "/api/voice/transcriptions"->Reply.json(JSONObject(normal.bytes.toString(Charsets.UTF_8))
+        .put("text",if(transcriptionCalls.incrementAndGet()==1)"Aegis, conte uma história" else "Melhor uma história curta"))
+      "/api/chat/messages/stream"->if(chatCalls.incrementAndGet()==1) {
+        firstChat.countDown()
+        check(finishOld.await(8,TimeUnit.SECONDS))
+        segmentedReply(request)
+      } else segmentedReply(request)
+      "/api/voice/speech/segments"->segmentPcmReply()
+      else->normal
+    }}).use{fixture->
+      val old=fixture.backend()
+      val first=RecordingSink()
+      val started=AtomicInteger()
+      val worker=Executors.newSingleThreadExecutor()
+      try {
+        val running=worker.submit<HandsFreeTurn>{
+          old.execute(wav(),session,null,first,null,incremental=true,onProcessing={
+            assertNull(old.generationInterruption());started.incrementAndGet()
+          })
+        }
+        assertTrue(firstChat.await(5,TimeUnit.SECONDS))
+        assertEquals(1,started.get())
+        val previous=checkNotNull(old.generationInterruption())
+        assertEquals("conte uma história",previous.previousContent)
+        assertNull(old.playbackInterruption(0))
+        old.requestCancellation()
+        val error=assertThrows(ExecutionException::class.java){running.get(5,TimeUnit.SECONDS)}
+        assertTrue(error.cause is java.util.concurrent.CancellationException)
+        assertTrue(first.aborted);assertFalse(first.finished);assertEquals(0,first.bytes.size())
+        assertFalse(fixture.requests.any{it.path=="/api/voice/speech/segments"})
+        val next=RecordingSink()
+        val result=fixture.backend().execute(wav(),session,null,next,null,incremental=true,interruptedGeneration=previous)
+        val chat=fixture.requests.filter{it.path=="/api/chat/messages/stream"}.map{JSONObject(it.text())}
+        assertEquals(2,chat.size)
+        assertEquals(listOf(session,session),chat.map{it.getString("voiceSessionId")})
+        assertTrue(chat[1].isNull("conversationId"))
+        assertEquals("Melhor uma história curta",chat[1].getString("content"))
+        val interrupted=chat[1].getJSONObject("interruptedGeneration")
+        assertEquals(setOf("turnId","previousContent"),interrupted.keys().asSequence().toSet())
+        assertEquals(chat[0].getString("turnId"),interrupted.getString("turnId"))
+        assertEquals("conte uma história",interrupted.getString("previousContent"))
+        assertFalse(chat[1].has("interruptedPlayback"))
+        assertEquals(conversation,result.conversationId)
+        assertTrue(next.finished)
+      }finally{finishOld.countDown();old.requestCancellation();worker.shutdownNow()}
+    }
+  }
+
   @Test fun invalidFirstStreamBoundaryNeverReportsAConversation() {
     for(failure in listOf("turn","conversation","requested","message","segment","sequence","content")) {
       val destinations=CopyOnWriteArrayList<String>()

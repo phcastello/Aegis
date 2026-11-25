@@ -1,9 +1,10 @@
 //! One opt-in listener per desktop installation. The worker owns the microphone,
 //! detector, output, and private backend requests even when the chat is hidden.
 use crate::{
-    windows_voice_audio::{self, Input},
-    windows_voice_backend::{Backend, Result},
-    windows_voice_signal::{Background, Capture, Endpoint, Waveform},
+    windows_barge_in_signal::{BargeInSignal, RenderReference},
+    windows_voice_audio::{self, Input, Output},
+    windows_voice_backend::{Backend, Interruption, Result, TurnReport},
+    windows_voice_signal::{Background, Capture, Endpoint, Waveform, RATE},
     windows_wakeword,
 };
 use serde::{Deserialize, Serialize};
@@ -151,7 +152,7 @@ impl Shared {
         let state = self.state.lock().unwrap();
         json!({"enabled":state.settings.enabled,"diagnostic":state.settings.diagnostic,
             "assistantSelected":true,"permissionGranted":!matches!(state.status,"microphone_unavailable"|"microphone_disconnected"|"device_unavailable"),
-            "captureConfirmed":matches!(state.status,"listening"|"capturing"|"continuation"),
+            "captureConfirmed":matches!(state.status,"listening"|"capturing"|"processing"|"speaking"|"continuation"),
             "modelReady":installed,"modelName":installed.then_some("Aegis Open v2"),
             "status":state.status,"message":message(state.status),"generation":state.generation})
     }
@@ -411,7 +412,7 @@ fn cycle(
         shared.publish("diagnostic_wake");
         return Ok(());
     }
-    let mut backend = Backend::open(&shared.app, http, cancel)?;
+    let backend = Backend::open(&shared.app, http, cancel)?;
     let session = Uuid::new_v4();
     // The read-only manager request is asynchronous. Start it during the
     // election, not after it; only the winning node may inspect/pause media.
@@ -452,6 +453,21 @@ fn cycle(
     if cancel.is_cancelled() {
         return Err("cancelled");
     }
+    let scope = backend.scope_key();
+    let mut destination = shared
+        .state
+        .lock()
+        .unwrap()
+        .recent
+        .and_then(|recent| recent.at(scope, detected));
+    // A granted session can navigate the existing webview, never activate or
+    // surface its window. Emit the intended destination before the voice state.
+    let _ = shared.app.emit_to(
+        "main",
+        "aegis-windows-voice-conversation",
+        json!({"conversationId": destination}),
+    );
+    let announced = Mutex::new(destination);
     let mut generation = shared.publish("capturing");
     let cue_started = Instant::now();
     windows_voice_audio::cue(cancel)?;
@@ -464,56 +480,76 @@ fn cycle(
         cue_started.elapsed().as_millis(),
         detected.elapsed().as_millis()
     );
-    let scope = backend.scope_key();
-    let mut destination = shared
-        .state
-        .lock()
-        .unwrap()
-        .recent
-        .and_then(|recent| recent.at(scope, detected));
+    let noise = history.noise();
     let mut first = true;
+    let mut next_audio: Option<Vec<i16>> = None;
+    let mut interruption: Option<Interruption> = None;
+    let mut tail: Option<(BargeInSignal, RenderReference)> = None;
     loop {
-        let mut endpoint = Endpoint::new(history.noise(), if first { 6 } else { 2 });
-        // Keep the inline command collected during the election and start
-        // counting the full first-speech wait after the audible cue.
-        if first {
-            endpoint.after_cue(mic.pending());
-        }
-        let mut waveform = Waveform::default();
-        let status = if first { "capturing" } else { "continuation" };
-        let samples = loop {
-            let block = mic.read(cancel)?;
-            shared.publish_waveform(&mut waveform, &block, status, generation, mic.pending());
-            match endpoint.push(&block) {
-                Capture::More => {}
-                Capture::Empty => return Ok(()),
-                Capture::Complete(audio) => break audio,
+        let samples = if let Some(audio) = next_audio.take() {
+            audio
+        } else {
+            let mut endpoint = Endpoint::new(noise, if first { 6 } else { 2 });
+            // Preserve the inline command buffered during election and allow a
+            // full wait after the initial cue. No cue or wakeword on continuation.
+            if first {
+                endpoint.after_cue(mic.pending());
+            }
+            let status = if first { "capturing" } else { "continuation" };
+            let mut waveform = Waveform::default();
+            loop {
+                let mut block = mic.read(cancel)?;
+                if let Some((signal, reference)) = tail.as_mut() {
+                    signal.clean_tail(&mut block, reference, mic.pending());
+                }
+                shared.publish_waveform(&mut waveform, &block, status, generation, mic.pending());
+                match endpoint.push(&block) {
+                    Capture::More => {}
+                    Capture::Empty => return Ok(()),
+                    Capture::Complete(audio) => break audio,
+                }
             }
         };
-        drop(mic);
+        first = false;
+        tail = None;
         shared.publish("processing");
-        let text = backend.transcribe(&samples)?;
-        drop(samples);
-        if text.is_empty() {
+        let monitored = monitor_turn(
+            shared,
+            &mut mic,
+            &backend,
+            cancel,
+            session,
+            destination,
+            &samples,
+            interruption.as_ref(),
+            noise,
+            &announced,
+        )?;
+        let report = monitored.report;
+        destination = report.conversation.or(destination);
+        // The accepted marker can arrive just as a candidate is interrupted.
+        // Recover its destination after the old worker is joined, exactly once.
+        if report.accepted {
+            if let Some(conversation) = destination {
+                announce_conversation(shared, &announced, conversation);
+            }
+        }
+        if let Some(captured) = monitored.captured {
+            // The preceding worker and output have completely ended. Continue
+            // on this exact session and identity without another wake election.
+            // The backend resolves an interrupted generation even if its
+            // accepted conversation event raced with cancellation.
+            let (captured, context) =
+                prepare_handoff(report, samples, captured, interruption.take())?;
+            interruption = context;
+            next_audio = Some(captured);
+            continue;
+        }
+        let reply = report.result?;
+        if reply.ignored {
             return Ok(());
         }
-        let Some(reply) = backend.respond(session, destination, text)? else {
-            // End the interaction quietly. The paused media guard resumes media
-            // and the next cycle reopens the microphone for the wake word.
-            return Ok(());
-        };
-        let speaking_generation = shared.publish("speaking");
-        let app = shared.app.clone();
-        let window = shared.window_handle.clone();
-        backend.speak(&reply, |output| {
-            output.observe_spectrum(
-                move || waveform_visible(&window),
-                move |levels| {
-                    let _ = app.emit_to("main", "aegis-windows-voice-waveform",
-                        json!({"status":"speaking","generation":speaking_generation,"levels":levels}));
-                },
-            );
-        })?;
+        let conversation = destination.ok_or("backend_response")?;
         {
             let mut state = shared.state.lock().unwrap();
             if cancel.is_cancelled() {
@@ -521,20 +557,189 @@ fn cycle(
             }
             state.recent = Some(RecentConversation {
                 scope,
-                conversation: reply.conversation,
+                conversation,
                 completed: Instant::now(),
             });
         }
-        first = false;
+        interruption = None;
         if !reply.continuation {
             return Ok(());
         }
-        mic = Input::open()?;
-        destination = Some(reply.conversation);
+        tail = Some((monitored.signal, monitored.reference));
         generation = shared.publish("continuation");
     }
 }
 
+fn prepare_handoff(
+    report: TurnReport,
+    previous: Vec<i16>,
+    mut captured: Vec<i16>,
+    mut context: Option<Interruption>,
+) -> Result<(Vec<i16>, Option<Interruption>)> {
+    let ignored = report.result.as_ref().is_ok_and(|reply| reply.ignored);
+    if !ignored {
+        if let Some(position) = report.playback {
+            context = Some(Interruption::Playback(position));
+        } else if report.chat_started {
+            if let Some(content) = report.transcript.filter(|text| !text.is_empty()) {
+                context = Some(Interruption::Generation {
+                    turn_id: report.turn_id,
+                    previous_content: content,
+                });
+            }
+        } else if report.transcript.is_none() {
+            // STT was itself interrupted. Retain the old command PCM rather
+            // than silently lose a command not yet transcribed. Keep any
+            // earlier context until the next request really carries it.
+            captured = merge_interrupted_capture(previous, captured)?;
+        }
+    }
+    Ok((captured, context))
+}
+
+struct MonitoredTurn {
+    report: TurnReport,
+    captured: Option<Vec<i16>>,
+    signal: BargeInSignal,
+    reference: RenderReference,
+}
+
+/// Mic remains on its original worker and never crosses a thread boundary.
+/// Each model/TTS turn has a child token; its exclusive Output is joined before
+/// handing off to a new backend so a stale turn cannot publish or play audio.
+fn monitor_turn(
+    shared: &Shared,
+    mic: &mut Input,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    session: Uuid,
+    destination: Option<Uuid>,
+    samples: &[i16],
+    interruption: Option<&Interruption>,
+    noise: f64,
+    announced: &Mutex<Option<Uuid>>,
+) -> Result<MonitoredTurn> {
+    let turn_cancel = cancel.child_token();
+    let reference = RenderReference::default();
+    let mut signal = BargeInSignal::new(noise);
+    let phase = Mutex::new(());
+    let (report, captured) = thread::scope(|scope| {
+        let mut worker_backend = backend.fork(&turn_cancel);
+        let worker_cancel = turn_cancel.clone();
+        let worker_reference = reference.clone();
+        let phase = &phase;
+        let work = scope.spawn(move || {
+            worker_backend.run_turn(
+                session,
+                destination,
+                samples,
+                interruption,
+                |conversation| {
+                    let _guard = phase.lock().unwrap();
+                    if !worker_cancel.is_cancelled() {
+                        announce_conversation(shared, announced, conversation);
+                    }
+                },
+                || {
+                    let mut output = Output::open()?;
+                    output.observe_reference(worker_reference);
+                    let _guard = phase.lock().unwrap();
+                    if worker_cancel.is_cancelled() {
+                        return Err("cancelled");
+                    }
+                    let generation = shared.publish("speaking");
+                    let app = shared.app.clone();
+                    let window = shared.window_handle.clone();
+                    output.observe_spectrum(
+                        move || waveform_visible(&window),
+                        move |levels| {
+                            let _ = app.emit_to("main", "aegis-windows-voice-waveform",
+                            json!({"status":"speaking","generation":generation,"levels":levels}));
+                        },
+                    );
+                    Ok(output)
+                },
+            )
+        });
+        let mut handoff: Option<(Endpoint, Waveform, u64)> = None;
+        let captured = loop {
+            if handoff.is_none() && work.is_finished() {
+                break Ok(None);
+            }
+            let mut block = match mic.read(cancel) {
+                Ok(block) => block,
+                Err(error) => {
+                    turn_cancel.cancel();
+                    break Err(error);
+                }
+            };
+            if let Some((endpoint, waveform, generation)) = handoff.as_mut() {
+                signal.clean_tail(&mut block, &reference, mic.pending());
+                shared.publish_waveform(waveform, &block, "capturing", *generation, mic.pending());
+                match endpoint.push(&block) {
+                    Capture::More => {}
+                    Capture::Complete(audio) => break Ok(Some(audio)),
+                    Capture::Empty => break Err("audio_error"), // a qualified prefix is never empty
+                }
+                continue;
+            }
+            if let Some(prefix) = signal.push(&block, &reference, mic.pending()) {
+                // The signal classifier has already qualified the speech; the
+                // retained cleaned prefix includes this exact triggering frame.
+                // Serialize cancellation and UI transition with the old worker's
+                // speaking/conversation callbacks to prevent late state events.
+                let _guard = phase.lock().unwrap();
+                turn_cancel.cancel();
+                let generation = shared.publish("capturing");
+                handoff = Some((
+                    Endpoint::interrupted(noise, prefix),
+                    Waveform::default(),
+                    generation,
+                ));
+            }
+        };
+        let report = work.join().map_err(|_| "backend_response")?;
+        Ok::<_, &'static str>((report, captured?))
+    })?;
+    if cancel.is_cancelled() {
+        return Err("cancelled");
+    }
+    Ok(MonitoredTurn {
+        report,
+        captured,
+        signal,
+        reference,
+    })
+}
+
+fn announce_conversation(shared: &Shared, announced: &Mutex<Option<Uuid>>, conversation: Uuid) {
+    let mut previous = announced.lock().unwrap();
+    if *previous != Some(conversation) {
+        *previous = Some(conversation);
+        let _ = shared.app.emit_to(
+            "main",
+            "aegis-windows-voice-conversation",
+            json!({"conversationId":conversation}),
+        );
+    }
+}
+
+fn merge_interrupted_capture(mut previous: Vec<i16>, next: Vec<i16>) -> Result<Vec<i16>> {
+    // Bound the exceptional pre-STT handoff to the existing 90-second service
+    // limit. Keep both utterances separated by 160 ms of silence; never trim a
+    // valid onset or silently truncate a previous command.
+    let gap = RATE * 160 / 1000;
+    let total = previous
+        .len()
+        .checked_add(gap)
+        .and_then(|n| n.checked_add(next.len()))
+        .filter(|n| *n <= RATE * 90)
+        .ok_or("backend_response")?;
+    previous.reserve(total - previous.len());
+    previous.resize(previous.len() + gap, 0);
+    previous.extend(next);
+    Ok(previous)
+}
 const MEDIA_OPERATION_BUDGET: Duration = Duration::from_millis(160);
 
 fn media_lookup_remaining(elapsed: Duration) -> Duration {
@@ -583,6 +788,95 @@ impl Drop for PausedMedia {
 #[cfg(test)]
 mod continuity_tests {
     use super::*;
+    use crate::windows_voice_backend::{PlaybackInterruption, TurnReply};
+
+    fn interrupted_report() -> TurnReport {
+        TurnReport {
+            result: Err("cancelled"),
+            turn_id: Uuid::new_v4(),
+            conversation: None,
+            accepted: false,
+            transcript: None,
+            chat_started: false,
+            playback: None,
+        }
+    }
+
+    #[test]
+    fn handoff_prefers_played_position_then_generation_and_keeps_prior_context_before_stt() {
+        let conversation = Uuid::new_v4();
+        let position = PlaybackInterruption {
+            conversation,
+            turn_id: Uuid::new_v4(),
+            assistant_message_id: Uuid::new_v4(),
+            segment_id: Uuid::new_v4(),
+            sequence: 0,
+            played_frames_in_segment: 30,
+            segment_frames: Some(100),
+        };
+        let next = vec![2; 320];
+        let previous = vec![1; 320];
+        let report = TurnReport {
+            playback: Some(position.clone()),
+            transcript: Some("História".into()),
+            chat_started: true,
+            ..interrupted_report()
+        };
+        let (audio, context) =
+            prepare_handoff(report, previous.clone(), next.clone(), None).unwrap();
+        assert_eq!(audio, next);
+        assert_eq!(context, Some(Interruption::Playback(position.clone())));
+        let (audio, context) = prepare_handoff(
+            interrupted_report(),
+            previous.clone(),
+            next.clone(),
+            context,
+        )
+        .unwrap();
+        assert_eq!(audio.len(), previous.len() + RATE * 160 / 1000 + next.len());
+        assert_eq!(context, Some(Interruption::Playback(position.clone())));
+        let turn = Uuid::new_v4();
+        let report = TurnReport {
+            turn_id: turn,
+            transcript: Some("Pedido".into()),
+            chat_started: true,
+            ..interrupted_report()
+        };
+        let (audio, context) =
+            prepare_handoff(report, previous.clone(), next.clone(), context).unwrap();
+        assert_eq!(audio, next);
+        assert_eq!(
+            context,
+            Some(Interruption::Generation {
+                turn_id: turn,
+                previous_content: "Pedido".into()
+            })
+        );
+        let ignored = TurnReport {
+            result: Ok(TurnReply {
+                ignored: true,
+                continuation: false,
+            }),
+            transcript: Some("Fala alheia".into()),
+            chat_started: true,
+            ..interrupted_report()
+        };
+        let (audio, after_ignore) =
+            prepare_handoff(ignored, previous, next.clone(), context.clone()).unwrap();
+        assert_eq!(audio, next);
+        assert_eq!(after_ignore, context);
+    }
+    #[test]
+    fn interrupted_stt_retains_both_commands_and_enforces_audio_bound() {
+        let first = vec![10; RATE];
+        let second = vec![20; RATE];
+        let merged = merge_interrupted_capture(first.clone(), second.clone()).unwrap();
+        let gap = RATE * 160 / 1000;
+        assert_eq!(&merged[..RATE], first.as_slice());
+        assert!(merged[RATE..RATE + gap].iter().all(|sample| *sample == 0));
+        assert_eq!(&merged[RATE + gap..], second.as_slice());
+        assert!(merge_interrupted_capture(vec![0; RATE * 90], second).is_err());
+    }
     #[test]
     fn media_lookup_is_charged_to_the_election_not_the_cue() {
         assert_eq!(

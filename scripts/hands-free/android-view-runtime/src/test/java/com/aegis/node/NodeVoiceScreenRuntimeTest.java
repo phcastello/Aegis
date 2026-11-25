@@ -4,8 +4,12 @@ import static org.junit.Assert.*;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.TextView;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import org.junit.After;
@@ -134,6 +138,46 @@ public class NodeVoiceScreenRuntimeTest {
         assertTrue(keepScreenOn());
         call(session, "finishIfSession", "screen-policy-session", false, true);
         assertFalse("Terminal error must release display before delayed dismissal", keepScreenOn());
+    }
+
+    @Test public void cleanActivePanelCentersItsVisualAndKeepsCancelErrorTranscriptAndAccessibility() throws Exception {
+        View root = (View) call(session, "onCreateContentView");
+        state("capturing");
+        TextView status = (TextView) getField(session, "label");
+        TextView partial = (TextView) getField(session, "partial");
+        View visual = (View) getField(session, "visualizer");
+        assertEquals(View.GONE, status.getVisibility());
+        assertEquals("Estou ouvindo", visual.getContentDescription());
+        assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, visual.getImportantForAccessibility());
+        call(session, "showPartial", "screen-policy-session", "fixture", "Pedido real");
+        assertEquals(View.VISIBLE, partial.getVisibility());
+        assertEquals("Pedido real", partial.getText().toString());
+
+        int width = Math.round(360 * root.getResources().getDisplayMetrics().density);
+        int height = Math.round(300 * root.getResources().getDisplayMetrics().density);
+        root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
+        root.layout(0,0,width,height);
+        ViewGroup row=(ViewGroup)visual.getParent();
+        assertEquals("The animation must be centered, independent of the cancel affordance",
+                row.getWidth(), visual.getLeft()+visual.getRight(),1);
+        Button cancel=null;
+        for(int i=0;i<row.getChildCount();i++)if(row.getChildAt(i) instanceof Button)cancel=(Button)row.getChildAt(i);
+        assertNotNull(cancel);
+        assertEquals("Cancelar interação",cancel.getContentDescription());
+        assertTrue(cancel.getWidth()>=Math.round(48*root.getResources().getDisplayMetrics().density));
+        assertTrue(visual.getRight()<=cancel.getLeft());
+
+        state("processing");
+        assertEquals(View.GONE,status.getVisibility());
+        assertTrue(visual.getContentDescription().toString().startsWith("Processando"));
+        state("speaking");
+        assertEquals(View.GONE,status.getVisibility());
+        assertTrue(visual.getContentDescription().toString().startsWith("Aegis está falando"));
+        state("session_failed");
+        assertEquals(View.VISIBLE,status.getVisibility());
+        assertEquals("Não consegui concluir. Tente novamente.",status.getText().toString());
+        assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO,visual.getImportantForAccessibility());
     }
 
     @Test public void explicitCancellationReleasesDisplayImmediately() throws Exception {

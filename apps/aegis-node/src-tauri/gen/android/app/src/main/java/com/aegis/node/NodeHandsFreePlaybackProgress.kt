@@ -2,6 +2,14 @@ package com.aegis.node
 
 import org.json.JSONObject
 
+/** No assistant audio was heard. The prior request is resolved by its turn ID,
+ * including a conversation persisted before the client received its marker. */
+internal data class HandsFreeGenerationInterruption(val turnId:String,val previousContent:String?) {
+    fun toJson()=JSONObject().put("turnId",turnId).apply {
+        previousContent?.let { put("previousContent",it) }
+    }
+}
+
 /** A position in a committed speech unit, measured against the native playback head. */
 internal data class HandsFreePlaybackInterruption(
     val conversationId: String,

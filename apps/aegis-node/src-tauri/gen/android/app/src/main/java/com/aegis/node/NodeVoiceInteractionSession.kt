@@ -53,16 +53,20 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         val root=FrameLayout(context).apply{setPadding(dp(12),dp(8),dp(12),dp(12))}
         val panel=LinearLayout(context).apply{
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(20),dp(4),dp(12),dp(16))
+            setPadding(dp(12),dp(4),dp(12),dp(12))
             background=GradientDrawable().apply{setColor(0xff172132.toInt());cornerRadius=dp(28).toFloat();setStroke(dp(1),0xff35435b.toInt())}
         }
         card=panel
-        val header=LinearLayout(context).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
-        header.addView(TextView(context).apply{
-            text="Aegis";setTextColor(0xffbdcbf6.toInt());textSize=15f;gravity=Gravity.CENTER_VERTICAL
-            typeface=android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL)
-        },LinearLayout.LayoutParams(0,dp(48),1f))
-        header.addView(Button(context).apply{
+        val visualRow=FrameLayout(context)
+        // Reserve equal margins around the visual. The cancel affordance has
+        // a 48dp target and never covers a bar; the blank opposite margin
+        // keeps the animation exactly at the panel's horizontal center.
+        visualizer=HandsFreePanelView(context).also{view->
+            visualRow.addView(view,FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,dp(72),Gravity.CENTER).apply {
+                setMargins(dp(52),0,dp(52),0)
+            })
+        }
+        visualRow.addView(Button(context).apply{
             text="×";contentDescription="Cancelar interação";textSize=27f;setTextColor(0xffbdcbf6.toInt())
             minWidth=0;minimumWidth=0;minHeight=0;minimumHeight=0;setPadding(0,0,0,0)
             background=android.graphics.drawable.StateListDrawable().apply{
@@ -70,18 +74,17 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
                 addState(intArrayOf(),GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(0xff253248.toInt())})
             }
             setOnClickListener{boundSession?.let{NodeHandsFree.runtime(context).cancelSession(it)};finishQuietly()}
-        },LinearLayout.LayoutParams(dp(48),dp(48)))
-        panel.addView(header)
-        visualizer=HandsFreePanelView(context).also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(72)))}
+        },FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END or Gravity.CENTER_VERTICAL))
+        panel.addView(visualRow,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(72)))
         label=TextView(context).apply{
-            text=presentation.state.label;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
-            setPadding(0,dp(4),dp(8),0);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
+            visibility=View.GONE;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
+            setPadding(0,dp(4),0,0);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
         }.also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))}
         partial=TextView(context).apply{
             textSize=14f;setTextColor(0xffaab5ca.toInt());gravity=Gravity.CENTER;maxLines=2;ellipsize=TextUtils.TruncateAt.END
-            visibility=View.GONE;setPadding(0,dp(8),dp(8),0);contentDescription="Transcrição temporária"
+            visibility=View.GONE;setPadding(0,dp(8),0,0)
             accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_NONE
-        }.also{panel.addView(it)}
+        }.also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))}
         root.addView(panel,FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM))
         ViewCompat.setOnApplyWindowInsetsListener(root){view,insets->
             val safe=insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -132,22 +135,31 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(!presentation.refresh(state))return
         if(displayedState!=state){partial?.text="";partial?.visibility=View.GONE;partialRequestId=null;HandsFreePanelSignal.reset(this)}
         displayedState=state
-        label?.text=presentation.state.label;visualizer?.state(presentation.state)
+        updateErrorLabel();visualizer?.state(presentation.state)
         val token = boundSession
-        if (state == "speaking" && token != null) refreshBargeInControls(token)
+        if (state in setOf("speaking","processing") && token != null) refreshBargeInControls(token)
         else updatePlaybackAccessibility(null)
         updateScreenPolicy()
     }
 
     internal fun refreshBargeInControls(token: String) {
-        if (!visible || boundSession != token || presentation.state != HandsFreePanelState.SPEAKING) return
+        if (!visible || boundSession != token || presentation.state !in setOf(HandsFreePanelState.SPEAKING,HandsFreePanelState.PROCESSING)) return
         val availability = NodeHandsFree.runtime(context).bargeInPanelAvailability(token)
         updatePlaybackAccessibility(presentation.bargeInAccessibilityHint(token, availability))
     }
 
     private fun updatePlaybackAccessibility(hint: String?) {
-        // Availability remains readable via TalkBack without an extra visible instruction.
-        label?.contentDescription = hint?.let { "${presentation.state.label}. $it" }
+        // The decorative visual carries the active status for TalkBack, while
+        // the actual error/transcript keep their ordinary accessible text.
+        val active=visible && presentation.state!=HandsFreePanelState.ERROR
+        visualizer?.importantForAccessibility=if(active)View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        visualizer?.contentDescription=if(active)hint?.let{"${presentation.state.label}. $it"}?:presentation.state.label else null
+    }
+
+    private fun updateErrorLabel() {
+        val error=presentation.state==HandsFreePanelState.ERROR
+        label?.text=if(error)presentation.state.label else ""
+        label?.visibility=if(error)View.VISIBLE else View.GONE
     }
 
     internal fun showPartial(token:String,requestId:String,text:String) {
@@ -173,7 +185,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         if(presentation.delayClose(immediate,failed)){
             partial?.text="";partial?.visibility=View.GONE;HandsFreePanelSignal.reset(this)
             updatePlaybackAccessibility(null)
-            label?.text=presentation.state.label;visualizer?.state(presentation.state)
+            updateErrorLabel();visualizer?.state(presentation.state)
             updateScreenPolicy()
             main.removeCallbacks(dismissError);main.postDelayed(dismissError,3500)
         } else finishQuietly()
@@ -230,7 +242,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
     }
     private val dataChanged:()->Unit={if(shown && signalBound && wakePosted.compareAndSet(false,true))post(wakeFrame)}
     private val scaleChanged=object:ContentObserver(main){override fun onChange(selfChange:Boolean){updateMotion()}}
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;lifecycleReady=true}
+    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;accessibilityLiveRegion=ACCESSIBILITY_LIVE_REGION_POLITE;lifecycleReady=true}
     internal fun show(observer:Any,token:String?) {
         hide()
         owner=observer;session=token;shown=true
@@ -326,24 +338,16 @@ internal class HandsFreePanelView(context:Context):View(context) {
         val centerX=width/2f;val centerY=height/2f
         when(state) {
             HandsFreePanelState.CAPTURING,HandsFreePanelState.CONTINUATION->{
-                val active=HandsFreePanelSignal.render(owner,now,amplitudes)
+                val active=HandsFreePanelSignal.render(owner,now,amplitudes,smooth=motion)
                 val left=width*.06f;val right=width*.94f
                 val slot=(right-left)/amplitudes.size
-                val bar=minOf(3.2f*density,slot*.46f)
-                var hasVoice=false
+                val bar=handsFreeInputBarWidth(slot,density)
                 for(index in amplitudes.indices) {
                     val amplitude=amplitudes[index]
-                    if(amplitude<=.002f)continue
-                    hasVoice=true
-                    val half=.65f*density+amplitude*(height*.40f)
+                    val half=handsFreeInputBarHeight(amplitude,density,height.toFloat())/2f
                     val x=left+(index+.5f)*slot
-                    paint.alpha=(36+219*amplitude).toInt().coerceIn(0,255)
                     bounds.set(x-bar/2,centerY-half,x+bar/2,centerY+half)
                     canvas.drawRoundRect(bounds,bar/2,bar/2,paint)
-                }
-                if(!hasVoice) {
-                    paint.alpha=24;paint.strokeWidth=density
-                    canvas.drawLine(left,centerY,right,centerY,paint)
                 }
                 if(motion && active)scheduleFrame()
             }

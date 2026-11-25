@@ -112,10 +112,12 @@ STT vazio ou somente a invocação não cria conversa nem chama o modelo. O
 e decisão estruturada no mesmo turno. As ferramentas mantêm suas confirmações.
 Erros, cancelamentos e resultados atrasados não redirecionam a sessão.
 
-Durante o processamento remoto, o microfone fica liberado. No começo da
-reprodução nativa, o Android abre o microfone para detectar uma interrupção.
-O detector de wake word continua suspenso. O filtro usa o PCM e a posição do
-AudioTrack para reduzir o eco da própria Aegis antes de detectar fala.
+Durante o processamento remoto, o Android também observa fala qualificada pelo
+microfone local, sem reativar o detector de wake word. No começo da reprodução,
+encerra essa escuta e retoma o caminho de barge-in com a referência e a posição
+do AudioTrack para reduzir o eco da própria Aegis. Veja a
+[interrupção durante processamento](android-processing-barge-in.md), incluindo
+o protocolo de transferência e as limitações de homologação.
 
 O monitor estima o nível de fundo do microfone no início da reprodução.
 O barge-in automático exige fala acima desse fundo e evidência acústica independente
@@ -127,9 +129,11 @@ Uma fala curta ou baixa pode terminar antes da confirmação. O relatório
 sem áudio registra o resultado, o fundo, o pico da detecção e o volume de
 mídia nas confirmações.
 
-Durante a resposta, o painel indica a preparação da escuta e quando é
-possível falar por cima. Quando a fala é confirmada, o painel exibe
-**Continue falando**. A pessoa pode concluir o pedido em andamento na
+Durante a resposta e a preparação do modelo, o painel expõe a disponibilidade
+de interrupção ao leitor de tela. A apresentação visível usa apenas a
+animação correspondente, o controle de cancelar e, quando houver, a
+transcrição ou o erro real. Quando a fala é confirmada, retorna ao
+visualizador de escuta. A pessoa pode concluir o pedido em andamento na
 mesma conversa, sem beep ou nova invocação.
 
 Ao confirmar fala por cima, o AudioTrack descarta o áudio pendente e o

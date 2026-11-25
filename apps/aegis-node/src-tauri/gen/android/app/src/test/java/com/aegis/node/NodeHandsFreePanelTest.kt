@@ -9,8 +9,8 @@ class NodeHandsFreePanelTest {
     private fun pcm(vararg levels:Int):ShortArray=ShortArray(levels.size*320){index->
         val value=levels[index/320];(if(index%2==0)value else -value).toShort()
     }
-    private fun waveform(owner:Any,now:Long)=FloatArray(HandsFreePanelSignal.BAR_COUNT).also{
-        HandsFreePanelSignal.render(owner,now,it)
+    private fun waveform(owner:Any,now:Long,smooth:Boolean=true)=FloatArray(HandsFreePanelSignal.BAR_COUNT).also{
+        HandsFreePanelSignal.render(owner,now,it,smooth)
     }
     private fun withSignal(body:(Any)->Unit) {
         val owner=Any();HandsFreePanelSignal.attach(owner,"turn")
@@ -41,11 +41,11 @@ class NodeHandsFreePanelTest {
         assertArrayEquals(copy,samples)
     }
     @Test fun positionsRepresentDifferentRealTemporalWindowsInsteadOfFixedCenterWeights()=withSignal{owner->
-        for(block in 0 until 7) {
+        for(block in 0 until 10) {
             val levels=IntArray(10){window->60+((block*10+window)*83)%2200}
             val samples=pcm(*levels);HandsFreePanelSignal.capture("turn",samples,samples.size,(block+1)*200L)
         }
-        val out=waveform(owner,1600)
+        val out=waveform(owner,2200)
         assertTrue(out.maxOrNull()!!-out.minOrNull()!!>0.18f)
         assertTrue(out.map{(it*1000).toInt()}.distinct().size>24)
         assertNotEquals(out.first(),out.last())
@@ -61,6 +61,42 @@ class NodeHandsFreePanelTest {
         // History is not revealed at once at receipt: it advances behind a bounded delay.
         assertEquals(0f,values.first(),0f)
     }
+    @Test fun fixedSlotsInterpolateVisualHeightsBetweenDiscreteSixtyMillisecondHistorySnapshots()=withSignal{owner->
+        val first=pcm(80,300,1400,0,700,90,2200,600,0,100)
+        val second=pcm(120,1800,20,1300,0,2000,600,20,150,0)
+        HandsFreePanelSignal.capture("turn",first,first.size,200)
+        HandsFreePanelSignal.capture("turn",second,second.size,400)
+        val a=waveform(owner,440,false)
+        val b=waveform(owner,500,false)
+        assertTrue(a.indices.any{kotlin.math.abs(a[it]-b[it])>.05f})
+        // As time advances one slot, the same measured history flows through
+        // adjacent fixed positions rather than translating a rendered shape.
+        assertArrayEquals(a.copyOfRange(1,a.size),b.copyOfRange(0,b.size-1),0f)
+        val early=waveform(owner,455)
+        val middle=waveform(owner,470)
+        for(index in a.indices) {
+            val from=kotlin.math.sqrt(a[index])
+            val to=kotlin.math.sqrt(b[index])
+            val q=from+(to-from)*.25f
+            val m=(from+to)*.5f
+            assertEquals(q*q,early[index],.002f)
+            assertEquals(m*m,middle[index],.002f)
+        }
+        assertArrayEquals(b,waveform(owner,500),0f)
+    }
+    @Test fun manualStyleBarsUseFixedThinWidthAndSquareRootHeightWithinAvailableGeometry() {
+        assertEquals(3f,handsFreeInputBarWidth(5f,1f),0f)
+        assertEquals(3f,handsFreeInputBarWidth(40f,1f),0f)
+        assertEquals(6f,handsFreeInputBarWidth(10f,2f),0f)
+        assertEquals(2.25f,handsFreeInputBarWidth(3f,1f),0f)
+        assertEquals(0f,handsFreeInputBarWidth(0f,1f),0f)
+        assertEquals(3f,handsFreeInputBarHeight(0f,1f,72f),0f)
+        assertEquals(17.5f,handsFreeInputBarHeight(.25f,1f,72f),0f)
+        assertEquals(32f,handsFreeInputBarHeight(1f,1f,72f),0f)
+        assertEquals(64f,handsFreeInputBarHeight(1f,2f,144f),0f)
+        assertEquals(20f,handsFreeInputBarHeight(2f,1f,20f),0f)
+        assertEquals(3f,handsFreeInputBarHeight(Float.NaN,1f,72f),0f)
+    }
     @Test fun presentationUsesOnlyAlreadyReceivedPcmAndDoesNotAdvanceToFutureInput()=withSignal{owner->
         val voice=pcm(1500,1500,1500,1500,1500,1500,1500,1500,1500,1500)
         HandsFreePanelSignal.capture("turn",voice,voice.size,200)
@@ -75,8 +111,8 @@ class NodeHandsFreePanelTest {
         val after=waveform(owner,500).last()
         assertTrue(before>after);assertTrue(after>0f)
         assertEquals(0f,waveform(owner,600).last(),0f)
-        for(block in 3..11)HandsFreePanelSignal.capture("turn",silence,silence.size,block*200L)
-        assertTrue(waveform(owner,2400).all{it==0f})
+        for(block in 3..13)HandsFreePanelSignal.capture("turn",silence,silence.size,block*200L)
+        assertTrue(waveform(owner,2800).all{it==0f})
     }
     @Test fun captureDropoutFadesAndExpiresInsteadOfFreezingLastSpeech()=withSignal{owner->
         val voice=pcm(*IntArray(10){1500});HandsFreePanelSignal.capture("turn",voice,voice.size,200)
@@ -158,7 +194,8 @@ class NodeHandsFreePanelTest {
         val voice=pcm(*IntArray(10){1500});val silence=ShortArray(3200)
         for(block in 1..300)HandsFreePanelSignal.capture("turn",if(block<20)voice else silence,3200,block*200L)
         val out=FloatArray(32);assertFalse(HandsFreePanelSignal.render(owner,60200,out));assertTrue(out.all{it==0f})
-        assertEquals(80,HandsFreePanelSignal.CAPACITY)
+        assertEquals(112,HandsFreePanelSignal.CAPACITY)
+        assertEquals(1920L,HandsFreePanelSignal.HISTORY_MS)
     }
     @Test fun producerAndVisualConsumerDoNotWaitForEachOtherOrPublishNonfiniteFrames()=withSignal{owner->
         val error=AtomicReference<Throwable?>();val voice=pcm(60,0,1400,20,700,0,1200,900,0,80)
@@ -187,7 +224,8 @@ class NodeHandsFreePanelTest {
         presentation.begin("current")
         presentation.refresh("processing")
         val voice = HandsFreeBargeInPanelAvailability.VOICE
-        assertNull(presentation.bargeInAccessibilityHint("current", voice))
+        assertEquals("Você pode corrigir o pedido por voz.",presentation.bargeInAccessibilityHint("current", voice))
+        assertNull(presentation.bargeInAccessibilityHint("old", voice))
 
         presentation.refresh("speaking")
         assertNull(presentation.bargeInAccessibilityHint("old", voice))

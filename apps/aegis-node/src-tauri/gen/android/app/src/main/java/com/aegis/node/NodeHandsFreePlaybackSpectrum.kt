@@ -22,6 +22,8 @@ internal object HandsFreePlaybackSpectrum {
     const val DISPLAY_BAND_COUNT = 16
     const val WINDOW_FRAMES = 1024
     const val STALE_CLEAR_MS = 500L
+    private const val DISPLAY_ATTACK_MS = 65.0
+    private const val DISPLAY_RELEASE_MS = 130.0
     private const val SAMPLE_RATE = 24000
     private const val CAPACITY = 64
 
@@ -223,7 +225,7 @@ internal object HandsFreePlaybackSpectrum {
             for (index in levels.indices) {
                 val target = maxOf(raw[index * 2], raw[index * 2 + 1])
                 val current = levels[index]
-                val tau = if (target > current) 75.0 else 150.0
+                val tau = if (target > current) DISPLAY_ATTACK_MS else DISPLAY_RELEASE_MS
                 levels[index] = if (smooth) (current + (target - current) * (1 - exp(-elapsed / tau))).toFloat() else target
             }
         }

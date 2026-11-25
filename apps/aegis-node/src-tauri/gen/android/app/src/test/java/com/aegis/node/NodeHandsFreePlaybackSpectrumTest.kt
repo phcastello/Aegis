@@ -196,13 +196,13 @@ class NodeHandsFreePlaybackSpectrumTest {
         display.update(high, 1000, true)
         assertEquals(16, display.levels.size)
         val first = display.levels[3]
-        assertTrue(first > .39f && first < .43f)
+        assertEquals((1 - kotlin.math.exp(-40.0 / 65.0)).toFloat(),first,.0001f)
         assertEquals(2, display.levels.count { it > 0f })
         display.update(high, 1040, true)
         val second = display.levels[3]
         assertTrue(second > first && second < 1f)
         display.update(low, 1080, true)
-        assertTrue(display.levels[3] < second && display.levels[3] > first)
+        assertEquals((.1 + (second - .1) * kotlin.math.exp(-40.0 / 130.0)).toFloat(),display.levels[3],.0001f)
         display.update(high, 1120, false)
         assertEquals(1f, display.levels[3], 0f)
         assertEquals(.2f, display.levels[11], 0f)
@@ -242,7 +242,7 @@ class NodeHandsFreePlaybackSpectrumTest {
             assertTrue(display.render(owner, true, 81_000_000L))
             assertTrue(display.levels.indices.maxBy { display.levels[it] } > oldPeak)
             val expectedHigh = analyze(tone(160)).let { raw -> maxOf(raw[oldPeak * 2], raw[oldPeak * 2 + 1]) }
-            assertEquals(expectedHigh * (1 - kotlin.math.exp(-40.0 / 75)).toFloat(), display.levels[oldPeak], .0001f)
+            assertEquals(expectedHigh * (1 - kotlin.math.exp(-40.0 / 65.0)).toFloat(), display.levels[oldPeak], .0001f)
             assertFalse(display.render(owner, true, 600_000_000L))
             assertTrue(display.levels.all { it == 0f })
             HandsFreePlaybackSpectrum.detach(owner)

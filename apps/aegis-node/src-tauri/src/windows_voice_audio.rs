@@ -1,5 +1,6 @@
 //! Windows multimedia's shared PCM devices perform conversion to the requested
 //! sample rate. Buffers stay pinned until the driver returns their headers.
+use crate::windows_barge_in_signal::RenderReference;
 use crate::windows_voice_signal::{PlaybackSpectrum, BLOCK, SPECTRUM_BANDS, SPEECH_RATE};
 use std::{
     cell::UnsafeCell,
@@ -333,6 +334,8 @@ pub(crate) struct Output {
     buffers: VecDeque<Buffer>,
     deadline: Instant,
     spectrum: Option<SpectrumObservation>,
+    reference: Option<(RenderReference, u64)>,
+    committed_frames: u64,
 }
 impl Output {
     pub fn open() -> Result<Self, &'static str> {
@@ -357,7 +360,21 @@ impl Output {
             buffers: VecDeque::new(),
             deadline: Instant::now() + Duration::from_secs(300),
             spectrum: None,
+            reference: None,
+            committed_frames: 0,
         })
+    }
+    /// Exact audio actually submitted to the device, independent of UI
+    /// visibility. The reference removes its query before the handle closes.
+    pub fn observe_reference(&mut self, reference: RenderReference) {
+        if self.reference.is_none() {
+            let raw = self.handle.0 as usize;
+            let epoch = reference.begin(move || playback_position(HWAVEOUT(raw as *mut _)));
+            self.reference = Some((reference, epoch));
+        }
+    }
+    pub fn played_frames(&self) -> Option<u64> {
+        playback_position(self.handle).filter(|&position| position <= self.committed_frames)
     }
     pub fn observe_spectrum(
         &mut self,
@@ -394,14 +411,24 @@ impl Output {
             while self.buffers.len() >= 4 {
                 self.reclaim(cancel)?;
             }
+            if cancel.is_cancelled() {
+                return Err("cancelled");
+            }
             let buf = Buffer::new(chunk.to_vec().into_boxed_slice());
             if unsafe { waveOutPrepareHeader(self.handle, buf.header.get(), HEADER) } != 0 {
                 return Err("audio_error");
             }
             self.buffers.push_back(buf);
             let hdr = self.buffers.back_mut().unwrap().header.get();
+            if cancel.is_cancelled() {
+                return Err("cancelled");
+            }
             if unsafe { waveOutWrite(self.handle, hdr, HEADER) } != 0 {
                 return Err("audio_error");
+            }
+            self.committed_frames += chunk.len() as u64;
+            if let Some((reference, epoch)) = &self.reference {
+                reference.submit(*epoch, chunk);
             }
             if let Some(observer) = &self.spectrum {
                 observer.submit(chunk);
@@ -420,6 +447,11 @@ impl Drop for Output {
     fn drop(&mut self) {
         if let Some(observer) = self.spectrum.take() {
             observer.finish();
+        }
+        // Sample the final played cursor immediately before reset. The
+        // reference's locked end removes its raw-handle query before close.
+        if let Some((reference, epoch)) = self.reference.take() {
+            reference.end(epoch);
         }
         unsafe { waveOutReset(self.handle) };
         for buf in self.buffers.drain(..) {

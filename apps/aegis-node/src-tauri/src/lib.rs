@@ -37,6 +37,8 @@ mod windows_hands_free;
 mod windows_wakeword;
 #[cfg(any(test, all(feature = "native-runtime", windows)))]
 mod windows_voice_signal;
+#[cfg(any(test, all(feature = "native-runtime", windows)))]
+mod windows_barge_in_signal;
 
 #[cfg(feature = "native-runtime")]
 #[derive(Clone, serde::Serialize)]

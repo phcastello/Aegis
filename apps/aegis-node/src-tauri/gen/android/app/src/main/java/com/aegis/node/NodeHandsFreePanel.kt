@@ -20,14 +20,24 @@ private fun handsFreePanelEnergy(energy:Double,count:Int):Float {
     return ((20.0*log10(rms)+58.0)/46.0).coerceIn(0.0,1.0).toFloat()
 }
 
+/** Presentation only: match the compact manual-recording bars without changing
+ * measured PCM levels or letting wider panels stretch an individual bar. */
+internal fun handsFreeInputBarHeight(level:Float,density:Float,availableHeight:Float):Float {
+    val normalized=if(level.isFinite())level.coerceIn(0f,1f) else 0f
+    return minOf(availableHeight,(3f+sqrt(normalized)*29f)*density).coerceAtLeast(0f)
+}
+internal fun handsFreeInputBarWidth(slot:Float,density:Float):Float =
+    minOf(3f*density,slot*.75f).coerceAtLeast(0f)
+
 /**
  * One audio producer, one visible UI consumer. Only energies/amplitudes and
  * timestamps are retained; PCM is read in place and never copied or retained.
  *
  * 20ms measurements are presented 200ms behind capture time. A 200ms microphone
  * delivery consequently supplies the next ten real presentation points instead
- * of stepping all bars together. 32 positions span 1.28s of that history. Linear
- * interpolation is presentation between measured envelopes, never invented PCM.
+ * of stepping all bars together. 32 positions span 1.92s of that history.
+ * Slots stay fixed in space. Interpolate their visual heights linearly between
+ * discrete 60ms snapshots resampled from measured envelopes, never inventing PCM.
  *
  * The audio producer never acquires a UI lock. A volatile odd/even publication
  * sequence lets render copy a small fixed snapshot and discard a racing frame.
@@ -35,11 +45,11 @@ private fun handsFreePanelEnergy(energy:Double,count:Int):Float {
 internal object HandsFreePanelSignal {
     const val BAR_COUNT=32
     const val WINDOW_MS=20L
-    const val BAR_STEP_MS=40L
+    const val BAR_STEP_MS=60L
     const val HISTORY_MS=BAR_COUNT*BAR_STEP_MS
     const val PRESENTATION_DELAY_MS=200L
     const val STALE_CLEAR_MS=1600L
-    const val CAPACITY=80 // 1.6s includes visible history plus presentation delay.
+    const val CAPACITY=112 // 2.24s includes visible history, delay and interpolation margin.
     const val ATTACK_MS=40.0
     const val RELEASE_MS=150.0
     private const val WINDOW_SAMPLES=320
@@ -136,7 +146,7 @@ internal object HandsFreePanelSignal {
     }
 
     /** Writes oldest-left/newest-right amplitudes into a caller-owned array. */
-    fun render(owner:Any?,nowMs:Long,output:FloatArray):Boolean {
+    fun render(owner:Any?,nowMs:Long,output:FloatArray,smooth:Boolean=true):Boolean {
         require(output.size>=BAR_COUNT)
         val target=observation?.takeIf{it.owner===owner}?:run{output.fill(0f);return false}
         val version=target.publication
@@ -155,12 +165,26 @@ internal object HandsFreePanelSignal {
         val age=if(received==Long.MIN_VALUE)Long.MAX_VALUE else nowMs-received
         if(count==0 || age<0 || age>=STALE_CLEAR_MS){output.fill(0f);return false}
         val headNs=(nowMs-PRESENTATION_DELAY_MS)*NS_PER_MS
+        val slotNs=BAR_STEP_MS*NS_PER_MS
+        // Without motion the View redraws only when a microphone batch arrives;
+        // sampling its actual time (rather than a preceding grid boundary)
+        // avoids displaying an empty first frame until the following batch.
+        val snapshotHead=if(smooth)Math.floorDiv(headNs,slotNs)*slotNs else headNs
+        val fraction=((headNs-snapshotHead).toDouble()/slotNs).toFloat()
+        val blend=if(smooth)fraction else 0f
         // Capture dropout fades the whole history; it must not freeze on the last word.
         val missingFade=if(age<=400)1f else ((1400-age)/1000f).coerceIn(0f,1f).let{it*it}
         var active=false
         for(index in 0 until BAR_COUNT) {
-            val at=headNs-(BAR_COUNT-1-index)*BAR_STEP_MS*NS_PER_MS
-            var level=sample(target,at,count)*missingFade
+            val at=snapshotHead-(BAR_COUNT-1-index)*slotNs
+            val left=sample(target,at,count)
+            val right=if(blend>0f)sample(target,at+slotNs,count) else left
+            // Manual bars interpolate height, not their squared measurement.
+            // Square-root visual scaling is applied at both measured endpoints
+            // so the final bar height has the same linear transition.
+            val from=sqrt(left)
+            val visual=from+(sqrt(right)-from)*blend
+            var level=(if(blend>0f)visual*visual else left)*missingFade
             if(level<QUIET)level=0f
             output[index]=level
             if(level>0f)active=true
@@ -241,8 +265,15 @@ internal class HandsFreePanelPresentation {
     fun snapshot():Snapshot?=activeSnapshot
     fun isCurrent(snapshot:Snapshot)=activeSnapshot===snapshot
     fun end(){activeSnapshot=null}
-    fun bargeInAccessibilityHint(token: String, availability: HandsFreeBargeInPanelAvailability): String? =
-        availability.hint.takeIf { state == HandsFreePanelState.SPEAKING && activeSnapshot?.session == token }
+    fun bargeInAccessibilityHint(token: String, availability: HandsFreeBargeInPanelAvailability): String? {
+        if(activeSnapshot?.session!=token)return null
+        return when(state) {
+            HandsFreePanelState.SPEAKING->availability.hint
+            HandsFreePanelState.PROCESSING->if(availability==HandsFreeBargeInPanelAvailability.VOICE)
+                "Você pode corrigir o pedido por voz." else availability.hint
+            else->null
+        }
+    }
 
     fun refresh(status:String):Boolean {
         if(terminalError)return false

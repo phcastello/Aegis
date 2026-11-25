@@ -281,6 +281,33 @@ internal fun handsFreeWav(samples:ShortArray,count:Int):ByteArray {
     return buffer.array()
 }
 
+/** A correction received while the first command is still being transcribed.
+ * Preserve both utterances for one new transcription, without carrying any
+ * generated assistant audio or changing the normal command-capture limit. */
+internal fun handsFreeJoinUntranscribedCommands(previous:ByteArray,latest:ByteArray):ByteArray {
+    val maximumPcmBytes=16000*2*90
+    val gapBytes=16000*2/4 // 250ms separator; both utterances remain PCM16 mono.
+    fun checkedData(wav:ByteArray):Int {
+        require(wav.size in 46..(44+maximumPcmBytes) && (wav.size-44)%2==0)
+        val header=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+        require(header.getInt(4)==wav.size-8 && header.getInt(40)==wav.size-44 &&
+            header.getInt(24)==16000 && header.getShort(22).toInt()==1 && header.getShort(34).toInt()==16)
+        return wav.size-44
+    }
+    val oldCount=checkedData(previous)
+    val newCount=checkedData(latest)
+    val keptOld=minOf(oldCount,(maximumPcmBytes-newCount-gapBytes).coerceAtLeast(0))
+    val gap=if(keptOld>0)gapBytes else 0
+    val output=ByteArray(44+keptOld+gap+newCount)
+    latest.copyInto(output,0,0,44)
+    previous.copyInto(output,44,previous.size-keptOld,previous.size)
+    latest.copyInto(output,44+keptOld+gap,44,latest.size)
+    ByteBuffer.wrap(output).order(ByteOrder.LITTLE_ENDIAN).apply {
+        putInt(4,output.size-8);putInt(40,output.size-44)
+    }
+    return output
+}
+
 /** JNI batches 200ms AudioRecord blocks; feature stride remains internal 10ms / 3 frames. */
 internal object MicroWakeWordNative {
     init {System.loadLibrary("aegis_microwakeword")}

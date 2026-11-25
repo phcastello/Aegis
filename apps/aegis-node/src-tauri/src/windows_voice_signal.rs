@@ -1,5 +1,6 @@
 //! PCM16 mono at 16 kHz. Election quality compares the last half-second with
 //! the preceding second, using the same windows as the Android node.
+use sonora_agc2::vad_wrapper::VoiceActivityDetectorWrapper;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -13,40 +14,29 @@ fn power(samples: &[i16]) -> f64 {
     samples.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / samples.len().max(1) as f64
 }
 
-// Same fixed display scale as the Android interaction panel: -58 to -12
-// dBFS, 40 ms attack, 150 ms release. Display only; never affects detection,
-// the transmitted command, or the microphone's gain.
+// Match the manual recording composer: a linear RMS level multiplied by 8,
+// one fixed history position every 60 ms. The UI interpolates the heights;
+// the capture, endpoint and audio stream never depend on this presentation.
 const WAVEFORM_BARS: usize = 64;
 const WAVEFORM_WINDOW: Duration = Duration::from_millis(20);
-const WAVEFORM_STEP: Duration = WAVEFORM_WINDOW;
-// These are independent of display density: don't shorten the capture jitter
-// allowance or the presentation delay when the header gains more bars.
+const WAVEFORM_STEP: Duration = Duration::from_millis(60);
 const WAVEFORM_DELAY: Duration = Duration::from_millis(40);
 const WAVEFORM_JITTER_TOLERANCE: Duration = Duration::from_millis(40);
 const WAVEFORM_GAP: Duration = Duration::from_millis(400);
-const WAVEFORM_CAPACITY: usize = 80; // 1.6 s: 1.28 s history plus presentation delay.
-const WAVEFORM_QUIET: f64 = 0.002;
+const WAVEFORM_CAPACITY: usize = 208; // 64 × 60ms plus room for presentation delay and jitter.
 
-fn waveform_level(samples: &[i16]) -> f64 {
-    let rms = power(samples).sqrt() / 32768.0;
-    if rms <= 0.0012589254 {
-        0.0
-    } else {
-        ((20.0 * rms.log10() + 58.0) / 46.0).clamp(0.0, 1.0)
-    }
+fn waveform_level(mean_square: f64) -> f64 {
+    (mean_square.sqrt() / 32768.0 * 8.0).min(1.0)
 }
 
-/// Capture delivers fixed 20 ms blocks. Retain only normalized envelopes and
-/// their estimated acquisition times, even when queued blocks arrive together.
-/// Presentation resamples the real history (64 bars spaced 20 ms apart),
-/// delayed by 40 ms to absorb normal recording/delivery jitter. No PCM is
-/// retained, and no audio or capture decisions depend on the visual timeline.
+/// Retain a timestamped RMS history, not PCM. Combining two consecutive
+/// 20ms blocks approximates the manual microphone's ~43ms analyser window.
+/// The display receives measured levels at 60ms intervals and animates the
+/// fixed positions over that same interval, like the existing text composer.
 #[derive(Default)]
 pub(crate) struct Waveform {
     points: VecDeque<(Instant, f64)>,
-    envelope: f64,
-    silence_start: f64,
-    silent_frames: u32,
+    previous_power: Option<f64>,
     last_frame: Option<Instant>,
     last_emitted: Option<Instant>,
 }
@@ -60,8 +50,6 @@ impl Waveform {
         queued_blocks: usize,
     ) -> Option<[f32; WAVEFORM_BARS]> {
         if !visible {
-            // Reset once when the app is hidden. Avoid even computing RMS
-            // while no visualization can be displayed.
             if self.last_frame.is_some() {
                 *self = Self::default();
             }
@@ -75,21 +63,12 @@ impl Waveform {
         }
         self.last_frame = Some(now);
         debug_assert_eq!(samples.len(), BLOCK);
-
-        // The driver returns complete, ordered 20 ms blocks; the completed
-        // buffers still queued behind this block represent its age. Anchor
-        // their timeline once and retain sample cadence, not read cadence.
         let age = WAVEFORM_WINDOW * queued_blocks.min(125) as u32;
         let estimate = now.checked_sub(age).unwrap_or(now);
         let captured_at = if let Some(&(previous, _)) = self.points.back() {
             let next = previous + WAVEFORM_WINDOW;
-            // Real acquisition/delivery gaps decay rather than extending the
-            // previous measurement through missing time; smaller variations
-            // in the driver's return time don't distort the sample spacing.
             if estimate.saturating_duration_since(next) > WAVEFORM_JITTER_TOLERANCE {
-                let gap_ms = estimate.saturating_duration_since(next).as_secs_f64() * 1000.;
-                self.envelope *= (-gap_ms / 150.).exp();
-                self.silent_frames = 0;
+                self.previous_power = None;
                 estimate
             } else {
                 next
@@ -97,87 +76,65 @@ impl Waveform {
         } else {
             estimate
         };
-        let level = waveform_level(samples);
-        if level == 0.0 {
-            if self.silent_frames == 0 {
-                self.silence_start = self.envelope;
-            }
-            self.silent_frames = (self.silent_frames + 1).min(8);
-            self.envelope =
-                self.silence_start * (1.0 - f64::from(self.silent_frames) * 20.0 / 150.0).max(0.0);
-        } else {
-            self.silent_frames = 0;
-            let time_constant = if level > self.envelope { 40.0 } else { 150.0 };
-            self.envelope = level + (self.envelope - level) * (-20.0 / time_constant as f64).exp();
-        }
-        if self.envelope < WAVEFORM_QUIET {
-            self.envelope = 0.0;
-        }
+        let current = power(samples);
+        let level = waveform_level(
+            self.previous_power
+                .map_or(current, |previous| (previous + current) * 0.5),
+        );
+        self.previous_power = Some(current);
         if self.points.len() == WAVEFORM_CAPACITY {
             self.points.pop_front();
         }
-        self.points.push_back((captured_at, self.envelope));
-
-        // Do not send a partially drained pre-roll as a current frame. Once
-        // the delayed head is covered, publish at most once per 20 ms source
-        // window. Each bar has its own measured temporal position rather
-        // than stretching or repeating a coarser series to fill the header.
+        self.points.push_back((captured_at, level));
         if age > WAVEFORM_DELAY {
             return None;
         }
-        if self
-            .last_emitted
-            .is_some_and(|previous| now.saturating_duration_since(previous) < WAVEFORM_WINDOW)
-        {
-            return None;
-        }
-        self.last_emitted = Some(now);
-        Some(self.history(now))
+        // Synchronize emission with the measured sample clock rather than the
+        // driver callback cadence. Jitter never shifts the history extra slots.
+        let head = self.points.back()?.0;
+        let presentation = match self.last_emitted {
+            Some(previous) => {
+                let count = head.saturating_duration_since(previous).as_millis()
+                    / WAVEFORM_STEP.as_millis();
+                if count == 0 {
+                    return None;
+                }
+                previous + WAVEFORM_STEP * count.min(u32::MAX as u128) as u32
+            }
+            None => head,
+        };
+        self.last_emitted = Some(presentation);
+        Some(self.history(presentation))
     }
 
     fn history(&self, now: Instant) -> [f32; WAVEFORM_BARS] {
         std::array::from_fn(|index| {
             now.checked_sub(WAVEFORM_DELAY + WAVEFORM_STEP * (WAVEFORM_BARS - 1 - index) as u32)
-                .map_or(0., |at| {
-                    let level = self.sample(at);
-                    if level < WAVEFORM_QUIET {
-                        0.
-                    } else {
-                        level as f32
-                    }
-                })
+                .map_or(0., |at| self.sample(at) as f32)
         })
     }
 
     fn sample(&self, at: Instant) -> f64 {
-        let Some(&(first_time, first_level)) = self.points.front() else {
-            return 0.;
-        };
-        if at < first_time {
-            let fraction =
-                1. - first_time.duration_since(at).as_secs_f64() / WAVEFORM_WINDOW.as_secs_f64();
-            return first_level * fraction.clamp(0., 1.);
-        }
-        let decay = |level: f64, age: Duration| level * (-age.as_secs_f64() / 0.150).exp();
-        let (mut left_time, mut left_level) = (first_time, first_level);
-        for &(right_time, right_level) in self.points.iter().skip(1) {
-            if at <= right_time {
-                let span = right_time.duration_since(left_time);
-                if span > WAVEFORM_WINDOW + WAVEFORM_JITTER_TOLERANCE {
-                    let start = right_time - WAVEFORM_WINDOW;
-                    if at < start {
-                        return decay(left_level, at.duration_since(left_time));
-                    }
-                    left_level = decay(left_level, start.duration_since(left_time));
-                    left_time = start;
-                }
-                let fraction = at.duration_since(left_time).as_secs_f64()
-                    / right_time.duration_since(left_time).as_secs_f64();
-                return left_level + (right_level - left_level) * fraction.clamp(0., 1.);
+        let mut previous = None;
+        for &(time, level) in &self.points {
+            if at == time {
+                return level;
             }
-            (left_time, left_level) = (right_time, right_level);
+            if at < time {
+                return previous
+                    .filter(|(left, _)| {
+                        time.duration_since(*left) <= WAVEFORM_WINDOW + WAVEFORM_JITTER_TOLERANCE
+                    })
+                    .map_or(0., |(left, value)| {
+                        let fraction = at.duration_since(left).as_secs_f64()
+                            / time.duration_since(left).as_secs_f64();
+                        value + (level - value) * fraction
+                    });
+            }
+            previous = Some((time, level));
         }
-        decay(left_level, at.duration_since(left_time))
+        // Do not synthesize samples across an acquisition gap.
+        0.
     }
 }
 
@@ -332,10 +289,15 @@ impl Background {
     }
 }
 
-/// Keep 240 ms of leading context, allow a natural pause after the cue, and
-/// bound both first-speech latency and total audio without sending silence.
+/// Keep 320 ms of leading context and use model-based speech evidence with a
+/// slowly adapting noise floor, rather than ending whenever RMS dips. A 1.4s
+/// hangover permits ordinary pauses but no recording can exceed the old limit.
+const ENDPOINT_LEAD_FRAMES: usize = 16;
+const ENDPOINT_ONSET_FRAMES: usize = 3; // 60 ms; the cue alone is shorter.
+const ENDPOINT_SILENCE_FRAMES: usize = 70; // 1.4 seconds after the last speech.
 pub(crate) struct Endpoint {
-    threshold: f64,
+    vad: VoiceActivityDetectorWrapper,
+    noise: f64,
     wait_frames: usize,
     frames: usize,
     earliest_end: usize,
@@ -353,14 +315,15 @@ pub(crate) enum Capture {
 impl Endpoint {
     pub fn new(noise_rms: f64, wait_seconds: usize) -> Self {
         Self {
-            threshold: (noise_rms * 2.3).clamp(130.0, 3500.0),
+            vad: VoiceActivityDetectorWrapper::new(sonora_simd::detect_backend(), RATE as i32),
+            noise: noise_rms.clamp(8.0, 400.0),
             wait_frames: wait_seconds * BLOCKS_PER_SECOND,
             frames: 0,
             earliest_end: 0,
             voiced_run: 0,
             trailing: 0,
             started: false,
-            lead: VecDeque::with_capacity(BLOCK * 12),
+            lead: VecDeque::with_capacity(BLOCK * ENDPOINT_LEAD_FRAMES),
             audio: Vec::new(),
         }
     }
@@ -368,25 +331,90 @@ impl Endpoint {
         self.wait_frames += buffered_frames;
         self.earliest_end = buffered_frames + 75;
     }
+    // The barge-in classifier has already qualified this onset. Do not require
+    // a second voiced run, nor discard the beginning of a very short command.
+    pub fn interrupted(noise_rms: f64, prefix: Vec<i16>) -> Self {
+        debug_assert!(!prefix.is_empty() && prefix.len() % BLOCK == 0);
+        let mut endpoint = Self::new(noise_rms, 2);
+        for block in prefix.chunks_exact(BLOCK) {
+            let _ = endpoint.voice_probability(block);
+        }
+        endpoint.frames = prefix.len() / BLOCK;
+        endpoint.started = true;
+        endpoint.audio = prefix;
+        endpoint
+    }
     pub fn push(&mut self, samples: &[i16]) -> Capture {
+        let probability = self.voice_probability(samples);
+        self.push_classified(samples, probability)
+    }
+    fn voice_probability(&mut self, samples: &[i16]) -> f32 {
+        debug_assert_eq!(samples.len(), BLOCK);
+        let mut floats = [0.; BLOCK];
+        for (value, sample) in floats.iter_mut().zip(samples) {
+            *value = f32::from(*sample);
+        }
+        // WebRTC RNN expects 10 ms frames. Prefer the speech-rich half of the
+        // 20 ms block so a short consonant is not averaged away.
+        let first = self.vad.analyze(&floats[..BLOCK / 2]);
+        let second = self.vad.analyze(&floats[BLOCK / 2..]);
+        first.max(second)
+    }
+    fn push_classified(&mut self, samples: &[i16], probability: f32) -> Capture {
         self.frames += 1;
-        let voiced = power(samples).sqrt() > self.threshold;
+        // Ignore DC/digital silence even while the RNN has speech hangover.
+        let mean = samples.iter().map(|&value| f64::from(value)).sum::<f64>() / BLOCK as f64;
+        let rms = (power(samples) - mean * mean).max(0.0).sqrt();
+        let standard_floor = (self.noise * 1.25).clamp(12.0, 220.0);
+        let confident_floor = (self.noise * 0.75).clamp(8.0, 45.0);
+        let floor = if probability >= 0.8 {
+            confident_floor
+        } else {
+            standard_floor
+        };
+        // The RNN alone may report voice on a rising white-noise floor. A
+        // nearly flat broadband block lacks short-lag correlation; don't let
+        // it confirm an onset or continually reset the trailing timer. This
+        // deliberately narrow veto only classifies timing, never filters PCM.
+        // Unvoiced consonants remain in the pre-roll/active command and the
+        // 1.4s trailing allowance protects short gaps in voiced evidence.
+        let structured = rms >= 8.0
+            && (1..=4).any(|lag| {
+                let correlation = samples[lag..]
+                    .iter()
+                    .zip(&samples[..BLOCK - lag])
+                    .map(|(&a, &b)| (f64::from(a) - mean) * (f64::from(b) - mean))
+                    .sum::<f64>();
+                correlation.abs() > 0.16 * rms * rms * (BLOCK - lag) as f64
+            });
+        let voiced =
+            probability >= (if self.started { 0.45 } else { 0.65 }) && rms >= floor && structured;
+        // Noise can change after speech began. Learn only from non-speech,
+        // never from a voiced word, and keep the floor from disqualifying a
+        // quieter utterance solely because pre-wake noise was loud.
+        if !voiced && (probability < 0.35 || !structured) {
+            self.noise += (rms.clamp(8.0, 1200.0) - self.noise) * 0.04;
+        }
         if !self.started {
             self.voiced_run = if voiced { self.voiced_run + 1 } else { 0 };
-            if self.lead.len() == BLOCK * 12 {
+            if self.lead.len() == BLOCK * ENDPOINT_LEAD_FRAMES {
                 self.lead.drain(..BLOCK);
             }
             self.lead.extend(samples);
-            if self.voiced_run >= 4 {
+            if self.voiced_run >= ENDPOINT_ONSET_FRAMES {
                 self.started = true;
                 self.audio.extend(self.lead.drain(..));
-            } else if self.frames >= self.wait_frames {
+            } else if self.frames >= self.wait_frames
+                // A candidate starting within the wait may confirm after the
+                // boundary, but a late pulse cannot extend it indefinitely.
+                && !(self.voiced_run > 0 && self.frames + 1 - self.voiced_run <= self.wait_frames)
+            {
                 return Capture::Empty;
             }
         } else {
             self.audio.extend_from_slice(samples);
             self.trailing = if voiced { 0 } else { self.trailing + 1 };
-            if (self.trailing >= 40 && self.frames >= self.earliest_end)
+            if (self.trailing >= ENDPOINT_SILENCE_FRAMES && self.frames >= self.earliest_end)
                 || self.audio.len() >= RATE * 30
             {
                 return Capture::Complete(std::mem::take(&mut self.audio));
@@ -420,6 +448,22 @@ pub(crate) fn wav(samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interrupted_capture_keeps_the_qualified_prefix_without_a_second_vad_gate() {
+        let prefix = vec![120i16; BLOCK * 3]; // below the normal endpoint threshold
+        let mut endpoint = Endpoint::interrupted(1000.0, prefix.clone());
+        for _ in 0..ENDPOINT_SILENCE_FRAMES - 1 {
+            assert!(matches!(endpoint.push(&[0; BLOCK]), Capture::More));
+        }
+        let Capture::Complete(command) = endpoint.push(&[0; BLOCK]) else {
+            panic!("qualified short speech must complete");
+        };
+        assert_eq!(&command[..prefix.len()], prefix.as_slice());
+        assert_eq!(
+            command.len(),
+            prefix.len() + BLOCK * ENDPOINT_SILENCE_FRAMES
+        );
+    }
     fn tone(bin: usize) -> [i16; SPECTRUM_SIZE] {
         std::array::from_fn(|index| {
             (6_000.0
@@ -494,91 +538,62 @@ mod tests {
     }
 
     #[test]
-    fn waveform_scale_matches_android_and_never_amplifies_noise() {
-        assert_eq!(waveform_level(&[0; BLOCK]), 0.);
-        assert_eq!(waveform_level(&[30; BLOCK]), 0.);
-        assert_eq!(waveform_level(&[i16::MIN; BLOCK]), 1.);
-        assert!(waveform_level(&[500; BLOCK]) > 0.);
-        assert!(waveform_level(&[3000; BLOCK]) > waveform_level(&[500; BLOCK]));
+    fn waveform_uses_manual_composer_rms_scale_and_saturation() {
+        assert_eq!(waveform_level(0.), 0.);
+        assert_eq!(waveform_level(32768.0_f64.powi(2)), 1.);
+        assert!((waveform_level(1024.0_f64.powi(2)) - 0.25).abs() < 1e-9);
+        assert!(waveform_level(30.0_f64.powi(2)) < 0.01);
     }
 
     #[test]
-    fn waveform_is_ordered_smoothed_and_cleared_after_silence() {
+    fn waveform_shifts_one_position_per_60ms_with_real_linear_levels() {
         let start = Instant::now();
         let mut meter = Waveform::default();
-        for index in 0..20 {
-            let now = start + Duration::from_millis(index * 20);
-            if let Some(levels) = meter.push(&[0; BLOCK], true, now, 0) {
-                assert_eq!(levels, [0.; WAVEFORM_BARS]);
+        let mut emitted = Vec::new();
+        for index in 0..280 {
+            let value = if (10..=15).contains(&index) { 1024 } else { 0 };
+            if let Some(frame) =
+                meter.push(&[value; BLOCK], true, start + WAVEFORM_WINDOW * index, 0)
+            {
+                emitted.push((meter.last_emitted.unwrap(), frame));
             }
         }
-        // A fixed 40 ms presentation delay; the capture data itself isn't delayed.
-        assert_eq!(
-            meter.push(&[10000; BLOCK], true, start + Duration::from_millis(400), 0),
-            Some([0.; WAVEFORM_BARS])
-        );
-        assert_eq!(
-            meter.push(&[10000; BLOCK], true, start + Duration::from_millis(420), 0),
-            Some([0.; WAVEFORM_BARS])
-        );
-        let first = meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(440), 0)
-            .unwrap();
-        assert!(first[..WAVEFORM_BARS - 1].iter().all(|level| *level == 0.));
-        assert!(first[WAVEFORM_BARS - 1] > 0. && first[WAVEFORM_BARS - 1] < 1.);
-        let intermediate = meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(460), 0)
-            .unwrap();
-        let second = meter
-            .push(&[10000; BLOCK], true, start + Duration::from_millis(480), 0)
-            .unwrap();
-        assert_eq!(second[WAVEFORM_BARS - 3], first[WAVEFORM_BARS - 1]);
-        assert_eq!(second[WAVEFORM_BARS - 2], intermediate[WAVEFORM_BARS - 1]);
-        assert!(second[WAVEFORM_BARS - 1] > intermediate[WAVEFORM_BARS - 1]);
-        assert!(intermediate[WAVEFORM_BARS - 1] > first[WAVEFORM_BARS - 1]);
-        for index in 25..110 {
-            meter.push(
-                &[0; BLOCK],
-                true,
-                start + Duration::from_millis(index * 20),
-                0,
-            );
+        assert_eq!(emitted.len(), 1 + (279 * 20 / 60));
+        for pair in emitted.windows(2) {
+            assert_eq!(pair[1].0.duration_since(pair[0].0), WAVEFORM_STEP);
+            // A fixed position inherits its adjacent slot's previous measurement.
+            assert_eq!(pair[1].1[..63], pair[0].1[1..]);
         }
-        assert_eq!(
-            meter.history(start + Duration::from_millis(2180)),
-            [0.; WAVEFORM_BARS]
-        );
+        assert!(emitted.iter().any(|(_, frame)| frame[63] > 0.2));
+        assert_eq!(emitted.last().unwrap().1, [0.; WAVEFORM_BARS]);
     }
 
     #[test]
-    fn waveform_exposes_all_64_measured_windows_without_changing_history_or_delay() {
+    fn waveform_uses_all_64_distinct_positions_and_the_original_manual_cadence() {
         let start = Instant::now();
         let mut meter = Waveform::default();
         let mut latest = [0.; WAVEFORM_BARS];
-        // A varying synthetic input offers a different observation on every
-        // block. With an aligned driver, every bar must use exactly its own
-        // measured window rather than repeated/interpolated 40 ms bars.
-        for index in 0..WAVEFORM_CAPACITY {
+        let mut emitted_at = start;
+        for index in 0..(WAVEFORM_CAPACITY + 13) {
             let when = start + WAVEFORM_WINDOW * index as u32;
-            let amplitude = (500 + 90 * index) as i16;
-            latest = meter.push(&[amplitude; BLOCK], true, when, 0).unwrap();
+            let amplitude = (300 + 8 * index) as i16;
+            if let Some(frame) = meter.push(&[amplitude; BLOCK], true, when, 0) {
+                latest = frame;
+                emitted_at = meter.last_emitted.unwrap();
+            }
         }
         assert_eq!(WAVEFORM_BARS, 64);
         assert_eq!(
             WAVEFORM_STEP * WAVEFORM_BARS as u32,
-            Duration::from_millis(1280)
+            Duration::from_millis(3840)
         );
         assert_eq!(WAVEFORM_DELAY, Duration::from_millis(40));
         assert_eq!(meter.points.len(), WAVEFORM_CAPACITY);
-        let last_measured = WAVEFORM_CAPACITY - 1 - 2; // delayed head remains two complete blocks behind capture.
-        let first_measured = last_measured + 1 - WAVEFORM_BARS;
         for (index, level) in latest.iter().enumerate() {
-            assert_eq!(*level, meter.points[first_measured + index].1 as f32);
+            let when = emitted_at - WAVEFORM_DELAY - WAVEFORM_STEP * (63 - index) as u32;
+            assert!((*level - meter.sample(when) as f32).abs() < 1e-6);
         }
-        assert!(
-            latest.windows(2).all(|pair| pair[0] < pair[1]),
-            "individual measured windows are retained"
-        );
+        assert!(latest.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
@@ -608,7 +623,7 @@ mod tests {
         assert_eq!(emitted.len(), 1);
         assert_eq!(queued.points.len(), count);
         assert_eq!(queued.points, live.points);
-        assert_eq!(emitted[0], live.history(end));
+        assert_eq!(emitted[0], live.history(queued.last_emitted.unwrap()));
         assert!(emitted[0].iter().any(|level| *level > 0.));
     }
 
@@ -634,10 +649,10 @@ mod tests {
             .iter()
             .enumerate()
             .all(|(i, (at, _))| *at == start + WAVEFORM_WINDOW * i as u32));
-        assert!(emitted.len() >= 32);
+        assert_eq!(emitted.len(), 1 + (63 * 20 / 60));
         assert!(emitted.windows(2).all(|pair| {
             let span = pair[1].duration_since(pair[0]);
-            span >= WAVEFORM_WINDOW && span <= Duration::from_millis(47)
+            span >= Duration::from_millis(53) && span <= Duration::from_millis(67)
         }));
     }
 
@@ -651,10 +666,8 @@ mod tests {
         let before = meter.sample(start + Duration::from_millis(80));
         meter.push(&[10000; BLOCK], true, start + Duration::from_millis(280), 0);
         let gap = meter.sample(start + Duration::from_millis(180));
-        assert!(
-            gap > 0. && gap < before * 0.55,
-            "a gap isn't sustained speech"
-        );
+        assert!(before > 0.);
+        assert_eq!(gap, 0., "a gap is not invented speech");
         assert!(meter
             .push(
                 &[10000; BLOCK],
@@ -696,16 +709,20 @@ mod tests {
         for _ in 0..250 {
             assert!(matches!(ep.push(&[0; BLOCK]), Capture::More));
         }
+        let speech = std::array::from_fn::<_, BLOCK, _>(|i| if i % 2 == 0 { 420 } else { -420 });
         for _ in 0..8 {
-            assert!(matches!(ep.push(&[420; BLOCK]), Capture::More));
+            assert!(matches!(ep.push_classified(&speech, 0.9), Capture::More));
         }
-        for _ in 0..39 {
-            assert!(matches!(ep.push(&[0; BLOCK]), Capture::More));
+        for _ in 0..ENDPOINT_SILENCE_FRAMES - 1 {
+            assert!(matches!(
+                ep.push_classified(&[0; BLOCK], 0.0),
+                Capture::More
+            ));
         }
-        let Capture::Complete(s) = ep.push(&[0; BLOCK]) else {
+        let Capture::Complete(s) = ep.push_classified(&[0; BLOCK], 0.0) else {
             panic!("no endpoint")
         };
-        assert_eq!(s.iter().filter(|&&x| x == 420).count(), BLOCK * 8);
+        assert_eq!(s.iter().filter(|&&x| x.abs() == 420).count(), BLOCK * 8);
         assert_eq!(&wav(&s)[..4], b"RIFF");
     }
     #[test]
@@ -715,5 +732,225 @@ mod tests {
             assert!(matches!(ep.push(&[0; BLOCK]), Capture::More));
         }
         assert!(matches!(ep.push(&[0; BLOCK]), Capture::Empty));
+    }
+
+    fn alternate(level: i16) -> [i16; BLOCK] {
+        std::array::from_fn(|i| if i % 2 == 0 { level } else { -level })
+    }
+
+    #[test]
+    fn natural_pauses_and_quieter_following_words_do_not_end_a_command() {
+        for pause in [40, 50, 65] {
+            // .8s, 1s, 1.3s
+            let mut ep = Endpoint::new(400., 6);
+            for _ in 0..3 {
+                assert!(matches!(
+                    ep.push_classified(&alternate(500), 0.96),
+                    Capture::More
+                ));
+            }
+            for _ in 0..pause {
+                assert!(matches!(ep.push_classified(&[0; BLOCK], 0.), Capture::More));
+            }
+            // A much quieter word after the pause still resets endpoint timing.
+            for _ in 0..3 {
+                assert!(matches!(
+                    ep.push_classified(&alternate(50), 0.96),
+                    Capture::More
+                ));
+            }
+            for _ in 0..ENDPOINT_SILENCE_FRAMES - 1 {
+                assert!(matches!(ep.push_classified(&[0; BLOCK], 0.), Capture::More));
+            }
+            let Capture::Complete(audio) = ep.push_classified(&[0; BLOCK], 0.) else {
+                panic!("expected endpoint")
+            };
+            assert_eq!(audio.iter().filter(|&&x| x.abs() == 500).count(), BLOCK * 3);
+            assert_eq!(audio.iter().filter(|&&x| x.abs() == 50).count(), BLOCK * 3);
+        }
+    }
+
+    #[test]
+    fn rising_non_speech_noise_does_not_extend_capture_and_floor_adapts() {
+        let mut ep = Endpoint::new(30., 6);
+        for _ in 0..3 {
+            assert!(matches!(
+                ep.push_classified(&alternate(700), 0.95),
+                Capture::More
+            ));
+        }
+        for i in 0..ENDPOINT_SILENCE_FRAMES - 1 {
+            assert!(matches!(
+                ep.push_classified(&alternate((50 + i * 20) as i16), 0.1),
+                Capture::More
+            ));
+        }
+        assert!(ep.noise > 100.);
+        assert!(matches!(
+            ep.push_classified(&alternate(1400), 0.1),
+            Capture::Complete(_)
+        ));
+    }
+
+    #[test]
+    fn actual_rnn_rejects_a_rising_broadband_noise_floor() {
+        let mut ep = Endpoint::new(30., 2);
+        let mut seed = 0x7b31a1b5u32;
+        let mut reached_timeout = false;
+        let mut max_probability = 0f32;
+        for frame in 0..100 {
+            let amplitude = 20 + frame * 15;
+            let noise: [i16; BLOCK] = std::array::from_fn(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (((seed >> 16) as i32 - 32768) * amplitude / 32768) as i16
+            });
+            let probability = ep.voice_probability(&noise);
+            max_probability = max_probability.max(probability);
+            let started = ep.started;
+            let capture = ep.push_classified(&noise, probability);
+            if !started && ep.started {
+                eprintln!(
+                    "broadband onset frame={frame} prob={probability} floor={} rms={}",
+                    ep.noise,
+                    power(&noise).sqrt()
+                );
+            }
+            match capture {
+                Capture::More => {}
+                Capture::Empty => {
+                    reached_timeout = true;
+                    break;
+                }
+                Capture::Complete(_) => panic!("rising stationary noise accepted as command"),
+            }
+        }
+        eprintln!("broadband max probability={max_probability}");
+        assert!(
+            reached_timeout,
+            "rising stationary noise must not prolong no-speech timeout"
+        );
+    }
+
+    #[test]
+    fn quiet_short_onset_near_wait_limit_confirms_without_allowing_isolated_click_or_dc() {
+        let mut ep = Endpoint::new(400., 2);
+        for _ in 0..99 {
+            assert!(matches!(ep.push_classified(&[0; BLOCK], 0.), Capture::More));
+        }
+        // Start inside the wait, confirm immediately after it, including all PCM.
+        for _ in 0..3 {
+            assert!(matches!(
+                ep.push_classified(&alternate(50), 0.99),
+                Capture::More
+            ));
+        }
+        for _ in 0..ENDPOINT_SILENCE_FRAMES - 1 {
+            assert!(matches!(ep.push_classified(&[0; BLOCK], 0.), Capture::More));
+        }
+        let Capture::Complete(audio) = ep.push_classified(&[0; BLOCK], 0.) else {
+            panic!("short command lost")
+        };
+        assert_eq!(audio.iter().filter(|&&x| x.abs() == 50).count(), BLOCK * 3);
+        let mut isolated = Endpoint::new(10., 2);
+        for _ in 0..99 {
+            assert!(matches!(
+                isolated.push_classified(&[500; BLOCK], 0.99),
+                Capture::More
+            ));
+        }
+        assert!(matches!(
+            isolated.push_classified(&alternate(900), 0.99),
+            Capture::More
+        ));
+        assert!(matches!(
+            isolated.push_classified(&[0; BLOCK], 0.),
+            Capture::Empty
+        ));
+    }
+
+    #[test]
+    fn hard_limit_is_preserved_despite_continuous_speech_evidence() {
+        let mut ep = Endpoint::new(10., 6);
+        for _ in 0..(RATE * 30 / BLOCK - 1) {
+            assert!(matches!(
+                ep.push_classified(&alternate(500), 0.99),
+                Capture::More
+            ));
+        }
+        let Capture::Complete(audio) = ep.push_classified(&alternate(500), 0.99) else {
+            panic!("30s limit not applied")
+        };
+        assert_eq!(audio.len(), RATE * 30);
+    }
+
+    #[test]
+    #[ignore = "requires existing synthetic speech fixtures (AEGIS_BARGE_IN_PCM_DIR)"]
+    fn replay_endpoint_with_real_rnn_vad_and_natural_pause() {
+        let dir = std::path::PathBuf::from(std::env::var("AEGIS_BARGE_IN_PCM_DIR").unwrap());
+        let mut total = 0;
+        for name in ["near-1.pcm", "near-2.pcm"] {
+            let bytes = std::fs::read(dir.join(name)).unwrap();
+            let pcm: Vec<i16> = bytes
+                .chunks_exact(2)
+                .map(|pair| i16::from_le_bytes(pair.try_into().unwrap()))
+                .collect();
+            let blocks: Vec<&[i16]> = pcm.chunks_exact(BLOCK).collect();
+            let first = blocks.iter().position(|b| power(b).sqrt() > 100.).unwrap();
+            let last = blocks.iter().rposition(|b| power(b).sqrt() > 100.).unwrap();
+            for gain in [0.08, 0.2, 1.0] {
+                let speech: Vec<[i16; BLOCK]> = blocks[first..=last]
+                    .iter()
+                    .map(|b| std::array::from_fn(|i| (b[i] as f64 * gain) as i16))
+                    .collect();
+                let mut ep = Endpoint::new(30., 6);
+                for _ in 0..10 {
+                    assert!(matches!(ep.push(&[0; BLOCK]), Capture::More));
+                }
+                for block in &speech {
+                    assert!(
+                        matches!(ep.push(block), Capture::More),
+                        "{name} gain {gain}: speech cut"
+                    );
+                }
+                assert!(ep.started, "{name} gain {gain}: no onset");
+                for _ in 0..50 {
+                    assert!(
+                        matches!(ep.push(&[0; BLOCK]), Capture::More),
+                        "{name} gain {gain}: pause cut"
+                    );
+                }
+                for block in &speech {
+                    assert!(
+                        matches!(ep.push(block), Capture::More),
+                        "{name} gain {gain}: second phrase cut"
+                    );
+                }
+                let mut completed = None;
+                for i in 0..100 {
+                    if let Capture::Complete(audio) = ep.push(&[0; BLOCK]) {
+                        completed = Some((i, audio));
+                        break;
+                    }
+                }
+                let (silence, audio) =
+                    completed.unwrap_or_else(|| panic!("{name} gain {gain}: did not end"));
+                let phrase: Vec<i16> = speech
+                    .iter()
+                    .flat_map(|block| block.iter().copied())
+                    .collect();
+                let mut expected = phrase.clone();
+                expected.resize(expected.len() + BLOCK * 50, 0);
+                expected.extend_from_slice(&phrase);
+                assert!(audio.windows(expected.len()).any(|window| window == expected),
+                    "{name} gain {gain}: capture did not preserve both complete phrases and the intervening pause");
+                println!(
+                    "endpoint replay {name} gain={gain} silence_ms={} captured_ms={}",
+                    (silence + 1) * 20,
+                    audio.len() * 1000 / RATE
+                );
+                total += 1;
+            }
+        }
+        assert_eq!(total, 6);
     }
 }

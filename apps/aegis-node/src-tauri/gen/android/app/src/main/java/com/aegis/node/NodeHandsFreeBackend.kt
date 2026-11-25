@@ -45,8 +45,12 @@ class NodeHandsFreeBackend internal constructor(
   private var pinnedSessionId: String? = null
   private var pinnedConversationId: String? = null
   private val playbackProgress = HandsFreePlaybackProgress()
+  @Volatile private var generationSnapshot:HandsFreeGenerationInterruption?=null
 
   internal fun playbackInterruption(playedFrames: Long) = playbackProgress.at(playedFrames)
+  /** Present only after the prior command was actually transcribed. */
+  internal fun generationInterruption()=generationSnapshot
+  internal fun processingInProgress()=executing.get() && !cancelled.get()
 
   private fun conversationChanged(id: String) {
     requireUuid(id)
@@ -188,9 +192,12 @@ class NodeHandsFreeBackend internal constructor(
 
   internal fun execute(wav:ByteArray,sessionId:String,conversationId:String?,pcm:HandsFreePcmSink,trace:HandsFreeTurnLatency?, incremental:Boolean=false,
                        interruptedPlayback: HandsFreePlaybackInterruption? = null,
+                       interruptedGeneration: HandsFreeGenerationInterruption? = null,
+                       onProcessing:()->Unit={},
                        onConversation:(String)->Unit={}):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
     playbackProgress.reset()
+    generationSnapshot=null
     latencyTrace=trace
     activePcm = pcm
     val conversationReportLock = Any()
@@ -207,7 +214,9 @@ class NodeHandsFreeBackend internal constructor(
       }
     }
     try {
-      return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, reportConversation)
+      require(interruptedPlayback==null || interruptedGeneration==null)
+      onProcessing()
+      return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, interruptedGeneration, reportConversation)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -220,7 +229,8 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean,
-                          interruptedPlayback: HandsFreePlaybackInterruption?, reportConversation:(String)->Unit): HandsFreeTurn {
+                          interruptedPlayback: HandsFreePlaybackInterruption?, interruptedGeneration:HandsFreeGenerationInterruption?,
+                          reportConversation:(String)->Unit): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
     validateWav(wav)
@@ -254,7 +264,8 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcribed", 0)
       checkCurrent()
       turnId = id
-      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback, reportConversation)
+      generationSnapshot=HandsFreeGenerationInterruption(id,command)
+      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback, interruptedGeneration, reportConversation)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
         chatJson(JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
@@ -364,7 +375,8 @@ class NodeHandsFreeBackend internal constructor(
 
   /** Two synthesis slots, bounded PCM pipes and one writer keep playback continuous. */
   private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink,
-                               interruptedPlayback: HandsFreePlaybackInterruption?, reportConversation:(String)->Unit):HandsFreeTurn {
+                               interruptedPlayback: HandsFreePlaybackInterruption?, interruptedGeneration:HandsFreeGenerationInterruption?,
+                               reportConversation:(String)->Unit):HandsFreeTurn {
     val trace=latencyTrace
     val events=java.util.concurrent.ArrayBlockingQueue<JSONObject>(2)
     val units=java.util.concurrent.ArrayBlockingQueue<SegmentDownload>(2)
@@ -381,6 +393,7 @@ class NodeHandsFreeBackend internal constructor(
       .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
       .put("allowSilentIgnore",true)
       .apply { interruptedPlayback?.takeIf { it.conversationId == conversationId }?.let { put("interruptedPlayback", it.toJson()) } }
+      .apply { interruptedGeneration?.let { put("interruptedGeneration",it.toJson()) } }
       .toString().toByteArray(Charsets.UTF_8)
     val reader=Thread({
       var persistedDestination=conversationId

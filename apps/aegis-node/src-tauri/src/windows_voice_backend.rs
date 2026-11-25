@@ -1,13 +1,22 @@
 use crate::{node_commands::NodeRuntime, windows_voice_audio::Output, windows_voice_signal::wav};
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response};
+use serde::Serialize;
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub(crate) struct Backend {
-    current_credential: Box<dyn Fn() -> Option<String>>,
+    current_credential: Arc<dyn Fn() -> Option<String> + Send + Sync>,
     origin: String,
     credential: String,
     client: Client,
@@ -15,12 +24,136 @@ pub(crate) struct Backend {
     turn: Option<Uuid>,
     speech: Option<Uuid>,
 }
-pub(crate) struct Reply {
-    pub conversation: Uuid,
-    pub message: Uuid,
+pub(crate) struct TurnReply {
+    pub ignored: bool,
     pub continuation: bool,
 }
 pub(crate) type Result<T> = std::result::Result<T, &'static str>;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PlaybackInterruption {
+    #[serde(skip)]
+    pub conversation: Uuid,
+    pub turn_id: Uuid,
+    pub assistant_message_id: Uuid,
+    pub segment_id: Uuid,
+    pub sequence: usize,
+    pub played_frames_in_segment: u64,
+    pub segment_frames: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Interruption {
+    Playback(PlaybackInterruption),
+    Generation {
+        turn_id: Uuid,
+        previous_content: String,
+    },
+}
+
+pub(crate) struct TurnReport {
+    pub result: Result<TurnReply>,
+    pub turn_id: Uuid,
+    pub conversation: Option<Uuid>,
+    pub accepted: bool,
+    pub transcript: Option<String>,
+    pub chat_started: bool,
+    pub playback: Option<PlaybackInterruption>,
+}
+
+pub(crate) trait TurnAudio {
+    fn write(&mut self, samples: &[i16], cancel: &CancellationToken) -> Result<()>;
+    fn finish(&mut self, cancel: &CancellationToken) -> Result<()>;
+    fn played_frames(&self) -> Option<u64>;
+}
+
+impl TurnAudio for Output {
+    fn write(&mut self, samples: &[i16], cancel: &CancellationToken) -> Result<()> {
+        Output::write(self, samples, cancel)
+    }
+    fn finish(&mut self, cancel: &CancellationToken) -> Result<()> {
+        Output::finish(self, cancel)
+    }
+    fn played_frames(&self) -> Option<u64> {
+        Output::played_frames(self)
+    }
+}
+
+const MAX_PLAYBACK_FRAMES: u64 = 24_000 * 180;
+const MAX_CHAT_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq)]
+struct Segment {
+    conversation: Uuid,
+    assistant: Uuid,
+    id: Uuid,
+    sequence: usize,
+}
+
+#[derive(Default)]
+struct PlaybackProgress {
+    segments: Vec<(Segment, u64, Option<u64>)>,
+}
+impl PlaybackProgress {
+    fn begin(&mut self, segment: Segment, start: u64) {
+        self.segments.push((segment, start, None));
+    }
+    fn length(&mut self, frames: u64) {
+        if let Some((_, _, length)) = self.segments.last_mut() {
+            *length = Some(frames);
+        }
+    }
+    fn at(&self, turn_id: Uuid, cursor: u64) -> Option<PlaybackInterruption> {
+        if cursor > MAX_PLAYBACK_FRAMES {
+            return None;
+        }
+        let (unit, start, length) = self
+            .segments
+            .iter()
+            .rev()
+            .find(|(_, start, _)| cursor >= *start)?;
+        let relative = cursor - start;
+        Some(PlaybackInterruption {
+            conversation: unit.conversation,
+            turn_id,
+            assistant_message_id: unit.assistant,
+            segment_id: unit.id,
+            sequence: unit.sequence,
+            played_frames_in_segment: length.map_or(relative, |n| relative.min(n)),
+            segment_frames: *length,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ChatProgress {
+    conversation: Option<Uuid>,
+    accepted: bool,
+}
+
+enum ChatEvent {
+    Segment(Segment),
+    Done(bool),
+    Ignored,
+}
+
+enum AudioChunk {
+    Pcm(Vec<i16>),
+    Complete(u64),
+}
+struct SpeechUnit {
+    segment: Segment,
+    receive: tokio::sync::mpsc::Receiver<AudioChunk>,
+    // Release only when this unit has drained into the native player; at most
+    // current plus one prepared successor can retain a PCM pipe.
+    _slot: tokio::sync::OwnedSemaphorePermit,
+}
+enum SpeechEvent {
+    Unit(SpeechUnit),
+    Done(bool),
+    Ignored,
+}
 
 impl Backend {
     pub fn open(app: &AppHandle, client: &Client, cancel: &CancellationToken) -> Result<Self> {
@@ -28,7 +161,7 @@ impl Backend {
             .map_err(|_| "backend_unavailable")?
             .base_url();
         let app = app.clone();
-        let current_credential = Box::new(move || {
+        let current_credential = Arc::new(move || {
             tauri::async_runtime::block_on(app.state::<NodeRuntime>().voice_credential())
         });
         let credential = current_credential().ok_or("pairing_required")?;
@@ -41,6 +174,17 @@ impl Backend {
             turn: None,
             speech: None,
         })
+    }
+    pub fn fork(&self, cancel: &CancellationToken) -> Self {
+        Self {
+            current_credential: self.current_credential.clone(),
+            origin: self.origin.clone(),
+            credential: self.credential.clone(),
+            client: self.client.clone(),
+            cancel: cancel.clone(),
+            turn: None,
+            speech: None,
+        }
     }
     pub fn scope_key(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
@@ -177,74 +321,477 @@ impl Backend {
         }
         .to_owned())
     }
-    pub fn respond(
+    /// One cancellable backend worker per automatic turn. The microphone owner
+    /// keeps reading while this worker performs STT, generation and playback.
+    pub fn run_turn<A: TurnAudio>(
         &mut self,
         session: Uuid,
         destination: Option<Uuid>,
-        text: String,
-    ) -> Result<Option<Reply>> {
-        let turn = Uuid::new_v4();
-        self.turn = Some(turn);
-        let response = self.send(self.post("/api/chat/messages", 180).json(&json!({
-            "turnId": turn,
-            "conversationId": destination,
-            "voiceSessionId": session,
-            "origin": "hands_free",
-            "content": text,
-            "allowSilentIgnore": true,
-        })))?;
-        if response.status() == StatusCode::NO_CONTENT {
-            // The server deliberately did not create a turn or assistant message.
-            // Clear the cleanup handle and finish without speech or a chat update.
-            self.turn = None;
-            self.current()?;
-            return Ok(None);
+        samples: &[i16],
+        interruption: Option<&Interruption>,
+        on_conversation: impl Fn(Uuid) + Send,
+        open: impl FnOnce() -> Result<A>,
+    ) -> TurnReport {
+        let turn_id = Uuid::new_v4();
+        let mut report = TurnReport {
+            result: Err("backend_response"),
+            turn_id,
+            conversation: destination,
+            accepted: false,
+            transcript: None,
+            chat_started: false,
+            playback: None,
+        };
+        let text = match self.transcribe(samples) {
+            Ok(text) => text,
+            Err(error) => {
+                report.result = Err(error);
+                return report;
+            }
+        };
+        if text.is_empty() {
+            report.transcript = Some(text);
+            report.result = Ok(TurnReply {
+                ignored: true,
+                continuation: false,
+            });
+            return report;
         }
-        let result = self.json_response(response)?;
-        let conversation = parse_uuid(&result["conversationId"])?;
-        let message = &result["message"];
-        if destination.is_some_and(|id| id != conversation)
-            || parse_uuid(&message["conversationId"])? != conversation
-            || message["role"] != "assistant"
-        {
+        report.transcript = Some(text.clone());
+        // Keep the turn handle even if cancellation wins before HTTP writes; the
+        // server settles a missing/unfinished prior generation idempotently.
+        self.turn = Some(turn_id);
+        report.chat_started = true;
+        let mut payload = json!({
+            "turnId": turn_id, "conversationId": destination, "voiceSessionId": session,
+            "origin": "hands_free", "content": text, "voiceSegments": true, "allowSilentIgnore": true,
+        });
+        match interruption {
+            Some(Interruption::Playback(position))
+                if destination == Some(position.conversation) =>
+            {
+                payload["interruptedPlayback"] = json!(position);
+            }
+            Some(Interruption::Generation {
+                turn_id,
+                previous_content,
+            }) => {
+                payload["interruptedGeneration"] =
+                    json!({"turnId":turn_id,"previousContent":previous_content});
+            }
+            _ => {}
+        }
+        let progress = Arc::new(Mutex::new(ChatProgress {
+            conversation: destination,
+            accepted: false,
+        }));
+        let mut output: Option<A> = None;
+        let mut playback = PlaybackProgress::default();
+        let mut position = None;
+        let reader = self.fork(&self.cancel);
+        let reader_progress = progress.clone();
+        let (send, receive) = tokio::sync::mpsc::channel(2);
+        let (unit_send, mut units) = tokio::sync::mpsc::channel(2);
+        let scheduler = self.fork(&self.cancel);
+        // Bound the whole segmented generation/synthesis/playback pipeline, not
+        // just each individual HTTP request. No timer runs during idle listening.
+        let deadline_done = CancellationToken::new();
+        let timer_done = deadline_done.clone();
+        // 0 = armed, 1 = completed, 2 = deadline claimed; the timer cannot
+        // cancel a completed turn and completion cannot hide an elapsed deadline.
+        let deadline_state = Arc::new(AtomicU8::new(0));
+        let timer_fired = deadline_state.clone();
+        let timer_cancel = self.cancel.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::select! { biased;
+                _=timer_done.cancelled()=>{},
+                _=timer_cancel.cancelled()=>{},
+                _=tokio::time::sleep(Duration::from_secs(300))=>{
+                    if timer_fired.compare_exchange(0,2,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                        timer_cancel.cancel();
+                    }
+                }
+            }
+        });
+        report.result = thread::scope(|scope| {
+            let read = scope.spawn(move || {
+                let result = reader.read_chat(
+                    turn_id,
+                    destination,
+                    payload,
+                    &reader_progress,
+                    send,
+                    on_conversation,
+                );
+                if result.is_err() {
+                    reader.cancel.cancel();
+                }
+                result
+            });
+            let schedule =
+                scope.spawn(move || scheduler.schedule_speech(turn_id, receive, unit_send));
+            let result = self.consume_segments(&mut units, &mut playback, &mut output, open);
+            if result.is_err() {
+                self.cancel.cancel();
+            }
+            // Snapshot the device's consumed head BEFORE waveOutReset/Drop.
+            // Dropping now, before joining another worker or remote cleanup,
+            // also discards buffered but unheard audio on an interruption.
+            position = output
+                .as_ref()
+                .and_then(|device| device.played_frames())
+                .and_then(|cursor| playback.at(turn_id, cursor));
+            drop(output.take());
+            drop(units);
+            let schedule = schedule.join().unwrap_or(Err("backend_response"));
+            let read = read.join().unwrap_or(Err("backend_response"));
+            match (result, schedule, read) {
+                (Err("cancelled"), _, Err(error)) if error != "cancelled" => Err(error),
+                (Err("cancelled"), Err(error), _) if error != "cancelled" => Err(error),
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
+                (Ok(reply), Ok(()), Ok(())) => Ok(reply),
+            }
+        });
+        let finished_before_deadline = deadline_state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        deadline_done.cancel();
+        if !finished_before_deadline {
+            self.cancel.cancel();
+            report.result = Err("backend_unavailable");
+        }
+        let confirmed = progress.lock().unwrap();
+        report.conversation = confirmed.conversation;
+        report.accepted = confirmed.accepted;
+        report.playback = position;
+        if report.result.is_ok() && !self.cancel.is_cancelled() {
+            if !report.result.as_ref().unwrap().ignored {
+                // Completion is a best-effort acknowledgement after device drain.
+                self.complete_turn(turn_id);
+            }
+            self.turn = None;
+            self.speech = None;
+        }
+        report
+    }
+
+    fn complete_turn(&self, id: Uuid) {
+        let request = self
+            .post(&format!("/api/chat/turns/{id}/complete"), 3)
+            .body(Vec::new());
+        tauri::async_runtime::spawn(async move {
+            let _ = request.send().await;
+        });
+    }
+
+    fn read_chat(
+        &self,
+        turn: Uuid,
+        destination: Option<Uuid>,
+        payload: Value,
+        progress: &Mutex<ChatProgress>,
+        send: tokio::sync::mpsc::Sender<ChatEvent>,
+        on_conversation: impl Fn(Uuid),
+    ) -> Result<()> {
+        let mut response = self.send(self.post("/api/chat/messages/stream", 180).json(&payload))?;
+        let mut pending = Vec::new();
+        let mut total = 0usize;
+        let mut sequence = 0usize;
+        let mut conversation = destination;
+        let mut reported = destination;
+        let mut assistant = None;
+        let mut seen = HashSet::new();
+        let mut any = false;
+        let mut terminal = None;
+        while let Some(chunk) = self.next(&mut response)? {
+            total = total.checked_add(chunk.len()).ok_or("backend_response")?;
+            if total > MAX_CHAT_BYTES {
+                return Err("backend_response");
+            }
+            pending.extend_from_slice(&chunk);
+            while let Some(index) = pending.iter().position(|b| *b == b'\n') {
+                if index > 64 * 1024 {
+                    return Err("backend_response");
+                }
+                let line: Vec<u8> = pending.drain(..=index).collect();
+                let event: Value = serde_json::from_slice(&line).map_err(|_| "backend_response")?;
+                self.current()?;
+                if terminal.is_some() {
+                    return Err("backend_response");
+                }
+                let kind = event["type"].as_str().ok_or("backend_response")?;
+                if kind == "error" {
+                    return Err("backend_unavailable");
+                }
+                if parse_uuid(&event["turnId"])? != turn {
+                    return Err("backend_response");
+                }
+                let first = !any;
+                any = true;
+                match kind {
+                    "ignored"
+                        if first && event.as_object().is_some_and(|value| value.len() == 2) =>
+                    {
+                        terminal = Some(ChatEvent::Ignored);
+                    }
+                    "conversation" => {
+                        let next = parse_uuid(&event["conversationId"])?;
+                        if conversation.is_some_and(|id| id != next) {
+                            return Err("backend_response");
+                        }
+                        conversation = Some(next);
+                        *progress.lock().unwrap() = ChatProgress {
+                            conversation,
+                            accepted: true,
+                        };
+                        if reported != conversation {
+                            on_conversation(next);
+                            reported = conversation;
+                        }
+                    }
+                    "final_segment" | "done" => {
+                        let next = parse_uuid(&event["conversationId"])?;
+                        let message = parse_uuid(&event["assistantMessageId"])?;
+                        if conversation.is_some_and(|id| id != next)
+                            || assistant.is_some_and(|id| id != message)
+                        {
+                            return Err("backend_response");
+                        }
+                        let validated = if kind == "done" {
+                            if sequence == 0 {
+                                return Err("backend_response");
+                            }
+                            ChatEvent::Done(event["voiceContinuation"] == "continue")
+                        } else {
+                            let id = parse_uuid(&event["segmentId"])?;
+                            let content = event["content"].as_str().ok_or("backend_response")?;
+                            if sequence >= 128
+                                || event["sequence"].as_u64() != Some(sequence as u64)
+                                || !seen.insert(id)
+                                || content.trim().is_empty()
+                                || content.chars().count() > 8000
+                            {
+                                return Err("backend_response");
+                            }
+                            ChatEvent::Segment(Segment {
+                                conversation: next,
+                                assistant: message,
+                                id,
+                                sequence,
+                            })
+                        };
+                        // A malformed segment or terminal must not navigate the
+                        // UI or claim an accepted destination as a side effect.
+                        conversation = Some(next);
+                        assistant = Some(message);
+                        *progress.lock().unwrap() = ChatProgress {
+                            conversation,
+                            accepted: true,
+                        };
+                        if reported != conversation {
+                            on_conversation(next);
+                            reported = conversation;
+                        }
+                        if kind == "done" {
+                            terminal = Some(validated);
+                        } else {
+                            send_event(&send, validated, &self.cancel)?;
+                            sequence += 1;
+                        }
+                    }
+                    "tool_status" | "memory_activity" | "token" => {}
+                    _ => return Err("backend_response"),
+                }
+            }
+            if pending.len() > 64 * 1024 {
+                return Err("backend_response");
+            }
+        }
+        if !pending.is_empty() {
             return Err("backend_response");
         }
-        Ok(Some(Reply {
-            conversation,
-            message: parse_uuid(&message["id"])?,
-            continuation: result["voiceContinuation"] == "continue",
-        }))
-    }
-    pub fn speak(&mut self, reply: &Reply, observe: impl FnOnce(&mut Output)) -> Result<()> {
-        let mut output = None;
-        let mut observe = Some(observe);
-        let cancel = self.cancel.clone();
-        self.speech_pcm(reply, |pcm| {
-            if output.is_none() {
-                let mut device = Output::open()?;
-                if let Some(callback) = observe.take() {
-                    callback(&mut device);
-                }
-                output = Some(device);
-            }
-            output.as_mut().unwrap().write(pcm, &cancel)
-        })?;
-        output.ok_or("backend_response")?.finish(&cancel)?;
         self.current()?;
-        self.turn = None;
-        self.speech = None;
-        Ok(())
+        send_event(&send, terminal.ok_or("backend_response")?, &self.cancel)
     }
-    fn speech_pcm(
-        &mut self,
-        reply: &Reply,
-        mut deliver: impl FnMut(&[i16]) -> Result<()>,
+
+    /// Match the Android segmented pipeline: no more than two active synthesis
+    /// slots, and bounded half-second PCM pipes. A successor can start as soon
+    /// as the preceding server request returned real PCM, preserving order.
+    fn schedule_speech(
+        &self,
+        turn: Uuid,
+        mut receive: tokio::sync::mpsc::Receiver<ChatEvent>,
+        send: tokio::sync::mpsc::Sender<SpeechEvent>,
     ) -> Result<()> {
+        let slots = Arc::new(tokio::sync::Semaphore::new(2));
+        let failure = Arc::new(Mutex::new(None));
+        let result = thread::scope(|scope| {
+            let mut previous_ready: Option<tokio::sync::oneshot::Receiver<()>> = None;
+            let outcome = (|| -> Result<()> {
+                loop {
+                    self.current()?;
+                    match receive_event(&mut receive, &self.cancel)? {
+                        ChatEvent::Ignored => {
+                            return send_event(&send, SpeechEvent::Ignored, &self.cancel);
+                        }
+                        ChatEvent::Done(continuation) => {
+                            return send_event(
+                                &send,
+                                SpeechEvent::Done(continuation),
+                                &self.cancel,
+                            );
+                        }
+                        ChatEvent::Segment(segment) => {
+                            if let Some(ready) = previous_ready.take() {
+                                tauri::async_runtime::block_on(async {
+                                    tokio::select! { biased;
+                                        _=self.cancel.cancelled()=>Err("cancelled"),
+                                        value=ready=>value.map_err(|_|"backend_response")
+                                    }
+                                })?;
+                            }
+                            let slot = tauri::async_runtime::block_on(async {
+                                tokio::select! { biased;
+                                    _=self.cancel.cancelled()=>Err("cancelled"),
+                                    value=slots.clone().acquire_owned()=>value.map_err(|_|"backend_response")
+                                }
+                            })?;
+                            let (pcm_send, pcm_receive) = tokio::sync::mpsc::channel(5);
+                            let (started, ready) = tokio::sync::oneshot::channel();
+                            previous_ready = Some(ready);
+                            let mut downloader = self.fork(&self.cancel);
+                            let cancel = self.cancel.clone();
+                            let speech_segment = segment.clone();
+                            let download_failure = failure.clone();
+                            scope.spawn(move || {
+                                let mut started = Some(started);
+                                let result = downloader
+                                    .segment_pcm(turn, &speech_segment, |frames| {
+                                        if let Some(signal) = started.take() {
+                                            let _ = signal.send(());
+                                        }
+                                        send_event(
+                                            &pcm_send,
+                                            AudioChunk::Pcm(frames.to_vec()),
+                                            &cancel,
+                                        )
+                                    })
+                                    .and_then(|frames| {
+                                        send_event(&pcm_send, AudioChunk::Complete(frames), &cancel)
+                                    });
+                                if let Err(error) = result {
+                                    if error != "cancelled" {
+                                        let mut failure = download_failure.lock().unwrap();
+                                        if failure.is_none() {
+                                            *failure = Some(error);
+                                        }
+                                    }
+                                    cancel.cancel();
+                                }
+                                // The downloader owns and cancels only its own speech handle.
+                            });
+                            send_event(
+                                &send,
+                                SpeechEvent::Unit(SpeechUnit {
+                                    segment,
+                                    receive: pcm_receive,
+                                    _slot: slot,
+                                }),
+                                &self.cancel,
+                            )?;
+                        }
+                    }
+                }
+            })();
+            if outcome.is_err() {
+                self.cancel.cancel();
+            }
+            outcome
+        });
+        let error = *failure.lock().unwrap();
+        error.map_or(result, Err)
+    }
+
+    fn consume_segments<A: TurnAudio>(
+        &self,
+        receive: &mut tokio::sync::mpsc::Receiver<SpeechEvent>,
+        playback: &mut PlaybackProgress,
+        output: &mut Option<A>,
+        open: impl FnOnce() -> Result<A>,
+    ) -> Result<TurnReply> {
+        let cancel = self.cancel.clone();
+        let mut open = Some(open);
+        let mut submitted = 0u64;
+        let mut last_identity = Instant::now();
+        loop {
+            self.current()?;
+            match receive_event(receive, &cancel)? {
+                SpeechEvent::Ignored => {
+                    return Ok(TurnReply {
+                        ignored: true,
+                        continuation: false,
+                    })
+                }
+                SpeechEvent::Done(continuation) => {
+                    output.as_mut().ok_or("backend_response")?.finish(&cancel)?;
+                    self.current()?;
+                    return Ok(TurnReply {
+                        ignored: false,
+                        continuation,
+                    });
+                }
+                SpeechEvent::Unit(mut unit) => {
+                    playback.begin(unit.segment, submitted);
+                    let start = submitted;
+                    loop {
+                        match receive_event(&mut unit.receive, &cancel)? {
+                            AudioChunk::Pcm(pcm) => {
+                                if last_identity.elapsed() >= Duration::from_secs(1) {
+                                    self.current()?;
+                                    last_identity = Instant::now();
+                                }
+                                let next = submitted
+                                    .checked_add(pcm.len() as u64)
+                                    .ok_or("backend_response")?;
+                                if next > MAX_PLAYBACK_FRAMES {
+                                    return Err("backend_response");
+                                }
+                                if output.is_none() {
+                                    if cancel.is_cancelled() {
+                                        return Err("cancelled");
+                                    }
+                                    *output = Some(open.take().ok_or("backend_response")?()?);
+                                }
+                                output.as_mut().unwrap().write(&pcm, &cancel)?;
+                                submitted = next;
+                            }
+                            AudioChunk::Complete(frames) => {
+                                if frames != submitted - start {
+                                    return Err("backend_response");
+                                }
+                                playback.length(frames);
+                                break;
+                            }
+                        }
+                    }
+                    // Dropping this unit releases its slot. Prefetched frames
+                    // never count as heard and the device cursor is authoritative.
+                }
+            }
+        }
+    }
+    fn segment_pcm(
+        &mut self,
+        turn: Uuid,
+        segment: &Segment,
+        mut deliver: impl FnMut(&[i16]) -> Result<()>,
+    ) -> Result<u64> {
         let id = Uuid::new_v4();
         self.speech = Some(id);
-        let mut response = self.send(self.post("/api/voice/speech", 300).json(
-            &json!({"turnId":self.turn,"assistantMessageId":reply.message,"speechRequestId":id}),
-        ))?;
+        let mut response = self.send(self.post("/api/voice/speech/segments", 300).json(&json!({
+            "turnId":turn,"speechRequestId":id,"assistantMessageId":segment.assistant,
+            "conversationId":segment.conversation,"segmentId":segment.id,"sequence":segment.sequence,
+        })))?;
         for (key, value) in [
             ("X-Aegis-Audio-Format", "pcm_s16le"),
             ("X-Aegis-Sample-Rate", "24000"),
@@ -254,17 +801,24 @@ impl Backend {
                 return Err("backend_response");
             }
         }
+        if response
+            .headers()
+            .get("X-Aegis-Speech-Request-Id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| Uuid::parse_str(v).ok())
+            != Some(id)
+        {
+            return Err("backend_response");
+        }
         self.current()?;
         let mut odd = None;
         let mut total = 0u64;
         let mut last_identity = Instant::now();
         while let Some(mut chunk) = self.next(&mut response)? {
-            if last_identity.elapsed() >= Duration::from_secs(1) {
-                self.current()?;
-                last_identity = Instant::now();
-            }
-            total += chunk.len() as u64;
-            if total > 24_000 * 2 * 180 {
+            total = total
+                .checked_add(chunk.len() as u64)
+                .ok_or("backend_response")?;
+            if total > MAX_PLAYBACK_FRAMES * 2 {
                 return Err("backend_response");
             }
             if let Some(byte) = odd.take() {
@@ -277,12 +831,13 @@ impl Backend {
                 .chunks_exact(2)
                 .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
                 .collect();
-            // Revalidate authority even when the backend delivers one large chunk
-            // which takes several seconds to drain on the output device.
-            for part in pcm.chunks(12_000) {
+            for part in pcm.chunks(2400) {
                 if last_identity.elapsed() >= Duration::from_secs(1) {
                     self.current()?;
                     last_identity = Instant::now();
+                }
+                if self.cancel.is_cancelled() {
+                    return Err("cancelled");
                 }
                 deliver(part)?;
             }
@@ -290,8 +845,34 @@ impl Backend {
         if total == 0 || odd.is_some() {
             return Err("backend_response");
         }
-        self.current()
+        self.current()?;
+        self.speech = None;
+        Ok(total / 2)
     }
+}
+
+fn send_event<T>(
+    send: &tokio::sync::mpsc::Sender<T>,
+    event: T,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    tauri::async_runtime::block_on(async {
+        tokio::select! { biased;
+            _=cancel.cancelled()=>Err("cancelled"),
+            result=send.send(event)=>result.map_err(|_|"cancelled")
+        }
+    })
+}
+fn receive_event<T>(
+    receive: &mut tokio::sync::mpsc::Receiver<T>,
+    cancel: &CancellationToken,
+) -> Result<T> {
+    tauri::async_runtime::block_on(async {
+        tokio::select! { biased;
+            _=cancel.cancelled()=>Err("cancelled"),
+            value=receive.recv()=>value.ok_or("backend_response")
+        }
+    })
 }
 fn parse_uuid(value: &Value) -> Result<Uuid> {
     Uuid::parse_str(value.as_str().unwrap_or(""))

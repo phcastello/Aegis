@@ -239,6 +239,40 @@ A medição continua com 32 bandas de FFT do PCM já reproduzido. A interface mo
 
 O filtro exponencial de apresentação segue o princípio de suavização temporal do [AnalyserNode da Web Audio API](https://www.w3.org/TR/webaudio/#fft-windowing-and-smoothing-over-time), mas com constantes de tempo de 75 ms na subida e 150 ms na descida. O coeficiente usa o tempo entre amostras, para que a resposta não dependa da frequência do monitor ou da tela. Não há interpolações aleatórias, alteração no PCM, ganho ou atrasos na reprodução. Quadros de silêncio válido recebem uma queda breve, limitada a 120 ms, para evitar saltos entre sílabas. A expiração (500 ms na interface Windows), o fim do estado e a ocultação limpam imediatamente a memória do filtro. O Android também descarta a memória na troca do stream/observador e quando o cursor não é válido. No Windows o evento existente não distingue um quadro silencioso de um cursor indisponível; ambos convergem a zero em até 120 ms enquanto os eventos chegam. O temporizador existente também limpa um último quadro silencioso mesmo sem novos eventos, sem manter uma animação independente. A preferência por movimento reduzido apresenta as amplitudes agregadas reais sem o filtro temporal.
 
+Na revisão seguinte, o envelope visual da saída Android teve suas constantes reduzidas para **65 ms de ataque e 130 ms de liberação**. Foram preservados as 16 bandas resultantes da análise real, o alcance de amplitudes, o protocolo de cursor e a rampa de silêncio de 120 ms. Os testes conferem o coeficiente de subida e descida pelo tempo transcorrido.
+
+O painel Android também fica compacto e sem cabeçalho ou texto de status
+durante escuta, processamento e fala. A área do visualizador é centralizada
+horizontalmente com margens iguais, reservando o botão de cancelar de 48 dp
+à direita sem sobrepor a animação. Mensagens de erro e transcrições reais
+continuam visíveis; o estado e a disponibilidade de interrupção são
+comunicados pelo TalkBack. A saída mantém as barras ancoradas à base inferior.
+
+Na entrada Android, as **32 posições são fixas** e continuam representando o
+histórico temporal da amplitude medida (1,92 s), não faixas de frequência.
+O produtor conserva as janelas de 20 ms, a escala e o atraso visual de 200 ms.
+No renderer, a linha do tempo é reamostrada em snapshots de 60 ms; cada
+posição interpola linearmente somente sua própria altura visual entre
+snapshots próximos, sem deslocar barras ou gerar novos valores acústicos.
+O desenho segue a referência da gravação manual: barras fixas de até 3 dp
+de largura, altura total de `3 + sqrt(nível) × 29` dp (3 a 32 dp), simétricas
+em torno do centro vertical. Na área estreita, a largura diminui para
+preservar o espaço entre posições, sem alongar barras ou alterar a escala
+da amplitude capturada. O silêncio é representado pelos pontos de 3 dp.
+Com movimento reduzido, a posição medida da linha do tempo é apresentada
+diretamente quando chega áudio, sem o ciclo visual de interpolação.
+Não há mudança no detector, VAD, ganho ou captura.
+
+Passaram **33 testes JVM** do sinal/painel/espectro e **15 testes do runtime
+de View Android em Robolectric**. O teste de conteúdo e layout conferiu a
+ausência do texto ativo, centro geométrico, botão de cancelar não sobreposto
+com alvo de 48 dp, erros, transcrição e descrição de acessibilidade. Em 187 ms
+entre blocos de áudio, o View apresentou 11 quadros intermediários distintos
+com animações habilitadas; a preferência explícita de movimento reduzido
+mantém o feedback acústico sem loop de frames. Esse ensaio usa classes de
+produção compiladas contra SDK 37, com as fronteiras de serviço e identidade
+simuladas no host e runtime Android instrumentado API 35, não o telefone.
+
 Comparação no fixture PCM sintético (mesma sequência de 781 quadros, 78 durante a fala; referência de 32 bandas agrupada em pares para comparar as mesmas faixas): a variação absoluta média entre quadros de fala caiu de 0,02548 para 0,01384 de amplitude normalizada (−45,7%). O pico de altura previsto na área Android de 72 dp caiu de 53,78 para 32,53 dp. Esses valores são do núcleo Kotlin e da geometria, não de medição em aparelho físico.
 
 ### Correção da linha do tempo do microfone Windows
@@ -256,3 +290,35 @@ Após a avaliação da interface ampliada, a entrada Windows passa a enviar **64
 O cabeçalho Windows ocupa a mesma área durante escuta, processamento, fala e continuação, inclusive em uma nova conversa. A forma do cartão não muda de uma fase para outra. Os controles do histórico e da conversa continuam acessíveis, e não há popup nem ativação de janela. A geometria SVG do áudio usa pixels CSS reais: 2 px de espessura para cada barra de entrada e 3 px para cada barra do espectro, sem escala horizontal dependente da janela. Em uma coluna estreita, grupos de amostras temporais adjacentes são representados pelo maior nível efetivamente medido, preservando o intervalo histórico e o espaço entre barras. O espectro conserva as 16 bandas suavizadas, com largura visual limitada a 280 px e centralizada na área disponível. Os três pontos preservam a animação aprovada e dimensões fixas.
 
 As verificações desta correção passaram: 120 testes Rust Windows (quatro ignorados por condições de hardware/serviço), 202 testes frontend, 96 verificações de contrato/distribuição, build e ensaio Chromium das quatro fases na mesma posição e dimensão, em janelas largas e estreitas. O ensaio mede a espessura real de cada barra, a compactação do histórico, a largura do espectro e a manutenção dos controles e da preferência por movimento reduzido. Usa sinais sintéticos para validar a interface, não constitui homologação física do microfone ou da reprodução.
+
+
+### Compositor de voz e refinamento da cadência
+
+Na revisão seguinte à .41, o visual de voz Windows substitui o editor da
+conversa enquanto o hands-free está ativo. A conversa é selecionada por evento
+nativo, sem abrir popup, forçar a janela ao primeiro plano ou apagar rascunhos.
+O cartão ocupa a parte inferior do chat: escuta, pensamento, fala e continuação
+mantêm a geometria, com estado acessível e sem texto de status visível. A
+captura manual também aproveita toda a largura entre seus controles.
+
+A referência visual que o proprietário especificou por fim foi a **gravação
+manual Windows da .41**, não o indicador hands-free: o editor antigo usa 19
+barras, RMS × 8, mapa de altura 3 + √nível × 29 px, espessura 3 px e uma
+transição linear de 80 ms a cada amostra de 80 ms. Aplicamos esses mesmos
+parâmetros à interface ampliada e à escuta hands-free no desktop. A fonte
+nativa calcula RMS em janelas reais de aproximadamente 40 ms (dois blocos
+20 ms), sem alterar o sinal capturado, o endpoint ou o detector, e emite até
+64 posições a cada 60 ms com 40 ms de atraso visual. No editor manual, a
+medição WebAudio de 2048 samples permanece e o histórico passa de 19 a até 64
+posições, mantendo o desenho original. A avaliação final aprovou a forma e definiu a cadência em **60 ms nos dois
+aplicativos**. Na largura máxima, isso cobre 3,84 s; colunas compactas exibem
+menos posições recentes sem alterar a cadência. Nenhuma barra transla: apenas
+sua altura interpola linearmente. O celular mantém 32 posições em 60 ms
+(1,92 s) com espessura/altura visual semelhantes ao microfone manual,
+preservando sua própria escala real e atraso.
+O espectro de voz da Aegis continua ancorado à base: o desktop mostra as 32
+bandas medidas, em até 460 px e com barras de 3 px, altura máxima de 52 px;
+o celular conserva as 16 bandas, a amplitude e a disposição anteriores.
+O envelope 65/130 ms torna a resposta aproximadamente 13% mais rápida que
+75/150 ms em ambos, preservando a breve finalização de silêncio. Telas estreitas
+agrupam apenas valores de frequências adjacentes e não esticam a espessura das barras.

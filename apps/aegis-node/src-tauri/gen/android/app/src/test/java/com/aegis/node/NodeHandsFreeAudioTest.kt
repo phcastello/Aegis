@@ -13,6 +13,27 @@ class NodeHandsFreeAudioTest {
     private val voice=HandsFreeSpeechClassifier{frame->frame.any{it.toInt()>30 || it.toInt() < -30}}
     private fun speech(count:Int,level:Int=1500)=ShortArray(count){if(it%30<15)level.toShort() else (-level).toShort()}
 
+    @Test fun preTranscriptionCorrectionRetainsBothCommandsAndRebuildsBoundedPcmHeader() {
+        val first=shortArrayOf(111,222,333)
+        val correction=shortArrayOf(444,555)
+        val oldWav=handsFreeWav(first,first.size)
+        val newWav=handsFreeWav(correction,correction.size)
+        val joined=handsFreeJoinUntranscribedCommands(oldWav,newWav)
+        val header=ByteBuffer.wrap(joined).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(joined.size-8,header.getInt(4))
+        assertEquals(joined.size-44,header.getInt(40))
+        header.position(44)
+        val samples=ShortArray((joined.size-44)/2){header.short}
+        assertArrayEquals(first+ShortArray(4000)+correction,samples)
+        assertArrayEquals(handsFreeWav(first,first.size),oldWav)
+        assertArrayEquals(handsFreeWav(correction,correction.size),newWav)
+        var many=oldWav
+        val latest=handsFreeWav(ShortArray(320000){1234},320000)
+        repeat(8){many=handsFreeJoinUntranscribedCommands(many,latest)}
+        assertTrue(many.size<=44+90*16000*2)
+        assertArrayEquals(latest.copyOfRange(44,latest.size),many.copyOfRange(many.size-latest.size+44,many.size))
+    }
+
     @Test fun ringRetainsTheExactSuffixAcrossPartialWrappedAndOversizedBlocks() {
         for(capacity in listOf(1,17,160,40000)) {
             val ring=HandsFreeRing(capacity)

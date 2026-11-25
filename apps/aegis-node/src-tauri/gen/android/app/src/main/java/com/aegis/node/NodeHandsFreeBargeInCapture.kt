@@ -204,7 +204,10 @@ internal class HandsFreeBargeInCapture internal constructor(
     private val commandNoiseFloor: () -> Double = { 8.0 },
     private val afterInterruption: (ShortArray) -> Unit = {},
     private val closeProcessor: () -> Unit = {},
-    private val onInputFailure: () -> Unit = {}
+    private val onInputFailure: () -> Unit = {},
+    // Before the response starts, there is no assistant PCM to align or cancel.
+    // The ordinary VAD and calibrated level gate still have to qualify speech.
+    private val beforePlayback: Boolean = false
 ):AutoCloseable {
     constructor(
         audio:AudioRecord,
@@ -240,6 +243,28 @@ internal class HandsFreeBargeInCapture internal constructor(
         commandNoiseFloor = processor::commandNoiseFloor,
         afterInterruption = processor::afterInterruption, closeProcessor = processor::close,
         onInputFailure = onInputFailure)
+
+    constructor(
+        audio:AudioRecord,
+        stillCurrent:()->Boolean,
+        onSpeech:()->Boolean,
+        onProbeResult: (String, Int, Int) -> Unit = { _, _, _ -> },
+        onAvailabilityChanged: () -> Unit = {},
+        onCommandFrame: (ShortArray) -> Unit = {},
+        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {},
+        inputUsable: () -> Boolean = { true },
+        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> }
+    ):this(AndroidInput(audio,inputUsable,{audio.release()},onMediaFilterClosed),
+        {_,_,_->HandsFreeBargeInEvidence.INDEPENDENT},{null},{0},{},
+        stillCurrent,onSpeech,{
+            val native=NativeHandsFreeSpeechClassifier()
+            object:HandsFreeBargeInClassifier {
+                override fun isSpeech(frame:ShortArray)=native.isSpeech(frame)
+                override fun reset()=native.reset()
+                override fun close()=native.close()
+            }
+        },onProbeResult=onProbeResult,onAvailabilityChanged=onAvailabilityChanged,voicePathReady={true},onCommandFrame=onCommandFrame,
+        onCaptureSummary=onCaptureSummary,beforePlayback=true)
     private val lifecycle=AtomicInteger(0) // new, started, closing, released
     private val stopping=AtomicBoolean(false)
     private val accepted=AtomicBoolean(false)
@@ -257,14 +282,19 @@ internal class HandsFreeBargeInCapture internal constructor(
     @Volatile private var readySucceeded=false
     @Volatile private var decisionAt:Long?=null
 
-    fun start():Boolean {
-        if(!lifecycle.compareAndSet(0,1))return readySucceeded && !stopping.get()
+    /** No recorder startup wait on the model-request path. Playback still uses start(). */
+    fun startAsync():Boolean {
+        if(!lifecycle.compareAndSet(0,1))return lifecycle.get()==1 && !stopping.get()
         try{Thread({capture()},"AegisBargeInAudio").apply{isDaemon=true;start()}}
         catch(_:Exception){
             stopping.set(true);lifecycle.set(2)
             Thread({releaseInput();ready.countDown();completed.countDown()},"AegisBargeInRelease").apply{isDaemon=true;start()}
             return false
         }
+        return true
+    }
+    fun start():Boolean {
+        if(!startAsync())return false
         val success=try{ready.await(START_WAIT_MS,TimeUnit.MILLISECONDS) && readySucceeded && !stopping.get()}
             catch(_:InterruptedException){Thread.currentThread().interrupt();false}
         if(!success)close()
@@ -381,7 +411,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                 loud && voiced
             }
             onset=HandsFreeBargeInOnset(onsetClassifier, learnedEvidence,
-                if (learnedEvidence) HandsFreeBargeInOnset.DUPLEX_PRE_SAMPLES else HandsFreeBargeInOnset.PRE_SAMPLES,
+                if (learnedEvidence || beforePlayback) HandsFreeBargeInOnset.DUPLEX_PRE_SAMPLES else HandsFreeBargeInOnset.PRE_SAMPLES,
                 confirmationWindowFrames, confirmationVotes) { vad.reset() }
             input.start()
             if(!current())return
@@ -407,6 +437,12 @@ internal class HandsFreeBargeInCapture internal constructor(
                 input.preprocessFrame(frame)
                 val now=clock()
                 if(!accepted.get()) {
+                    if(beforePlayback) {
+                        // The processing microphone is retired before any TTS
+                        // device can play. Independence is not inferred from a
+                        // missing playback timestamp during actual speech.
+                        evidence=HandsFreeBargeInEvidence.INDEPENDENT
+                    } else {
                     if (framesUntilVolumeRead==0) {
                         val observedVolume=mediaVolume()
                         if (volume!=null && observedVolume!=volume) {
@@ -459,6 +495,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                         referenceUnavailableFrames++
                         clearAmbiguousRun()
                     }
+                    }
                     if (clearOnsetVotes()) onset.clearVotes()
                     if (learnedEvidence && evidence == HandsFreeBargeInEvidence.INDEPENDENT) independentFrames++
                     val prefix=onset.process(frame,evidence, evidence == HandsFreeBargeInEvidence.INDEPENDENT ||
@@ -471,8 +508,8 @@ internal class HandsFreeBargeInCapture internal constructor(
                     try {
                         if(!current()) break
                         // Recheck at handoff so a recent gain change cannot reuse the old profile.
-                        val observedVolume=mediaVolume()
-                        if (observedVolume!=volume) {
+                        val observedVolume=if(beforePlayback)volume else mediaVolume()
+                        if (!beforePlayback && observedVolume!=volume) {
                             volume=observedVolume
                             outputMuteChanged(observedVolume == 0)
                             resetEvidence()
@@ -497,7 +534,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                         prefix.copyInto(pcm)
                         vad.reset()
                         state=HandsFreeCommandCapture(pcm,prefix.size,vad,initialSpeechConfirmed=true,
-                            initialNoiseRms=commandNoiseFloor())
+                            initialNoiseRms=if(beforePlayback)levels.floorRms else commandNoiseFloor())
                         trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
                         state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
                     } finally {
