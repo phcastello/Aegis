@@ -48,7 +48,7 @@ no evento NDJSON `done`; consumidores anteriores podem ignorar o campo.
 
 ## Descarte silencioso
 
-A partir da prévia com descarte, os clientes nativos podem enviar `allowSilentIgnore: true` junto a `origin: "hands_free"`. Antes de criar mensagem ou executar ações, o servidor pode encerrar uma fala alheia com HTTP 204 na rota síncrona ou com o evento terminal exclusivo `ignored` (correlacionado pelo `turnId`) na rota NDJSON. Um cliente que não envia a opção mantém o fluxo anterior. O modelo e critérios, as fontes estudadas e a bancada estão em [Descarte silencioso de ativações indevidas](utterance-directedness.md).
+A partir da prévia com descarte, os clientes nativos podem enviar `allowSilentIgnore: true` junto a `origin: "hands_free"`. Antes de criar mensagem ou executar ações, o servidor pode encerrar uma fala alheia com HTTP 204 na rota síncrona ou com o evento terminal exclusivo `ignored` (correlacionado pelo `turnId`) na rota NDJSON. Um cliente que não envia a opção mantém o fluxo anterior. A decisão é tomada pelo próprio modelo de chat na primeira rodada, com a função terminal `hands_free_ignore`. O servidor só registra o turno e persiste a mensagem após o aceite. O modelo e critérios, as fontes estudadas e a bancada estão em [Descarte silencioso de ativações indevidas](utterance-directedness.md).
 
 ## Decisão no próprio turno
 
