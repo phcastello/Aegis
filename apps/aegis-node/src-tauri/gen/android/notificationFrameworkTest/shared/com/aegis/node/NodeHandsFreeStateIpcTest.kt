@@ -88,7 +88,13 @@ class NodeHandsFreeStateIpcTest {
                 assertFalse("initial_setup_flag_$key",result.getBoolean(key))
             assertTrue(result.getString("status").isNotBlank())
             assertTrue(result.getString("message").isNotBlank())
-            assertEquals("aegis-mww-fleurs-dev-2026-10-31",result.getString("modelVersion"))
+            // A fresh installation has no private model bytes. Identity describes the
+            // installed package only, not the historical baseline supported by the importer.
+            // Require each field to be explicitly null (absent keys are a broken contract).
+            for(key in listOf("modelName","modelVersion","modelSha256")) {
+                assertTrue("initial_setup_model_identity_missing_$key",result.has(key))
+                assertTrue("initial_setup_model_identity_not_null_$key",result.isNull(key))
+            }
         }
         waitFor(view,"Boolean(document.querySelector('button[aria-label=\"Abrir histórico\"]') || document.querySelector('.global-settings-trigger'))","hands_free_real_ui_bootstrap_timeout")
         evaluate(view,"document.querySelector('button[aria-label=\"Abrir histórico\"]')?.click();null")
