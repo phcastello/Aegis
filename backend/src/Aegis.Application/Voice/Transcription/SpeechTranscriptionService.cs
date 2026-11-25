@@ -21,6 +21,13 @@ public sealed class SpeechTranscriptionService(
         }
 
         TranscriptionInputValidator.Validate(request, settings.MaxAudioBytes, settings.MaxRecordingSeconds);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (TranscriptionInputValidator.IsSilentNativeWav(request))
+        {
+            logger.LogInformation("{Event} {TranscriptionRequestId} {AudioBytes}",
+                "aegis_stt_digital_silence", request.TranscriptionRequestId, request.Audio.Length);
+            return new TranscriptionResult(request.TranscriptionRequestId, "");
+        }
         var primary = FindProvider(settings.PrimaryProvider);
         var fallback = settings.FallbackEnabled ? FindProvider(settings.FallbackProvider) : null;
         var fallbackUsed = false;
@@ -118,16 +125,16 @@ public sealed class SpeechTranscriptionService(
         try
         {
             var result = await provider.TranscribeAsync(request, cancellationToken);
-            if (string.IsNullOrWhiteSpace(result.Text))
+            if (result.Text is null)
             {
                 throw new TranscriptionProviderException(
                     TranscriptionFailureKind.Technical,
                     provider.ProviderName,
-                    "The transcription provider returned no text.");
+                    "The transcription provider returned an invalid transcript.");
             }
 
             logger.LogInformation(
-                "{Event} {TranscriptionRequestId} {Provider} {Model} {Success} {LatencyMilliseconds} {AudioBytes} {ClientDurationMilliseconds} {KeytermCount} {FallbackUsed} {FallbackReason} {ExternalStatusCode}",
+                "{Event} {TranscriptionRequestId} {Provider} {Model} {Success} {LatencyMilliseconds} {AudioBytes} {ClientDurationMilliseconds} {KeytermCount} {FallbackUsed} {FallbackReason} {ExternalStatusCode} {HasRecognizedText}",
                 "aegis_stt_attempt",
                 request.TranscriptionRequestId,
                 result.Provider,
@@ -139,8 +146,9 @@ public sealed class SpeechTranscriptionService(
                 provider.KeytermCount,
                 fallbackUsed,
                 fallbackCause?.Kind.ToString(),
-                null);
-            return result;
+                null,
+                !string.IsNullOrWhiteSpace(result.Text));
+            return result with { Text = result.Text.Trim() };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

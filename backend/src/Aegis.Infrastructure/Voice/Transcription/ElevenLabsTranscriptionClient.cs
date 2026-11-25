@@ -56,13 +56,17 @@ public sealed class ElevenLabsTranscriptionClient(
             try
             {
                 using var document = JsonDocument.Parse(body);
-                var text = document.RootElement.TryGetProperty("text", out var textElement) ? textElement.GetString() : null;
-                if (string.IsNullOrWhiteSpace(text))
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("text", out var textElement) ||
+                    textElement.ValueKind != JsonValueKind.String)
                 {
-                    throw new TranscriptionProviderException(TranscriptionFailureKind.Technical, ProviderName, "ElevenLabs returned an empty transcript.", (int)response.StatusCode);
+                    throw new TranscriptionProviderException(TranscriptionFailureKind.Technical, ProviderName, "ElevenLabs returned an invalid transcript.", (int)response.StatusCode);
                 }
 
-                return new ProviderTranscriptionResult(text.Trim(), ProviderName, Model);
+                // A successful, empty transcript means no words recognized.
+                // This is distinct from a missing/invalid result and must not
+                // cause another recognizer to guess at the same silence.
+                return new ProviderTranscriptionResult(textElement.GetString()!.Trim(), ProviderName, Model);
             }
             catch (JsonException exception)
             {

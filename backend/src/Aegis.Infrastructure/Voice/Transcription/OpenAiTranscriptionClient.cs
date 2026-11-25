@@ -52,13 +52,14 @@ public sealed class OpenAiTranscriptionClient(
             try
             {
                 using var document = JsonDocument.Parse(body);
-                var text = document.RootElement.TryGetProperty("text", out var textElement) ? textElement.GetString() : null;
-                if (string.IsNullOrWhiteSpace(text))
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("text", out var textElement) ||
+                    textElement.ValueKind != JsonValueKind.String)
                 {
-                    throw new TranscriptionProviderException(TranscriptionFailureKind.Technical, ProviderName, "OpenAI returned an empty transcript.", (int)response.StatusCode);
+                    throw new TranscriptionProviderException(TranscriptionFailureKind.Technical, ProviderName, "OpenAI returned an invalid transcript.", (int)response.StatusCode);
                 }
 
-                return new ProviderTranscriptionResult(text.Trim(), ProviderName, Model);
+                return new ProviderTranscriptionResult(textElement.GetString()!.Trim(), ProviderName, Model);
             }
             catch (JsonException exception)
             {

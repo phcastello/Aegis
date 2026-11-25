@@ -28,7 +28,7 @@ public sealed class RealtimeTranscriptionException(string code) : Exception(code
     public string Code { get; } = code;
 }
 
-public sealed record RealtimeTranscriptionResult(long AudioBytes, long CommitMilliseconds, int ConfirmedSegments);
+public sealed record RealtimeTranscriptionResult(long AudioBytes, long CommitMilliseconds, int ConfirmedSegments, bool DigitalSilence);
 
 /// <summary>
 /// One bounded local turn, manual commit only. This transport has no reference to chat or tools.
@@ -92,19 +92,21 @@ public sealed class ElevenLabsRealtimeTranscription(
                 model = Model, minAudioMilliseconds = 0 }, session.Token);
             var committed = 0;
             long audioBytes = 0;
+            var hasSignal = false;
+            var confirmedSilence = new TaskCompletionSource<(string Text, int Count)>(TaskCreationOptions.RunContinuationsAsynchronously);
             var commitClock = new System.Diagnostics.Stopwatch();
             using var commitGate = new SemaphoreSlim(1);
             var input = SendInput();
             var output = ReceiveOutput();
             try
             {
-                var first = await Task.WhenAny(input, output);
+                var first = await Task.WhenAny(input, output, confirmedSilence.Task);
                 // Input only completes normally on disconnect; commit keeps monitoring client cancellation.
                 if (first == input) { await input; throw new RealtimeTranscriptionException("client_disconnected"); }
-                var result = await output;
+                var result = first == confirmedSilence.Task ? await confirmedSilence.Task : await output;
                 await authorizeFinal(session.Token);
                 await SendJson(client, new { type = "final", transcriptionRequestId = requestId, text = result.Text }, session.Token);
-                return new(audioBytes, commitClock.ElapsedMilliseconds, result.Count);
+                return new(audioBytes, commitClock.ElapsedMilliseconds, result.Count, !hasSignal);
             }
             finally
             {
@@ -126,6 +128,9 @@ public sealed class ElevenLabsRealtimeTranscription(
                         if (payload.Length == 0 || payload.Length % 2 != 0) throw new RealtimeTranscriptionException("invalid_audio");
                         audioBytes += payload.Length;
                         if (audioBytes > MaximumAudioBytes) throw new RealtimeTranscriptionException("audio_limit_exceeded");
+                        // Only exact digital silence is unambiguously empty.
+                        // A quiet/nonzero sample or noise is not classified here.
+                        if (!hasSignal) hasSignal = payload.AsSpan().IndexOfAnyExcept((byte)0) >= 0;
                         await SendAudio(upstream, payload, false, session.Token);
                         continue;
                     }
@@ -139,6 +144,14 @@ public sealed class ElevenLabsRealtimeTranscription(
                     try
                     {
                         commitClock.Start();
+                        if (!hasSignal)
+                        {
+                            // No recognizer should guess words from zero PCM.
+                            // Finish locally, still after identity authorization.
+                            Volatile.Write(ref committed, 1);
+                            confirmedSilence.TrySetResult(("", 0));
+                            continue;
+                        }
                         await SendAudio(upstream, [], true, session.Token);
                         Volatile.Write(ref committed, 1);
                         commitDeadline.CancelAfter(TimeSpan.FromSeconds(10));
@@ -160,7 +173,9 @@ public sealed class ElevenLabsRealtimeTranscription(
                     // are enabled. Never append both, and never deduplicate by text ("não, não").
                     if (type == "committed_transcript_with_timestamps") continue;
                     if (type != "committed_transcript") throw new RealtimeTranscriptionException("provider_transcription_failed");
-                    var segment = root.GetProperty("text").GetString()?.Trim() ?? "";
+                    if (!root.TryGetProperty("text", out var textValue) || textValue.ValueKind != JsonValueKind.String)
+                        throw new RealtimeTranscriptionException("provider_transcription_failed");
+                    var segment = textValue.GetString()!.Trim();
                     if (segment.Length > 0)
                     {
                         if (text.Length > 0) text.Append(' ');
@@ -168,7 +183,11 @@ public sealed class ElevenLabsRealtimeTranscription(
                         if (text.Length > MaximumTextCharacters || ++count > 32) throw new RealtimeTranscriptionException("transcript_limit_exceeded");
                     }
                     await commitGate.WaitAsync(session.Token);
-                    try { if (Volatile.Read(ref committed) != 0) return (text.ToString(), count); }
+                    try
+                    {
+                        if (Volatile.Read(ref committed) != 0)
+                            return hasSignal ? (text.ToString(), count) : ("", 0);
+                    }
                     finally { commitGate.Release(); }
                 }
             }

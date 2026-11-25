@@ -90,7 +90,12 @@ public sealed class RealtimeTranscriptionTests
         var node = await nodes.FinalizeAsync(new(request.AttemptId, receipt.Credential));
         return new() { App = app, Provider = providerApp, Connector = connector, Nodes = nodes, Credential = receipt.Credential, NodeId = node.Id };
     }
-    private static Task Audio(WebSocket socket, int bytes = 64000) => socket.SendAsync(new ArraySegment<byte>(new byte[bytes]), WebSocketMessageType.Binary, true, default);
+    private static Task Audio(WebSocket socket, int bytes = 64000, bool silent = false)
+    {
+        var pcm = new byte[bytes];
+        if (!silent && bytes > 0) pcm[^1] = 1; // Preserve even the quietest nonzero input.
+        return socket.SendAsync(new ArraySegment<byte>(pcm), WebSocketMessageType.Binary, true, default);
+    }
 
     [Fact]
     public async Task RemoteVadIsRejectedInsteadOfAddingASecondEndpoint()
@@ -194,6 +199,77 @@ public sealed class RealtimeTranscriptionTests
         await Audio(client, 16000); await Send(client, new { type = "commit" });
         Assert.Equal("Sim.", (await Read(client)).GetProperty("text").GetString());
         Assert.Equal(16000, size);
+    }
+
+    [Fact]
+    public async Task DigitalSilenceProducesEmptyFinalOnlyAfterLocalCommitEvenIfProviderGuessesWords()
+    {
+        var guessed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var providerFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var committed = 0;
+        await using var fixture = await Host(async socket => {
+            var audio = await Read(socket);
+            Assert.False(audio.GetProperty("commit").GetBoolean());
+            Assert.All(Convert.FromBase64String(audio.GetProperty("audio_base_64").GetString()!), b => Assert.Equal((byte)0, b));
+            await Send(socket, new { message_type = "committed_transcript", text = "context:" });
+            guessed.TrySetResult();
+            try
+            {
+                var next = new byte[1024];
+                var message = await socket.ReceiveAsync(new ArraySegment<byte>(next), default);
+                if (message.MessageType != WebSocketMessageType.Close) Interlocked.Increment(ref committed);
+            }
+            finally { providerFinished.TrySetResult(); }
+        });
+        using var client = await fixture.Connect(); await Read(client);
+        await Audio(client, 16000, silent: true);
+        await guessed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var finalTask = Read(client);
+        await Task.Delay(30); Assert.False(finalTask.IsCompleted);
+        await Send(client, new { type = "commit" });
+        var result = await finalTask;
+        Assert.Equal("final", result.GetProperty("type").GetString());
+        Assert.Equal("", result.GetProperty("text").GetString());
+        await providerFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, committed);
+    }
+
+    [Theory]
+    [InlineData("context:")]
+    [InlineData("")]
+    public async Task NonzeroAudioUsesTheActualProviderFinalEvenAfterLeadingDigitalSilence(string transcript)
+    {
+        await using var fixture = await Host(async socket => {
+            var silence = await Read(socket);
+            Assert.All(Convert.FromBase64String(silence.GetProperty("audio_base_64").GetString()!), b => Assert.Equal((byte)0, b));
+            var quiet = await Read(socket);
+            Assert.Equal((byte)1, Convert.FromBase64String(quiet.GetProperty("audio_base_64").GetString()!)[^1]);
+            Assert.True((await Read(socket)).GetProperty("commit").GetBoolean());
+            await Send(socket, new { message_type = "committed_transcript", text = transcript });
+            var close = new byte[128]; await socket.ReceiveAsync(close, default);
+        });
+        using var client = await fixture.Connect(); await Read(client);
+        await Audio(client, 16000, silent: true);
+        await Audio(client, 16000);
+        await Send(client, new { type = "commit" });
+        Assert.Equal(transcript, (await Read(client)).GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task MissingOrNullProviderTextRemainsTechnicalFailureForNonzeroAudio()
+    {
+        await using var fixture = await Host(async socket => {
+            await Read(socket);
+            Assert.True((await Read(socket)).GetProperty("commit").GetBoolean());
+            await Send(socket, new { message_type = "committed_transcript", text = (string?)null });
+            var close = new byte[128]; await socket.ReceiveAsync(close, default);
+        });
+        using var client = await fixture.Connect(); await Read(client);
+        await Audio(client);
+        await Send(client, new { type = "commit" });
+        var failure = await Read(client);
+        Assert.Equal("error", failure.GetProperty("type").GetString());
+        Assert.Equal("provider_transcription_failed", failure.GetProperty("code").GetString());
     }
 
     [Fact]

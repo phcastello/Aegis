@@ -35,8 +35,8 @@ public sealed class RealtimeTranscriptionController(ElevenLabsRealtimeTranscript
                 if (!authentication.Authenticated || authentication.Node!.Id != nodeId)
                     throw new RealtimeTranscriptionException("node_identity_changed");
             }, cancellationToken);
-            logger.LogInformation("aegis_stt_realtime TranscriptionRequestId={TranscriptionRequestId} Model={Model} AudioBytes={AudioBytes} CommitMilliseconds={CommitMilliseconds} ConfirmedSegments={ConfirmedSegments}",
-                requestId, ElevenLabsRealtimeTranscription.Model, result.AudioBytes, result.CommitMilliseconds, result.ConfirmedSegments);
+            logger.LogInformation("aegis_stt_realtime TranscriptionRequestId={TranscriptionRequestId} Model={Model} AudioBytes={AudioBytes} CommitMilliseconds={CommitMilliseconds} ConfirmedSegments={ConfirmedSegments} DigitalSilence={DigitalSilence}",
+                requestId, ElevenLabsRealtimeTranscription.Model, result.AudioBytes, result.CommitMilliseconds, result.ConfirmedSegments, result.DigitalSilence);
         }
         catch (RealtimeTranscriptionException error) { reason = error.Code; }
         catch (OperationCanceledException) { reason = cancellationToken.IsCancellationRequested ? "cancelled" : "timeout"; }

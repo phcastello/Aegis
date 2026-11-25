@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Buffers.Binary;
 
 namespace Aegis.Application.Voice.Transcription;
 
@@ -23,6 +24,34 @@ public static class TranscriptionInputValidator
             pair => pair.Key,
             pair => pair.Value.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
+
+    // Only the exact, unambiguous native PCM16 mono 16kHz WAV format is
+    // eligible. We cannot establish lack of signal by inspecting compressed
+    // bytes or unfamiliar WAV layouts, nor by guessing an amplitude floor.
+    internal static bool IsSilentNativeWav(TranscriptionRequest request)
+    {
+        var mime = request.ContentType.Split(';', 2, StringSplitOptions.TrimEntries)[0];
+        if (!mime.Equals("audio/wav", StringComparison.OrdinalIgnoreCase) &&
+            !mime.Equals("audio/x-wav", StringComparison.OrdinalIgnoreCase))
+            return false;
+        ReadOnlySpan<byte> bytes = request.Audio;
+        if (bytes.Length < 46 || (bytes.Length - 44) % 2 != 0 ||
+            !bytes[..4].SequenceEqual("RIFF"u8) ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]) != bytes.Length - 8 ||
+            !bytes[8..16].SequenceEqual("WAVEfmt "u8) ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes[16..]) != 16 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes[20..]) != 1 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes[22..]) != 1 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes[24..]) != 16000 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes[28..]) != 32000 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes[32..]) != 2 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes[34..]) != 16 ||
+            !bytes[36..40].SequenceEqual("data"u8) ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes[40..]) != bytes.Length - 44)
+            return false;
+
+        return bytes[44..].IndexOfAnyExcept((byte)0) < 0;
+    }
 
     public static void Validate(TranscriptionRequest request, int maxAudioBytes, int maxRecordingSeconds)
     {

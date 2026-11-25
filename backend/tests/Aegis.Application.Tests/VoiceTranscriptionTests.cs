@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Buffers.Binary;
 using Aegis.Api.Controllers;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
@@ -82,17 +83,63 @@ public sealed class VoiceTranscriptionTests
         Assert.Equal(1, fallback.Calls);
     }
 
-    [Fact]
-    public async Task EmptyPrimaryResponseUsesFallbackAndReceivesTheSameBytes()
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \n\t ")]
+    public async Task SuccessfulEmptyTranscriptIsNotATechnicalFailureAndNeverUsesFallback(string empty)
     {
-        var primary = FakeProvider.Success("elevenlabs", "scribe_v2", string.Empty);
+        var primary = FakeProvider.Success("elevenlabs", "scribe_v2", empty);
         var fallback = FakeProvider.Success("openai", "gpt-4o-transcribe", "fallback");
         var request = ValidRequest();
 
         var result = await CreateService(primary, fallback).TranscribeAsync(request);
 
-        Assert.Equal("fallback", result.Text);
-        Assert.Equal(request.Audio, fallback.LastAudio);
+        Assert.Empty(result.Text);
+        Assert.Equal(0, fallback.Calls);
+    }
+
+    [Fact]
+    public async Task DigitalSilenceInCanonicalNativeWavNeedsNoProviderButQuietAndUnknownAudioArePreserved()
+    {
+        var primary = FakeProvider.Success("elevenlabs", "scribe_v2", "context:");
+        var fallback = FakeProvider.Success("openai", "gpt-4o-transcribe", "fallback");
+        var service = CreateService(primary, fallback);
+        var wav = NativeWav(0);
+        var request = new TranscriptionRequest(Guid.NewGuid(), wav, "command.wav", "audio/wav", 500);
+        Assert.Empty((await service.TranscribeAsync(request)).Text);
+        Assert.Equal(0, primary.Calls);
+        Assert.Equal(0, fallback.Calls);
+
+        // Even a single least-significant-bit at the end of the capture cannot
+        // be dismissed as silence or as a suspect transcription word.
+        var quiet = request with { Audio = NativeWav(1) };
+        Assert.Equal("context:", (await service.TranscribeAsync(quiet)).Text);
+        Assert.Equal(quiet.Audio, primary.LastAudio);
+        var unknownWav = NativeWav(0);
+        BinaryPrimitives.WriteUInt32LittleEndian(unknownWav.AsSpan(24), 44100);
+        Assert.Equal("context:", (await service.TranscribeAsync(request with { Audio = unknownWav })).Text);
+        Assert.Equal("context:", (await service.TranscribeAsync(ValidRequest() with { Audio = new byte[30] })).Text);
+        Assert.Equal(3, primary.Calls);
+        Assert.Equal(0, fallback.Calls);
+    }
+
+    private static byte[] NativeWav(short lastSample)
+    {
+        var bytes = new byte[44 + 8000 * 2];
+        "RIFF"u8.CopyTo(bytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), (uint)(bytes.Length - 8));
+        "WAVEfmt "u8.CopyTo(bytes.AsSpan(8));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(20), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(22), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24), 16000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), 32000);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(32), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(34), 16);
+        "data"u8.CopyTo(bytes.AsSpan(36));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40), (uint)(bytes.Length - 44));
+        BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(bytes.Length - 2), lastSample);
+        return bytes;
     }
 
     [Fact]
@@ -144,6 +191,32 @@ public sealed class VoiceTranscriptionTests
         Assert.Equal("/v1/audio/transcriptions", openAiHandler.RequestUri!.AbsolutePath);
         Assert.Equal("Bearer", openAiHandler.Authorization?.Scheme);
         Assert.Equal("stt-openai-key", openAiHandler.Authorization?.Parameter);
+    }
+
+    [Theory]
+    [InlineData("{\"text\":\"\"}", true)]
+    [InlineData("{\"text\":\" \\t \"}", true)]
+    [InlineData("{}", false)]
+    [InlineData("{\"text\":null}", false)]
+    [InlineData("{\"text\":17}", false)]
+    [InlineData("[]", false)]
+    public async Task ProvidersDistinguishRecognizedEmptySpeechFromMalformedResponse(string json, bool empty)
+    {
+        var stt = Options.Create(new SttOptions());
+        ISpeechTranscriptionProvider[] providers = [
+            new ElevenLabsTranscriptionClient(
+                new HttpClient(new RecordingHandler(json)) { BaseAddress = new Uri("https://api.elevenlabs.io/") },
+                Options.Create(new ElevenLabsSttOptions { ApiKey = "eleven-key" }), stt, CreateKeyterms("Aegis", 80)),
+            new OpenAiTranscriptionClient(
+                new HttpClient(new RecordingHandler(json)) { BaseAddress = new Uri("https://api.openai.com/") },
+                Options.Create(new OpenAiSttOptions { ApiKey = "stt-openai-key" }), stt)
+        ];
+        foreach (var provider in providers)
+        {
+            if (empty) Assert.Empty((await provider.TranscribeAsync(ValidRequest())).Text);
+            else Assert.Equal(TranscriptionFailureKind.Technical,
+                (await Assert.ThrowsAsync<TranscriptionProviderException>(() => provider.TranscribeAsync(ValidRequest()))).Kind);
+        }
     }
 
     [Fact]
