@@ -70,6 +70,11 @@ def scope(paths):
         if path == ".env.example":
             result.update(("backend", "pwa"))
             continue
+        # The repository-level SDK selector belongs to the .NET toolchain.
+        # Conservatively rebuild the API if that selector changes.
+        if path == "global.json":
+            result.add("backend")
+            continue
         if path.startswith("backend/") or path.startswith("docker-compose"):
             result.add("backend")
         if path.startswith("frontend/aegis-pwa/") or path.startswith("docker-compose"):

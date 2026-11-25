@@ -97,6 +97,7 @@ class PublicationTests(unittest.TestCase):
         cases = [(["backend/src/Aegis.Api/A.cs"], {"backend"}),
                  (["frontend/aegis-pwa/index.html", "frontend/aegis-pwa/src/sw.ts"], {"pwa"}),
                  ([".env.example"], {"backend", "pwa"}),
+                 (["global.json"], {"backend"}),
                  (["docs/a.md", "AGENTS.md", "README.md"], set()),
                  (["apps/aegis-node/README.md", "backend/README.md", "frontend/aegis-pwa/README.md", "packages/aegis-client/README.md"], set()),
                  (["backend/src/Aegis.Infrastructure/Prompts/agent.md"], {"backend"}),
