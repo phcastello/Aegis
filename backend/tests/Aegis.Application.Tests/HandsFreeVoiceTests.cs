@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Aegis.Api.Controllers;
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
@@ -11,6 +12,8 @@ using Aegis.Application.Tools;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Aegis.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -377,6 +380,267 @@ public sealed class HandsFreeVoiceTests
         Assert.Equal(new[] { "conversation", "final_segment", "final_segment", "done" }, events.Select(x => x.Type));
         Assert.Single(model.Requests);
         Assert.Equal(2, db.ChatMessages.Count());
+    }
+
+    [Fact]
+    public async Task ThinkingInterruptionBeforeAcceptanceKeepsThePriorRequestWithoutMakingAPhantomChat()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        var model = new Model([SegmentReply(), SegmentReply()]);
+        model.OnRespond = () => { if (model.Requests.Count == 1) registry.CancelAndGetInfo(prior, "interrupted"); };
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(prior, session, "Conte uma história."))) { }
+        });
+        db.ChangeTracker.Clear();
+        Assert.Empty(await db.Conversations.ToListAsync());
+        Assert.Empty(await db.ChatMessages.ToListAsync());
+        var correction = VoiceRequest(Guid.NewGuid(), session, "Na verdade, curta.", new(prior, "fallback não deve prevalecer"));
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in chat.StreamMessageAsync(correction)) events.Add(item);
+        Assert.Equal("done", events[^1].Type);
+        Assert.Single(await db.Conversations.ToListAsync());
+        var user = await db.ChatMessages.SingleAsync(x => x.Role == Aegis.Domain.ChatRoles.User);
+        Assert.Contains("Conte uma história.", user.Content);
+        Assert.Contains("Na verdade, curta.", user.Content);
+        Assert.DoesNotContain("fallback não deve prevalecer", user.Content);
+    }
+
+    [Fact]
+    public async Task ThinkingInterruptionAfterFirstSegmentReusesCommittedConversationAndMarksZeroPlayed()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        var model = new Model([SegmentReply(), SegmentReply()]) { EarlySegment = "Primeira." };
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry));
+        Guid destination;
+        await using (var initial = chat.StreamMessageAsync(VoiceRequest(prior, session, "Conte uma história.")).GetAsyncEnumerator())
+        {
+            Assert.True(await initial.MoveNextAsync());
+            Assert.Equal("conversation", initial.Current.Type);
+            destination = initial.Current.ConversationId!.Value;
+            Assert.True(await initial.MoveNextAsync());
+            Assert.Equal("final_segment", initial.Current.Type);
+            // Client never rendered audio, and may not even have read the conversation marker.
+        }
+        db.ChangeTracker.Clear();
+        var correction = VoiceRequest(Guid.NewGuid(), session, "Na verdade, curta.", new(prior, "Conte uma história."));
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in chat.StreamMessageAsync(correction)) events.Add(item);
+        Assert.Equal(destination, events[0].ConversationId);
+        Assert.Single(await db.Conversations.ToListAsync());
+        Assert.Equal(2, await db.ChatMessages.CountAsync(x => x.Role == Aegis.Domain.ChatRoles.User));
+        var next = await db.ChatMessages.SingleAsync(x => x.Content == "Na verdade, curta.");
+        Assert.Contains("\"playedFramesInSegment\":0", next.MetadataJson);
+        Assert.Contains(model.Requests[1].InputItems!, x => x.GetRawText().Contains("milissegundosOuvidosNoTrecho"));
+    }
+
+    [Fact]
+    public async Task ThinkingHandoffRejectsAnotherVoiceSession()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        var model = new Model([SegmentReply()]);
+        model.OnRespond = () => registry.CancelAndGetInfo(prior, "test");
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(prior, session, "Pedido anterior."))) { } });
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(Guid.NewGuid(), Guid.NewGuid(), "Outro pedido.", new(prior)))) { } });
+        var controller = new ChatController(chat, HandoffVoice(registry), NullLogger<ChatController>.Instance)
+        { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+        await using var body = new MemoryStream(); controller.Response.Body = body;
+        await controller.StreamMessage(VoiceRequest(Guid.NewGuid(), Guid.NewGuid(), "Outro pedido.", new(prior)), default);
+        Assert.Equal(StatusCodes.Status400BadRequest, controller.Response.StatusCode);
+        Assert.Contains("invalid_voice_generation_interruption", System.Text.Encoding.UTF8.GetString(body.ToArray()));
+        Assert.Single(model.Requests);
+    }
+
+    [Fact]
+    public async Task ThinkingInterruptionDoesNotResurrectAnExplicitlyIgnoredUtterance()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        var ignore = new ModelToolCall("ignore", HandsFreeDirection.IgnoreToolName, JsonSerializer.SerializeToElement(new { }));
+        var model = new Model([Response([ignore]), SegmentReply()]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry));
+        var discarded = new List<ChatStreamEvent>();
+        await foreach (var item in chat.StreamMessageAsync(VoiceRequest(prior, session, "Conversa alheia."))) discarded.Add(item);
+        Assert.Equal("ignored", Assert.Single(discarded).Type);
+        // The native client may have missed the terminal ignored event and sent
+        // a fallback; the authoritative receipt must not resurrect that content.
+        await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(Guid.NewGuid(), session, "Pedido legítimo.", new(prior, "Conversa alheia.")))) { }
+        var user = await db.ChatMessages.SingleAsync(x => x.Role == Aegis.Domain.ChatRoles.User);
+        Assert.Equal("Pedido legítimo.", user.Content);
+        Assert.Single(await db.Conversations.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RepeatedUnacceptedGenerationHandoffsRetainEffectivePriorContentExactlyOnce()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var first = Guid.NewGuid(); var second = Guid.NewGuid(); var third = Guid.NewGuid(); var session = Guid.NewGuid();
+        var model = new Model([SegmentReply(), SegmentReply(), SegmentReply()]);
+        model.OnRespond = () =>
+        {
+            if (model.Requests.Count == 1) registry.CancelAndGetInfo(first, "interrupted");
+            if (model.Requests.Count == 2) registry.CancelAndGetInfo(second, "interrupted");
+        };
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(first, session, "Primeiro pedido."))) { } });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(second, session, "Segunda correção.", new(first, "fallback descartado")))) { } });
+        db.ChangeTracker.Clear();
+        Assert.Empty(await db.Conversations.ToListAsync());
+        await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(third, session, "Terceira correção.", new(second, "fallback descartado")))) { }
+        var user = await db.ChatMessages.SingleAsync(x => x.Role == Aegis.Domain.ChatRoles.User);
+        foreach (var text in new[] { "Primeiro pedido.", "Segunda correção.", "Terceira correção." })
+            Assert.Equal(2, user.Content.Split(text, StringSplitOptions.None).Length);
+        Assert.DoesNotContain("fallback descartado", user.Content);
+        Assert.Single(await db.Conversations.ToListAsync());
+        Assert.Equal(3, model.Requests.Count);
+    }
+
+    [Fact]
+    public async Task HandoffWaitsForPriorStreamSettlementAndReusesPersistedConversation()
+    {
+        var options = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var priorContext = new AegisDbContext(options); using var nextContext = new AegisDbContext(options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        ChatService Create(AegisDbContext db, Model model, IVoiceService? service = null) => new(db, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, service ?? HandoffVoice(registry));
+        var remoteCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<CancelTurnResult> WaitRemoteCleanup(CancelTurnResult result)
+        {
+            remoteCleanup.TrySetResult(); await releaseCleanup.Task; return result;
+        }
+        var oldVoice = HandoffVoice(registry);
+        var proxy = (Proxy)(object)oldVoice; var original = proxy.Call;
+        proxy.Call = (method, args) => method.Name == nameof(IVoiceService.CancelTurnAsync) && (string)args![1]! == "text_stream_interrupted"
+            ? WaitRemoteCleanup(registry.CancelAndGetInfo((Guid)args[0]!, (string)args[1]!).Result)
+            : original(method, args);
+        var initial = Create(priorContext, new Model([SegmentReply()]) { EarlySegment = "Primeira." }, oldVoice)
+            .StreamMessageAsync(VoiceRequest(prior, session, "Pedido anterior.")).GetAsyncEnumerator();
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("conversation", initial.Current.Type);
+        var destination = initial.Current.ConversationId;
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("final_segment", initial.Current.Type);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationRegistration = registry.Find(prior)!.Cancellation.Token.Register(() => cancelled.TrySetResult());
+        var nextModel = new Model([SegmentReply()]);
+        VoiceGenerationReceipt? preceding = null;
+        nextModel.OnRespond = () => Assert.True(preceding?.Settled.IsCompleted == true,
+            "The replacement model must not run before the old stream settles.");
+        var nextChat = Create(nextContext, nextModel);
+        var resumed = Task.Run(async () =>
+        {
+            var events = new List<ChatStreamEvent>();
+            await foreach (var item in nextChat.StreamMessageAsync(VoiceRequest(Guid.NewGuid(), session, "Corrigindo.", new(prior, "fallback")))) events.Add(item);
+            return events;
+        });
+        try
+        {
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            preceding = registry.BeginVoiceGenerationHandoff(prior, session, destination).Receipt;
+            Assert.NotNull(preceding);
+            Assert.False(preceding.Settled.IsCompleted);
+            Assert.False(resumed.IsCompleted);
+            Assert.Empty(nextModel.Requests); // the first stream is still suspended at yield
+        }
+        finally
+        {
+            // Dispose the old stream, but deliberately keep its remote cleanup
+            // pending. Database settlement must still allow the next generation.
+            var disposal = initial.DisposeAsync().AsTask();
+            try
+            {
+                await remoteCleanup.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.False(disposal.IsCompleted);
+                var events = await resumed.WaitAsync(TimeSpan.FromSeconds(3));
+                Assert.Equal(destination, events[0].ConversationId);
+                Assert.Single(await nextContext.Conversations.ToListAsync());
+                Assert.Equal(2, await nextContext.ChatMessages.CountAsync(x => x.Role == Aegis.Domain.ChatRoles.User));
+                var newUser = await nextContext.ChatMessages.SingleAsync(x => x.Content == "Corrigindo.");
+                Assert.Contains("\"playedFramesInSegment\":0", newUser.MetadataJson);
+                Assert.False(disposal.IsCompleted);
+            }
+            finally { releaseCleanup.TrySetResult(); await disposal; }
+        }
+    }
+
+    [Fact]
+    public async Task MissingPriorReceiptUsesFallbackAndPreventsLatePriorPostFromCreatingChat()
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var prior = Guid.NewGuid(); var session = Guid.NewGuid();
+        var model = new Model([SegmentReply()]);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics), Titles(), registry, HandoffVoice(registry));
+        await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(Guid.NewGuid(), session, "Nova fala.", new(prior, "Pedido anterior.")))) { }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(prior, session, "Pedido anterior."))) { } });
+        Assert.Single(model.Requests);
+        var user = await db.ChatMessages.SingleAsync(x => x.Role == Aegis.Domain.ChatRoles.User);
+        Assert.Contains("Pedido anterior.", user.Content);
+        Assert.Contains("Nova fala.", user.Content);
+        Assert.Single(await db.Conversations.ToListAsync());
+    }
+
+    [Fact]
+    public void ThinkingHandoffRequiresTheSegmentedHandsFreeContractAndDifferentTurn()
+    {
+        var id = Guid.NewGuid();
+        Assert.Throws<ArgumentException>(() => HandsFreeReply.UserContent(new() { Content = "Oi", InterruptedGeneration = new(id) }));
+        Assert.Throws<ArgumentException>(() => HandsFreeReply.UserContent(VoiceRequest(id, Guid.NewGuid(), "Oi", new(id))));
+        Assert.Throws<ArgumentException>(() => HandsFreeReply.UserContent(new() { Origin = HandsFreeReply.Origin, VoiceSessionId = Guid.NewGuid(), VoiceSegments = true, AllowSilentIgnore = true, Content= "Oi", InterruptedGeneration = new(id) }));
+        Assert.Throws<ArgumentException>(() => HandsFreeReply.UserContent(VoiceRequest(Guid.NewGuid(), Guid.NewGuid(), "Oi", new(id, new string('x', 16385)))));
+    }
+
+    private static SendMessageRequest VoiceRequest(Guid turn, Guid session, string content, VoiceGenerationInterruption? handoff = null) => new()
+    {
+        TurnId = turn, VoiceSessionId = session, Origin = "hands_free", AllowSilentIgnore = true, VoiceSegments = true,
+        Content = content, InterruptedGeneration = handoff
+    };
+    private static ModelToolResponse SegmentReply() => Response([new("speak", FinalSpeechSegments.ToolName,
+        JsonSerializer.SerializeToElement(new { segments = new[] { "Primeira.", "Segunda." }, continuation = "close" }))]);
+    private static IConversationTitleJobQueue Titles()
+    {
+        var titles = DispatchProxy.Create<IConversationTitleJobQueue, Proxy>();
+        ((Proxy)(object)titles).Call = (_, _) => ValueTask.CompletedTask;
+        return titles;
+    }
+    private static IVoiceService HandoffVoice(ActiveTurnRegistry registry)
+    {
+        var voice = DispatchProxy.Create<IVoiceService, Proxy>();
+        ((Proxy)(object)voice).Call = (method, args) => method.Name switch
+        {
+            nameof(IVoiceService.RegisterTurnAsync) => Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!)),
+            nameof(IVoiceService.CancelTurnAsync) => Task.FromResult(registry.CancelAndGetInfo((Guid)args![0]!, (string)args[1]!).Result),
+            nameof(IVoiceService.CancelVoiceGenerationAsync) => Task.FromResult(registry.BeginVoiceGenerationHandoff(
+                (Guid)args![0]!, (Guid)args[1]!, (Guid?)args[2], (CancellationToken)args[3]!).Receipt),
+            _ => throw new NotSupportedException()
+        };
+        return voice;
     }
 
     private static async Task<(string Content, string? Decision)> Run(Model model, bool streaming, BenignTool? tool = null)

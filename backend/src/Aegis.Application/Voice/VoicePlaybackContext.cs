@@ -36,13 +36,34 @@ internal static class VoicePlaybackContext
 
     public static void Attach(ChatMessage userMessage, SendMessageRequest request, IEnumerable<ChatMessage> history)
     {
-        if (!request.IsHandsFree || !request.VoiceSegments || request.ConversationId != userMessage.ConversationId ||
-            request.InterruptedPlayback is not { } interruption ||
-            FindSegments(history, userMessage.ConversationId, interruption) is null)
-            return;
+        if (!request.IsHandsFree || !request.VoiceSegments || request.ConversationId != userMessage.ConversationId) return;
+        Attach(userMessage, request.InterruptedPlayback, history);
+    }
+
+    internal static void Attach(ChatMessage userMessage, VoicePlaybackInterruption? interruption, IEnumerable<ChatMessage> history)
+    {
+        if (interruption is null || FindSegments(history, userMessage.ConversationId, interruption) is null) return;
 
         userMessage.AttachAuditData(null, null, null,
             JsonSerializer.Serialize(new PlaybackEnvelope(new PlaybackMetadata(1, interruption)), JsonOptions));
+    }
+
+    // The generation may have committed a first speech segment before the
+    // client could play anything. Preserve the zero-played boundary rather
+    // than letting the model assume generated text was heard.
+    internal static VoicePlaybackInterruption? FirstUnplayed(Guid turnId, Guid conversationId, IEnumerable<ChatMessage> history)
+    {
+        foreach (var message in history)
+        {
+            if (message.Role != ChatRoles.Assistant || message.ConversationId != conversationId) continue;
+            var units = Read<SpeechEnvelope>(message.MetadataJson)?.VoiceSegments;
+            if (units is not { Version: 1, Segments.Length: > 0 } || units.TurnId != turnId) continue;
+            var first = units.Segments[0];
+            if (first is null) continue;
+            var position = new VoicePlaybackInterruption(turnId, message.Id, first.Id, 0, 0, null);
+            if (FindSegments(history, conversationId, position) is not null) return position;
+        }
+        return null;
     }
 
     public static string? Describe(IReadOnlyList<ChatMessage> history, ChatMessage currentUserMessage)

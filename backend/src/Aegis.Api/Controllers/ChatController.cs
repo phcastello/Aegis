@@ -107,6 +107,13 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         {
             await WriteStreamErrorAsync(exception.Message, "conversation_not_found", StatusCodes.Status404NotFound, cancellationToken);
         }
+        catch (ArgumentException exception) when (request.InterruptedGeneration is not null && !Response.HasStarted)
+        {
+            // The receipt's session/conversation ownership can only be checked
+            // while preparing the stream. A bad handoff is a client error, not
+            // an unexpected server/model failure.
+            await WriteStreamErrorAsync(exception.Message, "invalid_voice_generation_interruption", StatusCodes.Status400BadRequest, cancellationToken);
+        }
         catch (LlmRequestException exception)
         {
             logger.LogWarning(exception, "Chat stream model request failed.");

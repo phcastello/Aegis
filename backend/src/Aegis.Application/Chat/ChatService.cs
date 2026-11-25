@@ -55,9 +55,10 @@ public sealed class ChatService(
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
-        if (defer) pending.Track(turnRegistry, effectiveTurnId);
+        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
+        userContent = userMessage.Content;
         var turnToken = pending.Token;
         if (!defer) await AcceptTurnAsync(pending, request, effectiveTurnId, turnToken);
 
@@ -76,6 +77,7 @@ public sealed class ChatService(
             if (completion.Ignored)
             {
                 if (!defer || pending.Turn is not null) throw new InvalidOperationException("Unexpected ignored turn.");
+                pending.MarkIgnored();
                 turnToken.ThrowIfCancellationRequested();
                 return null;
             }
@@ -156,9 +158,10 @@ public sealed class ChatService(
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
-        if (defer) pending.Track(turnRegistry, effectiveTurnId);
+        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
+        userContent = userMessage.Content;
         var turnToken = pending.Token;
         var announced = false;
         if (!defer)
@@ -190,6 +193,7 @@ public sealed class ChatService(
             if (chunk.Ignored)
             {
                 if (!defer || pending.Turn is not null) throw new InvalidOperationException("Unexpected ignored turn.");
+                pending.MarkIgnored();
                 turnToken.ThrowIfCancellationRequested();
                 streamCompleted = true;
                 yield return ChatStreamEvent.Ignored(turnId);
@@ -283,6 +287,10 @@ public sealed class ChatService(
                         segmentedMessage.RuntimeContextSnapshot, SpeechSegmentMetadata(turn.TurnId, "interrupted", segments));
                     await dbContext.SaveChangesAsync(CancellationToken.None);
                 }
+                // Persistence (including interrupted segment metadata) is now
+                // settled. An unrelated native TTS DELETE must not hold up a
+                // successor's read of this completed database boundary.
+                pending.MarkSettled();
                 await voiceService.CancelTurnAsync(turn.TurnId, "text_stream_interrupted", CancellationToken.None);
             }
         }
@@ -393,16 +401,64 @@ public sealed class ChatService(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var conversation = await TurnLatencyProfile.MeasureAsync("chat.conversation_load", async () =>
-            request.ConversationId is { } conversationId
+        var destination = request.ConversationId;
+        Conversation? conversation = null;
+        var playback = request.InterruptedPlayback;
+        if (request.InterruptedGeneration is { } interruption)
+        {
+            // Cancellation is idempotent and tombstones a request that has not
+            // registered yet. The old HTTP stream may disconnect before its
+            // database write settles, so do not infer persistence from it.
+            var prior = await voiceService.CancelVoiceGenerationAsync(interruption.TurnId, request.VoiceSessionId!.Value,
+                destination, cancellationToken);
+            if (prior is not null)
+            {
+                await prior.Settled.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                conversation = await dbContext.GetConversationWithMessagesAsync(prior.ConversationId, cancellationToken);
+                if (conversation is not null)
+                {
+                    destination = conversation.Id;
+                    if (conversation.Messages.Any(message => message.Id == prior.UserMessageId && message.Role == ChatRoles.User))
+                        playback = VoicePlaybackContext.FirstUnplayed(interruption.TurnId, conversation.Id, conversation.Messages);
+                    else
+                    {
+                        // An explicitly ignored background utterance must not
+                        // reappear just because its terminal event was lost.
+                        if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                        playback = prior.Playback;
+                    }
+                }
+                else
+                {
+                    if (destination is { } known) throw new ConversationNotFoundException(known);
+                    if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                }
+            }
+            else
+                userContent = MergeInterruptedContent(interruption.PreviousContent, userContent);
+        }
+        var isNewConversation = destination is null;
+        conversation ??= await TurnLatencyProfile.MeasureAsync("chat.conversation_load", async () =>
+            destination is { } conversationId
                 ? await dbContext.GetConversationWithMessagesAsync(conversationId, cancellationToken)
                     ?? throw new ConversationNotFoundException(conversationId)
                 : new Conversation(Conversation.DefaultTitle));
         // Before the model decides, keep the provisional message detached even for
         // an existing conversation. A discarded utterance must not affect its history.
         var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, userContent);
-        VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
-        return new PendingChatTurn(conversation, userMessage, cancellationToken);
+        if (request.InterruptedGeneration is not null)
+            VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
+        else
+            VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
+        return new PendingChatTurn(conversation, userMessage, isNewConversation, playback, cancellationToken);
+    }
+
+    private static string MergeInterruptedContent(string? previous, string current)
+    {
+        if (string.IsNullOrWhiteSpace(previous)) return current;
+        var retained = previous.Trim();
+        if (retained.Length > 16384) retained = retained[^16384..];
+        return $"Pedido anterior interrompido: {retained}\nNova fala (complemento ou correção): {current}";
     }
 
     private async Task AcceptTurnAsync(PendingChatTurn pending, SendMessageRequest request,
@@ -419,7 +475,7 @@ public sealed class ChatService(
             throw new OperationCanceledException(turn.Cancellation.Token);
         pending.Activate(turn);
         pending.Token.ThrowIfCancellationRequested();
-        if (request.ConversationId is null) dbContext.AddConversation(conversation);
+        if (pending.IsNewConversation) dbContext.AddConversation(conversation);
         conversation.AddMessage(userMessage);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
@@ -433,18 +489,29 @@ public sealed class ChatService(
     }
 
     private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage,
-        CancellationToken cancellationToken) : IDisposable
+        bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
     {
         private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         private CancellationTokenRegistration registration;
         private IDisposable? reservation;
+        private VoiceGenerationReceipt? generationReceipt;
         public Conversation Conversation { get; } = conversation;
         public ChatMessage UserMessage { get; } = userMessage;
+        public bool IsNewConversation { get; } = isNewConversation;
         public ActiveTurn? Turn { get; private set; }
         public CancellationToken Token => cancellation.Token;
 
-        public void Track(IActiveTurnRegistry registry, Guid turnId) =>
-            reservation = registry.TrackPendingTurn(turnId, Conversation.Id, cancellation);
+        public void Track(IActiveTurnRegistry registry, Guid turnId, SendMessageRequest request)
+        {
+            var receipt = request.VoiceSegments && request.VoiceSessionId is { } sessionId
+                ? new VoiceGenerationReceipt(sessionId, Conversation.Id, UserMessage.Id, UserMessage.Content, playback)
+                : null;
+            reservation = registry.TrackPendingTurn(turnId, Conversation.Id, cancellation, receipt);
+            generationReceipt = receipt;
+        }
+
+        public void MarkIgnored() => generationReceipt?.MarkIgnored();
+        public void MarkSettled() => generationReceipt?.Settle();
 
         public void Activate(ActiveTurn turn)
         {
@@ -454,9 +521,13 @@ public sealed class ChatService(
 
         public void Dispose()
         {
-            reservation?.Dispose();
-            registration.Dispose();
-            cancellation.Dispose();
+            try
+            {
+                reservation?.Dispose();
+                registration.Dispose();
+                cancellation.Dispose();
+            }
+            finally { generationReceipt?.Settle(); }
         }
     }
 

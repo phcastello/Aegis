@@ -245,5 +245,86 @@ public sealed class ActiveTurnRegistryTests
         Assert.True(registry.IsCurrent(conversation, active.TurnId));
     }
 
+    [Fact]
+    public void RejectedDuplicateCannotCreateAReceiptOrAuthorizeHandoffOfAnotherTurn()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid(); var id = Guid.NewGuid(); var session = Guid.NewGuid();
+        var existing = registry.Register(id, conversation);
+        using var cancellation = new CancellationTokenSource();
+        var receipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "unrelated", null);
+        Assert.Throws<InvalidOperationException>(() => registry.TrackPendingTurn(id, conversation, cancellation, receipt));
+        Assert.Throws<ArgumentException>(() => registry.BeginVoiceGenerationHandoff(id, session, conversation));
+        Assert.False(existing.Cancellation.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversation, id));
+    }
+
+    [Fact]
+    public void HandoffCannotCancelPendingLegacyOrAnotherVoiceSessionButCanCancelItsOwn()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid(); var session = Guid.NewGuid();
+        var legacyId = Guid.NewGuid(); var voiceId = Guid.NewGuid();
+        using var legacy = new CancellationTokenSource(); using var voice = new CancellationTokenSource();
+        using var legacyReservation = registry.TrackPendingTurn(legacyId, conversation, legacy);
+        var receipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "request", null);
+        using var voiceReservation = registry.TrackPendingTurn(voiceId, conversation, voice, receipt);
+        Assert.Throws<ArgumentException>(() => registry.BeginVoiceGenerationHandoff(legacyId, session, conversation));
+        Assert.Throws<ArgumentException>(() => registry.BeginVoiceGenerationHandoff(voiceId, Guid.NewGuid(), conversation));
+        Assert.Throws<ArgumentException>(() => registry.BeginVoiceGenerationHandoff(voiceId, session, Guid.NewGuid()));
+        Assert.False(legacy.IsCancellationRequested); Assert.False(voice.IsCancellationRequested);
+        var handoff = registry.BeginVoiceGenerationHandoff(voiceId, session, conversation);
+        Assert.Same(receipt, handoff.Receipt);
+        Assert.True(voice.IsCancellationRequested); Assert.False(legacy.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void UnknownHandoffTombstonesLateRegistrationAndCannotBeReusedAfterRelease()
+    {
+        using var registry = CreateRegistry();
+        var id = Guid.NewGuid(); var conversation = Guid.NewGuid(); var session = Guid.NewGuid();
+        Assert.Null(registry.BeginVoiceGenerationHandoff(id, session, null).Receipt);
+        using var cancellation = new CancellationTokenSource();
+        var receipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "late", null);
+        using (registry.TrackPendingTurn(id, conversation, cancellation, receipt))
+            Assert.True(cancellation.IsCancellationRequested);
+        Assert.Throws<InvalidOperationException>(() => registry.TrackPendingTurn(id, conversation, cancellation, receipt));
+        Assert.Throws<InvalidOperationException>(() => registry.Register(id, conversation));
+    }
+
+    [Fact]
+    public void HandoffOnlyCancelsUnfinishedSpeechAndDoesNotRewriteCompletedTurn()
+    {
+        using var registry = CreateRegistry();
+        var id = Guid.NewGuid(); var session = Guid.NewGuid(); var conversation = Guid.NewGuid();
+        using var cancellation = new CancellationTokenSource();
+        var receipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "request", null);
+        using var pending = registry.TrackPendingTurn(id, conversation, cancellation, receipt);
+        var turn = registry.Register(id, conversation);
+        Assert.True(registry.TryTransition(id, TurnStatus.Created, TurnStatus.GeneratingText));
+        var assistant = Guid.NewGuid(); var first = new FinalSpeechSegment(Guid.NewGuid(), 0, assistant, "first");
+        var second = new FinalSpeechSegment(Guid.NewGuid(), 1, assistant, "second");
+        Assert.True(registry.TryAuthorizeSpeechSegment(id, first)); Assert.True(registry.TryAuthorizeSpeechSegment(id, second));
+        var firstRequest = Guid.NewGuid(); var secondRequest = Guid.NewGuid();
+        Assert.True(registry.TryBeginSegmentSpeech(id, first.Id, firstRequest, "native-first"));
+        Assert.True(registry.TryBeginSegmentSpeech(id, second.Id, secondRequest, "native-second"));
+        Assert.True(registry.CompleteSegmentSpeech(firstRequest));
+        var handoff = registry.BeginVoiceGenerationHandoff(id, session, conversation);
+        Assert.Equal(new[] { "native-second" }, handoff.Cancellation.SegmentNativeSpeechRequestIds);
+        Assert.Equal(new[] { "native-second" }, registry.CancelAndGetInfo(id, "old_stream_cleanup").SegmentNativeSpeechRequestIds);
+        Assert.Equal(TurnStatus.Cancelled, turn.Status);
+
+        var completedId = Guid.NewGuid();
+        using var completedToken = new CancellationTokenSource();
+        using var completedPending = registry.TrackPendingTurn(completedId, conversation, completedToken,
+            new(session, conversation, Guid.NewGuid(), "finished", null));
+        var completed = registry.Register(completedId, conversation);
+        registry.Complete(completedId);
+        Assert.Equal(TurnStatus.Completed, completed.Status);
+        var completedHandoff = registry.BeginVoiceGenerationHandoff(completedId, session, conversation);
+        Assert.False(completedHandoff.Cancellation.Result.LlmCancellationRequested);
+        Assert.Equal(TurnStatus.Completed, completed.Status);
+    }
+
     private static ActiveTurnRegistry CreateRegistry() => new(new AegisMetrics());
 }

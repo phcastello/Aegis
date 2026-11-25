@@ -155,6 +155,21 @@ public sealed class VoiceService(
         return cancellation.Result;
     }
 
+    public async Task<VoiceGenerationReceipt?> CancelVoiceGenerationAsync(Guid turnId, Guid sessionId, Guid? destination,
+        CancellationToken cancellationToken = default)
+    {
+        var handoff = turnRegistry.BeginVoiceGenerationHandoff(turnId, sessionId, destination, cancellationToken);
+        // Ownership and local invalidation are already committed together. Stop
+        // only the unfinished native speech requests from that snapshot; do not
+        // serially repeat a DELETE for every completed segment of a long reply.
+        var cancellation = handoff.Cancellation;
+        var nativeRequests = new List<string>(cancellation.SegmentNativeSpeechRequestIds ?? []);
+        if (cancellation.Result.SpeechCancellationRequested && !string.IsNullOrWhiteSpace(cancellation.NativeSpeechRequestId))
+            nativeRequests.Add(cancellation.NativeSpeechRequestId);
+        await Task.WhenAll(nativeRequests.Distinct().Select(native => speechClient.CancelAsync(native, CancellationToken.None)));
+        return handoff.Receipt;
+    }
+
     public async Task CancelAllTurnsAsync(string reason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

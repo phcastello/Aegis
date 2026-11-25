@@ -14,6 +14,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     private readonly Dictionary<Guid, Guid> turnBySpeechRequest = [];
     private readonly Dictionary<Guid, DateTimeOffset> cancelledBeforeRegistration = [];
     private readonly Dictionary<Guid, PendingTurn> pendingTurns = [];
+    private readonly Dictionary<Guid, VoiceGenerationReceipt> voiceGenerations = [];
     private long turnSequence;
     private readonly Timer cleanupTimer;
     private readonly AegisMetrics metrics;
@@ -27,26 +28,65 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
 
     // A speculative voice turn can be cancelled without making it the active turn.
     // A silent discard simply disposes the reservation, leaving the current turn untouched.
-    public IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation)
+    public IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation, VoiceGenerationReceipt? receipt = null)
     {
         if (turnId == Guid.Empty || conversationId == Guid.Empty)
             throw new ArgumentException("Turn and conversation identifiers are required.");
+        if (receipt is not null && (receipt.SessionId == Guid.Empty || receipt.ConversationId != conversationId))
+            throw new ArgumentException("The voice receipt belongs to another session or conversation.");
         lock (gate)
         {
             ThrowIfStopping();
             CleanupUnsafe();
-            if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
+            if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId) || voiceGenerations.ContainsKey(turnId))
                 throw new InvalidOperationException("The turn identifier has already been used.");
             if (pendingTurns.Count >= MaxTurns)
                 throw new InvalidOperationException("Too many pending turns.");
+            if (receipt is not null && voiceGenerations.Count >= MaxTurns)
+            {
+                var oldest = voiceGenerations.Where(pair => pair.Value.SettledAt is not null &&
+                        (!turns.TryGetValue(pair.Key, out var active) || !IsActiveUnsafe(active)))
+                    .OrderBy(pair => pair.Value.SettledAt).FirstOrDefault();
+                if (oldest.Value is null) throw new InvalidOperationException("Too many pending voice turns.");
+                voiceGenerations.Remove(oldest.Key);
+            }
             if (cancelledBeforeRegistration.ContainsKey(turnId)) cancellation.Cancel();
             var pending = new PendingTurn(conversationId, ++turnSequence, cancellation);
             pendingTurns.Add(turnId, pending);
+            // The authorization/reservation and its handoff receipt are one atomic
+            // registration. A rejected duplicate cannot publish a forged receipt.
+            if (receipt is not null) voiceGenerations.Add(turnId, receipt);
             return new PendingRegistration(this, turnId, pending);
         }
     }
 
     private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation);
+
+    public VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (turnId == Guid.Empty || sessionId == Guid.Empty)
+            throw new ArgumentException("A interrupção da geração por voz é inválida.");
+        lock (gate)
+        {
+            ThrowIfStopping();
+            CleanupUnsafe();
+            var receipt = voiceGenerations.GetValueOrDefault(turnId);
+            if (receipt is not null)
+            {
+                if (receipt.SessionId != sessionId || destination is { } requested && requested != receipt.ConversationId)
+                    throw new ArgumentException("A interrupção não pertence a esta sessão de voz.");
+            }
+            else if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
+                throw new ArgumentException("O turno interrompido não é uma geração desta sessão de voz.");
+
+            // Validate ownership and reserve cancellation in one critical section.
+            // If no prior registration exists, the tombstone prevents a late POST
+            // from accepting while a successor is already being prepared.
+            return new(receipt, CancelAndGetInfoUnsafe(turnId, "voice_generation_interrupted", activeSegmentsOnly: true));
+        }
+    }
 
     private sealed class PendingRegistration(ActiveTurnRegistry registry, Guid turnId, PendingTurn pending) : IDisposable
     {
@@ -74,7 +114,10 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             ThrowIfStopping();
             CleanupUnsafe();
-            if (turns.ContainsKey(turnId))
+            // A settled segmented receipt is also a used identifier even if its
+            // speculative turn never became active. It may only be registered
+            // by its own still-live pending reservation.
+            if (turns.ContainsKey(turnId) || (voiceGenerations.ContainsKey(turnId) && !pendingTurns.ContainsKey(turnId)))
             {
                 throw new InvalidOperationException("The turn identifier has already been used.");
             }
@@ -326,24 +369,39 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     public TurnCancellationInfo CancelAndGetInfo(Guid turnId, string reason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (gate)
-        {
-            if (!turns.TryGetValue(turnId, out var turn))
-            {
-                cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
-                TrimCancelledBeforeRegistrationUnsafe();
-                if (pendingTurns.TryGetValue(turnId, out var pending)) pending.Cancellation.Cancel();
-                return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
-            }
+        lock (gate) return CancelAndGetInfoUnsafe(turnId, reason);
+    }
 
-            var wasSpeech = turn.SpeechRequestId is not null || turn.SegmentRequests.Count > 0;
-            var nativeSpeechRequestId = turn.NativeSpeechRequestId;
-            var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
-            CancelUnsafe(turn, reason);
-            return new TurnCancellationInfo(
-                new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
-                nativeSpeechRequestId, turn.SegmentRequests.Values.ToArray());
+    private TurnCancellationInfo CancelAndGetInfoUnsafe(Guid turnId, string reason, bool activeSegmentsOnly = false)
+    {
+        if (!turns.TryGetValue(turnId, out var turn))
+        {
+            cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
+            TrimCancelledBeforeRegistrationUnsafe();
+            if (pendingTurns.TryGetValue(turnId, out var pending)) pending.Cancellation.Cancel();
+            return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
         }
+
+        // A native DELETE or old stream's finally may race with the handoff.
+        // Receipt-backed segmented turns use the same unfinished-only cleanup
+        // policy regardless of which of those cancellation paths arrived first.
+        activeSegmentsOnly |= voiceGenerations.ContainsKey(turnId);
+
+        // Recovering a receipt must not turn a completed/failed earlier response
+        // into a new cancellation or decrement the active-turn metric twice.
+        if (activeSegmentsOnly && turn.Status is TurnStatus.Completed or TurnStatus.Failed)
+            return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", false, false), null);
+
+        var segmentRequests = activeSegmentsOnly
+            ? turn.SegmentRequests.Where(pair => !turn.CompletedSegmentRequests.Contains(pair.Key)).Select(pair => pair.Value).ToArray()
+            : turn.SegmentRequests.Values.ToArray();
+        var wasSpeech = turn.SpeechRequestId is not null || segmentRequests.Length > 0;
+        var nativeSpeechRequestId = turn.NativeSpeechRequestId;
+        var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
+        CancelUnsafe(turn, reason);
+        return new TurnCancellationInfo(
+            new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
+            nativeSpeechRequestId, segmentRequests);
     }
 
     public IReadOnlyList<TurnCancellationInfo> BeginShutdownAndCancelAll(string reason)
@@ -386,6 +444,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             cancelledBeforeRegistration.Clear();
             foreach (var pending in pendingTurns.Values.ToList()) pending.Cancellation.Cancel();
             pendingTurns.Clear();
+            voiceGenerations.Clear();
         }
     }
 
@@ -443,6 +502,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             cancelledBeforeRegistration.Remove(pair.Key);
         }
+        foreach (var pair in voiceGenerations.Where(pair => pair.Value.SettledAt < cutoff &&
+            (!turns.TryGetValue(pair.Key, out var active) || !IsActiveUnsafe(active))).ToList())
+            voiceGenerations.Remove(pair.Key);
         TrimCancelledBeforeRegistrationUnsafe();
 
         while (turns.Count > MaxTurns)

@@ -19,5 +19,11 @@ public sealed class SendMessageRequest
 
     public Aegis.Application.Voice.VoicePlaybackInterruption? InterruptedPlayback { get; init; }
 
+    public VoiceGenerationInterruption? InterruptedGeneration { get; init; }
+
     public string Content { get; init; } = string.Empty;
 }
+
+/// <summary>A new utterance cut off a voice turn before any audio was played.
+/// Prior content is only a fallback when the server no longer has its receipt.</summary>
+public sealed record VoiceGenerationInterruption(Guid TurnId, string? PreviousContent = null);

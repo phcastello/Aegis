@@ -31,6 +31,12 @@ public static class HandsFreeReply
 
     public static string UserContent(SendMessageRequest request)
     {
+        if (request.InterruptedGeneration is { } interruption &&
+            (!request.IsHandsFree || !request.VoiceSegments || !request.AllowSilentIgnore ||
+             request.InterruptedPlayback is not null || interruption.TurnId == Guid.Empty ||
+             request.TurnId is null || request.TurnId == Guid.Empty ||
+             interruption.TurnId == request.TurnId || interruption.PreviousContent?.Length > 16384))
+            throw new ArgumentException("A interrupção da geração por voz é inválida.");
         var content = request.Content.Trim();
         if (!request.IsHandsFree) return content;
         if (request.VoiceSessionId is null || request.VoiceSessionId == Guid.Empty)
@@ -61,6 +67,8 @@ public static class HandsFreeReply
                 "hands_free_reply_segments como única chamada, com segments contendo unidades finais ordenadas da resposta");
         context += " Memória semântica é consultada sob demanda nesta rodada: quando um fato pessoal necessário não estiver no histórico ou contexto, use memory_search; não adivinhe. Considere também referências indiretas, preferências pertinentes, correções e validade temporal. Para comparar o presente com o passado, consulte cada instante separadamente, usando asOf na busca histórica; ausência na busca atual não prova ausência histórica. Se as buscas pertinentes não trouxerem evidência, reconheça a ausência e não use fatos de outra pessoa como substitutos.";
         if (request.AllowSilentIgnore) context += " " + HandsFreeDirection.Guidance;
+        if (request.InterruptedGeneration is not null)
+            context += " O usuário interrompeu a geração anterior antes de ouvir uma resposta. Considere o pedido anterior e a nova fala em conjunto, priorizando a correção mais recente. Não suponha que uma ação externa foi ou não executada apenas porque a geração foi interrompida.";
         var item = JsonSerializer.SerializeToElement(new { role = "developer", content = context });
         return prompt with
         {
