@@ -43,6 +43,11 @@ try {
         if (name === 'aegis-windows-voice-state') callbacks.get(id)({ id, event: name, payload: { status, generation: initial.generation } });
       }
     };
+    window.hfFixture.conversationEvent = conversationId => {
+      for (const [id, name] of events) {
+        if (name === 'aegis-windows-voice-conversation') callbacks.get(id)({ id, event: name, payload: { conversationId } });
+      }
+    };
     window.hfFixture.waveEvent = (levels, generation = initial.generation, status = initial.status) => {
       for (const [id, name] of events) {
         if (name === 'aegis-windows-voice-waveform') callbacks.get(id)({ id, event: name, payload: { status, generation, levels } });
@@ -333,17 +338,21 @@ try {
   console.log('Battery UI: three modes, explicit silent study, active/recovery controls, manual finish, visible-only polling and signed device comparisons PASS (mock IPC)');
   console.log('Hands-free UI: initial failure, accessible retry, setup without prerequisites/backend, stale state, recovery, serialized events and unmount PASS (mock IPC; no native ACL claim)');
   const desktop = await context.newPage();
-  const waveformConversation = { id: 'waveform-fixture', title: 'Conversa para medir o layout',
+  const waveformConversation = { id: 'ddfabbe3-d5b7-4001-9000-123456789abc', title: 'Conversa para medir o layout',
     createdAt: '2026-11-25T00:00:00Z', updatedAt: '2026-11-25T00:00:00Z', messageCount: 0, messages: [] };
   await desktop.route('**/api/chat/conversations?*', route => route.fulfill({
     json: { items: [waveformConversation], hasMore: false }
   }));
-  await desktop.route('**/api/chat/conversations/waveform-fixture', route => route.fulfill({ json: waveformConversation }));
+  await desktop.route(`**/api/chat/conversations/${waveformConversation.id}`, route => route.fulfill({ json: waveformConversation }));
   await desktop.goto(origin + '?windows');
-  const indicator = desktop.locator('.chat-header .desktop-voice-indicator');
+  const indicator = desktop.locator('.composer .desktop-voice-indicator');
   await desktop.waitForFunction(() => window.hfFixture.calls.some(c => c.operation === 'state'));
   assert.equal(await indicator.count(), 0, 'idle desktop has no visual indicator');
   const historyTrigger = desktop.getByRole('button', { name: 'Abrir histórico', exact: true });
+  await historyTrigger.focus();
+  const composerCard = desktop.locator('.composer .desktop-voice-status');
+  const input = desktop.locator('.composer textarea');
+  await input.fill('Rascunho preservado');
   await historyTrigger.focus();
   let narrowPhaseBounds;
   for (const [phase, label] of Object.entries({
@@ -351,12 +360,16 @@ try {
   })) {
     await desktop.evaluate(status => window.hfFixture.voiceEvent(status), phase);
     await indicator.and(desktop.locator(`[data-phase="${phase}"]`)).waitFor();
-    assert.equal((await indicator.innerText()).trim(), label);
+    assert.equal((await indicator.locator('.sr-only').textContent()).trim(), label);
+    assert.equal(await input.count(), 0);
+    assert.equal(await desktop.locator('.chat-header .desktop-voice-indicator').count(), 0);
+    assert.ok(await composerCard.getByRole('button', { name: 'Cancelar interação' }).isVisible());
+    assert.equal(await indicator.locator('.sr-only').evaluate(el => getComputedStyle(el).width), '1px');
     assert.equal(await historyTrigger.evaluate(button => document.activeElement === button), true, 'voice updates preserve keyboard focus');
     assert.equal(await indicator.locator('svg[aria-hidden="true"]').count(), 1);
     const bounds = await indicator.boundingBox();
     assert.ok(bounds);
-    if (narrowPhaseBounds) assert.deepEqual(bounds, narrowPhaseBounds, 'all active phases share one narrow header');
+    if (narrowPhaseBounds) assert.deepEqual(bounds, narrowPhaseBounds, 'all active phases share one bottom composer');
     narrowPhaseBounds = bounds;
   }
   const sample = Array.from({ length: 64 }, (_, i) =>
@@ -364,11 +377,12 @@ try {
   const meter = indicator.locator('.desktop-voice-waveform');
   const bars = meter.locator('rect');
   await desktop.evaluate(levels => { window.hfFixture.voiceEvent('capturing'); window.hfFixture.waveEvent(levels); }, sample);
-  await bars.nth(63).waitFor({ state: 'attached' });
+  await bars.nth(31).waitFor({ state: 'attached' });
   assert.equal(await meter.getAttribute('data-meter'), 'input');
   const heights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
-  assert.equal(heights.length, 64);
-  assert.ok(new Set(heights).size > 40 && heights[0] === 0, 'input bars represent the individual measured levels');
+  assert.equal(heights.length, 32);
+  const compactExpected = values => values.slice(-32).map(level => 3 + Math.sqrt(level) * 29);
+  assert.ok(heights.every((height, i) => Math.abs(height - compactExpected(sample)[i]) < 1e-10), 'input bars preserve original manual RMS height curve and most recent time slots');
   await desktop.evaluate(levels => {
     const f = window.hfFixture;
     f.waveEvent(levels.slice(1));
@@ -382,9 +396,11 @@ try {
   await desktop.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   assert.equal(await indicator.evaluate(el => getComputedStyle(el).color !== getComputedStyle(el).backgroundColor), true);
   assert.equal(await indicator.evaluate(el => el.getAnimations({ subtree: true }).length), 0);
+  assert.equal(await bars.first().evaluate(el => getComputedStyle(el).transitionDuration), '0s');
   const fill = await bars.nth(6).evaluate(bar => getComputedStyle(bar).fill);
   assert.notEqual(fill, 'none');
   await desktop.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
+  assert.equal(await bars.first().evaluate(el => getComputedStyle(el).transitionDuration), '0.06s, 0.06s');
   await desktop.setViewportSize({ width: 1180, height: 800 });
   await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
   const sidebar = desktop.locator('#conversation-sidebar');
@@ -394,22 +410,27 @@ try {
   const wideIndicator = await indicator.boundingBox();
   const wideMeter = await meter.boundingBox();
   const frame = await desktop.locator('.chat-panel').boundingBox();
-  assert.ok(wideIndicator && wideMeter && frame && wideIndicator.width > frame.width * .8 && wideMeter.width > frame.width * .7,
-    'microphone waveform occupies the available horizontal chat header instead of a small card');
-  assert.equal(wideMeter.height, 40, 'the input waveform grows vertically as well');
+  const cardWide = await composerCard.boundingBox();
+  assert.ok(wideIndicator && wideMeter && frame && cardWide && wideIndicator.width >= cardWide.width - 120 && wideMeter.width >= cardWide.width - 120,
+    'microphone waveform occupies the available horizontal composer instead of a small card');
+  assert.equal(wideMeter.height, 64, 'the input waveform grows vertically as well');
+  const composerBounds = await composerCard.boundingBox();
+  assert.ok(composerBounds && composerBounds.height >= 90 && composerBounds.y > frame.y + frame.height / 2);
   await bars.nth(63).waitFor({ state: 'attached' });
   const wideBars = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
   assert.equal(wideBars.length, 64);
   assert.ok(wideBars[63].x - wideBars[0].x > wideMeter.width * .8, 'the 64 measured bars span the meter width');
-  assert.ok(wideBars.every(bar => Math.abs(bar.width - 2) < .01), 'capture bars are exactly 2 CSS pixels, even in wide layouts');
+  assert.equal(await bars.first().evaluate(el => getComputedStyle(el).transitionDuration), '0.06s, 0.06s');
+  assert.ok(wideBars.every(bar => Math.abs(bar.width - 3) < .01), 'capture bars are exactly 3 CSS pixels, even in wide layouts');
   assert.equal(await meter.getAttribute('viewBox'), null, 'capture geometry is never scaled by a viewBox');
-  assert.equal(await indicator.evaluate(el => getComputedStyle(el.closest('.chat-voice-controls')).pointerEvents), 'none',
-    'the expanded area does not intercept clicks');
+  const beforePositions = await bars.evaluateAll(nodes => nodes.map(node => node.getAttribute('x')));
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels.map((_, i) => levels[(i + 4) % levels.length])), sample);
+  assert.deepEqual(await bars.evaluateAll(nodes => nodes.map(node => node.getAttribute('x'))), beforePositions, 'only height changes as measured time history advances');
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png`, animations: 'disabled' });
   // A real desktop sidebar occupies a column. Opening it, selecting a conversation and
   // starting another one do not hide the active microphone display or block controls.
   await historyTrigger.click();
-  await sidebar.getByRole('button', { name: waveformConversation.title, exact: true }).click();
+  await desktop.evaluate(id => window.hfFixture.conversationEvent(id), waveformConversation.id);
   const menuTrigger = desktop.getByRole('button', { name: 'Menu da conversa', exact: true });
   await menuTrigger.waitFor({ state: 'visible' });
   const sidebarBounds = await sidebar.boundingBox();
@@ -418,8 +439,8 @@ try {
   const menuBounds = await menuTrigger.boundingBox();
   assert.ok(sidebarBounds && chatBounds && inputBounds && menuBounds
     && inputBounds.x >= sidebarBounds.x + sidebarBounds.width
-    && inputBounds.x + inputBounds.width <= menuBounds.x
-    && inputBounds.width > chatBounds.width * .75,
+    && inputBounds.y >= menuBounds.y + menuBounds.height
+    && inputBounds.width >= (await composerCard.boundingBox()).width - 120,
     'expanded microphone layout stays inside the chat column and leaves the conversation menu free');
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing-sidebar.png`, animations: 'disabled' });
@@ -432,18 +453,15 @@ try {
   const activeNavBounds = await historyTrigger.boundingBox();
   const activeMenuBounds = await menuTrigger.boundingBox();
   assert.ok(activeNarrowBounds && activeNavBounds && activeMenuBounds
-    && activeNarrowBounds.x >= activeNavBounds.x + activeNavBounds.width
-    && activeNarrowBounds.x + activeNarrowBounds.width < activeMenuBounds.x,
+    && activeNarrowBounds.y > activeNavBounds.y + activeNavBounds.height
+    && activeNarrowBounds.y > activeMenuBounds.y + activeMenuBounds.height,
     'even a narrow active conversation leaves history and menu visible');
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
   await desktop.waitForFunction(() => document.querySelectorAll('.desktop-voice-waveform rect').length === 32);
   const compactHeights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
-  const expectedCompact = Array.from({ length: 32 }, (_, i) => {
-    const peak = Math.max(sample[i * 2], sample[i * 2 + 1]);
-    return peak > .002 ? 1.3 + 34.7 * peak : 0;
-  });
-  assert.deepEqual(compactHeights, expectedCompact, 'narrow capture preserves every adjacent pair by its real peak');
-  assert.ok(await bars.evaluateAll(nodes => nodes.every(node => Math.abs(node.getBoundingClientRect().width - 2) < .01)),
+  const expectedCompact = compactExpected(sample);
+  assert.ok(compactHeights.every((height, i) => Math.abs(height - expectedCompact[i]) < 1e-10), 'narrow capture preserves the newest real samples at their 60ms cadence');
+  assert.ok(await bars.evaluateAll(nodes => nodes.every(node => Math.abs(node.getBoundingClientRect().width - 3) < .01)),
     'compact capture never changes the actual bar thickness');
   await desktop.setViewportSize({ width: 1180, height: 800 });
   await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
@@ -458,10 +476,10 @@ try {
   await desktop.setViewportSize({ width: 320, height: 844 });
   const box = await indicator.boundingBox();
   const navBox = await historyTrigger.boundingBox();
-  assert.ok(box && navBox && box.x >= navBox.x + navBox.width, 'indicator does not cover navigation in narrow layout');
+  assert.ok(box && navBox && box.y >= navBox.y + navBox.height, 'indicator does not cover navigation in narrow layout');
   const narrowMeter = await meter.boundingBox();
   assert.ok(narrowMeter && box && narrowMeter.width > box.width * .8 && narrowMeter.width >= 100,
-    'the caption stacks at narrow widths and leaves generous room for the microphone');
+    'the composer reserves room for the microphone');
   assert.equal(await desktop.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await desktop.setViewportSize({ width: 390, height: 844 });
   await desktop.evaluate(() => window.hfFixture.voiceEvent('continuation'));
@@ -472,7 +490,7 @@ try {
   }, sample);
   assert.equal(await bars.count(), 0, 'previous capture cannot appear in continuation');
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
-  await bars.nth(63).waitFor({ state: 'attached' });
+  await bars.nth(31).waitFor({ state: 'attached' });
   await meter.locator('line').waitFor({ state: 'attached', timeout: 2500 });
   assert.equal(await bars.count(), 0, 'stalled meter expires');
   await desktop.evaluate(levels => {
@@ -491,30 +509,30 @@ try {
   await meter.locator('line').waitFor({ state: 'attached' });
   assert.equal(await meter.getAttribute('data-meter'), 'output');
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? .95 : i === 23 ? .5 : 0)));
-  await bars.nth(15).waitFor({ state: 'attached' });
-  assert.equal(await bars.count(), 16, 'speaking merges adjacent bins while capture retains 64 measured samples');
+  await bars.nth(31).waitFor({ state: 'attached' });
+  assert.equal(await bars.count(), 32, 'desktop shows all 32 measured bands while capture retains 64 samples');
   assert.equal(await meter.getAttribute('viewBox'), null, 'playback geometry is never scaled by a viewBox');
   assert.ok(await bars.evaluateAll(nodes => nodes.every(node => Math.abs(node.getBoundingClientRect().width - 3) < .01)));
-  const peak = Number(await bars.nth(3).getAttribute('height'));
-  assert.ok(peak > Number(await bars.nth(11).getAttribute('height')));
-  assert.ok(peak > 0 && peak < 15, 'first output frame uses the softened attack');
-  assert.ok(Math.abs(Number(await bars.nth(3).getAttribute('y')) + peak - 36) < 1e-6);
+  const peak = Number(await bars.nth(7).getAttribute('height'));
+  assert.ok(peak > Number(await bars.nth(23).getAttribute('height')));
+  assert.ok(peak > 0 && peak < 31, 'first output frame uses the softened attack');
+  assert.ok(Math.abs(Number(await bars.nth(7).getAttribute('y')) + peak - 59) < 1e-6);
   await desktop.emulateMedia({ reducedMotion: 'reduce' });
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? 1 : 0)));
-  assert.ok(Math.abs(Number(await bars.nth(3).getAttribute('height')) - 20.8) < 1e-6, 'lower output height cap');
-  assert.equal(Number(await bars.nth(11).getAttribute('height')), 0, 'reduced motion bypasses the envelope');
+  assert.ok(Math.abs(Number(await bars.nth(7).getAttribute('height')) - 52) < 1e-6, 'larger desktop output height cap');
+  assert.equal(Number(await bars.nth(23).getAttribute('height')), 0, 'reduced motion bypasses the envelope');
   await desktop.emulateMedia({ reducedMotion: 'no-preference' });
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array(32).fill(0)));
-  assert.equal(await bars.count(), 16, 'quiet has a short release rather than a jump');
+  assert.equal(await bars.count(), 32, 'quiet has a short release rather than a jump');
   await meter.locator('line').waitFor({ state: 'attached', timeout: 300 });
   assert.equal(await bars.count(), 0, 'a final quiet frame clears within the short release even without more events');
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 23 ? .5 : 0)));
-  await bars.nth(15).waitFor({ state: 'attached' });
-  assert.equal(Number(await bars.nth(3).getAttribute('height')), 0, 'previous peak cannot leak after silence');
+  await bars.nth(31).waitFor({ state: 'attached' });
+  assert.equal(Number(await bars.nth(7).getAttribute('height')), 0, 'previous peak cannot leak after silence');
   await meter.locator('line').waitFor({ state: 'attached', timeout: 1500 });
   assert.equal(await bars.count(), 0, 'stalled playback clears independently of capture timeout');
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? .95 : i === 23 ? .5 : 0)));
-  await bars.nth(15).waitFor({ state: 'attached' });
+  await bars.nth(31).waitFor({ state: 'attached' });
   await desktop.setViewportSize({ width: 1180, height: 800 });
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-speaking.png` });
   const meterSize = await indicator.boundingBox();
@@ -523,7 +541,7 @@ try {
   const thoughtSize = await indicator.boundingBox();
   assert.ok(meterSize && thoughtSize && Math.abs(meterSize.width - thoughtSize.width) <= 1 &&
     Math.abs(meterSize.height - thoughtSize.height) <= 1, 'the visualizer retains its position and size between phases');
-  assert.equal((await indicator.innerText()).trim(), 'Preparando resposta');
+  assert.equal((await indicator.locator('.sr-only').textContent()).trim(), 'Preparando resposta');
   const thoughts = indicator.locator('.desktop-voice-thoughts');
   assert.equal(await thoughts.locator('circle').count(), 3);
   const clusterPositions = await thoughts.evaluate(g => {
@@ -575,7 +593,7 @@ try {
   await desktop.emulateMedia({ reducedMotion: 'no-preference' });
   await desktop.setViewportSize({ width: 390, height: 844 });
   // Visual evidence and a geometric invariant in both sizes: every active state
-  // occupies the exact same header; only the central content changes. This also
+  // occupies the exact same composer; only the central content changes. This also
   // verifies the output bars are never stretched by a wide viewport.
   const speechSample = Array.from({ length: 32 }, (_, i) => .05 + .85 * Math.abs(Math.sin(i * .51) * Math.cos(i * .16)));
   for (const width of [1180, 390]) {
@@ -590,7 +608,7 @@ try {
       await indicator.and(desktop.locator(`[data-phase="${phase}"]`)).waitFor();
       const bounds = await indicator.boundingBox();
       assert.ok(bounds);
-      if (phaseBounds) assert.deepEqual(bounds, phaseBounds, 'every active phase keeps the exact same header geometry');
+      if (phaseBounds) assert.deepEqual(bounds, phaseBounds, 'every active phase keeps the exact same composer geometry');
       phaseBounds = bounds;
       if (phase === 'processing') {
         const shape = await indicator.locator('.desktop-voice-state-icon').boundingBox();
@@ -605,21 +623,21 @@ try {
         if (phase === 'speaking') {
           const spectrumBox = await meter.boundingBox();
           const visualBox = await indicator.locator('.desktop-voice-visual').boundingBox();
-          assert.ok(spectrumBox && visualBox && Math.abs(spectrumBox.width - Math.min(280, visualBox.width)) < .1,
-            'sixteen frequency bands remain legible in a bounded visual area');
+          assert.ok(spectrumBox && visualBox && Math.abs(spectrumBox.width - Math.min(460, visualBox.width)) < .1,
+            'thirty-two frequency bands remain legible in a bounded visual area');
           assert.ok(Math.abs(spectrumBox.x + spectrumBox.width / 2 - visualBox.x - visualBox.width / 2) < .1,
-            'the bounded spectrum is centered without shrinking the header');
+            'the bounded spectrum is centered without shrinking the composer');
           const currentHeights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
           assert.ok(Math.max(...currentHeights) > 15, 'the visual fixture represents ongoing speech, not just the first attack frame');
         }
         const widths = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-        assert.ok(widths.every(value => Math.abs(value - (phase === 'speaking' ? 3 : 2)) < .01));
-        assert.equal(widths.length, phase === 'speaking' ? 16 : 64);
+        assert.ok(widths.every(value => Math.abs(value - 3) < .01));
+        assert.equal(widths.length, phase === 'speaking' || width === 390 ? 32 : 64);
       }
       if (evidence) await desktop.screenshot({ path: `${evidence}/windows-voice-${width === 1180 ? 'wide' : 'narrow'}-${phase}.png`, animations: 'disabled' });
     }
   }
-  console.log('Windows voice meters: 64 capture levels, 16 smoothed output bands, fixed bar widths, stable full-width active header, responsive layout and reduced motion PASS');
+  console.log('Windows voice meters: 64 capture levels, 32 smoothed output bands, fixed bar widths, stable bottom composer, responsive layout and reduced motion PASS');
   await desktop.evaluate(() => { window.hfFixture.hold = true; document.dispatchEvent(new Event('visibilitychange')); });
   await desktop.waitForFunction(() => typeof window.hfFixture.resolve === 'function');
   await desktop.evaluate(() => {
@@ -627,12 +645,14 @@ try {
     window.hfFixture.resolve({ ...window.hfFixture.initial, status: 'capturing' });
   });
   await indicator.and(desktop.locator('[data-phase="speaking"]')).waitFor();
-  assert.equal((await indicator.innerText()).trim(), 'Falando');
+  assert.equal((await indicator.locator('.sr-only').textContent()).trim(), 'Falando');
   for (const status of ['listening', 'diagnostic', 'unexpected']) {
     await desktop.evaluate(state => window.hfFixture.voiceEvent(state), status);
     await indicator.waitFor({ state: 'detached' });
   }
   assert.equal(await page.locator('.desktop-voice-status').count(), 0, 'Android keeps its native presentation');
+  await input.waitFor({ state: 'visible' });
+  assert.equal(await input.inputValue(), 'Rascunho preservado', 'the unsubmitted draft returns when the hands-free interaction ends');
   console.log('Windows voice indicator: four states, idle and unknown hidden, focus, forced colors, recovery race PASS');
   await desktop.getByRole('button', { name: 'Abrir histórico', exact: true }).click();
   await desktop.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();

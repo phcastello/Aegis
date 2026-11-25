@@ -12,6 +12,8 @@ const compile = path => ts.transpileModule(readFileSync(new URL(path, import.met
 }).outputText;
 const transcriptionCode = compile('../src/composables/useAegisTranscription.ts');
 const voiceInputCode = compile('../src/services/voiceInput.ts');
+const waveformExport = {};
+vm.runInNewContext(compile('../src/services/voiceWaveform.ts'), { exports: waveformExport });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 function stream() {
@@ -62,6 +64,7 @@ function fixture(options = {}) {
     require(name) {
       if (name === 'vue') return { ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }), onBeforeUnmount: callback => { unmount = callback; } };
       if (name === '../services/voiceInput') return voiceInput;
+      if (name === '../services/voiceWaveform') return waveformExport;
       if (name === '../services/audioOwnership') return { acquireAudio: options.acquireAudio ?? (async () => async () => {}) };
       if (name === '../services/aegisApi') return {
         getTranscriptionStatus: async () => options.status ?? { enabled: true, configured: true, maxRecordingSeconds: 90 },
@@ -226,9 +229,9 @@ test('uncertain decode, non-finite or empty PCM does not claim absence of speech
 });
 test('meter follows actual PCM; track.muted reports missing data rather than physical mute', async () => {
   for (const sample of [0, 0.02]) {
-    const f = await fixture({ meterSample: sample }).ready(); await f.start(); for (let i = 0; i < 26; i++) f.fireTimer(80);
+    const f = await fixture({ meterSample: sample }).ready(); await f.start(); for (let i = 0; i < 34; i++) f.fireTimer(60);
     assert.equal(f.api.inputLevel.value > 0, sample > 0); if (!sample) assert.match(f.api.inputStatus.value, /Sem sinal detectado/);
-    f.streams[0].track.muted = true; f.fireTimer(80); assert.match(f.api.inputStatus.value, /temporariamente sem dados/); f.api.dispose(); f.assertReleased();
+    f.streams[0].track.muted = true; f.fireTimer(60); assert.match(f.api.inputStatus.value, /temporariamente sem dados/); f.api.dispose(); f.assertReleased();
   }
 });
 test('max duration finalizes once; idle creates no capture, context or timer', async () => {
@@ -282,11 +285,23 @@ test('direct-send does not fire after cancellation, invalidation, silence or upl
 test('waveform contains recent measured PCM and returns to rest on release', async () => {
   for (const sample of [0, 0.02]) {
     const f = await fixture({ meterSample: sample }).ready();
-    assert.equal(f.api.inputLevels.value.length, 19); assert.ok(f.api.inputLevels.value.every(level => level === 0));
-    await f.start(); f.fireTimer(80);
-    assert.equal(f.api.inputLevels.value.length, 19);
+    assert.equal(f.api.inputLevels.value.length, 64); assert.ok(f.api.inputLevels.value.every(level => level === 0));
+    await f.start(); f.fireTimer(60);
+    assert.equal(f.api.inputLevels.value.length, 64);
     assert.equal(f.api.inputLevels.value.at(-1) > 0, sample > 0);
     assert.equal(f.api.inputLevels.value.at(-2) > 0, sample > 0);
     f.api.discard(); assert.ok(f.api.inputLevels.value.every(level => level === 0)); f.assertReleased();
   }
+});
+
+test('wide input waveform keeps all measured samples; narrow windows keep newest samples at the same cadence', () => {
+  const history = Array.from({ length: 64 }, (_, i) => i / 63);
+  const wide = waveformExport.recentVoiceHistory(history, 600);
+  const narrow = waveformExport.recentVoiceHistory(history, 220);
+  assert.equal(waveformExport.VOICE_HISTORY_STEP_MS, 60);
+  assert.deepEqual(Array.from(wide), history);
+  assert.equal(narrow.length, 32);
+  assert.equal(narrow.at(-1), 1);
+  assert.deepEqual(Array.from(narrow), history.slice(-32));
+  assert.ok(narrow.every(x => x >= 0 && x <= 1));
 });

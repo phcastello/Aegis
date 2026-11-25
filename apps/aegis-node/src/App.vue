@@ -27,6 +27,12 @@ const props = defineProps<{ runtime: RuntimeInfo }>();
 const releaseIdentity = computed(() => getReleaseIdentity(props.runtime.version));
 const section = ref<SettingsSection | null>(null); const dirty = ref(false); const activity = ref(false);
 const chat = ref<InstanceType<typeof ChatView> | null>(null);
+const nativeVoiceActive = ref(false);
+function followNativeVoiceConversation(id: string | null) {
+  // Select the conversation within the existing app, never raise its window or
+  // discard an independently open settings editor.
+  if (!disposed) chat.value?.navigateNativeVoiceConversation(id);
+}
 const shell = ref<InstanceType<typeof SettingsShell> | null>(null); const focusedReminderId = ref<string | null>(null);
 const remindersPanel = ref<InstanceType<typeof RemindersPanel> | null>(null); const placesPanel = ref<InstanceType<typeof PlacesPanel> | null>(null);
 const actionSettings = ref<NotificationSettings | null>(null);
@@ -148,8 +154,8 @@ onMounted(() => { window.addEventListener('aegis-navigation-layer', syncNavigati
 onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNavigation); window.removeEventListener('aegis-conversation-changed', nativeConversationChanged); window.removeEventListener('aegis-app-visibility', foreground); window.removeEventListener('online', conversationRecovery); disposed = true; clearTimeout(changeRetryTimer); stopReminderListener?.(); stopConversationListener?.(); desktopSyncListener?.(); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('aegis-reminder-actions-changed', refreshPendingActions); window.removeEventListener('aegis-back', nativeBack); window.removeEventListener('aegis-reminder-open', openReminder); window.removeEventListener('aegis-conversation-open', openConversation); if (foregroundTimer !== null) clearTimeout(foregroundTimer); void invoke('node_settings_open', { open: false }).catch(() => undefined); });
 </script>
 <template>
-  <ChatView ref="chat" :app-version="runtime.version" :conversation-push-active="desktopConversationPush" @activity-changed="activity = $event">
-    <template v-if="runtime.platform === 'windows'" #voice-status><DesktopVoiceStatus /></template>
+  <ChatView ref="chat" :app-version="runtime.version" :conversation-push-active="desktopConversationPush" :native-voice-active="nativeVoiceActive" @activity-changed="activity = $event">
+    <template v-if="runtime.platform === 'windows'" #native-voice-composer><DesktopVoiceStatus @active-changed="nativeVoiceActive = $event" @conversation="followNativeVoiceConversation" /></template>
     <template #global-navigation><SettingsTrigger @click="navigate('devices')" /></template>
     <template #notice><div v-if="pendingActions || actionStatusUnavailable" class="native-node-notice" role="status"><template v-if="actionStatusUnavailable">Consulta das ações locais temporariamente indisponível. Não foi possível confirmar as pendências.<template v-if="pendingActions"> Última leitura: {{ pendingActionLabel(pendingActions) }}.</template></template><template v-else>{{ pendingActionLabel(pendingActions) }}. Adiamentos pendentes não têm horário offline garantido.</template><button @click="navigate('reminders')">Ver lembretes</button></div><div v-if="updates.visible.value && section !== 'updates'" class="native-node-notice" role="status"><span>{{ updates.update.value?.distributionKind === 'rollback' ? 'Atualização de recuperação da Aegis' : 'Atualização da Aegis' }}{{ updates.update.value ? ` ${updates.update.value.version}` : '' }}. Acompanhe em Atualizações.</span><button @click="navigate('updates')">Ver Atualizações</button></div><div v-if="identity && identity.state !== 'paired'" class="native-node-notice">{{ identity.state === 'disabled' ? 'Este dispositivo está desativado.' : identity.state === 'revoked' ? 'A identidade deixou de ser válida. Pareie este dispositivo novamente.' : 'Pareie este dispositivo para receber lembretes nativos.' }} <button @click="navigate('devices')">Abrir dispositivos</button></div></template>
   </ChatView>

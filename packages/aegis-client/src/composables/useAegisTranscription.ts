@@ -2,6 +2,7 @@ import { computed, onBeforeUnmount, ref } from 'vue';
 import { getTranscriptionStatus, transcribeAudio } from '../services/aegisApi';
 import { DIGITAL_ZERO_FLOOR, classifyPcmSignal, getPreferredVoiceInput, setPreferredVoiceInput } from '../services/voiceInput';
 import { acquireAudio } from '../services/audioOwnership';
+import { VOICE_HISTORY_STEP_MS } from '../services/voiceWaveform';
 
 export type TranscriptionState = 'idle' | 'requesting_permission' | 'recording' | 'transcribing' | 'unavailable' | 'error';
 export type TranscriptionIntent = 'review' | 'send';
@@ -9,7 +10,10 @@ export type CaptureDiagnostic = 'permission_denied' | 'no_device' | 'device_unav
 
 const DEFAULT_MAX_RECORDING_MILLISECONDS = 90_000;
 const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4'];
-const WAVEFORM_SAMPLES = 19;
+// Keep the same short timeline as the hands-free waveform. Each of the fixed
+// positions receives a new measured level every 20 ms; do not stretch 19 bars.
+const WAVEFORM_SAMPLES = 64;
+const METER_INTERVAL_MS = VOICE_HISTORY_STEP_MS;
 
 type CaptureSession = {
   valid: boolean;
@@ -144,7 +148,7 @@ export function useAegisTranscription(onTranscript: (text: string, intent: Trans
           inputLevels.value = [...inputLevels.value.slice(1), 0];
           inputStatus.value = 'Medição de entrada indisponível; confira as permissões do sistema.';
         }
-        session.meterTimer = window.setTimeout(tick, 80);
+        session.meterTimer = window.setTimeout(tick, METER_INTERVAL_MS);
       };
       void context.resume().catch(() => undefined);
       tick();

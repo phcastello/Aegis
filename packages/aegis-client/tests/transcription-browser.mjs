@@ -2,21 +2,23 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
+import { createServer as createNetServer } from 'node:net';
 
 // Browser integration of both real Apps and the browser's MediaRecorder/WebAudio.
 // getUserMedia is replaced with an oscillator/silence destination. No physical
 // capture, native device claim, outbound backend request or paid STT is involved.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const requireNative = createRequire(join(root, 'apps/aegis-node/package.json'));
-const { createServer } = await import(requireNative.resolve('vite'));
+const { createServer } = await import(pathToFileURL(requireNative.resolve('vite')).href);
 const version = JSON.parse(readFileSync(join(root, 'apps/aegis-node/package.json'), 'utf8')).version;
 const servers = [];
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 try {
   for (const host of ['web', 'native']) {
-    const server = await createServer({ root: join(root, host === 'web' ? 'frontend/aegis-pwa' : 'apps/aegis-node'), server: { host: '127.0.0.1', port: 0, strictPort: false } });
+    const port = await new Promise((resolve, reject) => { const probe = createNetServer(); probe.once('error', reject); probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(error => error ? reject(error) : resolve(port)); }); });
+    const server = await createServer({ root: join(root, host === 'web' ? 'frontend/aegis-pwa' : 'apps/aegis-node'), server: { host: '127.0.0.1', port, strictPort: false } });
     await server.listen(); servers.push(server);
     const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
     for (const platform of host === 'native' ? ['android', 'windows'] : ['browser']) {
@@ -145,6 +147,9 @@ try {
           const boxes = await Promise.all(['Descartar gravação', 'Parar e transcrever para revisão', 'Parar, transcrever e enviar'].map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
           assert.ok(boxes.every(box => box && box.x >= 0 && box.x + box.width <= width), `recording controls fit ${width}px`);
           assert.ok(boxes.every(box => Math.abs(box.y - boxes[0].y) <= 1), 'controls share one line');
+          const geometry = await page.locator('.recording-waveform').evaluate(el => ({ width: el.clientWidth, bars: [...el.querySelectorAll('i')].map(b => ({ x: b.getBoundingClientRect().x, width: b.getBoundingClientRect().width })) }));
+          assert.ok(geometry.bars.length >= 8 && geometry.bars.every(b => Math.abs(b.width - 3) < .1));
+          assert.ok(geometry.bars.at(-1).x - geometry.bars[0].x >= geometry.width * .8, 'fixed thin bars use the full available recording strip');
         }
         await page.emulateMedia({ reducedMotion: 'reduce' });
         assert.equal(await page.locator('.recording-waveform-bar').first().evaluate(bar => getComputedStyle(bar).transitionDuration), '0s');
@@ -183,12 +188,12 @@ try {
           await settings.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).check();
           await settings.getByText('Escutando “Aegis”.', { exact: true }).waitFor();
           await settings.getByRole('checkbox', { name: 'Diagnóstico: detectar chamadas sem enviar comandos', exact: true }).check();
-          await settings.getByRole('button', { name: 'Exportar métricas', exact: true }).click();
+          await settings.getByRole('button', { name: 'Exportar métricas e ativações (ZIP)', exact: true }).click();
           await settings.getByRole('button', { name: 'Cancelar interação', exact: true }).click();
           assert.equal(await page.evaluate(() => window.syntheticHandsFree.diagnostic), true);
           assert.equal(uploads, 1, 'hands-free configuration never uploads audio');
           assert.equal(prompts.length, 0, 'hands-free configuration never sends typed drafts');
-        } else assert.equal(await settings.getByRole('heading', { name: 'Hands-free', exact: true }).count(), 0);
+        } else assert.equal(await settings.getByRole('heading', { name: 'Hands-free', exact: true }).count(), platform === 'windows' ? 1 : 0);
         await settings.getByText('Microfone', { exact: true }).click();
         await settings.getByLabel('Entrada de áudio', { exact: true }).selectOption('synthetic-b');
         await settings.getByRole('button', { name: 'Fechar configurações', exact: true }).click();

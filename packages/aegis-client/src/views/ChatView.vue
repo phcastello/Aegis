@@ -44,7 +44,7 @@ import type {
   SubmitMessageFeedbackRequest
 } from '../types/chat';
 
-const props = defineProps<{ appVersion?: string; conversationPushActive?: boolean }>();
+const props = defineProps<{ appVersion?: string; conversationPushActive?: boolean; nativeVoiceActive?: boolean }>();
 const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
@@ -147,6 +147,8 @@ let activeSpeechOwner: ConversationContext | null = null;
 const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
 const transcription = useAegisTranscription(insertTranscriptIntoDraft);
+// Never hide the controls of a recording the user explicitly began.
+const nativeComposerActive = computed(() => Boolean(props.nativeVoiceActive && !transcription.isBusy.value));
 let capture: { owner: ConversationContext; text: string; start: number; end: number } | null = null;
 let streamScrollFrame: number | null = null;
 let layoutObserver: ResizeObserver | null = null;
@@ -423,7 +425,7 @@ function resizeComposer(): void {
 }
 
 function focusComposer(explicit = false): void {
-  if (isRestoring.value || (!explicit && (window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId))) return;
+  if (nativeComposerActive.value || isRestoring.value || (!explicit && (window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId))) return;
 
   const owner = selected.value;
   // On touch, keep the immediate focus in the user activation when the existing
@@ -1302,10 +1304,22 @@ function navigateToConversation(id: string): void {
   if (isRestoring.value) { explicitDestination = id; return; }
   void openConversation(id);
 }
+// The native hands-free session selects its own chat without foregrounding the
+// window or focusing the keyboard. Drafts belong to their original contexts.
+function navigateNativeVoiceConversation(id: string | null): void {
+  if (transcription.isBusy.value) return;
+  if (id) {
+    if (conversationId.value !== id) void openConversation(id);
+    conversationChanged(id, false);
+  } else if (conversationId.value && !selectedHasActiveTurn.value) {
+    startNewConversation(false);
+  }
+}
+watch(nativeComposerActive, active => { if (!active) resizeComposer(); });
 watch(isRestoring, restoring => {
   if (!restoring && explicitDestination) { const id = explicitDestination; explicitDestination = null; void openConversation(id); }
 });
-defineExpose({ openConversation: navigateToConversation, conversationChanged, reconcileConversations, resetConversationChanges });
+defineExpose({ openConversation: navigateToConversation, navigateNativeVoiceConversation, conversationChanged, reconcileConversations, resetConversationChanges });
 onMounted(() => {
   document.addEventListener('visibilitychange', serverForeground);
   window.addEventListener('focus', serverForeground);
@@ -1508,13 +1522,15 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <form class="composer" @submit.prevent="selectedHasActiveTurn ? stopActiveTurn() : handleSubmit()">
+      <form class="composer" @submit.prevent="!nativeComposerActive && (selectedHasActiveTurn ? stopActiveTurn() : handleSubmit())">
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
           Uma mensagem não pôde ser enviada.
           <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
         </p>
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
+        <div v-show="nativeComposerActive"><slot name="native-voice-composer" /></div>
+        <template v-if="!nativeComposerActive">
         <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
           @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
         <div v-else class="composer-field">
@@ -1548,6 +1564,7 @@ onBeforeUnmount(() => {
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
         <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        </template>
       </form>
       </section>
     </div>
