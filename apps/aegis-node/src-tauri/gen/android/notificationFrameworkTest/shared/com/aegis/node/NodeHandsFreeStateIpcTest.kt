@@ -54,12 +54,13 @@ class NodeHandsFreeStateIpcTest {
     }
     private fun state(view:WebView,operation:String="state"):JSONObject =
         invokeObject(view,"node_hands_free","{operation:'$operation'}")
+    private fun providerMajor():Int = if(Build.VERSION.SDK_INT>=26)
+        WebView.getCurrentWebViewPackage()?.versionName?.substringBefore('.')?.toIntOrNull()?:-1
+    else -1
     private fun uiDiagnostics(view:WebView):String {
         // Report only the provider major version and fixed DOM/capability flags.
         // No arbitrary page text, URL, conversation, user agent or logcat is printed.
-        val providerMajor=if(Build.VERSION.SDK_INT>=26)
-            WebView.getCurrentWebViewPackage()?.versionName?.substringBefore('.')?.toIntOrNull()?:-1
-        else -1
+        val providerMajor=providerMajor()
         val dom=evaluate(view,"""
             (function(){
                 var root=document.getElementById('app');
@@ -136,7 +137,23 @@ class NodeHandsFreeStateIpcTest {
                 assertTrue("initial_setup_model_identity_not_null_$key",result.isNull(key))
             }
         }
+        val major=providerMajor()
+        assertTrue("hands_free_webview_provider_version_unavailable",major>0)
+        android.util.Log.i("AegisNodeNativeTest","phase=hands_free_webview_provider_major version=$major")
+        android.util.Log.i("AegisNodeNativeTest","phase=hands_free_real_ipc_initial_state errorType=Checkpoint")
+        if(major<107) {
+            // The stock API 26 CI image runs WebView 69, below the Vite 7
+            // bundle target. Require visible guidance, not a blank page or a
+            // successful timeout; all the real native IPC assertions above ran.
+            waitFor(view,"(function(){var n=document.getElementById('aegis-webview-unsupported');return Boolean(n && !n.hidden && n.getClientRects().length && getComputedStyle(n).visibility==='visible' && document.getElementById('app').getAttribute('data-aegis-webview-unsupported')==='true');})()","hands_free_unsupported_webview_warning_timeout",diagnoseUi=true)
+            assertEquals("true",evaluate(view,"(function(){var n=document.getElementById('aegis-webview-unsupported');return n.getAttribute('role')==='alert' && n.textContent.indexOf('Atualize o Android System WebView')>=0 && n.textContent.indexOf('reabra a Aegis')>=0 && !document.querySelector('.app-shell');})()"))
+            assertEquals(PackageManager.PERMISSION_DENIED,context.checkSelfPermission(Manifest.permission.RECORD_AUDIO))
+            assertFalse(context.getSharedPreferences("aegis-hands-free-v1",0).getBoolean("enabled",false))
+            android.util.Log.i("AegisNodeNativeTest","phase=hands_free_unsupported_webview_warning errorType=Checkpoint")
+            return
+        }
         waitFor(view,"Boolean(document.querySelector('button[aria-label=\"Abrir histórico\"]') || document.querySelector('.global-settings-trigger'))","hands_free_real_ui_bootstrap_timeout",diagnoseUi=true)
+        assertEquals("true",evaluate(view,"(function(){var n=document.getElementById('aegis-webview-unsupported');return !n || n.hidden;})()"))
         evaluate(view,"var button=document.querySelector('button[aria-label=\"Abrir histórico\"]');if(button)button.click();null")
         waitFor(view,"Boolean(document.querySelector('.global-settings-trigger'))","hands_free_real_settings_trigger_timeout")
         evaluate(view,"document.querySelector('.global-settings-trigger').click();null")
@@ -150,7 +167,7 @@ class NodeHandsFreeStateIpcTest {
         assertFalse(controls.getBoolean("checked"));assertFalse(controls.getBoolean("error"));assertFalse(controls.getBoolean("loading"))
         assertEquals(PackageManager.PERMISSION_DENIED,context.checkSelfPermission(Manifest.permission.RECORD_AUDIO))
         assertFalse(context.getSharedPreferences("aegis-hands-free-v1",0).getBoolean("enabled",false))
-        android.util.Log.i("AegisNodeNativeTest","phase=hands_free_real_ipc_initial_state errorType=Checkpoint")
+        android.util.Log.i("AegisNodeNativeTest","phase=hands_free_real_setup_ui errorType=Checkpoint")
         // Tao exits when its final Activity is destroyed. The host force-stops after results,
         // with waitForActivitiesToComplete=false, as in the existing live WebView tests.
     }

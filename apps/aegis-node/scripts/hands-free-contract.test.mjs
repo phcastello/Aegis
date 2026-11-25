@@ -31,13 +31,20 @@ test('Android framework gate runs real hands-free IPC before granting microphone
   assert.ok(invoke < host.indexOf('permission(true);'));
   assert.ok(fixture < 0 || invoke < fixture);
   const android = source('gen/android/notificationFrameworkTest/shared/com/aegis/node/NodeHandsFreeStateIpcTest.kt');
-  assert.ok(android.includes("__TAURI_INTERNALS__.invoke('node_hands_free',{operation:'$operation'})"));
+  assert.ok(android.includes("__TAURI_INTERNALS__.invoke('$command',$args)"));
+  assert.ok(android.includes('invokeObject(view,"node_hands_free","{operation:\'$operation\'}")'));
   assert.ok(android.includes('operation:String="state"'));
   assert.ok(android.includes('state(view,"conversationChanges")'));
   assert.ok(android.includes('val result=state(view)'));
+  assert.ok(android.includes('invokeObject(view,"runtime_info","{}")'));
   assert.doesNotMatch(android, /mockIPC|__TAURI_INTERNALS__\s*=/);
   assert.ok(android.includes('hands_free_real_ipc_initial_state'));
+  assert.ok(android.indexOf('hands_free_real_ipc_initial_state') < android.indexOf('if(major<107)'));
+  assert.ok(android.includes('hands_free_real_setup_ui'));
+  assert.ok(android.includes('hands_free_unsupported_webview_warning'));
   assert.ok(host.includes("phases.has('hands_free_real_ipc_initial_state')"));
+  assert.ok(host.includes('handsFreeWebViewEvidence(run('));
+  assert.ok(host.includes('phases.has(handsFreeEvidence.expected)'));
 });
 
 test('activation collection controls retain their closed Rust JNI Activity and R8 contracts', () => {

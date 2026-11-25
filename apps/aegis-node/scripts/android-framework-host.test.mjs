@@ -1,6 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {adbFailure,frameworkCleanup,waitForAndroidFrameworkReady,ensureAndroidFrameworkRoot,AdbOperationError} from './android-framework-host.mjs';
+import {adbFailure,frameworkCleanup,waitForAndroidFrameworkReady,ensureAndroidFrameworkRoot,AdbOperationError,handsFreeWebViewEvidence} from './android-framework-host.mjs';
+
+test('hands-free always requires real native IPC and the matching visible UI evidence',()=>{
+  const ipc='phase=hands_free_real_ipc_initial_state errorType=Checkpoint';
+  const warning='phase=hands_free_unsupported_webview_warning errorType=Checkpoint';
+  const setup='phase=hands_free_real_setup_ui errorType=Checkpoint';
+  const version=major=>`phase=hands_free_webview_provider_major version=${major}`;
+  assert.deepEqual(handsFreeWebViewEvidence([version(69),ipc,warning].join('\n')),{providerMajor:69,expected:'hands_free_unsupported_webview_warning',present:['hands_free_real_ipc_initial_state','hands_free_unsupported_webview_warning']});
+  for(const major of [107,140])assert.equal(handsFreeWebViewEvidence([version(major),ipc,setup].join('\n')).expected,'hands_free_real_setup_ui');
+  for(const invalid of [[version(69),warning],[version(69),ipc],[version(69),ipc,setup],[version(140),ipc,warning],[version(140),ipc,setup,warning],[version(69),version(140),ipc,setup],[ipc,setup]])
+    assert.throws(()=>handsFreeWebViewEvidence(invalid.join('\n')),/hands_free_webview_/);
+});
 
 test('adb failures expose only a closed operation and reason',()=>{
   const secret='private-token /private/device/path fixture-node-id';

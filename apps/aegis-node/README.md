@@ -18,6 +18,13 @@ Windows exige Visual Studio Build Tools (C++) e WebView2. Android exige JDK 17,
 SDK/NDK Android e o target Rust `aarch64-linux-android` (as versões exatas usadas
 no build ficam no workflow `.github/workflows/aegis-node-ci.yml`).
 
+No Android, a interface exige um Android System WebView (ou Chrome, quando
+for o provedor selecionado) atualizado. O bundle Vite 7 tem alvo de Chromium
+107; provedores anteriores recebem um aviso local para atualizar pela Play
+Store e reabrir a Aegis. O SDK mínimo do runtime nativo permanece 24.
+O [harness Android](../../docs/distribuicao-e-ci.md) testa IPC real em API 26/35,
+aviso visível no provedor stock antigo e a interface real em provedor compatível.
+
 Na raiz do repositório:
 
 ```sh

@@ -202,6 +202,8 @@ jobs:
           node apps/aegis-node/tests/reminders-browser.mjs
       - name: Exercise capture sessions and input meter in Chromium for Android and Windows IPC hosts
         run: node packages/aegis-client/tests/transcription-browser.mjs
+      - name: Verify production WebView bootstrap and unsupported-Android guidance
+        run: node apps/aegis-node/tests/webview-bootstrap-browser.mjs
       - name: Retire the cached web app shell while preserving queued legacy actions
         run: |
           npm run test:worker --prefix frontend/aegis-pwa
