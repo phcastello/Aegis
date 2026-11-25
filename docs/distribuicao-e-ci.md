@@ -331,6 +331,20 @@ geográfica, reinício e transporte nativos continuam nas APIs 26/35. O teste
 de WebView/IPC moderno na API 35 e o smoke do bundle sob CSP não demonstram
 suporte a versões antigas de WebView nem substituirão testes físicos.
 
+Na integração da v0.8.0, o [teste real API 35](https://github.com/phcastello/Aegis/actions/runs/45631336350/job/139284235686)
+detectou uma colisão na criação do banco de lembretes ao retomar a Activity.
+O [SQLiteOpenHelper do Android](https://developer.android.com/reference/kotlin/android/database/sqlite/SQLiteOpenHelper)
+abre/cria o banco ao acessar seus getters. O [código AOSP](https://android.googlesource.com/platform/frameworks/base/%2B/master/core/java/android/database/sqlite/SQLiteOpenHelper.java)
+mostra que a exclusão mútua é por instância e a leitura da versão antecede a
+transação de criação: o lock apenas em `onOpen` chegava tarde para helpers
+concorrentes. A Aegis usa o mesmo lock reentrante de lembretes em ambos os
+getters, sem mudar schema, migrações, backup ou dados. O gate de framework
+nas APIs 26/35, debug e R8, abre concorrentemente bancos novos e um banco
+legado por meio dos pontos JNI reais, usando apenas diretórios e preferências
+descartáveis. Verifica o schema, uma apresentação persistida, a migração e
+o backup do registro anterior. Não prova acesso multiprocesso nem elimina a
+necessidade de homologação em aparelhos físicos.
+
 O smoke de identidade do APK instalado usa o [conector Android do Playwright](https://playwright.dev/docs/api/class-androiddevice#android-device-web-view).
 Na [aceitação da v0.8.0](https://github.com/phcastello/Aegis/actions/runs/45612125835),
 o mesmo código aprovado no PR e na integração falhou antes das asserções:

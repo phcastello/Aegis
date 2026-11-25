@@ -132,6 +132,11 @@ try {
   for(const phase of handsFreeEvidence.present)preservedCheckpoints.add(phase);
   run(['shell','am','force-stop','com.aegis.node']);
   permission(true);
+  instrumentation('NodeReminderDatabaseConcurrencyFrameworkTest');
+  const databasePhase='phase=reminder_database_concurrent_open errorType=Checkpoint';
+  assert(run(['logcat','-d','-v','raw','-s','AegisNodeNativeTest:I','*:S']).split(/\r?\n/).includes(databasePhase), 'Concurrent fresh and legacy reminder database opens must complete');
+  preservedCheckpoints.add('reminder_database_concurrent_open');
+  console.log(`AegisNodeNativeTest ${databasePhase}`);
   instrumentation('NodeNotificationFrameworkTest');
   permission(false);
   instrumentation('NodeNotificationPermissionDeniedTest');
@@ -231,7 +236,7 @@ try {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
-  for(const phase of [...handsFreeWebViewPhases,'hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
+  for(const phase of [...handsFreeWebViewPhases,'reminder_database_concurrent_open','hybrid_actual_permission_denial','hybrid_process_interruption_recovered','hybrid_reboot_preserves_identity_no_transition'])if(crash.includes(`phase=${phase} errorType=Checkpoint`)) {
     console.log(`AegisNodeNativeTest phase=${phase} errorType=Checkpoint`);
     phases.add(phase);
   }
@@ -261,6 +266,7 @@ try {
   if(!primaryError) {
     assert(phases.has('hands_free_real_ipc_initial_state'),'Real bundled WebView hands-free state must pass Tauri ACL and Android JNI before initial setup');
     assert(handsFreeEvidence && phases.has(handsFreeEvidence.expected),'Actual WebView setup or explicit unsupported-provider warning must pass');
+    assert(phases.has('reminder_database_concurrent_open'),'Concurrent fresh/legacy reminder database initialization must pass on the target APK');
   }
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('residential65_adapter_fresh_accuracy_timeout_saver'),'Residential native adapter validation required');
   if(livePassed && phases.has('geofence_google_registration_task_succeeded'))assert(phases.has('reminder_webview_scroll_edit_keyboard_native_back'),'Real WebView editor, keyboard and native Back validation required');
