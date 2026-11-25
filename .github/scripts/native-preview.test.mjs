@@ -220,6 +220,38 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     assert.deepEqual(preparedPlan.deployment, prepared);
     assert.deepEqual((await git.state.read()).ledger.reservations.at(-1).deployment, prepared, 'Prepared contracts and deployed sources are durable with the reservation.');
     assert.equal(calls.some(call => call.includes('/statuses')), false, 'The workflow never polls private deployment status.');
+
+    // Stable validation precedes the long acceptance matrix. No build-plan
+    // artifact or ledger mutation is allowed until its exact SHA passed.
+    Object.assign(process.env, {PUBLISH_DEV:'false', PREVIEW_VERSION:'0.7.2', PREVIEW_BRANCH:'main', GITHUB_RUN_ID:'504'});
+    sourceVersion='0.7.2';
+    delete process.env.ACCEPTED_STABLE_SHA;
+    const stableBefore=await git.state.read();
+    const beforeArtifact=readFileSync(join(work,'preview-plan/preview.json'),'utf8');
+    const stableWritesBefore=git.calls.filter(call=>call.method!=='GET').length;
+    await assert.rejects(resolvePreview(), /exact source accepted by the full release gate/);
+    const eligible=await resolvePreview({reserve:false});
+    assert.equal(eligible.sha,sha);
+    assert.equal(eligible.versionCode,7002999);
+    assert.deepEqual(await git.state.read(),stableBefore);
+    assert.equal(readFileSync(join(work,'preview-plan/preview.json'),'utf8'),beforeArtifact);
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,stableWritesBefore,'Preflight must not write to GitHub.');
+    process.env.PREVIEW_BRANCH=input.branch;
+    await assert.rejects(resolvePreview({reserve:false}),/integrated into main/);
+    process.env.PREVIEW_BRANCH='main'; ancestry='diverged';
+    await assert.rejects(resolvePreview({reserve:false}),/reachable/);
+    ancestry='ahead'; process.env.PREVIEW_VERSION='0.7.2-unstable.504';
+    await assert.rejects(resolvePreview({reserve:false}),/only accepts a stable version/);
+    process.env.PREVIEW_VERSION='0.7.2'; process.env.ACCEPTED_STABLE_SHA='f'.repeat(40);
+    await assert.rejects(resolvePreview(),/exact source accepted by the full release gate/);
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,stableWritesBefore);
+    process.env.ACCEPTED_STABLE_SHA=sha;
+    const stable=await resolvePreview();
+    assert.equal(stable.versionCode,7002999);
+    assert.deepEqual((await git.state.read()).ledger.reservations.at(-1),stable);
+    assert.deepEqual(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))),stable);
+    process.env.GITHUB_RUN_ID='505';
+    await assert.rejects(resolvePreview({reserve:false}),/must follow reserved/);
   } finally {
     process.chdir(cwd); globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];
@@ -231,8 +263,23 @@ test('build workflow requires manual dispatch, durable reservation and isolated 
   const workflow = readFileSync(join(root, '.github/workflows/aegis-native-preview.yml'), 'utf8').replace(/\r\n/g, '\n');
   const build = workflow.split('  build:\n')[1].split('  sign:\n')[0];
   const signer = workflow.split('  sign:\n')[1];
+  const stableSource=workflow.split('  stable-source:\n')[1].split('  acceptance:\n')[0];
+  const acceptance=workflow.split('  acceptance:\n')[1].split('  plan:\n')[0];
+  const reservation=workflow.split('  plan:\n')[1].split('  build:\n')[0];
   assert.doesNotMatch(workflow, /pull_request_target|publish-release|node-preview\/latest\.json|gh release|git tag/);
-  assert.match(workflow.split('  plan:\n')[1].split('  acceptance:\n')[0], /contents: write/);
+  assert.match(reservation, /contents: write/);
+  assert.match(stableSource,/!contains\(inputs.version, '-'\)/);
+  assert.match(stableSource,/contents: read/);
+  assert.doesNotMatch(stableSource,/contents: write|upload-artifact|environment:|secrets\./);
+  assert.match(stableSource,/ref: \$\{\{ github.sha \}\}/);
+  assert.match(stableSource,/native-preview\.mjs preflight-stable/);
+  assert.match(acceptance,/needs: stable-source/);
+  assert.match(acceptance,/needs\.stable-source\.result == 'success'/);
+  assert.match(acceptance,/stage: release\n      full_matrix: true\n      ref: \$\{\{ needs\.stable-source\.outputs\.sha \}\}/);
+  assert.match(reservation,/needs: \[stable-source, acceptance\]/);
+  assert.match(reservation,/!cancelled\(\) && \(contains\(inputs.version, '-'\) \|\| \(needs\.stable-source\.result == 'success' && needs\.acceptance\.result == 'success'\)\)/);
+  assert.match(reservation,/ACCEPTED_STABLE_SHA: \$\{\{ needs\.acceptance\.result == 'success' && needs\.stable-source\.outputs\.sha \|\| '' \}\}/);
+  assert.match(build,/needs\.plan\.outputs\.stable != 'true' \|\| needs\.acceptance\.result == 'success'/);
   assert.doesNotMatch(build, /secrets\./);
   assert.match(signer, /environment: aegis-native-signing/);
   assert.match(signer,/if: \$\{\{ !cancelled\(\) && needs.plan.result == 'success' && needs.build.result == 'success' \}\}/);
@@ -241,8 +288,6 @@ test('build workflow requires manual dispatch, durable reservation and isolated 
   assert.match(signer, /preview-updater-verifier\/Cargo.toml/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /group: aegis-native-distribution/);
-  assert.match(workflow, /if: needs.plan.outputs.stable == 'true'/);
-  assert.match(workflow, /stage: release\n      full_matrix: true/);
   const promotion=readFileSync(join(root,'.github/workflows/aegis-native-promote.yml'),'utf8').replace(/\r\n/g, '\n');
   assert.match(promotion,/if: inputs.publish/); assert.match(promotion,/default: false/);
   assert.match(promotion,/environment: aegis-native-signing/); assert.doesNotMatch(promotion,/secrets\.|npm run build/);

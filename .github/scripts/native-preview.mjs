@@ -5,7 +5,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, write
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { androidVersionCode, parseDistributionVersion, compareVersions, rollbackVersion } from '../../apps/aegis-node/scripts/version.mjs';
+import { allocateVersionCode, androidVersionCode, parseDistributionVersion, compareVersions, rollbackVersion } from '../../apps/aegis-node/scripts/version.mjs';
 import { metadata } from '../../apps/aegis-node/scripts/release-metadata.mjs';
 import { DistributionState, historicalFloor, recommendedFeed } from './distribution-state.mjs';
 
@@ -128,7 +128,7 @@ export async function publishedManifest(version) {
   return manifest;
 }
 
-export async function resolvePreview() {
+export async function resolvePreview({ reserve = true } = {}) {
   assertTrustedDispatch({ eventName: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
     workflowRef: process.env.GITHUB_WORKFLOW_REF, repository: process.env.GITHUB_REPOSITORY, attempt: process.env.GITHUB_RUN_ATTEMPT });
   await assertAuthorizedActor(process.env.GITHUB_ACTOR);
@@ -137,6 +137,11 @@ export async function resolvePreview() {
   assert.equal(requested.kind, process.env.DISTRIBUTION_KIND ?? 'normal', 'Version does not match the requested distribution kind.');
   const args = parameters({ sha: process.env.PREVIEW_SHA, branch: process.env.PREVIEW_BRANCH,
     number: requested.preview ?? 1, platform: process.env.PREVIEW_PLATFORM });
+  if (!reserve) assert.ok(requested.stable, 'Read-only stable preflight only accepts a stable version.');
+  if (requested.stable) {
+    assert.equal(args.branch, 'main', 'Stable distribution source must already be integrated into main.');
+    if (reserve) assert.equal(process.env.ACCEPTED_STABLE_SHA, args.sha, 'Stable reservation requires the exact source accepted by the full release gate.');
+  }
   const [environment, branchPolicies] = await Promise.all([
     api(`environments/${signingEnvironment}`), pages(`environments/${signingEnvironment}/deployment-branch-policies`, 'branch_policies')
   ]);
@@ -211,9 +216,22 @@ export async function resolvePreview() {
     runId: process.env.GITHUB_RUN_ID, controlSha: process.env.GITHUB_SHA,
     limits: deployment ? 'Authorized development publication; deployment contracts prepared before dispatch. No physical acceptance.'
       : 'Build/signing only; publication requires explicit promotion. No backend deployment or physical acceptance.' };
-  const plan = await state.reserve(identity, floor);
-  mkdirSync('preview-plan', { recursive: true });
-  writeJson('preview-plan/preview.json', plan);
+  let plan;
+  if (reserve) {
+    // Recheck current state immediately before allocation even if a stable
+    // preflight already found an eligible version. Only this job can reserve.
+    plan = await state.reserve(identity, floor);
+    mkdirSync('preview-plan', { recursive: true });
+    writeJson('preview-plan/preview.json', plan);
+  } else {
+    // The stable acceptance may take hours. Check eligibility without
+    // consuming the unique stable version/code or emitting a build plan.
+    for (const item of snapshot.ledger.reservations) {
+      assert.notEqual(item.runId, identity.runId, 'Run already reserved.');
+      assert.ok(compareVersions(identity.version, item.version) > 0, `Version must follow reserved ${item.version}.`);
+    }
+    plan = { ...identity, versionCode: allocateVersionCode(identity.version, [snapshot.ledger.highWaterMark, floor]) };
+  }
   for (const name of ['sha', 'version', 'versionCode']) output(name, plan[name]);
   output('sourceVersion', sourceVersion);
   output('stable', String(requested.stable));
@@ -221,6 +239,7 @@ export async function resolvePreview() {
     ...(args.platform !== 'windows' ? [{ platform: 'Android-arm64', android: 'true', os: 'ubuntu-24.04' }] : []),
     ...(args.platform !== 'android' ? [{ platform: 'Windows-x86_64', android: 'false', os: 'windows-2022' }] : [])
   ] }));
+  return plan;
 }
 
 export function manifest(directory, plan, platform, signed = false) {
@@ -248,6 +267,7 @@ export function verifyInput(directory, plan, platform) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'resolve') await resolvePreview();
+  else if (command === 'preflight-stable') await resolvePreview({ reserve: false });
   else if (command === 'prepare') prepareCandidate(resolve(args[0]), resolve(args[1]), args[2], args[3]);
   else if (command === 'manifest') manifest(resolve(args[0]), json(args[1]), args[2], args[3] === 'signed');
   else if (command === 'verify-input') verifyInput(resolve(args[0]), json(args[1]), args[2]);

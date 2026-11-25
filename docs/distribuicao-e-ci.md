@@ -123,8 +123,15 @@ publicação, `latest.json`. Cada reserva é adicionada ao ledger com versão,
 código, SHA, run, controle confiável e procedência. Não há serviço ou banco novo.
 O piso inclui releases e runs admitidos anteriores, inclusive o primeiro run.
 
-A reserva é gravada **antes** da compilação. Uma falha ou cancelamento não
-devolve a versão nem o código. Nova tentativa de build usa nova distribuição;
+A reserva é gravada **antes** da compilação. Na distribuição estável, a fonte
+já integrada à `main` e a elegibilidade da versão são verificadas em um job
+somente de leitura; a matriz completa de aceite testa esse SHA exato antes
+de reservar. Se o aceite falhar ou for cancelado, nenhuma versão/código é
+consumido: um novo run pode verificar novamente a mesma versão ainda livre.
+O plano confiável revalida fonte e ledger após o aceite, e só então reserva a
+estável antes de compilar. Previews e recuperações continuam a reservar sem
+esse aceite completo. Uma falha após a reserva não devolve a versão nem o
+código. Nova tentativa de build usa nova distribuição;
 não reexecutar assinatura com o mesmo nome para produzir bytes diferentes.
 A promoção pode ser repetida com os mesmos artefatos assinados.
 
@@ -183,7 +190,7 @@ assinatura Windows. Assinatura do updater Windows não é Authenticode nem remov
 SmartScreen.
 
 Confira ledger, releases e runs admitidos antes de escolher uma distribuição.
-Uma falha consome a reserva; nova compilação exige versão/código novos. Nunca
+Uma falha após a reserva consome a versão; nova compilação exige versão/código novos. Nunca
 reutilize uma reserva antiga para bytes diferentes ou reexecute um run antigo
 para produzir outra assinatura. Artefatos expirados exigem uma nova distribuição.
 
