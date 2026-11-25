@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const requirePwa = createRequire(new URL('../package.json', import.meta.url));
 const requireClient = createRequire(new URL('../../../packages/aegis-client/package.json', import.meta.url));
@@ -10,9 +11,17 @@ const { build } = requirePwa('esbuild');
 const { chromium } = requireClient('playwright-core');
 const repository = new URL('../../../', import.meta.url);
 // Immutable pre-maintenance worker: exercise a real upgrade, not a second production implementation.
-const baseline = '5552de452c8465ec2eeacdef32308f45d5aa981d';
+const baseline = '1efb4d48c17d6ca4d16b02308425980aeb398a78';
 const historical = file => execFileSync('git', ['show', `${baseline}:${file}`], { cwd: repository, encoding: 'utf8' });
-const oldSource = historical('frontend/aegis-pwa/src/sw.ts');
+// The predecessor's actual click and queue code is used. Its old navigation
+// cache is seeded by the browser below; there is no need to reinstall the
+// retired precache/router dependencies merely to reproduce IndexedDB replay.
+const oldSource = historical('frontend/aegis-pwa/src/sw.ts')
+  .replace(/^import .* from 'workbox-precache[^']*';\r?\n/gm, '')
+  .replace(/^import .* from 'workbox-routing';\r?\n/gm, '')
+  .replace(/^cleanupOutdatedCaches\(\);\r?\n/gm, '')
+  .replace(/^precacheAndRoute\(.*\);\r?\n/gm, '')
+  .replace(/^registerRoute\(.*\);\r?\n/gm, '');
 const oldPayload = historical('frontend/aegis-pwa/src/services/reminderNotification.ts');
 const currentSource = await readFile(new URL('../src/sw.ts', import.meta.url), 'utf8');
 assert.doesNotMatch(currentSource, /addEventListener\(['"]push['"]/);
@@ -45,13 +54,13 @@ self.addEventListener('message', event => {
         });
         self.dispatchEvent(sync); await Promise.all(pending);
       }
-      event.ports[0].postMessage({ version: TEST_VERSION, count: (await interactionQueue.getAll()).length, displayed });
+      event.ports[0].postMessage({ version: TEST_VERSION, count: (await interactionQueue.getAll()).length, displayed, caches: await caches.keys(), scope: self.registration.scope });
     } catch (error) { event.ports[0].postMessage({ error: error.message }); }
   })());
 });`;
 async function bundle(source, version) {
   const result = await build({
-    stdin: { contents: source + instrumentation, loader: 'ts', resolveDir: new URL('../src/', import.meta.url).pathname },
+    stdin: { contents: source + instrumentation, loader: 'ts', resolveDir: fileURLToPath(new URL('../src/', import.meta.url)) },
     bundle: true, write: false, format: 'iife', target: 'es2022',
     define: { 'import.meta.env.VITE_AEGIS_API_BASE_URL': '""', 'self.__WB_MANIFEST': JSON.stringify([{ url: '/index.html', revision: version }]), 'TEST_VERSION': JSON.stringify(version), 'process.env.NODE_ENV': '"production"' },
     plugins: version === 'old' ? [{ name: 'historical-payload', setup(builder) {
@@ -83,6 +92,10 @@ try {
   await page.goto(origin);
   await page.evaluate(async () => {
     localStorage.setItem('owner-preference', 'preserved');
+    const retiredCache = await caches.open(`workbox-precache-v2-${location.origin}/`);
+    await retiredCache.put('/index.html', new Response('cached old PWA'));
+    const unrelatedCache = await caches.open('unrelated-cache');
+    await unrelatedCache.put('/unrelated', new Response('preserved'));
     const database = await new Promise((resolve, reject) => {
       const request = indexedDB.open('owner-state', 1);
       request.onupgradeneeded = () => request.result.createObjectStore('preferences');
@@ -102,7 +115,6 @@ try {
     navigator.serviceWorker.controller.postMessage(command, [channel.port2]);
   }), command);
   const payload = { type: 'reminder', reminderId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', text: 'Synthetic reminder', acknowledgeToken: 'fixture-ack', openToken: 'fixture-open' };
-  assert.equal((await message({ command: 'push', payload })).displayed, 1);
   assert.equal((await message({ command: 'click', payload })).count, 1);
   version = 'current';
   await page.evaluate(async () => {
@@ -111,6 +123,16 @@ try {
   });
   const upgraded = await message({ command: 'state' });
   assert.equal(upgraded.version, 'current'); assert.equal(upgraded.count, 1);
+  // A controllerchange is observable before the activation waitUntil settles.
+  await page.evaluate(async () => {
+    const name = `workbox-precache-v2-${location.origin}/`;
+    const deadline = Date.now() + 10000;
+    while ((await caches.keys()).includes(name) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  });
+  assert.equal(await page.evaluate(async () => (await caches.keys()).includes(`workbox-precache-v2-${location.origin}/`)), false, JSON.stringify(upgraded));
+  assert.equal(await page.evaluate(async () => (await (await caches.open('unrelated-cache')).match('/unrelated')).text()), 'preserved');
   assert.equal((await message({ command: 'push', payload })).displayed, 0);
   interactionStatus = 204;
   assert.equal((await message({ command: 'sync' })).count, 0);
@@ -131,9 +153,8 @@ try {
   const api = await page.goto(`${origin}/api/must-not-use-shell`);
   assert.equal(api.status(), 410);
   await context.setOffline(true);
-  await page.goto(`${origin}/conversation/cached`);
-  assert.equal(await page.title(), 'current');
-  console.log('Worker upgrade passed: legacy queue/actions, terminal responses, cache, navigation, /api exclusion and stored owner state.');
+  await assert.rejects(page.goto(`${origin}/conversation/cached`), /ERR_/);
+  console.log('Worker upgrade passed: legacy queue/actions, terminal responses, targeted cache deletion, no offline app, /api exclusion and stored owner state.');
 } finally {
   await browser.close(); await new Promise(resolve => server.close(resolve));
 }

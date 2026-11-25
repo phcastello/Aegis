@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 
@@ -74,7 +75,9 @@ def scope(paths):
         if path.startswith("frontend/aegis-pwa/") or path.startswith("docker-compose"):
             result.add("pwa")
         if path.startswith("packages/aegis-client/"):
-            result.update(("pwa", "native"))
+            # The legacy pwa component now contains a standalone static
+            # gateway and retirement worker, not the shared Vue chat client.
+            result.add("native")
         if path.startswith("apps/aegis-node/"):
             result.add("native")
         if not (path.startswith(("docs/", ".github/", "scripts/", "backend/", "frontend/", "packages/", "apps/"))
@@ -413,7 +416,7 @@ class PrivateHost:
 
     def backup_and_rehearse(self, plan):
         self.test_db()
-        # Stop only the writer. PWA stays available; no DB or vector/graph restart.
+        # Stop only the writer. The web gateway stays available; no DB or vector/graph restart.
         self.writers_stopped = True
         self.run([*self.fdc, "stop", "--timeout", "30", "aegis-api"])
         self.before = self.inventory()
@@ -502,7 +505,7 @@ class PrivateHost:
             if component in self.images:
                 self.run([*self.ndc, "up", "-d", "--no-deps", "--no-build", "aegis-api" if component == "backend" else "aegis-pwa"])
         self.writers_stopped = False
-        # A new PWA resolves the upstream at startup. Reload only an existing
+        # A new gateway resolves the upstream at startup. Reload only an existing
         # nginx after an API replacement; compose up can precede its PID file.
         if "backend" in self.images and "pwa" not in self.images:
             self.run(["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"])
@@ -536,19 +539,13 @@ class PrivateHost:
             require(current["Mounts"] == old["Mounts"], "Persistent mounts changed.")
             if not initial and component in self.images:
                 require(current["Config"]["Labels"].get(REVISION) == plan["sha"], "Running SHA differs from candidate.")
-        status, headers, sw = self.http("/sw.js")
-        require(status == 200 and "javascript" in headers.get("Content-Type", "") and len(sw) > 100,
-                "PWA service worker is unavailable.")
-        require("no-cache" in headers.get("Cache-Control", ""), "Service worker cache policy is unsafe.")
-        for path, body in (("sw.js", sw), ("index.html", self.http("/")[2])):
-            actual = self.run(["docker", "exec", "aegis-pwa", "sha256sum", "/usr/share/nginx/html/" + path]).split()[0]
-            require(hashlib.sha256(body).hexdigest() == actual, "HTTPS PWA bytes differ from running image: " + path)
+        is_gateway = self.validate_gateway(initial)
         # Read-only normal API contract; no reminder creation or synthetic push.
         for path in ("/api/chat/conversations",):
             status, _, body = self.http(path)
             require(status == 200 and isinstance(json.loads(body), (list, dict)), "Installed client API contract failed.")
         if not initial:
-            self.health = {"https": True, "serviceWorker": True, "clientApiV1": True}
+            self.health = {"https": True, "serviceWorker": True, "gateway": is_gateway, "clientApiV1": True}
             if "backend" in plan["components"] and not getattr(self, "workers_checked", False):
                 worker_source = self.source / "backend/src/Aegis.Infrastructure/Proactivity/ReminderInterventionWorker.cs"
                 if worker_source.exists():
@@ -556,6 +553,51 @@ class PrivateHost:
                 self.workers_checked = True
             if getattr(self, "worker_evidence", None):
                 self.health["workers"] = self.worker_evidence
+
+    def validate_gateway(self, initial=False):
+        # Validate the actual public gateway, including the same Google OAuth
+        # result routes used by installed nodes. The initial/recovery image
+        # may still be the old PWA during the migration; do not require new
+        # gateway markers in it, nor invalidate the old rollback path.
+        status, index_headers, index = self.http("/")
+        require(status == 200 and "text/html" in index_headers.get("Content-Type", "") and len(index) > 100,
+                "Web gateway root is unavailable.")
+        for result in ("connected", "connect_failed"):
+            callback_status, callback_headers, body = self.http("/?email=" + result)
+            require(callback_status == 200 and "text/html" in callback_headers.get("Content-Type", "") and body == index,
+                    "Web gateway OAuth result route differs from its root page.")
+        marker = b'name="aegis-deployment" content="native-gateway"'
+        manifest = self.source / "frontend/aegis-pwa/package.json"
+        gateway_expected = not initial and manifest.is_file() and json.loads(manifest.read_text()).get("name") == "aegis-web-gateway"
+        is_gateway = marker in index
+        require(not gateway_expected or is_gateway, "Expected the retired-PWA native download gateway.")
+        if is_gateway:
+            require("no-store" in index_headers.get("Cache-Control", "") or "no-cache" in index_headers.get("Cache-Control", ""),
+                    "Native gateway cache policy is unsafe.")
+            # urllib raises for HTTP 410, which is the deliberate permanent
+            # retirement of the old installable PWA manifest (not an outage).
+            try:
+                manifest_status, _, _ = self.http("/manifest.webmanifest")
+            except urllib.error.HTTPError as error:
+                manifest_status = error.code
+                error.close()
+            require(manifest_status == 410, "Legacy installable manifest was not retired.")
+        public_files = [("index.html", index)]
+        # The old production build only guarantees sw.js. Once it is replaced,
+        # either historical worker URL must serve the retirement implementation.
+        for path in (("sw.js", "dev-sw.js") if is_gateway else ("sw.js",)):
+            worker_status, worker_headers, worker = self.http("/" + path)
+            require(worker_status == 200 and "javascript" in worker_headers.get("Content-Type", "") and len(worker) > 100,
+                    "Legacy worker retirement endpoint is unavailable: " + path)
+            require("no-cache" in worker_headers.get("Cache-Control", "") or "no-store" in worker_headers.get("Cache-Control", ""),
+                    "Worker cache policy is unsafe: " + path)
+            public_files.append((path, worker))
+        if is_gateway:
+            require(public_files[-1][1] == public_files[-2][1], "Legacy worker URLs serve different retirement code.")
+        for path, body in public_files:
+            actual = self.run(["docker", "exec", "aegis-pwa", "sha256sum", "/usr/share/nginx/html/" + path]).split()[0]
+            require(hashlib.sha256(body).hexdigest() == actual, "HTTPS gateway bytes differ from running image: " + path)
+        return is_gateway
 
     def verify_proactivity_workers(self):
         registration = (self.source / "backend/src/Aegis.Infrastructure/DependencyInjection.cs").read_text()

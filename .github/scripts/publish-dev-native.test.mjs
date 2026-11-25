@@ -26,7 +26,7 @@ test('prepared immutable deployment records exact source and supported contracts
     assert.throws(() => deploymentSnapshot({ ...deployment, ...change }, sha));
 });
 test('one trusted job verifies both signatures and publishes without interactive or private-host coordination', () => {
-  const workflow = readFileSync(new URL('../workflows/aegis-native-preview.yml', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../workflows/aegis-native-preview.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const build = workflow.split('  build:\n')[1].split('  sign:\n')[0];
   const signer = workflow.split('  sign:\n')[1];
   assert.equal((signer.match(/environment: aegis-native-signing/g) ?? []).length, 1);

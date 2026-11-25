@@ -60,7 +60,7 @@ test('docs-only integration runs the selector/documentation checks without appli
 });
 
 test('UI-only integration keeps interface builds and contracts without native/energy jobs', () => {
-  for (const path of [ui, 'apps/aegis-node/src/components/PlacesPanel.vue', 'frontend/aegis-pwa/src/main.ts']) {
+  for (const path of [ui, 'apps/aegis-node/src/components/PlacesPanel.vue']) {
     const selected = selectJobs([path]);
     assert.equal(selected.ui, true); assert.equal(selected.native, false); assert.equal(selected.backend, false); assert.equal(selected.framework, false); assert.equal(selected.idle, false);
   }
@@ -91,10 +91,28 @@ test('shared Rust selects Windows and Android integration, including capability 
 });
 
 test('dependencies, lockfiles, build config and workflows do not promote integration to prolonged acceptance', () => {
-  for (const path of ['apps/aegis-node/package-lock.json', 'frontend/aegis-pwa/package.json', 'packages/aegis-client/tsconfig.json', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/src-tauri/build.rs', '.github/scripts/select-node-ci.mjs', '.github/workflows/aegis-node-ci.yml']) {
+  for (const path of ['apps/aegis-node/package-lock.json', 'packages/aegis-client/tsconfig.json', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/src-tauri/build.rs', '.github/scripts/select-node-ci.mjs', '.github/workflows/aegis-node-ci.yml']) {
     const selected = selectJobs([path]);
     for (const flag of ['ui', 'windows', 'android', 'framework', 'identity']) assert.equal(selected[flag], true, `${path}: ${flag}`);
     assert.equal(selected.stage, 'integration'); assert.equal(selected.idle, false, path);
+  }
+});
+
+test('retired web client path selects gateway and transport checks, not native identity/builds', () => {
+  for (const path of ['frontend/aegis-pwa/index.html', 'frontend/aegis-pwa/package.json', 'frontend/aegis-pwa/package-lock.json', 'frontend/aegis-pwa/tests/worker-upgrade.mjs']) {
+    const selected = selectJobs([path]);
+    assert.equal(selected.ui, true, path);
+    assert.equal(selected.backend, false, path);
+    assert.equal(selected.native, false, path);
+    assert.equal(selected.identity, false, path);
+    assert.equal(selected.framework, false, path);
+  }
+  for (const path of ['frontend/aegis-pwa/nginx.conf', 'frontend/aegis-pwa/Dockerfile']) {
+    const selected = selectJobs([path]);
+    assert.equal(selected.backend, true, path);
+    assert.equal(selected.ui, true, path);
+    assert.equal(selected.native, false, path);
+    assert.equal(selected.identity, false, path);
   }
 });
 
@@ -138,7 +156,7 @@ test('unknown files and failed diff remain conservative for integration and rele
 });
 
 test('workflow concurrency cancels superseded branch/PR runs without using a per-commit group', () => {
-  const workflow = readFileSync(new URL('../workflows/aegis-node-ci.yml', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../workflows/aegis-node-ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const concurrency = workflow.match(/^concurrency:\n([\s\S]*?)(?=^[^\s])/m)?.[1];
   assert.ok(concurrency, 'workflow must define concurrency');
   assert.match(concurrency, /cancel-in-progress:\s*true/);

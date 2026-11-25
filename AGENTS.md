@@ -89,6 +89,12 @@ npm run test:release --prefix apps/aegis-node
 dotnet test backend/Aegis.sln
 ```
 
+O diretório e serviço `aegis-pwa` conservam o nome histórico por compatibilidade
+operacional; abrigam o gateway estático de downloads, retorno OAuth, proxy da API
+e a transição do antigo service worker, não um terceiro cliente de chat. Para
+alterações nessa transição, exercite também os testes de página e migração do
+worker descritos em [desenvolvimento e testes](docs/testes.md).
+
 Consulte a documentação do componente para os testes específicos e seus requisitos.
 Se uma verificação não puder ser executada no ambiente disponível, informe a
 limitação; nunca declare que passou. Mocks, navegador e emuladores não comprovam

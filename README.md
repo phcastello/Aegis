@@ -24,9 +24,8 @@ Cada instalação nativa pareada é um **Node**: um dispositivo com identidade, 
 | --- | --- |
 | Android ARM64 | Chat, notificações nativas, lembretes e monitoramento geográfico em segundo plano. |
 | Windows x86_64 | Chat, notificações nativas, gerenciamento dos dispositivos e execução na bandeja. |
-| Web/PWA | Chat, histórico e integrações. O recebimento atual de lembretes usa os aplicativos nativos. |
 
-Não há distribuição nativa para Linux, macOS ou iOS nesta versão.
+Não há distribuição nativa para Linux, macOS ou iOS nesta versão. Na linha de desenvolvimento v0.8.0, o antigo chat Web/PWA é substituído por uma página web de downloads e retorno das autorizações Google; a conversa passa a ser feita nos aplicativos nativos.
 
 ## Baixar e atualizar
 
@@ -55,8 +54,8 @@ A área real representa o lugar. Uma área de proximidade, aprovada separadament
 | --- | --- |
 | `backend/` | API e serviços .NET: conversa, integrações, memória, lembretes e gerenciamento de Nodes. |
 | `apps/aegis-node/` | Aplicativo Tauri 2 para Android e Windows, com Rust e integração nativa Android. |
-| `packages/aegis-client/` | Interface Vue compartilhada entre os clientes. |
-| `frontend/aegis-pwa/` | Cliente web/PWA. |
+| `packages/aegis-client/` | Interface Vue compartilhada pelos aplicativos Android e Windows. |
+| `frontend/aegis-pwa/` | Gateway estático de downloads e retorno OAuth, proxy HTTP da API e transição do antigo service worker (nome de diretório legado). |
 | `docs/` | Documentação técnica e registros dos lançamentos. |
 
 PostgreSQL mantém o estado persistente; Qdrant e Neo4j dão suporte às projeções da memória. O TTS é um serviço separado. A configuração de provedores e credenciais pertence ao backend, não ao frontend.

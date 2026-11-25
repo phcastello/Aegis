@@ -71,6 +71,8 @@ test('temporary synchronization updates all consumers without changing branch fi
   const work = mkdtempSync(join(tmpdir(), 'aegis-preview-version-'));
   const files = ['apps/aegis-node/package.json', 'apps/aegis-node/package-lock.json', 'apps/aegis-node/src-tauri/tauri.conf.json',
     'apps/aegis-node/src-tauri/Cargo.toml', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/scripts/version.mjs', 'apps/aegis-node/scripts/version.test.mjs',
+    // The static gateway retains version-only manifests at the old path for
+    // compatibility with the trusted main preview version synchronizer.
     'packages/aegis-client/package.json', 'packages/aegis-client/package-lock.json', 'frontend/aegis-pwa/package.json', 'frontend/aegis-pwa/package-lock.json'];
   const original = readFileSync(join(root, files[0]), 'utf8');
   try {
@@ -91,6 +93,7 @@ test('temporary synchronization updates all consumers without changing branch fi
     assert.equal(JSON.parse(readFileSync(join(work, files[0]))).version, plan.version);
     assert.equal(JSON.parse(readFileSync(join(work, files[2]))).bundle.android.versionCode, independentCode);
     assert.equal(JSON.parse(readFileSync(join(work, 'packages/aegis-client/package.json'))).version, plan.version);
+    assert.equal(JSON.parse(readFileSync(join(work, 'frontend/aegis-pwa/package.json'))).version, plan.version);
     assert.equal(readFileSync(join(root, files[0]), 'utf8'), original);
     const checkSnapshot = () => {
       assert.deepEqual(JSON.parse(readFileSync(configPath)).app.security.capabilities, candidateCapabilities,
@@ -225,7 +228,7 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
 });
 
 test('build workflow requires manual dispatch, durable reservation and isolated signing; promotion is separately explicit', () => {
-  const workflow = readFileSync(join(root, '.github/workflows/aegis-native-preview.yml'), 'utf8');
+  const workflow = readFileSync(join(root, '.github/workflows/aegis-native-preview.yml'), 'utf8').replace(/\r\n/g, '\n');
   const build = workflow.split('  build:\n')[1].split('  sign:\n')[0];
   const signer = workflow.split('  sign:\n')[1];
   assert.doesNotMatch(workflow, /pull_request_target|publish-release|node-preview\/latest\.json|gh release|git tag/);
@@ -240,7 +243,7 @@ test('build workflow requires manual dispatch, durable reservation and isolated 
   assert.match(workflow, /group: aegis-native-distribution/);
   assert.match(workflow, /if: needs.plan.outputs.stable == 'true'/);
   assert.match(workflow, /stage: release\n      full_matrix: true/);
-  const promotion=readFileSync(join(root,'.github/workflows/aegis-native-promote.yml'),'utf8');
+  const promotion=readFileSync(join(root,'.github/workflows/aegis-native-promote.yml'),'utf8').replace(/\r\n/g, '\n');
   assert.match(promotion,/if: inputs.publish/); assert.match(promotion,/default: false/);
   assert.match(promotion,/environment: aegis-native-signing/); assert.doesNotMatch(promotion,/secrets\.|npm run build/);
   assert.match(promotion,/native-preview-android.py verify/); assert.match(promotion,/preview-updater-verifier\/Cargo.toml/);

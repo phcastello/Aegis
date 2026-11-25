@@ -139,7 +139,7 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/aegis-pwa/package-lock.json
+          cache-dependency-path: scripts/node-transport-probe/package-lock.json
       - name: Verify development and private Compose configuration without starting services
         run: node scripts/check-compose.mjs
       - name: Real authenticated transport through two Nginx proxy hops
@@ -168,7 +168,7 @@ jobs:
             packages/aegis-client/package-lock.json
             frontend/aegis-pwa/package-lock.json
             apps/aegis-node/package-lock.json
-      - name: Build clients and check shared behavior
+      - name: Build native client and static gateway; check behavior
         run: |
           npm ci --prefix packages/aegis-client
           npm ci --prefix frontend/aegis-pwa
@@ -190,20 +190,21 @@ jobs:
               'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
           PYTHON
           npx playwright-core install --with-deps chromium
-      - name: Render real components and exercise sidebar/update navigation
+      - name: Render native host components and exercise sidebar/update navigation
         env:
           PARITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/v0.7.0-completion/ui
         run: |
-          npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
           npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
           npm run test:browser --prefix packages/aegis-client
           node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
           node apps/aegis-node/tests/places-browser.mjs
           node apps/aegis-node/tests/reminders-browser.mjs
-      - name: Exercise capture sessions and input meter in Chromium for web, Android and Windows IPC hosts
+      - name: Exercise capture sessions and input meter in Chromium for Android and Windows IPC hosts
         run: node packages/aegis-client/tests/transcription-browser.mjs
-      - name: Upgrade the legacy service worker while preserving queued actions and offline cache
-        run: node frontend/aegis-pwa/tests/worker-upgrade.mjs
+      - name: Retire the cached web app shell while preserving queued legacy actions
+        run: |
+          npm run test:worker --prefix frontend/aegis-pwa
+          npm run test:page --prefix frontend/aegis-pwa
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:

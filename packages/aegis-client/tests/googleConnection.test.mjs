@@ -9,7 +9,7 @@ test('native OAuth waits for return/focus and cleans up without polling an old c
   globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   env.configureClient({ apiBaseUrl: '', externalLinks: 'system', openExternalUrl: async () => {} });
   let started = 0, connected = 0;
-  const stop = observeGoogleConnection({ started: () => started++, connected: () => connected++, failed() {} });
+  const stop = observeGoogleConnection({ started: () => started++, connected: () => connected++ });
   await env.openClientLink('https://accounts.google.com/', true);
   assert.equal(started, 1); assert.equal(connected, 0);
   document.visibilityState = 'hidden'; document.dispatchEvent(new Event('visibilitychange'));
@@ -22,17 +22,13 @@ test('native OAuth waits for return/focus and cleans up without polling an old c
   assert.equal(started, 1);
 });
 
-test('web callback retains connection/error URL handling and removes only OAuth parameters', () => {
-  const replacements = [];
+test('browser fixture neither confirms OAuth from query values nor changes navigation', () => {
   globalThis.document = { title: 'Aegis' };
   globalThis.window = { location: { href: 'https://web.example.test/?email=connected&keep=1#chat' },
-    history: { replaceState(_state, _title, url) { replacements.push(url); } } };
+    history: { replaceState() { assert.fail('Unexpected URL change'); } } };
   env.configureClient({ apiBaseUrl: '', externalLinks: 'browser' });
   let connected = 0;
-  const stop = observeGoogleConnection({ connected: () => connected++, failed() { assert.fail('Unexpected failure'); } });
-  assert.equal(connected, 1); assert.deepEqual(replacements, ['/?keep=1#chat']); stop();
-  window.location.href = 'https://web.example.test/?email=connect_failed&email_error_code=google_rejected';
-  let code;
-  observeGoogleConnection({ connected() { assert.fail('Unexpected connection'); }, failed(value) { code = value; } })();
-  assert.equal(code, 'google_rejected');
+  const stop = observeGoogleConnection({ connected: () => connected++ });
+  assert.equal(connected, 0);
+  stop();
 });

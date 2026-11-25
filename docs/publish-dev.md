@@ -17,16 +17,21 @@ servidor, acesse esse host pelo caminho privado autenticado já existente e exec
 o comando nele. Não exponha portas administrativas para esse fim.
 
 O diff usa o SHA implantado **de cada componente**, e o feed recomendado para os
-Nodes. Backend altera só a API; PWA altera só a PWA; cliente compartilhado altera
-PWA e nativos. Documentação não publica componentes. Componente sem identidade
+Nodes. Backend altera só a API; o gateway estático altera só o componente privado
+`pwa` (nome histórico); cliente compartilhado altera apenas os nativos.
+Documentação não publica componentes. Componente sem identidade
 verificável é reconstruído uma vez. `--rebuild backend` ou `--rebuild pwa` força
 somente esse componente privado, sem forçar uma versão nativa; `--full` força todos.
-API nova provoca apenas reload do nginx da PWA para resolver seu novo IP.
+API nova provoca apenas reload do nginx do gateway para resolver seu novo IP.
 
 O agente executa os testes pertinentes antes do commit/push. `publish-dev` constrói
 somente os componentes privados selecionados e verifica a integridade da implantação:
-imagem/SHA efetivamente iniciados, HTTPS, API v1 e disponibilidade/cache do service
-worker. Não repete as suítes de desenvolvimento nem a homologação extensa de
+imagem/SHA efetivamente iniciados, HTTPS, API v1, página raiz e retorno OAuth,
+manifesto aposentado (410), disponibilidade/cache dos workers legados e
+correspondência dos bytes ao container.
+Durante a primeira substituição, o preflight aceita o antigo cliente web, mas
+a implantação nova precisa servir o gateway e os dois endpoints de aposentadoria.
+Não repete as suítes de desenvolvimento nem a homologação extensa de
 consumo. O comando usa a configuração efetiva, preservando mounts, volumes,
 credenciais e bancos; alterações de Compose exigem reconciliar a instalação antes
 da publicação. Os health checks reais são concluídos nessa preparação, sem
@@ -50,7 +55,8 @@ Quando o diff afeta aplicativos, a operação escolhe a próxima `unstable.N` no
 ledger e despacha **uma vez** `aegis-native-preview.yml` da `main` com
 `publish_dev=true`. A preparação fixa SHA, identidades implantadas e contratos de
 compatibilidade API/dados. O input `deployment` contém `sourceCommit`, os SHAs
-implantados de `backend`/`pwa` e `compatibility: { api: 1, nodeData: 1 }`; o plano
+implantados de `backend`/`pwa` (esta última identifica o gateway estático) e
+`compatibility: { api: 1, nodeData: 1 }`; o plano
 e a reserva conservam esses metadados, sem prazo de validade. O workflow
 confere a solicitação autorizada e os contratos, reserva versão/código, compila
 sem segredos, verifica os artefatos, assina Android e Windows com código confiável

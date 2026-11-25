@@ -122,15 +122,16 @@ const ok = (value, message) => { assert.ok(value, message); assertions++; };
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 const errors = [];
 try {
-  for (const platform of ['browser', 'android', 'windows']) {
-    const host = platform === 'browser' ? 'web' : 'native';
-    const vite = await createServer({ root: join(root, host === 'web' ? 'frontend/aegis-pwa' : 'apps/aegis-node'),
+  // Keep the wide desktop case previously exercised by the browser host.
+  for (const { platform, width } of [
+    { platform: 'android', width: 390 }, { platform: 'windows', width: 820 }, { platform: 'windows', width: 1440 },
+  ]) {
+    const vite = await createServer({ root: join(root, 'apps/aegis-node'),
       server: { host: '127.0.0.1', port: await ephemeralPort(), strictPort: false } });
     await vite.listen();
     const fixture = createFixture(`http://127.0.0.1:${vite.httpServer.address().port}`);
     await new Promise(resolve => fixture.server.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${fixture.server.address().port}`;
-    const width = platform === 'android' ? 390 : platform === 'windows' ? 820 : 1440;
     const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: platform === 'android', isMobile: platform === 'android' });
     await context.addInitScript(({ version, platform, origin }) => {
       localStorage.setItem('aegis.voice.autoSpeak', 'false');
@@ -138,7 +139,7 @@ try {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => {
         if (window.fixtureCopyFailure) throw Error('Clipboard denied'); window.fixtureClipboard.push(text);
       } } });
-      if (platform !== 'browser') window.__TAURI_INTERNALS__ = { invoke: async command => {
+      window.__TAURI_INTERNALS__ = { invoke: async command => {
         if (command === 'runtime_info') return { platform, backendUrl: origin, version, processSessionId: 'ux-fixture' };
         if (command === 'node_read_visibility') return true;
         if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
@@ -180,7 +181,7 @@ try {
     try {
       await page.goto(origin); await composer().waitFor(); await page.locator('.history-item__main').first().waitFor();
       equal(await menu().count(), 0, 'initial new conversation hides the action menu');
-      if (platform !== 'browser') equal(await composer().evaluate(el => el === document.activeElement), false, 'native initialization never requests composer focus');
+      equal(await composer().evaluate(el => el === document.activeElement), false, 'native initialization never requests composer focus');
       await fresh();
       await page.waitForFunction(() => document.querySelector('.composer textarea') === document.activeElement);
       equal(await menu().count(), 0, 'explicit new conversation still has no persisted menu');
@@ -267,6 +268,8 @@ try {
       ok(Math.abs((await scroll()).top - inputlessReading.top) <= 2, 'scrollbar or assistive upward movement suspends following without wheel events');
       await page.locator('.messages').evaluate(el => { el.scrollTop = el.scrollHeight; }); await delay(80);
       streaming.token('Acompanhamento retomado pela rolagem assistiva.\n\n'); await delay(120);
+      await page.locator('.messages').getByText('Acompanhamento retomado pela rolagem assistiva.', { exact: true }).waitFor();
+      await page.waitForFunction(() => { const el = document.querySelector('.messages'); return el.scrollHeight - el.scrollTop - el.clientHeight <= 4; });
       position = await scroll();
       ok(position.height - position.top - position.visible <= 4, 'scrollbar or assistive return to bottom resumes following after content growth');
       await userScroll(false, 15); const smallManual = await scroll();
@@ -420,9 +423,9 @@ try {
       if (process.env.UX_SCREENSHOT_DIR) {
         await page.locator('#conversation-sidebar').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => undefined))));
         mkdirSync(process.env.UX_SCREENSHOT_DIR, { recursive: true });
-        await page.screenshot({ path: `${process.env.UX_SCREENSHOT_DIR}/${platform}-chat.png` });
+        await page.screenshot({ path: `${process.env.UX_SCREENSHOT_DIR}/${platform}${width === 1440 ? '-wide' : ''}-chat.png` });
       }
-      console.log(`PASS ${platform}: streaming ownership, late ID, navigation, completion/error/deletion, explicit stop, drafts, user scroll/resize, proactive incoming, header/menu/copy and explicit focus`);
+      console.log(`PASS ${platform}/${width}px: streaming ownership, late ID, navigation, completion/error/deletion, explicit stop, drafts, user scroll/resize, proactive incoming, header/menu/copy and explicit focus`);
     } finally {
       fixture.releaseConversation(); await context.close(); fixture.server.closeAllConnections(); await new Promise(resolve => fixture.server.close(resolve)); await vite.close();
     }

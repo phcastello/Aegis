@@ -37,9 +37,13 @@ export function affectedSubsystems(paths, { unknown = false } = {}) {
     if (/^(?:\.github\/|Dockerfile(?:\.[^/]+)?$|\.dockerignore$|Makefile$|CMakeLists\.txt$)/.test(path)) { all(); continue; }
     if (/^deploy\/sql\//.test(path)) { enable('backend'); continue; }
     if (/^deploy\//.test(path)) { all(); continue; }
+    // The old path is retained as a static gateway, not a client host. It
+    // does not share native package dependencies or release identity. Test
+    // the static page/retirement worker and the actual two-hop API proxy.
+    if (/^frontend\/aegis-pwa\//.test(path)) { enable('ui'); if (/(?:nginx(?:\.|$)|Dockerfile)/.test(path)) enable('backend'); continue; }
     if (/^(?:backend\/|docker-compose.*|\.env\.example)/.test(path)) enable('backend');
-    if (/^(?:packages\/aegis-client\/|frontend\/aegis-pwa\/|apps\/aegis-node\/(?:src\/|tests\/))/.test(path)) enable('ui');
-    if (/^(?:apps\/aegis-node|packages\/aegis-client|frontend\/aegis-pwa)\/.*(?:package(?:-lock)?\.json|(?:vite|tsconfig|postcss|tailwind)[^/]*|Cargo\.(?:toml|lock)|build\.rs|tauri\.conf\.json)$/.test(path)) {
+    if (/^(?:packages\/aegis-client\/|apps\/aegis-node\/(?:src\/|tests\/))/.test(path)) enable('ui');
+    if (/^(?:apps\/aegis-node|packages\/aegis-client)\/.*(?:package(?:-lock)?\.json|(?:vite|tsconfig|postcss|tailwind)[^/]*|Cargo\.(?:toml|lock)|build\.rs|tauri\.conf\.json)$/.test(path)) {
       enable('ui', 'windows', 'android', 'distribution', 'dependencies', 'identity');
     }
     if (/^apps\/aegis-node\/src-tauri\//.test(path)) {

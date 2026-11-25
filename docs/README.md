@@ -1,7 +1,8 @@
 # Documentação da Aegis
 
 O [README principal](../README.md) apresenta a versão publicada. As mudanças de
-manutenção nesta branch ainda precisam de distribuição posterior da API/PWA/apps.
+manutenção nesta branch ainda precisam de distribuição posterior da API, do
+gateway estático e dos aplicativos nativos.
 
 - [Desenvolvimento nativo](../apps/aegis-node/README.md): requisitos e comandos atuais.
 - [Desenvolvimento e testes](testes.md): suítes, execução e limites das evidências.

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const workflow = name => readFileSync(new URL(`../workflows/${name}.yml`, import.meta.url), 'utf8');
+const workflow = name => readFileSync(new URL(`../workflows/${name}.yml`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const job = (source, name) => {
   const match = source.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|(?![\\s\\S]))`, 'm'));
   assert.ok(match, `Missing job ${name}`); return match[1];
@@ -23,6 +23,19 @@ test('new commits cancel previous integration runs using the same PR concurrency
   assert.match(concurrency, /github.head_ref/);
   assert.doesNotMatch(concurrency, /github.sha|github.run_id/);
   assert.match(concurrency, /cancel-in-progress: true/);
+});
+
+test('gateway transition is tested separately from the Android and Windows chat host', () => {
+  const ui = job(workflow('aegis-node-ci'), 'ui');
+  for (const command of ['npm run build', 'npm run test:worker', 'npm run test:page']) {
+    assert.ok(ui.includes(`${command} --prefix frontend/aegis-pwa`));
+  }
+  assert.doesNotMatch(ui, /npm run (?:preview|dev) --prefix frontend\/aegis-pwa/);
+  const identityWorkflow = workflow('aegis-release-identity-ci');
+  const nativeBrowser = job(identityWorkflow, 'browser');
+  assert.match(nativeBrowser, /release-identity-browser\.mjs/);
+  assert.doesNotMatch(nativeBrowser, /frontend\/aegis-pwa/);
+  assert.match(job(identityWorkflow, 'required'), /needs: \[selection, browser, windows, android\]/);
 });
 
 test('long Windows baselines and comparisons require the release idle selection', () => {

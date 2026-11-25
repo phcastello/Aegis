@@ -52,10 +52,10 @@ jobs:
         env:
           CI_INPUTS: ${{ toJSON(inputs) }}
         run: node .github/scripts/select-node-ci.mjs
-  web:
+  browser:
     needs: selection
     if: ${{ needs.selection.outputs.identity == 'true' }}
-    name: Shared and host identity regression
+    name: Native host identity regression in Chromium
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -70,15 +70,12 @@ jobs:
           cache-dependency-path: |
             packages/aegis-client/package-lock.json
             apps/aegis-node/package-lock.json
-            frontend/aegis-pwa/package-lock.json
-      - name: Install shared client and both hosts
+      - name: Install shared client and native host
         run: |
           npm ci --prefix packages/aegis-client
           npm ci --prefix apps/aegis-node
-          npm ci --prefix frontend/aegis-pwa
-      - name: Build both hosts for real identity App chains
+      - name: Build the native host for real identity App chains
         run: |
-          npm run build --prefix frontend/aegis-pwa
           npm run build --prefix apps/aegis-node
       - name: Install Chromium for the real App chains
         working-directory: packages/aegis-client
@@ -92,7 +89,7 @@ jobs:
               'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
           PYTHON
           npx playwright-core install --with-deps chromium
-      - name: Real native and web App chains across viewport and enlarged-font matrix
+      - name: Real Windows and Android App chains across viewport and enlarged-font matrix
         env:
           IDENTITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/release-identity/browser
         run: node packages/aegis-client/tests/release-identity-browser.mjs
@@ -193,7 +190,7 @@ jobs:
           retention-days: 14
   required:
     name: Aegis Release Identity result
-    needs: [selection, web, windows, android]
+    needs: [selection, browser, windows, android]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -215,5 +212,5 @@ jobs:
           if (jobs.selection.result !== 'success') throw Error('Identity CI selection did not pass.');
           const selected = Object.fromEntries(Object.entries(jobs.selection.outputs).map(([key, value]) => [key, ['true','false'].includes(value) ? value === 'true' : value]));
           validateIntegrationContext(selected, {event:process.env.GITHUB_EVENT_NAME,payload:JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')),sha:process.env.GITHUB_SHA,checkoutSha:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()});
-          validateResults(selected, jobs, { web: 'identity', windows: 'windows', android: 'identity' });
+          validateResults(selected, jobs, { browser: 'identity', windows: 'windows', android: 'identity' });
           JS

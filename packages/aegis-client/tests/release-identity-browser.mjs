@@ -3,22 +3,22 @@ import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { expectedReleaseIdentity, legacyReleaseIdentity, newerAvailableFixture } from './release-identity-expectations.mjs';
 
-// Run from any directory after npm ci in both hosts and @aegis/client:
+// Run from any directory after npm ci in the native host and @aegis/client:
 //   node packages/aegis-client/tests/release-identity-browser.mjs
 // IDENTITY_SCREENSHOT_DIR changes the report/PNG destination. A compatible
 // Chromium from Playwright's cache or PLAYWRIGHT_CHROMIUM_EXECUTABLE is required.
-// --before captures both actual Apps and intentionally fails on absent names;
+// --before captures the actual native App and intentionally fails on absent names;
 // a screenshot baseline without the codename never counts as a passing result.
-// Exercise both production entry points, including App -> ChatView ->
+// Exercise the production entry point on both platforms, including App -> ChatView ->
 // ConversationSidebar -> AegisIdentityCard. Only external API/IPC are fixtures.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const requireNative = createRequire(join(root, 'apps/aegis-node/package.json'));
-const { createServer } = await import(requireNative.resolve('vite'));
+const { createServer } = await import(pathToFileURL(requireNative.resolve('vite')).href);
 const phase = process.argv.includes('--before') ? 'before' : 'after';
 const output = resolve(process.env.IDENTITY_SCREENSHOT_DIR ?? join(root, '.artifacts/release-identity', phase));
 mkdirSync(output, { recursive: true });
@@ -27,7 +27,6 @@ const { codename, tagline } = expectedReleaseIdentity(installed);
 const availableVersion = newerAvailableFixture(installed);
 const sourceFiles = [
   'apps/aegis-node/src/main.ts', 'apps/aegis-node/src/App.vue',
-  'frontend/aegis-pwa/src/main.ts', 'frontend/aegis-pwa/src/App.vue',
   'packages/aegis-client/src/views/ChatView.vue',
   'packages/aegis-client/src/components/ConversationSidebar.vue',
   'packages/aegis-client/src/components/AegisIdentityCard.vue',
@@ -37,7 +36,7 @@ const sourceFiles = [
 const sourceHashes = () => Object.fromEntries(sourceFiles.map(file => [file, createHash('sha256').update(readFileSync(join(root, file))).digest('hex')]));
 const report = {
   phase, installed, sourceHashes: sourceHashes(),
-  rendering: 'Production web and native main.ts/App.vue and shared components; browser Chromium with simulated native IPC, not installed Android or Windows/WebView2.',
+  rendering: 'Production native main.ts/App.vue and shared components; browser Chromium with simulated Android and Windows IPC, not installed Android or Windows/WebView2.',
   scaling: 'Root font size 100%/200%, no CSS transform; no Android system-font hardware claim.',
   cases: [], failures: [], pageErrors: [],
 };
@@ -145,8 +144,9 @@ let browser;
 const servers = [];
 try {
   process.env.npm_package_version = installed;
-  for (const host of ['native', 'web']) {
-    const appRoot = join(root, host === 'native' ? 'apps/aegis-node' : 'frontend/aegis-pwa');
+  {
+    const host = 'native';
+    const appRoot = join(root, 'apps/aegis-node');
     const port = await availablePort();
     const server = await createServer({ root: appRoot, configFile: join(appRoot, 'vite.config.ts'), server: { port, host: '127.0.0.1', strictPort: true }, clearScreen: false });
     await server.listen();

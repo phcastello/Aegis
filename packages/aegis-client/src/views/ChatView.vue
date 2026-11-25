@@ -36,7 +36,7 @@ import { useAegisTranscription, type TranscriptionIntent } from '../composables/
 import { useSidebarGesture } from '../composables/useSidebarGesture';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import { pollMemoryActivity } from '../services/memoryActivityPolling';
-import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
+import { emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
   Conversation,
   ConversationSummary,
@@ -1492,15 +1492,7 @@ onMounted(() => {
       emailConnectionState.value = 'pending';
       emailConnectionMessage.value = 'Conectando conta Google…';
     },
-    connected: () => void confirmEmailConnection(),
-    failed: (code) => {
-      const message = emailConnectionFailureMessage(code);
-      if (message) {
-        emailConnectionAbortController?.abort();
-        emailConnectionState.value = 'failed';
-        emailConnectionMessage.value = message;
-      }
-    }
+    connected: () => void confirmEmailConnection()
   });
   const handleViewportChange = (): void => {
     syncViewportHeight();

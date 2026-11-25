@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -94,13 +95,13 @@ class PublicationTests(unittest.TestCase):
 
     def test_component_dependency_selection(self):
         cases = [(["backend/src/Aegis.Api/A.cs"], {"backend"}),
-                 (["frontend/aegis-pwa/src/App.vue"], {"pwa"}),
+                 (["frontend/aegis-pwa/index.html", "frontend/aegis-pwa/src/sw.ts"], {"pwa"}),
                  ([".env.example"], {"backend", "pwa"}),
                  (["docs/a.md", "AGENTS.md", "README.md"], set()),
                  (["apps/aegis-node/README.md", "backend/README.md", "frontend/aegis-pwa/README.md", "packages/aegis-client/README.md"], set()),
                  (["backend/src/Aegis.Infrastructure/Prompts/agent.md"], {"backend"}),
                  (["apps/aegis-node/src-tauri/src/lib.rs"], {"native"}),
-                 (["packages/aegis-client/src/App.vue"], {"pwa", "native"}),
+                 (["packages/aegis-client/src/App.vue"], {"native"}),
                  (["backend/a.cs", "apps/aegis-node/src/App.vue"], {"backend", "native"})]
         for paths, expected in cases:
             with self.subTest(paths=paths):
@@ -165,12 +166,77 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(host.api, "old")
         self.assertFalse(any(e.startswith("build-") or e == "deploy" for e in host.events))
 
-    def test_pwa_only_no_native_or_backend_build(self):
+    def test_gateway_only_no_native_or_backend_build(self):
         host = FixtureHost()
         dev.publish(host, plan(("pwa",)), {})
         self.assertIn("build-pwa", host.events)
         self.assertNotIn("build-backend", host.events)
         self.assertNotIn("dispatch-native", host.events)
+
+    def gateway_fixture(self, directory, *, legacy=False):
+        host = object.__new__(dev.PrivateHost)
+        host.source = Path(directory)
+        manifest = host.source / "frontend/aegis-pwa/package.json"
+        manifest.parent.mkdir(parents=True)
+        # The selected source is the new gateway, but initial preflight may see
+        # the old PWA image and its original single production worker URL.
+        manifest.write_text(json.dumps({"name": "aegis-web-gateway"}))
+        marker = b"" if legacy else b'<meta name="aegis-deployment" content="native-gateway">'
+        index = b'<!doctype html><html><head>' + marker + b'</head><body>' + b"Aegis " * 30 + b"</body></html>"
+        worker = b"// historical worker endpoint\n" * 8
+        html_type = {"Content-Type": "text/html", "Cache-Control": "no-store"}
+        worker_type = {"Content-Type": "application/javascript", "Cache-Control": "no-cache"}
+        responses = {"/": (200, html_type, index),
+                     "/?email=connected": (200, html_type, index),
+                     "/?email=connect_failed": (200, html_type, index),
+                     "/sw.js": (200, worker_type, worker)}
+        files = {"index.html": index, "sw.js": worker}
+        if not legacy:
+            responses["/manifest.webmanifest"] = (410, {}, b"")
+            responses["/dev-sw.js"] = (200, worker_type, worker)
+            files["dev-sw.js"] = worker
+        host.http = responses.__getitem__
+        def checksum(args):
+            self.assertEqual(args[:4], ["docker", "exec", "aegis-pwa", "sha256sum"])
+            filename = Path(args[-1]).name
+            return hashlib.sha256(files[filename]).hexdigest() + "  " + args[-1]
+        host.run = checksum
+        return host, responses
+
+    def test_gateway_health_covers_both_historical_worker_urls_and_oauth_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host, responses = self.gateway_fixture(directory)
+            self.assertTrue(host.validate_gateway())
+            for route, failure, message in [
+                ("/", (200, {"Content-Type": "text/html", "Cache-Control": "public"}, responses["/"][2]), "OAuth result|cache"),
+                ("/?email=connect_failed", (200, {"Content-Type": "text/html"}, b"other app"), "OAuth result"),
+                ("/manifest.webmanifest", (200, {}, b"legacy manifest"), "manifest was not retired"),
+                ("/dev-sw.js", (404, {}, b""), "retirement endpoint"),
+                ("/sw.js", (200, {"Content-Type": "application/javascript", "Cache-Control": "public"}, responses["/sw.js"][2]), "cache policy"),
+                ("/sw.js", (200, responses["/sw.js"][1], responses["/sw.js"][2] + b"modified"), "different retirement code"),
+            ]:
+                with self.subTest(route=route, message=message):
+                    original = responses[route]
+                    responses[route] = failure
+                    try:
+                        with self.assertRaisesRegex(dev.Blocked, message):
+                            host.validate_gateway()
+                    finally:
+                        responses[route] = original
+
+            # Both URLs could return the same stale bytes from a proxy. The
+            # independent hash check must still reject the deployed mismatch.
+            for path in ("/sw.js", "/dev-sw.js"):
+                responses[path] = (200, responses[path][1], responses[path][2] + b"modified")
+            with self.assertRaisesRegex(dev.Blocked, "bytes differ"):
+                host.validate_gateway()
+
+    def test_legacy_preflight_remains_compatible_but_post_deploy_requires_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host, _ = self.gateway_fixture(directory, legacy=True)
+            self.assertFalse(host.validate_gateway(initial=True))
+            with self.assertRaisesRegex(dev.Blocked, "Expected the retired-PWA"):
+                host.validate_gateway()
 
     def test_native_only_returns_after_dispatch_without_claiming_feed_publication(self):
         host = FixtureHost()
@@ -470,7 +536,7 @@ class PublicationTests(unittest.TestCase):
                 reloads = [c for c in commands if c[:2] == ["docker", "exec"]]
                 self.assertEqual(reloads, [["docker", "exec", "aegis-pwa", "nginx", "-s", "reload"]]
                                  if components == ("backend",) else [],
-                                 "a newly started PWA must not race an unnecessary nginx reload")
+                                 "a newly started gateway must not race an unnecessary nginx reload")
                 config = json.loads((host.op / "deployment.compose.private.json").read_text())
                 for component, service in (("backend", "aegis-api"), ("pwa", "aegis-pwa")):
                     if component not in components:

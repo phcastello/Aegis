@@ -32,7 +32,8 @@ public sealed class NotificationApiTests
             var body = JsonSerializer.SerializeToElement(result.Value);
             Assert.Equal("web_push_retired", body.GetProperty("code").GetString());
             Assert.False(body.GetProperty("retryable").GetBoolean());
-            Assert.Contains("pareado", body.GetProperty("error").GetString());
+            Assert.Equal("O Web Push foi encerrado. Para criar e receber lembretes, use um aplicativo Aegis Android ou Windows pareado.",
+                body.GetProperty("error").GetString());
         }
         var stored = Assert.Single(f.Db.PushSubscriptions);
         Assert.Equal(historical.Endpoint, stored.Endpoint); Assert.Null(stored.DisabledAt);
@@ -40,6 +41,8 @@ public sealed class NotificationApiTests
         Assert.False(configuration.GetProperty("enabled").GetBoolean());
         Assert.Equal(JsonValueKind.Null, configuration.GetProperty("publicKey").ValueKind);
         Assert.True(configuration.GetProperty("retired").GetBoolean());
+        Assert.Contains("Android ou Windows pareado", configuration.GetProperty("message").GetString());
+        Assert.DoesNotContain("chat web", configuration.GetProperty("message").GetString()!);
         var status = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(f.Api.Status(stored.Id, new("old-management-token"))).Value);
         Assert.False(status.GetProperty("active").GetBoolean());
         Assert.IsType<NoContentResult>(f.Api.Disable(stored.Id, new("old-management-token")));
@@ -47,7 +50,7 @@ public sealed class NotificationApiTests
     }
 
     [Fact]
-    public async Task WebChatCanStillCreateReminderForEligibleNodeWithoutWebPush()
+    public async Task ChatCanCreateReminderForEligibleNodeWithoutWebPush()
     {
         using var f = new Fixture(); using var metrics = new AegisMetrics();
         var service = new ReminderService(new ReminderStore(f.Db), f.Clock, metrics);

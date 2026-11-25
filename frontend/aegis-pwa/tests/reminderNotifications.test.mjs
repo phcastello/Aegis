@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import typescript from 'typescript';
+import { transform } from 'esbuild';
 async function load(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
-  const compiled = typescript.transpileModule(source, { compilerOptions: { module: typescript.ModuleKind.ESNext, target: typescript.ScriptTarget.ES2022 } }).outputText;
+  const compiled = (await transform(source, { loader: 'ts', format: 'esm', target: 'es2022' })).code;
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 }
 const { parseReminderPush, handleReminderClick } = await load('../src/services/reminderNotification.ts');

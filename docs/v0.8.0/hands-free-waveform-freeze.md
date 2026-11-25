@@ -104,7 +104,7 @@ apps/aegis-node/src-tauri/gen/android/gradlew \
   test --console=plain --max-workers=2
 ```
 
-O [README do harness](../../../scripts/hands-free/android-view-runtime/README.md)
+O [README do harness](../../scripts/hands-free/android-view-runtime/README.md)
 explica a obtenção do JAR e a comparação com a revisão anterior. Evidências
 e JARs imutáveis foram preservados em
 `/home/phc/.cache/aegis-hands-free-waveform-freeze/validation-v1/`.

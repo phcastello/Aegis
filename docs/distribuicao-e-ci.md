@@ -1,7 +1,7 @@
 # Distribuição, atualizações e estágios de CI
 
 Para disponibilizar desenvolvimento para teste, use a operação única
-[publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
+[publish-dev](publish-dev.md). Ela coordena API e gateway web privados e, quando o diff afeta
 aplicativos, reserva, build, assinatura e recomendação em uma execução autônoma,
 sem aprovação interativa. Os comandos separados descritos abaixo permanecem para
 homologação focada, estáveis e manutenção explícita.
@@ -322,7 +322,8 @@ esse gate, que deve aprovar o candidato real antes do merge. PR #19 permanece
 draft; somente o PR separado de infraestrutura pode ser integrado nesta ativação.
 ## Backend, dados e lançamento estável
 
-`publish-dev` atualiza a API/PWA somente quando seus componentes mudam. Uma
+`publish-dev` atualiza a API e o gateway estático (componente histórico `pwa`)
+somente quando os respectivos componentes mudam. Uma
 alteração apenas de backend não compila Android/Windows. A preparação valida a
 saúde real e os contratos necessários aos clientes existentes; os metadados
 verificáveis acompanham a distribuição nativa, sem novos health checks durante

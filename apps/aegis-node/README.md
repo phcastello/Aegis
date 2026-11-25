@@ -2,7 +2,8 @@
 
 Aplicativo Tauri 2 para Android ARM64 e Windows x86_64, com a interface Vue de
 `packages/aegis-client`. Cada instalação pareada é um Node; notificações nativas
-usam Windows/FCM. O cliente web/PWA tem outro host.
+usam Windows/FCM. O gateway web oferece downloads e retorno OAuth, não uma
+interface adicional de chat.
 
 O primeiro hands-free Android da v0.8.0 usa o assistente nativo do sistema e o
 modelo privado importado pelo proprietário. Veja [ativação, arquitetura e

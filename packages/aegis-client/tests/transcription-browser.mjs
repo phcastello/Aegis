@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createServer as createNetServer } from 'node:net';
 
-// Browser integration of both real Apps and the browser's MediaRecorder/WebAudio.
+// Integration of the real native App on Android and Windows and its WebView-compatible MediaRecorder/WebAudio.
 // getUserMedia is replaced with an oscillator/silence destination. No physical
 // capture, native device claim, outbound backend request or paid STT is involved.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -16,12 +16,12 @@ const version = JSON.parse(readFileSync(join(root, 'apps/aegis-node/package.json
 const servers = [];
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 try {
-  for (const host of ['web', 'native']) {
+  {
     const port = await new Promise((resolve, reject) => { const probe = createNetServer(); probe.once('error', reject); probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(error => error ? reject(error) : resolve(port)); }); });
-    const server = await createServer({ root: join(root, host === 'web' ? 'frontend/aegis-pwa' : 'apps/aegis-node'), server: { host: '127.0.0.1', port, strictPort: false } });
+    const server = await createServer({ root: join(root, 'apps/aegis-node'), server: { host: '127.0.0.1', port, strictPort: false } });
     await server.listen(); servers.push(server);
     const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-    for (const platform of host === 'native' ? ['android', 'windows'] : ['browser']) {
+    for (const platform of ['android', 'windows']) {
       if (process.env.TRANSCRIPTION_BROWSER_PLATFORM && process.env.TRANSCRIPTION_BROWSER_PLATFORM !== platform) continue;
       const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
       let uploads = 0, transcriptionText = 'Texto sintético', transcriptionFailure = false, sendFailure = false, transcriptionGate = null, deletionGate = null, deleted = false;
@@ -98,7 +98,7 @@ try {
           window.syntheticAudio.captures.push({ context, stream: destination.stream });
           return destination.stream;
         } });
-        if (platform !== 'browser') window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+        window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
           if (command === 'node_hands_free') {
             const hf = window.syntheticHandsFree; hf.calls.push({ ...args });
             if (args.operation === 'manualAcquire') { if (hf.lease) return { acquired: false }; hf.lease = args.leaseId; return { acquired: true }; }
@@ -193,7 +193,7 @@ try {
           assert.equal(await page.evaluate(() => window.syntheticHandsFree.diagnostic), true);
           assert.equal(uploads, 1, 'hands-free configuration never uploads audio');
           assert.equal(prompts.length, 0, 'hands-free configuration never sends typed drafts');
-        } else assert.equal(await settings.getByRole('heading', { name: 'Hands-free', exact: true }).count(), platform === 'windows' ? 1 : 0);
+        } else assert.equal(await settings.getByRole('heading', { name: 'Hands-free', exact: true }).count(), 1);
         await settings.getByText('Microfone', { exact: true }).click();
         await settings.getByLabel('Entrada de áudio', { exact: true }).selectOption('synthetic-b');
         await settings.getByRole('button', { name: 'Fechar configurações', exact: true }).click();
@@ -278,7 +278,7 @@ try {
           const calls = await page.evaluate(() => window.syntheticHandsFree.calls);
           assert.equal(calls.filter(call => call.operation === 'manualAcquire').length, calls.filter(call => call.operation === 'manualRelease').length);
         }
-        console.log(`${host}/${platform}: real MediaRecorder/WebAudio with synthetic signal, waveform, review, direct send, failures, drafts, silence, input preference and cleanup PASS`);
+        console.log(`native/${platform}: real MediaRecorder/WebAudio with synthetic signal, waveform, review, direct send, failures, drafts, silence, input preference and cleanup PASS`);
       } finally { await context.close(); }
     }
   }

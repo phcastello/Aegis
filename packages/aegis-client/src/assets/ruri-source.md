@@ -82,8 +82,10 @@ node scripts/ruri/review-pixellab.mjs /tmp/ruri-pixellab-review
 node --test packages/aegis-client/tests/ruri-*.test.mjs
 npm run test:visual-refinements --prefix packages/aegis-client
 npm run build --prefix apps/aegis-node
-npm run build --prefix frontend/aegis-pwa
 ```
+
+The former PWA build was also verified in the original asset work. The v0.8.0
+static gateway no longer consumes the shared conversation UI or Ruri assets.
 
 Integrity tests verify immutable sources, exact reproduction, unchanged frames
 0–2, local edit bounds, mouth/body/feet preservation, the idle transition and byte-exact playback packing.

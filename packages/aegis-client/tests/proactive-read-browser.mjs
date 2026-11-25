@@ -22,12 +22,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return json(res, null, 204);
   const url = new URL(req.url, 'http://localhost');
-  if (!url.pathname.startsWith('/api/')) {
-    const response = await fetch('http://127.0.0.1:18092' + req.url);
-    const headers = Object.fromEntries(response.headers);
-    for (const name of ['content-encoding', 'content-length', 'transfer-encoding']) delete headers[name];
-    res.writeHead(response.status, headers); res.end(Buffer.from(await response.arrayBuffer())); return;
-  }
+  if (!url.pathname.startsWith('/api/')) return json(res, { error: 'Unknown fixture path' }, 404);
   let raw = ''; for await (const part of req) raw += part;
   const body = raw ? JSON.parse(raw) : {};
   if (url.pathname === '/api/health') return json(res, { status: 'ok' });
@@ -112,8 +107,22 @@ try {
   await unread(phone).waitFor(); assert.equal(data.get(first).read, 0);
   // A second client represents the Windows/UI consumer of the shared server marker.
   windows = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  await windows.addInitScript(({ version }) => {
+    localStorage.setItem('aegis.voice.autoSpeak', 'false');
+    window.__TAURI_INTERNALS__ = { invoke: async command => {
+      if (command === 'runtime_info') return { platform: 'windows', backendUrl: 'http://127.0.0.1:18094', version, processSessionId: 'read-fixture-desktop' };
+      if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
+      if (command === 'node_transport_status') return { transportState: 'online' };
+      if (command === 'node_action_state') return { pendingActions: 0 };
+      if (command === 'node_notification_settings') return { granted: false, pushConfigured: false };
+      if (command === 'node_consume_reminder_open') return { reminderId: null, conversationId: null };
+      if (command === 'plugin:updater|check') return null;
+      if (command === 'check_backend') return { status: 'connected' };
+      return;
+    } };
+  }, { version });
   const desktop = await windows.newPage(); desktop.on('pageerror', error => errors.push(error.message));
-  await desktop.goto('http://127.0.0.1:18094'); await unread(desktop).waitFor();
+  await desktop.goto('http://127.0.0.1:1420'); await unread(desktop).waitFor();
   await phone.getByRole('button', { name: /^Conversa proativa/ }).click();
   await phone.locator('[data-proactive-sequence="1"]').waitFor(); await end(phone); await waitRead(1);
   assert.equal(await phone.evaluate(() => document.hasFocus()), false, 'Activity foreground is independent from WebView input focus');
