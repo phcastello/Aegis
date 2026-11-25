@@ -46,38 +46,72 @@ test('native disclosure starts collapsed and has a keyboard accessible summary',
   assert.doesNotMatch(source, /[🧠💾📚✨]/u);
 });
 
-test('pending Used becomes Used plus Created without reload', async () => {
+test('pending Used becomes Used plus Created without reload', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
   const seen = [];
   let attempts = 0;
-  const result = await pollMemoryActivity(async () => {
+  let firstUpdate;
+  const pendingShown = new Promise((resolve) => { firstUpdate = resolve; });
+  const running = pollMemoryActivity(async () => {
     attempts++;
     return attempts === 1
       ? { pending: true, sections: [section('used')] }
       : { pending: false, sections: [section('used'), section('created')] };
-  }, (snapshot) => seen.push(snapshot), new AbortController().signal, () => true, 1, 100);
-  assert.equal(result, 'completed');
+  }, (snapshot) => { seen.push(snapshot); firstUpdate(); }, new AbortController().signal, () => true, 1, 100);
+
+  t.mock.timers.tick(1);
+  await pendingShown;
+  assert.equal(attempts, 1);
+  assert.deepEqual(seen, [{ pending: true, sections: [section('used')] }]);
+  t.mock.timers.tick(1);
+  assert.equal(await running, 'completed');
+  assert.equal(attempts, 2);
   assert.equal(seen.length, 2);
+  assert.deepEqual(seen[1], { pending: false, sections: [section('used'), section('created')] });
   assert.equal(presentation.memoryActivityTitle(seen[1].sections), 'Memória');
 });
 
-test('conversation change or unmount cancels polling and ignores late response', async () => {
+test('conversation change or unmount cancels polling and ignores late response', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
   const controller = new AbortController();
   let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
   const seen = [];
-  const running = pollMemoryActivity(() => new Promise((resolve) => { release = resolve; }),
-    (snapshot) => seen.push(snapshot), controller.signal, () => true, 1, 100);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  const running = pollMemoryActivity((signal) => new Promise((resolve) => {
+    release = resolve;
+    markStarted(signal);
+  }), (snapshot) => seen.push(snapshot), controller.signal, () => true, 1, 100);
+  t.mock.timers.tick(1);
+  const requestSignal = await started;
+  assert.equal(requestSignal.aborted, false);
   controller.abort();
+  assert.equal(requestSignal.aborted, true);
   release({ pending: false, sections: [section('created')] });
   assert.equal(await running, 'cancelled');
   assert.deepEqual(seen, []);
 });
 
-test('polling stops after the timeout even when the request is still pending', async () => {
+test('polling stops after the timeout even when the request is still pending', async (t) => {
+  // Under a busy runner, real 1 ms and 20 ms timers can both expire before
+  // the first read starts. Drive the polling interval and deadline separately
+  // so this test actually exercises cancellation of an in-flight request.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  let requestSignal;
   let requestAborted = false;
-  const result = await pollMemoryActivity((signal) => new Promise((_, reject) => {
+  const running = pollMemoryActivity((signal) => new Promise((_, reject) => {
+    requestSignal = signal;
     signal.addEventListener('abort', () => { requestAborted = true; reject(new Error('aborted')); }, { once: true });
   }), () => assert.fail('no update expected'), new AbortController().signal, () => true, 1, 20);
-  assert.equal(result, 'timeout');
+
+  t.mock.timers.tick(1);
+  await Promise.resolve();
+  assert.ok(requestSignal, 'a request must be in flight before the deadline');
+  assert.equal(requestSignal.aborted, false);
+  t.mock.timers.tick(18);
+  assert.equal(requestAborted, false, 'the pending read must remain active until the deadline');
+  t.mock.timers.tick(1);
+  assert.equal(await running, 'timeout');
   assert.equal(requestAborted, true);
+  assert.equal(requestSignal.aborted, true);
 });
