@@ -9,6 +9,14 @@ previsibilidade e baixo custo operacional orientam as decisões.
 **Maximizar a utilidade com o menor trabalho necessário, tornando a Aegis cada vez
 mais facilitadora.** Prefira soluções simples, eficientes e incrementais.
 
+## Pesquisa antes de implementar uma funcionalidade
+
+- Estude como empresas ou projetos reconhecidos resolvem o mesmo problema em uso real. Priorize fontes primárias e aproveite a pesquisa existente quando ela cobrir a decisão atual.
+- Registre na documentação da funcionalidade as referências, as condições de uso e o motivo da abordagem escolhida. Valide na Aegis o comportamento que motivou a escolha.
+- Prefira uma solução que sirva aos dispositivos e cenários previstos na etapa da versão. Quando ela depender de uma capacidade específica, detecte sua disponibilidade, avalie uma alternativa para os demais dispositivos e documente os limites de suporte.
+
+Veja a [filosofia de desenvolvimento](README.md#filosofia-de-desenvolvimento).
+
 ## Implementação
 
 - Prefira a menor solução correta. Leia o código, os contratos e a documentação

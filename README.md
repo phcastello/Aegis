@@ -69,6 +69,12 @@ A localização usa eventos geográficos e aquisições temporárias, não GPS p
 
 O comportamento de memória registrado na [issue #23](https://github.com/phcastello/Aegis/issues/23) permanece adiado. As verificações de voz e execução em segundo plano têm os limites descritos nas [notas da v0.7.2](docs/v0.7.2-release-notes.md#limitações-conhecidas).
 
+## Filosofia de desenvolvimento
+
+Antes de projetar uma funcionalidade, estudamos como empresas ou projetos reconhecidos já resolveram o mesmo problema em uso real. Consultamos documentação, código ou estudos dos próprios responsáveis para entender o que funciona, em quais condições e com quais limitações. Na Aegis, registramos a escolha e verificamos se ela atende ao uso previsto na etapa atual do planejamento.
+
+Preferimos soluções que continuem funcionando quando o proprietário trocar de aparelho ou acrescentar um Node. Quando uma plataforma oferece um recurso específico, a Aegis verifica se ele está disponível. Se houver uma alternativa compatível com o escopo da versão, ela pode atender os demais dispositivos. Um exemplo é a [escolha de qual Node responde à chamada de voz](docs/v0.8.0/windows-hands-free.md#sistemas-estudados).
+
 ## Desenvolvimento e documentação
 
 O projeto é pessoal e usa configuração própria de infraestrutura. Revise [`.env.example`](.env.example), [`docker-compose.yml`](docker-compose.yml) e o [procedimento de operação privada](docs/operacao-privada.md), incluindo migrations, antes de executar uma instância. O [índice técnico](docs/README.md) reúne desenvolvimento, testes e histórico.
