@@ -194,15 +194,17 @@ export function batteryRateDifference(after?: HandsFreeBatteryRun, before?: Hand
   return typeof a === 'number' && typeof b === 'number' ? a - b : null;
 }
 
-export type HandsFreeDiagnosticCode = 'command_not_authorized' | 'bridge_unavailable' | 'timeout' | 'invalid_response' | 'native_failure' | 'unsupported' | 'invalid_request' | 'audio_busy';
+export type HandsFreeDiagnosticCode = 'command_not_authorized' | 'bridge_unavailable' | 'timeout' | 'invalid_response' | 'native_failure' | 'unsupported' | 'invalid_request' | 'audio_busy' | 'model_invalid' | 'model_runtime_unavailable';
 const diagnosticMessages: Record<HandsFreeDiagnosticCode, string> = {
   command_not_authorized: 'A autorização interna da escuta está indisponível nesta versão.',
   bridge_unavailable: 'Não foi possível acessar o controle nativo da escuta.',
   timeout: 'O controle nativo da escuta não respondeu a tempo.',
   invalid_response: 'O controle nativo retornou um estado inválido.',
   native_failure: 'O controle nativo não conseguiu concluir a operação.',
-  unsupported: 'Este controle hands-free está disponível no Android.',
+  unsupported: 'Este controle hands-free está indisponível neste dispositivo.',
   invalid_request: 'A configuração de escuta é inválida.',
+  model_invalid: 'Escolha o ZIP original do modelo Micro v2 + Open v2.',
+  model_runtime_unavailable: 'O Windows não conseguiu carregar o modelo de voz neste computador.',
   audio_busy: 'O áudio está em uso pela sessão hands-free. Aguarde ou cancele a interação.'
 };
 export class HandsFreeError extends Error {

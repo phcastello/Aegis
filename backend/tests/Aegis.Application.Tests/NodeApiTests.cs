@@ -63,6 +63,39 @@ public sealed class NodeApiTests
         await registry.SetEnabledAsync(null, pc.Node.Id, true); await registry.RevokeAsync(pc.Node.Id, pc.Node.Id);
         var revoked = await client.GetAsync("/api/nodes/me"); Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode); Assert.Contains("node_revoked", await revoked.Content.ReadAsStringAsync());
     }
+    [Fact]
+    public async Task VoiceActivationAcceptsOnlyPairedNodesAndGrantsOneCandidateBeforeRecording()
+    {
+        var (app, client, registry) = await Host();
+        await using var dispose = app;
+        const string path = "/api/nodes/me/voice-activations/claim";
+        var desktop = await Pair(registry);
+        var phone = await Pair(registry);
+        var pcClaim = new VoiceActivationClaim(Guid.NewGuid(), 7, 0.98);
+        var phoneClaim = new VoiceActivationClaim(Guid.NewGuid(), 22, 0.83);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, pcClaim)).StatusCode);
+        using var pcHttp = app.GetTestClient();
+        using var phoneHttp = app.GetTestClient();
+        pcHttp.DefaultRequestHeaders.Add("Authorization", "AegisNode " + desktop.Secret);
+        phoneHttp.DefaultRequestHeaders.Add("Authorization", "AegisNode " + phone.Secret);
+        Assert.Equal(HttpStatusCode.BadRequest, (await pcHttp.PostAsJsonAsync(path, new {
+            pcClaim.ActivationId, nodeId = phone.Node.Id
+        })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await pcHttp.PostAsJsonAsync(path, new {
+            pcClaim.ActivationId, samples = "not accepted"
+        })).StatusCode);
+        await Task.Delay(VoiceActivationArbiter.CatchUpWindow);
+        var replies = await Task.WhenAll(pcHttp.PostAsJsonAsync(path, pcClaim), phoneHttp.PostAsJsonAsync(path, phoneClaim));
+        Assert.All(replies, response => {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+        });
+        Assert.Equal(new(pcClaim.ActivationId, "suppressed"), await replies[0].Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        Assert.Equal(new(phoneClaim.ActivationId, "granted"), await replies[1].Content.ReadFromJsonAsync<VoiceActivationDecision>());
+        await registry.SetEnabledAsync(null, phone.Node.Id, false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await phoneHttp.PostAsJsonAsync(path, phoneClaim)).StatusCode);
+    }
+
     [Fact] public async Task AnonymousPairingIsRateLimitedAndDoesNotTrustForwardedHeader()
     {
         var (app, client, _) = await Host(); await using var dispose = app;

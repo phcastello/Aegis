@@ -14,6 +14,8 @@ public static class NodeApiServices
         services.AddAuthorization(options => options.AddPolicy("NodeManagement", policy =>
             policy.AddAuthenticationSchemes(NodeAuthenticationHandler.SchemeName).RequireAuthenticatedUser()));
         services.AddScoped<NodeApiFilter>();
+        services.AddSingleton<VoiceActivationArbiter>();
+        services.AddHostedService<VoiceActivationArbiter>(p => p.GetRequiredService<VoiceActivationArbiter>());
         services.AddDataProtection();
         services.Configure<Aegis.Infrastructure.Nodes.NodeFcmOptions>(configuration?.GetSection("NodeFcm") ?? new ConfigurationBuilder().Build().GetSection("NodeFcm"));
         services.AddSingleton<Aegis.Infrastructure.Nodes.INodeFcmCredentials, Aegis.Infrastructure.Nodes.NodeFcmCredentials>();
@@ -52,6 +54,9 @@ public static class NodeApiServices
                 context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new FixedWindowRateLimiterOptions {
                     PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
             options.AddPolicy("node-notifications", context => RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+            options.AddPolicy("node-voice-activation", context => RateLimitPartition.GetFixedWindowLimiter(
+                context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions {
+                    PermitLimit = 90, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
             options.AddPolicy("node-codes", context => RateLimitPartition.GetFixedWindowLimiter(
                 context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions {
                     PermitLimit = 3, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));

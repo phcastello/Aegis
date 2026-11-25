@@ -27,6 +27,19 @@ mod windows_notifications;
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_updates;
 
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_voice_audio;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_voice_backend;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_hands_free;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_wakeword;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_voice_panel;
+#[cfg(any(test, all(feature = "native-runtime", windows)))]
+mod windows_voice_signal;
+
 #[cfg(feature = "native-runtime")]
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,7 +164,7 @@ async fn install_android_update(
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, version);
-        Err("Atualização Android disponível somente no celular.".into())
+        Err("AtualizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o Android disponÃƒÆ’Ã‚Â­vel somente no celular.".into())
     }
 }
 
@@ -212,6 +225,8 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(node_commands::NodeRuntime::initialize(app.handle().clone()));
+            #[cfg(windows)]
+            app.manage(windows_hands_free::WindowsHandsFree::start(app.handle())?);
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 handle
@@ -348,6 +363,8 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
+                #[cfg(windows)]
+                app.state::<windows_hands_free::WindowsHandsFree>().shutdown();
                 app.state::<node_commands::NodeRuntime>().shutdown();
             }
         });

@@ -9,6 +9,7 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     UrlEncoder encoder, INodeRegistry nodes) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "AegisNode";
+    public const string TargetPriorityClaim = "aegis_node_target_priority";
     private string failure = "node_authentication_required";
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -21,7 +22,8 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
         if (header.Length > 180 || !header.StartsWith(SchemeName + " ", StringComparison.Ordinal)) return AuthenticateResult.NoResult();
         var authentication = await nodes.AuthenticateAsync(header[(SchemeName.Length + 1)..], Context.RequestAborted);
         if (!authentication.Authenticated) { failure = authentication.Error!; return AuthenticateResult.Fail("Node authentication rejected."); }
-        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, authentication.Node!.Id.ToString()) };
+        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, authentication.Node!.Id.ToString()),
+            new Claim(TargetPriorityClaim, authentication.Node.TargetPriority.ToString(System.Globalization.CultureInfo.InvariantCulture)) };
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName)), SchemeName));
     }
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)

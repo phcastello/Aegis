@@ -47,7 +47,7 @@ public static class HandsFreeReply
     {
         if (!request.IsHandsFree) return prompt;
         var context = $"Origem operacional: hands_free; sessão de voz: {request.VoiceSessionId:D}. " +
-            "O áudio ocorre no assistente Android e pode estar com a tela bloqueada. " +
+            "O pedido chegou por voz e a tela do dispositivo pode estar bloqueada. " +
             "Mantenha todas as confirmações e verificações normais de ferramentas. " +
             "Ao concluir o turno, use hands_free_reply como única chamada, com speech contendo a resposta final " +
             "e continuation=continue somente quando uma continuação for útil; caso contrário, close. " +

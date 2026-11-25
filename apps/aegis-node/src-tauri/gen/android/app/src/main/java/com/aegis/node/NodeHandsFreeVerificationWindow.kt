@@ -12,10 +12,10 @@ internal class HandsFreeWakeCandidate(val decisionSample:Long,val blockOffset:In
         require(retainedStart>=0 && start>=retainedStart && end>=start && end<=streamSamples)
         return ShortArray((end-start).toInt()).also { ring.copyRangeTo(it,(start-retainedStart).toInt(),it.size) }
     }
-    fun verificationWindow(ring:HandsFreeRing,streamSamples:Long):HandsFreeVerificationWindow {
-        require(ready(streamSamples))
+    fun verificationWindow(ring:HandsFreeRing,streamSamples:Long,withLookahead:Boolean=true):HandsFreeVerificationWindow {
+        require(if(withLookahead)ready(streamSamples) else streamSamples>=decisionSample)
         val begin=maxOf(0L,decisionSample-LOOKBACK_SAMPLES)
-        val end=decisionSample+LOOKAHEAD_SAMPLES
+        val end=if(withLookahead)decisionSample+LOOKAHEAD_SAMPLES else decisionSample
         return HandsFreeVerificationWindow(copy(ring,streamSamples,begin,end),(decisionSample-begin).toInt())
     }
     fun context(ring:HandsFreeRing,streamSamples:Long):ShortArray =

@@ -41,11 +41,11 @@ pub fn verify(
         return Err("app_command_manifest_required");
     }
     let allowed = resolved.allowed_commands.get("node_hands_free");
-    if target != Target::Android {
+    if !matches!(target, Target::Android | Target::Windows) {
         return if allowed.is_none() {
             Ok(())
         } else {
-            Err("hands_free_must_be_android_only")
+            Err("hands_free_platform_unsupported")
         };
     }
     let grants = allowed
@@ -102,7 +102,7 @@ mod tests {
         )
     }
     #[test]
-    fn selected_command_is_scoped_to_android_local_main() {
+    fn selected_command_is_scoped_to_native_local_main() {
         let (config, manifests, files) = fixture();
         assert_eq!(
             verify(&config, &manifests, files.clone(), Target::Android),
@@ -156,8 +156,8 @@ mod tests {
         let mut changed = files;
         changed.get_mut("android-hands-free").unwrap().platforms = None;
         assert_eq!(
-            verify(&config, &manifests, changed, Target::Windows),
-            Err("hands_free_must_be_android_only")
+            verify(&config, &manifests, changed, Target::Linux),
+            Err("hands_free_platform_unsupported")
         );
     }
     #[test]

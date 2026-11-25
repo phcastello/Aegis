@@ -275,7 +275,7 @@ static bool PairingLifecycle(HttpRequest request)
 sealed class NodeControllersOnly : ControllerFeatureProvider
 {
     protected override bool IsController(TypeInfo type) => type.AsType() == typeof(NodesController) || type.AsType() == typeof(NodePairingController) || type.AsType() == typeof(NodeTransportController) ||
-        type.AsType() == typeof(RemindersController) || type.AsType() == typeof(RemindersReconcileController) || type.AsType() == typeof(ReminderWithdrawalReceiptsController) || type.AsType() == typeof(ScopedReminderActionsController) ||
+        type.AsType() == typeof(NodeVoiceActivationController) || type.AsType() == typeof(RemindersController) || type.AsType() == typeof(RemindersReconcileController) || type.AsType() == typeof(ReminderWithdrawalReceiptsController) || type.AsType() == typeof(ScopedReminderActionsController) ||
         type.AsType() == typeof(PlacesController) || type.AsType() == typeof(LocationController) || type.AsType() == typeof(GeofencesController);
 }
 sealed class FixtureMetrics

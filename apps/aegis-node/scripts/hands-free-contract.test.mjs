@@ -5,12 +5,12 @@ import { test } from 'node:test';
 const source = path => readFileSync(new URL(`../src-tauri/${path}`, import.meta.url), 'utf8');
 const androidSource = name => source(`gen/android/app/src/main/java/com/aegis/node/${name}.kt`);
 
-test('hands-free selected capability keeps the closed app command on Android main only', () => {
+test('hands-free selected capability keeps the closed app command on Android and Windows main only', () => {
   const config = JSON.parse(source('tauri.conf.json'));
   const capability = JSON.parse(source('capabilities/hands-free.json'));
   assert.equal(capability.identifier, 'android-hands-free');
   assert.ok(config.app.security.capabilities.includes(capability.identifier), 'A discovered capability is insufficient when selection is explicit.');
-  assert.deepEqual(capability.platforms, ['android']);
+  assert.deepEqual(capability.platforms, ['android', 'windows']);
   assert.deepEqual(capability.windows, ['main']);
   assert.deepEqual(capability.permissions, ['allow-node-hands-free']);
   assert.equal(capability.remote, undefined);

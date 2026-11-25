@@ -54,7 +54,9 @@ android-native-keyring-store = "1.0.0"
 jni = "0.21"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_System_Com", "Win32_System_WinRT"] }
+windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_System_Com", "Win32_System_WinRT", "Win32_System_WinRT_ML", "Win32_Graphics_Gdi", "AI_MachineLearning", "Foundation_Collections", "Storage_Streams", "Media_Control", "Win32_Foundation", "Win32_Media_Audio", "Win32_Media_Multimedia", "Win32_System_Threading", "Win32_Security", "Win32_UI_Controls_Dialogs", "Win32_UI_WindowsAndMessaging"] }
+zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tempfile = "3"
 windows-registry = "0.6"
 rusqlite = { version = "0.37", features = ["bundled"] }
 windows-native-keyring-store = "1.1.0"

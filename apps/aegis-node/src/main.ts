@@ -14,7 +14,7 @@ async function start(): Promise<void> {
   configureClient({ apiBaseUrl: runtime.backendUrl, externalLinks: 'system', openExternalUrl: openUrl, processSessionId: runtime.processSessionId, dismissKeyboard: () => invoke<void>('node_hide_keyboard'),
     isForeground: runtime.platform === 'android' ? () => invoke<boolean>('node_read_visibility') : undefined,
     nativeSpeech: runtime.platform === 'android' ? nativeSpeech : undefined,
-    acquireAudio: runtime.platform === 'android' ? acquireNativeAudio : undefined });
+    acquireAudio: ['android', 'windows'].includes(runtime.platform) ? acquireNativeAudio : undefined });
   createApp(App, { runtime }).mount('#app');
 }
 void start().catch((error: unknown) => {

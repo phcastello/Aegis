@@ -35,6 +35,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-utils",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -43,6 +44,7 @@ dependencies = [
  "windows",
  "windows-native-keyring-store",
  "windows-registry",
+ "zip",
 ]
 
 [[package]]
@@ -5942,6 +5944,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]

@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { batteryRateDifference, batteryRunsForComparison, latestBatteryRuns, type HandsFreeBatteryMode, type HandsFreeMediaReferenceStatus } from '../services/handsFree';
 import { useHandsFreeSettings } from '../composables/useHandsFreeSettings';
 
+const props = withDefaults(defineProps<{ platform?: 'android' | 'windows' }>(), { platform: 'android' });
 const { state, busy, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, automationSupported, automationLive, canStartBattery, startBattery, finishBattery, canStartAuto, startAuto, cancelAuto, exportBattery } = useHandsFreeSettings();
 const mediaReferenceMessage: Record<HandsFreeMediaReferenceStatus,string> = {
   unsupported: 'Disponível a partir do Android 10.',
@@ -41,28 +43,39 @@ const automationMessage = computed(() => {
 });
 function isValidationRun(id: string): boolean { return Boolean(automation.value?.validation && automation.value.runIds.includes(id)); }
 const deleteArmed = ref(false);
+let stopVoiceEvents: UnlistenFn | undefined;
+let mounted = false;
+onMounted(async () => {
+  mounted = true;
+  if (props.platform !== 'windows') return;
+  try {
+    const stop = await listen('aegis-windows-voice-state', () => { if (document.visibilityState === 'visible') void refresh(); });
+    if (mounted) { stopVoiceEvents = stop; void refresh(); } else stop();
+  } catch { /* Focus and the refresh control also read native state. */ }
+});
 let collectionRefresh: ReturnType<typeof setInterval> | undefined;
 function foreground() { if (document.visibilityState === 'visible') void refresh(); }
 onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.mediaReference?.session || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
-onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); });
+onBeforeUnmount(() => { mounted = false; stopVoiceEvents?.(); clearInterval(collectionRefresh); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); });
 </script>
 <template>
   <section class="hands-free-settings" aria-labelledby="hands-free-title">
     <h3 id="hands-free-title">Hands-free</h3>
-    <p>Diga “Aegis” seguido do pedido, inclusive com a tela bloqueada. A detecção acontece no celular. Somente o comando ativado é enviado para transcrição.</p>
+    <p v-if="props.platform === 'windows'">Diga “Aegis” e faça seu pedido ao ouvir o sinal. A escuta continua com a Aegis na bandeja. Importe o pacote privado Micro v2 + Open v2 para ativar a escuta.</p>
+    <p v-else>Diga “Aegis” seguido do pedido, inclusive com a tela bloqueada. A detecção acontece no celular. Somente o comando ativado é enviado para transcrição.</p>
     <template v-if="state">
-      <label class="audio-preference"><input type="checkbox" :checked="state.enabled" :disabled="!canConfigure" @change="run('configure', ($event.target as HTMLInputElement).checked)" /> Escutar “Aegis”</label>
+      <label class="audio-preference"><input type="checkbox" :checked="state.enabled" :disabled="!canConfigure || (props.platform === 'windows' && !state.enabled && !state.modelReady)" @change="run('configure', ($event.target as HTMLInputElement).checked)" /> Escutar “Aegis”</label>
       <p role="status">{{ stale ? 'Último estado conhecido: ' : '' }}{{ state.message }}</p>
       <p v-if="stale" class="settings-muted">A escuta e o recebimento de áudio não estão confirmados neste momento.</p>
       <p v-if="state.modelReady" class="settings-muted">{{ stale ? 'Último modelo informado:' : 'Modelo instalado:' }} <strong>{{ state.modelName || 'Identificação indisponível' }}</strong></p>
       <div class="settings-actions">
         <button v-if="!state.permissionGranted" type="button" :disabled="!canConfigure" @click="run('permission')">Permitir microfone</button>
-        <button v-if="!state.assistantSelected" type="button" :disabled="!canConfigure" @click="run('assistant')">Selecionar assistente no Android</button>
+        <button v-if="props.platform === 'android' && !state.assistantSelected" type="button" :disabled="!canConfigure" @click="run('assistant')">Selecionar assistente no Android</button>
         <button type="button" :disabled="!canConfigure || state.enabled" @click="run('import')">{{ state.modelReady ? 'Importar modelo novamente' : 'Importar modelo privado' }}</button>
       </div>
-      <p class="settings-muted">A seleção de assistente é feita na tela oficial do Android. O modelo pessoal deve ser importado uma vez, com a escuta desligada.</p>
+      <p v-if="props.platform === 'android'" class="settings-muted">A seleção de assistente é feita na tela oficial do Android. O modelo pessoal deve ser importado uma vez, com a escuta desligada.</p>
       <label class="audio-preference"><input type="checkbox" :checked="state.diagnostic" :disabled="!canConfigure" @change="run('configure', undefined, ($event.target as HTMLInputElement).checked)" /> Diagnóstico: detectar chamadas sem enviar comandos</label>
-      <div class="settings-actions"><button type="button" :disabled="!canConfigure" @click="run('cancel')">Cancelar interação</button><button type="button" :disabled="!canConfigure" @click="run('export')">Exportar métricas e ativações (ZIP)</button></div>
+      <div class="settings-actions"><button type="button" :disabled="!canConfigure" @click="run('cancel')">Cancelar interação</button><button v-if="props.platform === 'android'" type="button" :disabled="!canConfigure" @click="run('export')">Exportar métricas e ativações (ZIP)</button></div>
       <fieldset v-if="state.mediaReference" class="media-reference-settings">
         <legend>Cancelamento de áudio de mídia (experimental)</legend>
         <p>Autorize o áudio de músicas, vídeos e jogos para melhorar a escuta enquanto outras mídias tocam. A referência é processada localmente em memória e descartada; a Aegis não grava a tela.</p>
@@ -96,7 +109,7 @@ onBeforeUnmount(() => { clearInterval(collectionRefresh); document.removeEventLi
         <p v-if="automationSupported">Inicie uma vez e apague a tela. A Aegis compara A → B → C automaticamente, por 30 minutos de medição em cada etapa: cerca de 1h30, além da preparação entre etapas. Apague a tela para começar. As trocas podem atrasar no Android.</p>
         <p>Comece com carga entre 50% e 80%, aparelho frio e fora do carregador. Mantenha a tela apagada e o mesmo ambiente. Durante os testes, a Aegis não responde a chamadas e nenhum áudio é salvo ou enviado.</p>
         <p v-if="batteryLocked" class="settings-muted">Os controles normais ficam suspensos até o encerramento.</p>
-        <p v-if="!state.assistantSelected" class="settings-muted">Selecione a Aegis como assistente no Android antes de iniciar os testes.</p>
+        <p v-if="props.platform === 'android' && !state.assistantSelected" class="settings-muted">Selecione a Aegis como assistente no Android antes de iniciar os testes.</p>
         <p v-else-if="!state.permissionGranted" class="settings-muted">Para a sequência automática, permita o microfone nos controles acima.</p>
         <p v-else-if="!state.modelReady" class="settings-muted">Para a sequência automática, importe e confira o modelo de detecção nos controles acima.</p>
         <div v-if="automationSupported && !batteryLocked" class="settings-actions"><button type="button" :disabled="!canStartAuto()" @click="startAuto()">Iniciar comparação automática</button></div>

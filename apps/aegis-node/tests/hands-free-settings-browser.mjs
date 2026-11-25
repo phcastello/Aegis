@@ -19,7 +19,9 @@ try {
   await context.addInitScript(({ version }) => {
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
     const initial = { enabled: false, diagnostic: false, assistantSelected: false, permissionGranted: false, modelReady: false, captureConfirmed: false, status: 'disabled', message: 'Escuta desligada.' };
-    window.hfFixture = { fail: 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
+    const windows = new URLSearchParams(location.search).has('windows');
+    if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; }
+    window.hfFixture = { fail: windows ? null : 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
     window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       if (command === 'node_hands_free') {
         if (args.operation === 'conversationChanges') return { generation: '00000000-0000-4000-8000-000000000001', changes: [] };
@@ -27,6 +29,8 @@ try {
         try {
           if (f.hold) { f.hold = false; return await new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; }); }
           if (f.fail) throw { code: f.fail, message: 'private exception must never be rendered' };
+          if (windows && args.operation === 'import') Object.assign(f.initial, { modelReady: true, modelName: 'Aegis Open v2' });
+          if (windows && args.operation === 'configure') Object.assign(f.initial, { enabled: args.enabled, diagnostic: args.diagnostic });
           if (args.operation === 'mediaReferenceStart') f.initial.mediaReference = f.mediaGrant
             ? { supported: true, session: true, status: 'ready' }
             : { supported: true, session: false, status: 'denied' };
@@ -38,7 +42,7 @@ try {
           return JSON.parse(JSON.stringify(f.initial));
         } finally { f.active--; }
       }
-      if (command === 'runtime_info') return { platform: 'android', backendUrl: location.origin, version };
+      if (command === 'runtime_info') return { platform: windows ? 'windows' : 'android', backendUrl: location.origin, version };
       if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
       if (command === 'node_notification_settings') return { granted: true, pendingActions: 0, failedActions: 0, actionDiagnosticsAvailable: true, actionDiagnostics: [] };
       if (command === 'node_transport_status') return { transportState: 'offline' };
@@ -296,5 +300,18 @@ try {
   console.log('Automatic battery UI: one-click arm, hidden/visible polling, cancellation, functional validation, delay feedback and isolated sequence results PASS (mock IPC)');
   console.log('Battery UI: three modes, explicit silent study, active/recovery controls, manual finish, visible-only polling and signed device comparisons PASS (mock IPC)');
   console.log('Hands-free UI: initial failure, accessible retry, setup without prerequisites/backend, stale state, recovery, serialized events and unmount PASS (mock IPC; no native ACL claim)');
+  const desktop = await context.newPage();
+  await desktop.goto(origin + '?windows');
+  await desktop.getByRole('button', { name: 'Abrir histórico', exact: true }).click();
+  await desktop.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();
+  await desktop.getByRole('button', { name: 'Áudio e voz', exact: true }).click();
+  const voice = desktop.locator('.hands-free-settings');
+  await voice.getByRole('button', { name: 'Importar modelo privado', exact: true }).click();
+  await voice.getByText('Modelo instalado: Aegis Open v2', { exact: true }).waitFor();
+  await voice.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).check();
+  assert.equal(await voice.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), true);
+  assert.equal(await voice.getByRole('button', { name: 'Selecionar assistente no Android' }).count(), 0);
+  assert.equal(await voice.getByRole('button', { name: 'Exportar métricas e ativações (ZIP)' }).count(), 0);
+  console.log('Windows settings: model import, opt-in and platform controls PASS');
   await context.close();
 } finally { await browser.close(); await server.close(); }

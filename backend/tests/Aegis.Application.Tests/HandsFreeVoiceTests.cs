@@ -154,7 +154,12 @@ public sealed class HandsFreeVoiceTests
         {
             Assert.Equal("hands_free", request.Request.Metadata!["origin"]);
             Assert.Equal(session.ToString("D"), request.Request.Metadata["voice_session_id"]);
-            Assert.Contains(request.Request.InputItems!, item => item.GetRawText().Contains("hands_free"));
+            var context = Assert.Single(request.Request.InputItems!, item =>
+                item.TryGetProperty("content", out var text) && text.ValueKind == JsonValueKind.String &&
+                text.GetString()!.Contains("Origem operacional: hands_free")).GetProperty("content").GetString()!;
+            Assert.Contains("tela do dispositivo pode estar bloqueada", context);
+            Assert.DoesNotContain("Android", context);
+            Assert.DoesNotContain("Windows", context);
         });
     }
 

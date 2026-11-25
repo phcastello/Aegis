@@ -1,7 +1,7 @@
 {
   "identifier": "android-hands-free",
-  "description": "Android assistant configuration, local model picker and aggregate metrics export.",
+  "description": "Local Android and Windows hands-free controls.",
   "windows": ["main"],
-  "platforms": ["android"],
+  "platforms": ["android", "windows"],
   "permissions": ["allow-node-hands-free"]
 }

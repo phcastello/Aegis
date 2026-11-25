@@ -115,6 +115,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     @Volatile private var cancelledAt=0L
     @Volatile private var recordingGroupId:String?=null
     private val diagnosticCancelEpoch=java.util.concurrent.atomic.AtomicInteger(0)
+    private val electionEpoch=java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile internal var screenLocked=false
     @Volatile internal var screenInteractive=true
     private var continuationDeadline=0L
@@ -199,6 +200,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val identityObserver=NodeNativeSession.observeIdentity(context){identityChanged()}
     private fun currentIdentity()=NodeNativeSession.read(context)?.let{NodeNativeSession.fingerprint(it)}
     private fun identityChanged()=synchronized(lock) {
+        electionEpoch.incrementAndGet()
         val identity=currentIdentity()
         val active=continuityActivation
         conversationContinuity.identityChanged(identity)
@@ -391,6 +393,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         val panelCancellation=if(expectedSession==null)NodeVoiceInteractionSession.current?.cancellationSnapshot() else null
         synchronized(lock) {
             if(expectedSession!=null && expectedSession!=sessionId)return
+            electionEpoch.incrementAndGet()
             if(sessionId==null && !pendingActivation){
                 if(diagnostic){cancelledAt=HandsFreeTurnLatency.now();diagnosticCancelEpoch.incrementAndGet()}
                 // A terminal error may outlive its turn. Dismiss only the presentation
@@ -1253,11 +1256,15 @@ internal class HandsFreeRuntime(private val context:Context) {
             metrics.add("external_media_reference_samples", referenceSamples)
             metrics.add("external_media_filtered_reads", filteredReads)
         } else null
-        val ring=HandsFreeRing(if(wakeVerifier==null)40000 else HandsFreeWakeCandidate.RING_CAPACITY)
+        val electWake = !continuation && !batteryStudy && !diagnostic
+        val candidateWorker = wakeVerifier!=null || electWake
+        val ring=HandsFreeRing(if(candidateWorker)HandsFreeWakeCandidate.RING_CAPACITY else 40000)
         var wakeCandidate:HandsFreeWakeCandidate?=null
         var pendingVerification:HandsFreePendingWakeVerification?=null
         var verificationStartedAt=0L
-        val verificationExecutor=if(wakeVerifier!=null)java.util.concurrent.ThreadPoolExecutor(
+        var candidateDeadline=0L
+        var candidateEpoch=0
+        val verificationExecutor=if(candidateWorker)java.util.concurrent.ThreadPoolExecutor(
             0,1,30,java.util.concurrent.TimeUnit.SECONDS,java.util.concurrent.LinkedBlockingQueue<Runnable>(1)
         ) else null
         val command=ShortArray(320000) // At most 20s, exclusively at/after activation.
@@ -1428,14 +1435,20 @@ internal class HandsFreeRuntime(private val context:Context) {
                 var verifiedCandidate:HandsFreeWakeCandidate?=null
                 var verifiedPending:HandsFreePendingWakeVerification?=null
                 var verifiedCommandLength=0
-                if(wakeVerifier!=null && !continuation && !pendingActivation) {
+                if(candidateWorker && !continuation && !pendingActivation) {
                     if(event>=0 && wakeCandidate==null && pendingVerification==null) {
                         wakeCandidate=HandsFreeWakeCandidate(event,(event-(detectorSamples-count)).toInt(),MicroWakeWordNative.activationScores(detector))
-                        metrics.add("wake_verifier_candidates")
+                        candidateDeadline=now + HandsFreeWakeElection.MAX_AGE_MS - (streamSamples-event).coerceAtLeast(0)/16
+                        candidateEpoch=electionEpoch.get()
+                        if(wakeVerifier!=null)metrics.add("wake_verifier_candidates")
                     }
                     event=-1L
                     val candidate=wakeCandidate
-                    if(candidate!=null && candidate.ready(streamSamples)) {
+                    if(candidate!=null && (wakeVerifier==null || candidate.ready(streamSamples))) {
+                        val expectedEpoch=candidateEpoch
+                        val election=if(electWake)HandsFreeWakeElection({NodeNativeSession.read(context)},
+                            {SystemClock.elapsedRealtime()},candidateDeadline,
+                            {current(generation) && electionEpoch.get()==expectedEpoch && !pendingActivation},wakeVerifier!=null) else null
                         verificationStartedAt=SystemClock.elapsedRealtime()
                         pendingVerification=HandsFreePendingWakeVerification(candidate,ring,streamSamples,
                             checkNotNull(verificationExecutor),verificationStartedAt,{SystemClock.elapsedRealtime()},
@@ -1444,28 +1457,33 @@ internal class HandsFreeRuntime(private val context:Context) {
                                 val cpu=if(batteryStudy)Debug.threadCpuTimeNanos() else 0L
                                 val traced=batteryStudy && Build.VERSION.SDK_INT>=29 && android.os.Trace.isEnabled()
                                 if(traced)android.os.Trace.beginSection("AegisWakeVerifier")
-                                try{wakeVerifier.score(window.samples,window.samples.size,window.candidateSample){cancelled() || !current(generation)}}
+                                try{wakeVerifier?.score(window.samples,window.samples.size,window.candidateSample){cancelled() || !current(generation)} ?: 1f}
                                 finally{
                                     if(traced)android.os.Trace.endSection()
                                     if(batteryStudy) {
                                     val end=Debug.threadCpuTimeNanos()
                                     batteryDiagnostics.component("verifier",window.samples.size,SystemClock.elapsedRealtimeNanos()-wall,if(cpu>=0 && end>=cpu)end-cpu else -1L)
                                 }}
-                            },threshold=wakeVerifier.threshold)
+                            },threshold=wakeVerifier?.threshold ?: 1f,election=election,withLookahead=wakeVerifier!=null)
                         wakeCandidate=null
                     }
                     val pending=pendingVerification
                     if(pending!=null) {
                         val outcome=pending.poll(SystemClock.elapsedRealtime())
                         if(outcome.status!=HandsFreePendingWakeVerification.Status.WAITING) {
-                            metrics.timing("wake_verifier_wait",SystemClock.elapsedRealtime()-verificationStartedAt,metrics.identityToken())
+                            metrics.timing(if(electWake)"wake_verification_and_election_wait" else "wake_verifier_wait",SystemClock.elapsedRealtime()-verificationStartedAt,metrics.identityToken())
                             when(outcome.status) {
                                 HandsFreePendingWakeVerification.Status.ACCEPTED -> {
-                                    pending.candidate.verifierScore=outcome.score
+                                    pending.candidate.verifierScore=outcome.score.takeIf{wakeVerifier!=null}
                                     verifiedCandidate=pending.candidate;verifiedPending=pending
                                     verifiedCommandLength=pending.copyCommandTo(command)
                                     event=pending.candidate.decisionSample
-                                    metrics.add("wake_verifier_accepted")
+                                    if(wakeVerifier!=null)metrics.add("wake_verifier_accepted")
+                                    if(electWake)metrics.add("wake_election_granted")
+                                }
+                                HandsFreePendingWakeVerification.Status.SUPPRESSED, HandsFreePendingWakeVerification.Status.COORDINATOR_UNAVAILABLE -> {
+                                    metrics.add(if(outcome.status==HandsFreePendingWakeVerification.Status.SUPPRESSED)"wake_election_suppressed" else "wake_election_unavailable")
+                                    pending.close();pendingVerification=null
                                 }
                                 HandsFreePendingWakeVerification.Status.FAILED ->
                                     throw WakeVerificationUnavailable(IllegalStateException("verifier_failed"))
@@ -1491,10 +1509,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                         if(!current(generation))return null
                         if(continuation && sessionCancelled)return ByteArray(0)
                         val assistantActivation=pendingActivation;pendingActivation=false
+                        if(electWake && !assistantActivation && verifiedPending?.election?.canActivate()!=true) {
+                            verifiedPending?.close();pendingVerification=null
+                            command.fill(0,0,verifiedCommandLength)
+                            continue
+                        }
                         if(!continuation)metrics.add("activations")
                         if(!continuation && !assistantActivation && !diagnostic) {
                             val activatedAt=SystemClock.elapsedRealtime()
-                            continuityActivation=conversationContinuity.activate(currentIdentity(),activatedAt)
+                            continuityActivation=conversationContinuity.activate(verifiedPending?.election?.grantedIdentity() ?: currentIdentity(),activatedAt)
                             conversationId=continuityActivation?.conversationId
                         }
                         val acceptedCandidate=if(assistantActivation)null else verifiedCandidate
@@ -1505,7 +1528,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         if(!continuation) {
                             if(!assistantActivation){sessionCancelled=false;endReason=null;snapshotActivationScreen();transcriptionStatus="not_started"}
                             val token=if(assistantActivation)checkNotNull(sessionId) else UUID.randomUUID().toString()
-                            val contextPcm=verifiedPending?.context() ?: boundary?.context(ring) ?: ShortArray(minOf(ring.size,32000+count-offset)).also{ring.copyRangeTo(it,ring.size-it.size,it.size)}
+                            val contextPcm=verifiedPending?.takeUnless{assistantActivation}?.context() ?: boundary?.context(ring) ?: ShortArray(minOf(ring.size,32000+count-offset)).also{ring.copyRangeTo(it,ring.size-it.size,it.size)}
                             try {
                                 if(assistantActivation)collection.setTriggerContext(activeEvent,contextPcm)
                                 else {
@@ -1518,7 +1541,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     metadata.put("activatedAt",observedAt.minusNanos(inferenceDelay+postSamples*1_000_000_000L/16000).toString())
                                     acceptedCandidate?.let {
                                         metadata.put("instantaneousScore",it.scores.getOrNull(0)).put("decisionScore",it.scores.getOrNull(1))
-                                            .put("verifierScore",it.verifierScore).put("verifierLookaheadSamples",HandsFreeWakeCandidate.LOOKAHEAD_SAMPLES)
+                                            .put("verifierScore",it.verifierScore).put("verifierLookaheadSamples",if(wakeVerifier!=null)HandsFreeWakeCandidate.LOOKAHEAD_SAMPLES else 0)
                                     }
                                     metadata.put("timestampBasis","sample_boundary_mapped_from_capture_read_return")
                                     val id=collection.begin(metadata,contextPcm)

@@ -41,6 +41,18 @@ pub async fn node_hands_free(
     assistant_message_id: Option<String>,
     speech_request_id: Option<String>,
 ) -> Result<Value, HandsFreeError> {
+    #[cfg(windows)]
+    {
+        let _ = (battery_mode, collection_enabled, collection_limit_mi_b, audio_kind, turn_id, assistant_message_id, speech_request_id);
+        return tauri::async_runtime::spawn_blocking(move || {
+            use tauri::Manager;
+            app.state::<crate::windows_hands_free::WindowsHandsFree>()
+                .operate(&operation, enabled, diagnostic, lease_id)
+                .map_err(HandsFreeError::new)
+        }).await.map_err(|_| HandsFreeError::new("native_failure"))?;
+    }
+    #[cfg(not(windows))]
+    {
     let (method, payload) = match operation.as_str() {
         "state" => ("handsFreeState", json!({})),
         "conversationChanges" => ("conversationChanges", json!({})),
@@ -159,6 +171,7 @@ pub async fn node_hands_free(
     {
         let _ = (app, method, payload);
         Err(HandsFreeError::new("unsupported"))
+    }
     }
 }
 

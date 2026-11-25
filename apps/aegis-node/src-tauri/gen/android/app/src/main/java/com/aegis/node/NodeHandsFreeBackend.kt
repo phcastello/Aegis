@@ -589,7 +589,7 @@ class NodeHandsFreeBackend internal constructor(
       Thread(task, "AegisTtsDeadline").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }
     // Shared, bounded idle connection pool; no logging interceptor or response cache.
-    private val transport = OkHttpClient.Builder()
+    internal val transport = OkHttpClient.Builder()
       .connectionPool(ConnectionPool(1,30,TimeUnit.SECONDS))
       .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
 

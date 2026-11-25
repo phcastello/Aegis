@@ -19,16 +19,18 @@ internal class HandsFreePendingWakeVerification(
     private val clock:()->Long,
     verify:(HandsFreeVerificationWindow,()->Boolean)->Float,
     private val timeoutMs:Long=2000L,
-    private val threshold:Float=HandsFreeWakeCandidate.THRESHOLD
+    private val threshold:Float=HandsFreeWakeCandidate.THRESHOLD,
+    val election:HandsFreeWakeElection?=null,
+    withLookahead:Boolean=true
 ):AutoCloseable {
-    enum class Status { WAITING,ACCEPTED,REJECTED,TIMED_OUT,CANCELLED,FAILED,LIMIT_EXCEEDED }
+    enum class Status { WAITING,ACCEPTED,REJECTED,TIMED_OUT,CANCELLED,FAILED,LIMIT_EXCEEDED,SUPPRESSED,COORDINATOR_UNAVAILABLE }
     data class Outcome(val status:Status,val score:Float?=null)
-    private data class Completed(val score:Float,val finishedAtMs:Long)
+    private data class Completed(val score:Float,val finishedAtMs:Long,val ownership:HandsFreeWakeElection.Decision?)
     private val stopped=AtomicBoolean(false)
     // Claims ownership of the worker's PCM: close-before-start or worker-finally,
     // never both concurrently. Future.cancel alone does not prove the worker stopped.
     private val windowClaimed=AtomicBoolean(false)
-    private val window=candidate.verificationWindow(ring,streamSamples)
+    private val window=candidate.verificationWindow(ring,streamSamples,withLookahead)
     private val prefix=run {
         val context=candidate.context(ring,streamSamples)
         try { context.copyOf(minOf(candidate.decisionSample,32000L).toInt()) }
@@ -48,7 +50,8 @@ internal class HandsFreePendingWakeVerification(
                     if(stopped.get())throw InterruptedException("wake_verifier_cancelled")
                     val score=verify(window){stopped.get() || Thread.currentThread().isInterrupted}
                     require(score.isFinite() && score in 0f..1f){"wake_verifier_invalid_score"}
-                    Completed(score,clock())
+                    val ownership=if(score>=threshold && !stopped.get())election?.claim(window,score) else null
+                    Completed(score,clock(),ownership)
                 } finally { window.samples.fill(0) }
             })
         } catch(error:Throwable) {
@@ -80,8 +83,10 @@ internal class HandsFreePendingWakeVerification(
             val status=when {
                 completed.finishedAtMs<startedAtMs -> Status.FAILED
                 completed.finishedAtMs-startedAtMs>=timeoutMs -> Status.TIMED_OUT
-                completed.score>=threshold -> Status.ACCEPTED
-                else -> Status.REJECTED
+                completed.score<threshold -> Status.REJECTED
+                completed.ownership==HandsFreeWakeElection.Decision.SUPPRESSED -> Status.SUPPRESSED
+                election!=null && (completed.ownership!=HandsFreeWakeElection.Decision.GRANTED || !election.canActivate()) -> Status.COORDINATOR_UNAVAILABLE
+                else -> Status.ACCEPTED
             }
             return Outcome(status,completed.score).also { terminal=it }
         }
@@ -111,6 +116,7 @@ internal class HandsFreePendingWakeVerification(
 
     private fun cancelWorker() {
         stopped.set(true)
+        election?.close()
         future.cancel(true)
         // A cancelled FutureTask remains queued by default. Remove it so a slow
         // native call cannot leave expired candidates occupying the one queue slot.
