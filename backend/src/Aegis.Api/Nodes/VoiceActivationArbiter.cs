@@ -32,6 +32,28 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
     {
         public long Opened => opened;
         public Dictionary<Guid, Candidate> Candidates { get; } = new();
+        // A complete, conservative inventory permits a fast decision only after
+        // every possible participant answered. Never infer presence from a socket.
+        public HashSet<Guid>? ExpectedNodes { get; private set; }
+        public bool InventoryUnknown { get; private set; }
+
+        public void ObserveInventory(Guid claimant, IReadOnlyList<Guid>? participants)
+        {
+            if (InventoryUnknown) return;
+            if (participants is null || !participants.Contains(claimant))
+            {
+                InventoryUnknown = true;
+                ExpectedNodes = null;
+                return;
+            }
+            ExpectedNodes ??= new HashSet<Guid>();
+            // Keep the union: an identity disappearing/reappearing during a round
+            // is never used as evidence that it could not have heard the wakeword.
+            ExpectedNodes.UnionWith(participants);
+        }
+
+        public bool AllParticipantsClaimed => !InventoryUnknown && ExpectedNodes is { Count: > 0 } expected
+            && expected.All(Candidates.ContainsKey);
     }
 
     private readonly object gate = new();
@@ -59,7 +81,8 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
         return Task.CompletedTask;
     }
 
-    public async Task<VoiceActivationDecision> ClaimAsync(Guid node, VoiceActivationClaim claim, int priority, CancellationToken ct)
+    public async Task<VoiceActivationDecision> ClaimAsync(Guid node, VoiceActivationClaim claim, int priority, CancellationToken ct,
+        IReadOnlyList<Guid>? participants = null)
     {
         ct.ThrowIfCancellationRequested();
         if (claim.ActivationId == Guid.Empty || claim.SnrDb is { } snr && (!double.IsFinite(snr) || snr is < -60 or > 100)
@@ -85,12 +108,14 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
                     candidate.Decision.SetResult(false);
                 else
                 {
-                    if (current is null)
-                    {
-                        current = new Round(now);
-                        _ = CloseAfterWindowAsync(current);
-                    }
-                    current.Candidates.Add(node, candidate);
+                    var opened = current is null;
+                    var round = current ??= new Round(now);
+                    round.ObserveInventory(node, participants);
+                    round.Candidates.Add(node, candidate);
+                    if (round.AllParticipantsClaimed)
+                        Close(round, now);
+                    else if (opened)
+                        _ = CloseAfterWindowAsync(round);
                 }
             }
             candidate.Waiters++;

@@ -24,8 +24,8 @@ internal class HandsFreePendingWakeVerification(
     withLookahead:Boolean=true
 ):AutoCloseable {
     enum class Status { WAITING,ACCEPTED,REJECTED,TIMED_OUT,CANCELLED,FAILED,LIMIT_EXCEEDED,SUPPRESSED,COORDINATOR_UNAVAILABLE }
-    data class Outcome(val status:Status,val score:Float?=null)
-    private data class Completed(val score:Float,val finishedAtMs:Long,val ownership:HandsFreeWakeElection.Decision?)
+    data class Outcome(val status:Status,val score:Float?=null,val verifiedAtMs:Long?=null,val finishedAtMs:Long?=null)
+    private data class Completed(val score:Float,val verifiedAtMs:Long,val finishedAtMs:Long,val ownership:HandsFreeWakeElection.Decision?)
     private val stopped=AtomicBoolean(false)
     // Claims ownership of the worker's PCM: close-before-start or worker-finally,
     // never both concurrently. Future.cancel alone does not prove the worker stopped.
@@ -50,8 +50,9 @@ internal class HandsFreePendingWakeVerification(
                     if(stopped.get())throw InterruptedException("wake_verifier_cancelled")
                     val score=verify(window){stopped.get() || Thread.currentThread().isInterrupted}
                     require(score.isFinite() && score in 0f..1f){"wake_verifier_invalid_score"}
+                    val verifiedAt=clock()
                     val ownership=if(score>=threshold && !stopped.get())election?.claim(window,score) else null
-                    Completed(score,clock(),ownership)
+                    Completed(score,verifiedAt,clock(),ownership)
                 } finally { window.samples.fill(0) }
             })
         } catch(error:Throwable) {
@@ -81,14 +82,14 @@ internal class HandsFreePendingWakeVerification(
                 return Outcome(Status.FAILED).also { terminal=it }
             }
             val status=when {
-                completed.finishedAtMs<startedAtMs -> Status.FAILED
+                completed.verifiedAtMs<startedAtMs || completed.finishedAtMs<completed.verifiedAtMs -> Status.FAILED
                 completed.finishedAtMs-startedAtMs>=timeoutMs -> Status.TIMED_OUT
                 completed.score<threshold -> Status.REJECTED
                 completed.ownership==HandsFreeWakeElection.Decision.SUPPRESSED -> Status.SUPPRESSED
                 election!=null && (completed.ownership!=HandsFreeWakeElection.Decision.GRANTED || !election.canActivate()) -> Status.COORDINATOR_UNAVAILABLE
                 else -> Status.ACCEPTED
             }
-            return Outcome(status,completed.score).also { terminal=it }
+            return Outcome(status,completed.score,completed.verifiedAtMs,completed.finishedAtMs).also { terminal=it }
         }
         if(nowMs<startedAtMs || nowMs-startedAtMs>=timeoutMs) {
             val outcome=Outcome(if(nowMs<startedAtMs)Status.FAILED else Status.TIMED_OUT)

@@ -56,6 +56,57 @@ public sealed class VoiceActivationTests
     }
 
     [Fact]
+    public async Task ASingleKnownPairedNodeReceivesItsGrantWithoutWaitingForTheWindow()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var activation = Guid.NewGuid();
+        var only = arbiter.ClaimAsync(Phone, new(activation), 0, default, [Phone]);
+        Assert.True(only.IsCompletedSuccessfully);
+        Assert.Equal("granted", (await only).Decision);
+        Assert.Equal("granted", (await arbiter.ClaimAsync(Phone, new(activation), 0, default, [Phone])).Decision);
+        Assert.Equal("suppressed", (await arbiter.ClaimAsync(Desktop, new(Guid.NewGuid()), 0, default, [Phone, Desktop])).Decision);
+    }
+
+    [Fact]
+    public async Task EarlyDecisionWaitsForEveryKnownNodeAndRetainsTheQualityRanking()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        Guid[] participants = [Phone, Desktop];
+        var desktop = arbiter.ClaimAsync(Desktop, new(Guid.NewGuid(), 6), 0, default, participants);
+        Assert.False(desktop.IsCompleted);
+        clock.Advance(TimeSpan.FromMilliseconds(400));
+        var phone = arbiter.ClaimAsync(Phone, new(Guid.NewGuid(), 20), 0, default, participants);
+        // No clock advancement to the 650 ms deadline is needed.
+        Assert.Equal("granted", (await phone.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal("suppressed", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal("suppressed", (await Claim(arbiter, Guid.NewGuid(), snr: 100)).Decision);
+    }
+
+    [Fact]
+    public async Task OfflineOrUncertainInventoryRetainsTheFullElectionWindow()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var pending = arbiter.ClaimAsync(Desktop, new(Guid.NewGuid(), 6), 0, default, [Phone, Desktop]);
+        Assert.False(pending.IsCompleted);
+        // A new snapshot that omits the phone cannot erase its possible claim.
+        var third = Guid.NewGuid();
+        var another = arbiter.ClaimAsync(third, new(Guid.NewGuid(), 10), 0, default, [Desktop, third]);
+        Assert.False(another.IsCompleted);
+        Assert.False(pending.IsCompleted);
+        Settle(clock, arbiter);
+        Assert.Equal("granted", (await another).Decision);
+        Assert.Equal("suppressed", (await pending).Decision);
+        clock.Advance(VoiceActivationArbiter.CatchUpWindow);
+        var unknown = arbiter.ClaimAsync(Phone, new(Guid.NewGuid()), 0, default, null);
+        Assert.False(unknown.IsCompleted);
+        Settle(clock, arbiter);
+        Assert.Equal("granted", (await unknown).Decision);
+    }
+
+    [Fact]
     public async Task StrongerNodeWithMeasuredDetectorSkewRemainsEligibleUntilDeadline()
     {
         var clock = new Clock();

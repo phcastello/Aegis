@@ -33,9 +33,15 @@ class NodeHandsFreePendingWakeVerificationTest {
             seen=window.samples.copyOf();assertEquals(40000,window.candidateSample);.8f
         }).use { pending->
             assertEquals(HandsFreePendingWakeVerification.Status.WAITING,pending.poll(1200).status)
-            assertTrue(pending.append(source.copyOfRange(44800,48000),3200))
+            for(offset in 44800 until 48000 step 640) {
+                assertTrue(pending.append(source.copyOfRange(offset,offset+640),640))
+                assertEquals(HandsFreePendingWakeVerification.Status.WAITING,pending.poll(1200).status)
+            }
             now=1500;executor.run()
-            assertEquals(HandsFreePendingWakeVerification.Status.ACCEPTED,pending.poll(1700).status)
+            val outcome=pending.poll(1540)
+            assertEquals(HandsFreePendingWakeVerification.Status.ACCEPTED,outcome.status)
+            assertEquals(1500L,outcome.verifiedAtMs)
+            assertEquals(1500L,outcome.finishedAtMs)
             assertArrayEquals(source.copyOfRange(320,42880),seen)
             val destination=ShortArray(320000);val size=pending.copyCommandTo(destination)
             assertArrayEquals(source.copyOfRange(40320,48000),destination.copyOf(size))

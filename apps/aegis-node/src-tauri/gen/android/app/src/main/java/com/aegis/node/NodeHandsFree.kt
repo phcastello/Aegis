@@ -738,7 +738,10 @@ internal class HandsFreeRuntime(private val context:Context) {
         collection.finish(id,finalState,reason,transcription)
     }
     private fun closePanel(token:String?,immediate:Boolean=false,failed:Boolean=false){if(token!=null){releaseSessionPower(token);main.post{NodeVoiceInteractionSession.current?.finishIfSession(token,immediate,failed)}}}
-    private fun beep()=activationCue.play()
+    private fun beep():HandsFreeCueCompletion {
+        val identity=metrics.identityToken()
+        return activationCue.play{delay->metrics.timing("activation_cue_enqueue_to_play",delay,identity)}
+    }
 
     private class MicrophoneUnavailable:Exception()
     private class WakeVerificationUnavailable(cause:Throwable):Exception(cause)
@@ -1267,6 +1270,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         var wakeCandidate:HandsFreeWakeCandidate?=null
         var pendingVerification:HandsFreePendingWakeVerification?=null
         var verificationStartedAt=0L
+        var candidateObservedAt=0L
+        var candidateDecisionEstimatedAt=0L
         var candidateDeadline=0L
         var candidateEpoch=0
         val verificationExecutor=if(candidateWorker)java.util.concurrent.ThreadPoolExecutor(
@@ -1324,7 +1329,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(continuation)showSession()
             }
             while(current(generation)) {
-                val count=audio.read(buffer,0,buffer.size,AudioRecord.READ_BLOCKING)
+                // The detector normally reads at 200ms for battery life. A candidate
+                // awaiting lookahead or the coordinator may be recognized earlier at
+                // 40ms cadence (80ms with active external reference), without changing
+                // either the audio or the winner rule. Idle never probes that reference here.
+                val waitingForElection=electWake && !pendingActivation && (wakeCandidate!=null || pendingVerification!=null)
+                val readSize=handsFreePendingWakeReadSamples(buffer.size,waitingForElection,waitingForElection && NodeExternalPlaybackReference.active())
+                val count=audio.read(buffer,0,readSize,AudioRecord.READ_BLOCKING)
                 val readReturnedAtMs=HandsFreeTurnLatency.now()
                 if(!current(generation)){retainCancellationPrefix(count,readReturnedAtMs);return null}
                 val now=SystemClock.elapsedRealtime()
@@ -1439,10 +1450,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(diagnostic && diagnosticCancelled)event=-1L
                 var verifiedCandidate:HandsFreeWakeCandidate?=null
                 var verifiedPending:HandsFreePendingWakeVerification?=null
+                var verifiedOutcome:HandsFreePendingWakeVerification.Outcome?=null
+                var grantObservedAt=0L
                 var verifiedCommandLength=0
                 if(candidateWorker && !continuation && !pendingActivation) {
                     if(event>=0 && wakeCandidate==null && pendingVerification==null) {
                         wakeCandidate=HandsFreeWakeCandidate(event,(event-(detectorSamples-count)).toInt(),MicroWakeWordNative.activationScores(detector))
+                        candidateObservedAt=SystemClock.elapsedRealtime()
+                        // Sample boundary mapped from read return; not a physical wake timestamp.
+                        candidateDecisionEstimatedAt=now-(streamSamples-event).coerceAtLeast(0)/16
                         candidateDeadline=now + HandsFreeWakeElection.MAX_AGE_MS - (streamSamples-event).coerceAtLeast(0)/16
                         candidateEpoch=electionEpoch.get()
                         if(wakeVerifier!=null)metrics.add("wake_verifier_candidates")
@@ -1476,9 +1492,11 @@ internal class HandsFreeRuntime(private val context:Context) {
                     if(pending!=null) {
                         val outcome=pending.poll(SystemClock.elapsedRealtime())
                         if(outcome.status!=HandsFreePendingWakeVerification.Status.WAITING) {
-                            metrics.timing(if(electWake)"wake_verification_and_election_wait" else "wake_verifier_wait",SystemClock.elapsedRealtime()-verificationStartedAt,metrics.identityToken())
+                            val terminalObservedAt=SystemClock.elapsedRealtime()
+                            metrics.timing(if(electWake)"wake_verification_and_election_wait" else "wake_verifier_wait",terminalObservedAt-verificationStartedAt,metrics.identityToken())
                             when(outcome.status) {
                                 HandsFreePendingWakeVerification.Status.ACCEPTED -> {
+                                    grantObservedAt=terminalObservedAt;verifiedOutcome=outcome
                                     pending.candidate.verifierScore=outcome.score.takeIf{wakeVerifier!=null}
                                     verifiedCandidate=pending.candidate;verifiedPending=pending
                                     verifiedCommandLength=pending.copyCommandTo(command)
@@ -1595,7 +1613,24 @@ internal class HandsFreeRuntime(private val context:Context) {
                             return ByteArray(0)
                         }
                         metrics.add("sessions_started");setState("capturing","Escutando pedido…");showSession()
-                        if(!continuation)cueCompletion=beep()
+                        if(!continuation) {
+                            val cueRequestedAt=SystemClock.elapsedRealtime()
+                            cueCompletion=beep()
+                            if(electWake && !assistantActivation)verifiedOutcome?.let { outcome ->
+                                val identity=metrics.identityToken()
+                                metrics.timing("wake_primary_read_observation_estimate",candidateObservedAt-candidateDecisionEstimatedAt,identity)
+                                metrics.timing("wake_lookahead_wait",verificationStartedAt-candidateObservedAt,identity)
+                                outcome.verifiedAtMs?.let{verifiedAt->
+                                    metrics.timing("wake_local_verification_wait",verifiedAt-verificationStartedAt,identity)
+                                    outcome.finishedAtMs?.let{finishedAt->
+                                        metrics.timing("wake_coordinator_wait",finishedAt-verifiedAt,identity)
+                                        metrics.timing("wake_grant_observation_wait",grantObservedAt-finishedAt,identity)
+                                    }
+                                }
+                                metrics.timing("wake_grant_observed_to_cue_request",cueRequestedAt-grantObservedAt,identity)
+                                metrics.timing("wake_decision_to_cue_request_estimate",cueRequestedAt-candidateDecisionEstimatedAt,identity)
+                            }
+                        }
                         val activeBackend=backend?:newBackend(generation,session).also{backend=it}
                         realtime=try{activeBackend.beginCapture(activeTrace){partial->
                             // The capture closure and trace gate delayed callbacks even in a continuation

@@ -2,6 +2,13 @@ package com.aegis.node
 
 internal data class HandsFreeVerificationWindow(val samples:ShortArray,val candidateSample:Int)
 
+/** Keep the economical idle microphone cadence. Once a normal automatic
+ * candidate exists, poll the verifier/coordinator and its exact lookahead at
+ * 40ms cadence (80ms if the media reference may wait up to 45ms per read),
+ * in complete 20ms media-filter frames. No PCM is discarded. */
+internal fun handsFreePendingWakeReadSamples(normalReadSamples:Int,waitingForElectedCandidate:Boolean,externalReferenceActive:Boolean=false):Int =
+    if(waitingForElectedCandidate)minOf(normalReadSamples,if(externalReferenceActive)1280 else 640) else normalReadSamples
+
 /** Retains the original wake decision while a bounded lookahead is captured on the same stream. */
 internal class HandsFreeWakeCandidate(val decisionSample:Long,val blockOffset:Int,val scores:FloatArray) {
     init { require(decisionSample>=0 && blockOffset>=0) }

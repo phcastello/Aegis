@@ -407,19 +407,57 @@ fn cycle(
     }
     let mut backend = Backend::open(&shared.app, http, cancel)?;
     let session = Uuid::new_v4();
-    if !backend.claim(session, detected, confidence, history.snr())? {
-        return Ok(());
+    // The read-only manager request is asynchronous. Start it during the
+    // election, not after it; only the winning node may inspect/pause media.
+    let lookup_started = Instant::now();
+    let lookup = MediaManager::RequestAsync().ok();
+    let grant = backend.claim(session, detected, confidence, history.snr());
+    if !matches!(grant, Ok(true)) || cancel.is_cancelled() {
+        if let Some(operation) = lookup {
+            let _ = operation.Cancel();
+        }
+        grant?;
+        return if cancel.is_cancelled() {
+            Err("cancelled")
+        } else {
+            Ok(())
+        };
     }
+    let granted_at = Instant::now();
     drop(detector);
+    // A completed lookup returns immediately, even when the remaining timeout
+    // is zero. An unfinished lookup must not add another full wait to the cue.
+    let manager = tauri::async_runtime::block_on(async {
+        let lookup = lookup?;
+        let budget = media_lookup_remaining(lookup_started.elapsed());
+        match tokio::time::timeout(budget, lookup.clone()).await {
+            Ok(Ok(manager)) => Some(manager),
+            Err(_) => {
+                let _ = lookup.Cancel();
+                None
+            }
+            _ => None,
+        }
+    });
     if cancel.is_cancelled() {
         return Err("cancelled");
     }
-    let _paused = PausedMedia::new();
+    let _paused = PausedMedia::new(manager);
     if cancel.is_cancelled() {
         return Err("cancelled");
     }
     let mut generation = shared.publish("capturing");
+    let cue_started = Instant::now();
     windows_voice_audio::cue(cancel)?;
+    // Local diagnostics only: monotonic durations, no recording, words, device
+    // identity or backend credentials. Playback time includes driver startup.
+    eprintln!(
+        "AegisWindowsVoiceCue claimMs={} preparationMs={} playbackMs={} detectionToCueEndMs={}",
+        granted_at.duration_since(detected).as_millis(),
+        cue_started.duration_since(granted_at).as_millis(),
+        cue_started.elapsed().as_millis(),
+        detected.elapsed().as_millis()
+    );
     let scope = backend.scope_key();
     let mut destination = shared
         .state
@@ -491,24 +529,25 @@ fn cycle(
     }
 }
 
+const MEDIA_OPERATION_BUDGET: Duration = Duration::from_millis(160);
+
+fn media_lookup_remaining(elapsed: Duration) -> Duration {
+    MEDIA_OPERATION_BUDGET.saturating_sub(elapsed)
+}
+
 /// Only resume the exact session the listener successfully paused.
 struct PausedMedia(Option<MediaSession>);
 impl PausedMedia {
-    fn new() -> Self {
+    fn new(manager: Option<MediaManager>) -> Self {
         // A media player can stall a remote WinRT operation. Keep this best-effort
         // interaction within the local capture queue and the audible cue budget.
         let paused = tauri::async_runtime::block_on(async {
-            let lookup = MediaManager::RequestAsync().ok()?;
-            let manager = tokio::time::timeout(Duration::from_millis(160), lookup)
-                .await
-                .ok()?
-                .ok()?;
-            let session = manager.GetCurrentSession().ok()?;
+            let session = manager?.GetCurrentSession().ok()?;
             if session.GetPlaybackInfo().ok()?.PlaybackStatus().ok()? != Playback::Playing {
                 return None;
             }
             let operation = session.TryPauseAsync().ok()?;
-            match tokio::time::timeout(Duration::from_millis(160), operation.clone()).await {
+            match tokio::time::timeout(MEDIA_OPERATION_BUDGET, operation.clone()).await {
                 Ok(Ok(true)) => Some(session),
                 Err(_) => {
                     let _ = operation.Cancel();
@@ -538,6 +577,34 @@ impl Drop for PausedMedia {
 #[cfg(test)]
 mod continuity_tests {
     use super::*;
+    #[test]
+    fn media_lookup_is_charged_to_the_election_not_the_cue() {
+        assert_eq!(
+            media_lookup_remaining(Duration::ZERO),
+            MEDIA_OPERATION_BUDGET
+        );
+        assert_eq!(
+            media_lookup_remaining(Duration::from_millis(80)),
+            Duration::from_millis(80)
+        );
+        assert_eq!(
+            media_lookup_remaining(Duration::from_millis(160)),
+            Duration::ZERO
+        );
+        assert_eq!(
+            media_lookup_remaining(Duration::from_millis(650)),
+            Duration::ZERO
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn zero_remaining_lookup_budget_still_accepts_a_ready_manager() {
+        // Tokio's timeout polls the lookup first. A completed RequestAsync
+        // can therefore be consumed after the election even at zero budget.
+        let ready = tokio::time::timeout(Duration::ZERO, std::future::ready(42)).await;
+        assert_eq!(ready.unwrap(), 42);
+        let stalled = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>()).await;
+        assert!(stalled.is_err());
+    }
     #[test]
     fn recent_destination_uses_detection_time_and_identity() {
         let completed = Instant::now();

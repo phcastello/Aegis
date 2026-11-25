@@ -71,6 +71,8 @@ public sealed class NodeApiTests
         const string path = "/api/nodes/me/voice-activations/claim";
         var desktop = await Pair(registry);
         var phone = await Pair(registry);
+        // No live socket is required for a potential listener to participate.
+        Assert.Equal(new[] { desktop.Node.Id, phone.Node.Id }.Order(), (await registry.ListVoiceActivationParticipantsAsync())!.Order());
         var pcClaim = new VoiceActivationClaim(Guid.NewGuid(), 7, 0.98);
         var phoneClaim = new VoiceActivationClaim(Guid.NewGuid(), 22, 0.83);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, pcClaim)).StatusCode);
@@ -94,6 +96,7 @@ public sealed class NodeApiTests
         Assert.Equal(new(phoneClaim.ActivationId, "granted"), await replies[1].Content.ReadFromJsonAsync<VoiceActivationDecision>());
         await registry.SetEnabledAsync(null, phone.Node.Id, false);
         Assert.Equal(HttpStatusCode.Forbidden, (await phoneHttp.PostAsJsonAsync(path, phoneClaim)).StatusCode);
+        Assert.Equal(new[] { desktop.Node.Id }, await registry.ListVoiceActivationParticipantsAsync());
     }
 
     [Fact] public async Task AnonymousPairingIsRateLimitedAndDoesNotTrustForwardedHeader()

@@ -32,6 +32,10 @@ public interface INodeRegistry
     Task<IReadOnlyList<NodeView>> ListAsync(Guid actor, CancellationToken ct = default);
     // Backend-only inventory for scheduled delivery; never exposed as an unauthenticated API.
     Task<IReadOnlyList<NodeView>> ListForDeliveryAsync(CancellationToken ct = default);
+    // Conservative inventory: every enabled paired identity, even offline or without a live transport.
+    // null means the implementation cannot provide a complete inventory; election keeps the full window.
+    Task<IReadOnlyList<Guid>?> ListVoiceActivationParticipantsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Guid>?>(null);
     Task<NodeView> MeAsync(Guid actor, CancellationToken ct = default);
     Task<NodeView> RenameAsync(Guid actor, Guid target, string name, CancellationToken ct = default);
     Task<NodeView> SetEnabledAsync(Guid? actor, Guid target, bool enabled, CancellationToken ct = default);

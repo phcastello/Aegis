@@ -28,11 +28,13 @@ internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
         .apply{allowCoreThreadTimeOut(true)}
     @Volatile private var active:AudioTrack?=null
     @Volatile private var completion:CountDownLatch?=null
-    fun play():HandsFreeCueCompletion {
+    fun play(onStarted:(Long)->Unit={}):HandsFreeCueCompletion {
         val token=generation.incrementAndGet()
         val ready=HandsFreeCueCompletion()
+        val requestedAt=System.nanoTime()
         executor.execute {
             var player:AudioTrack?=null
+            var startedDelay:Long?=null
             try {
                 if(token!=generation.get())return@execute
                 val pcm=HandsFreeCueSignal.samples
@@ -57,6 +59,8 @@ internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
                 // A cancellation cannot stop the track and then race with a late play().
                 val started=synchronized(lock){if(token!=generation.get())false else {track.play();true}}
                 if(!started)return@execute
+                // This is the local AudioTrack start call, not a measurement of acoustic output.
+                startedDelay=(System.nanoTime()-requestedAt)/1_000_000L
                 val deadline=System.nanoTime()+500_000_000L
                 var finished=false
                 while(token==generation.get() && System.nanoTime()<deadline) {
@@ -78,6 +82,7 @@ internal class HandsFreeActivationCue(private val failure:()->Unit={}) {
                 synchronized(lock){completion=null;active=null}
                 try{player?.stop()}catch(_:Exception){}
                 try{player?.release()}catch(_:Exception){}
+                startedDelay?.let{try{onStarted(it)}catch(_:RuntimeException){}}
             }
         }
         return ready
