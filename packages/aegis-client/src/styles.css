@@ -1247,6 +1247,8 @@ button:disabled {
 }
 
 .recording-composer {
+  /* Keep the grid item within the composer even before the waveform's ResizeObserver catches up. */
+  min-width: 0;
   align-items: center;
   min-height: 90px;
 }

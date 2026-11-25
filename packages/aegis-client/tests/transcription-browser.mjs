@@ -142,7 +142,9 @@ try {
         assert.equal(await page.locator('meter').count(), 0, 'no diagnostic meter in composer');
         const controls = await Promise.all(['Descartar gravação', 'Parar e transcrever para revisão', 'Parar, transcrever e enviar'].map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
         assert.ok(controls.every(Boolean)); assert.ok(controls[0].x < controls[1].x && controls[1].x < controls[2].x, 'cancel, microphone and send ordered horizontally');
-        for (const width of [320, 390, 720, 1100]) {
+        // Rapid shrink/grow across the drawer breakpoint must fit even while the
+        // waveform still has its pre-resize bar count, not only after a render settles.
+        for (const width of [320, 390, 720, 1100, 320, 1100, 320, 1100]) {
           await page.setViewportSize({ width, height: 900 });
           const boxes = await Promise.all(['Descartar gravação', 'Parar e transcrever para revisão', 'Parar, transcrever e enviar'].map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
           assert.ok(boxes.every(box => box && box.x >= 0 && box.x + box.width <= width), `recording controls fit ${width}px`);
