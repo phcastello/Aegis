@@ -8,7 +8,6 @@ const [major, minor, patch] = appVersion.split('-')[0].split('.').map(Number);
 const updateVersion = appVersion.includes('-') ? `${major}.${minor}.${patch}` : `${major}.${minor}.${patch + 1}`;
 assert.notEqual(updateVersion, appVersion);
 assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, appVersion);
-assert.equal(JSON.parse(readFileSync(new URL('../../../frontend/aegis-pwa/package.json', import.meta.url), 'utf8')).version, appVersion);
 const fixture = { id: 'c1', title: 'Conversa de teste', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 2, messages: [{ id: 'm0', conversationId: 'c1', role: 'assistant', content: 'Histórico preservado.', createdAt: new Date().toISOString() }] };
 let cancellations = 0, feedback = 0, deletions = 0, renameFailures = 0;
 let proactiveMessages = [], proactiveRead = 0, conversationDelay = 0, notificationConversationLoads = 0;
@@ -19,11 +18,7 @@ const server = http.createServer(async (req, res) => {
  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,PATCH,OPTIONS');
  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
  const url = new URL(req.url, 'http://localhost');
- if (!url.pathname.startsWith('/api/')) {
-   const response = await fetch('http://127.0.0.1:18092' + req.url);
-   const headers = Object.fromEntries(response.headers); delete headers['content-encoding']; delete headers['content-length']; delete headers['transfer-encoding'];
-   res.writeHead(response.status, headers); res.end(Buffer.from(await response.arrayBuffer())); return;
- }
+ if (!url.pathname.startsWith('/api/')) return json(res, { error: 'Unknown fixture path' }, 404);
  let raw = ''; for await (const part of req) raw += part;
  const body = raw ? JSON.parse(raw) : {};
  const path = url.pathname;
@@ -67,11 +62,12 @@ const server = http.createServer(async (req, res) => {
  json(res, { error: 'Unknown fixture path' }, 404);
 });
 // The test uses a private in-memory API fixture; it never writes to the real Aegis backend.
-for (const url of ['http://127.0.0.1:18092', 'http://127.0.0.1:1420']) {
+{
+  const url = 'http://127.0.0.1:1420';
   const deadline = Date.now() + 15000;
   while (true) {
     try { const response = await fetch(url); if (response.ok) break; } catch {}
-    if (Date.now() >= deadline) throw new Error('Start the web preview and native Vite servers before testing: ' + url);
+    if (Date.now() >= deadline) throw new Error('Start the native Vite server before testing: ' + url);
     await new Promise(resolve => setTimeout(resolve, 150));
   }
 }
@@ -80,10 +76,11 @@ if(process.env.PARITY_SCREENSHOT_DIR)mkdirSync(process.env.PARITY_SCREENSHOT_DIR
 let activePage=null,activeHost='unknown';
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 try {
- for (const host of ['web', 'native']) {
+ {
+   const host = 'native'; // Exercise the real App via simulated Android IPC at mobile and desktop widths.
    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
    await context.addInitScript(() => localStorage.setItem('aegis.voice.autoSpeak', 'false')); // Audio/device acceptance is separate.
-   if (host === 'native') await context.addInitScript((runtimeVersion) => {
+   await context.addInitScript((runtimeVersion) => {
      window.openedUrls = []; window.nativeCalls = []; window.reminderPayloads=[]; window.placePayloads=[];
      const reminders=[],series=[],places=[],geofences=[];
      window.seedPausedReminder=()=>reminders.push({reminderId:crypto.randomUUID(),text:'Ocorrência temporal pausada',dueAt:'2026-10-20T11:00:00Z',timeZoneId:'America/Sao_Paulo',status:'Paused',seriesId:null,revision:2,generation:1,deliveryPolicy:'allEligible'});
@@ -152,7 +149,7 @@ try {
    const page = await context.newPage(); activePage=page;activeHost=host;const errors = [];
    page.on('pageerror', e => { errors.push(e.message); console.log('PAGEERROR', host, e.message); });
    page.on('console', m => { if (m.type() === 'error') console.log('CONSOLEERROR', host, m.text()); });
-   await page.goto(host === 'web' ? 'http://127.0.0.1:18093' : 'http://127.0.0.1:1420');
+   await page.goto('http://127.0.0.1:1420');
    await page.getByLabel('Abrir histórico').click();
    await page.locator('#conversation-sidebar').getByText(`v${appVersion}`, { exact: true }).waitFor();
    await page.getByRole('button', { name: 'Conversa de teste', exact: true }).click();
@@ -208,14 +205,14 @@ try {
    await page.getByLabel('Marcar resposta como ruim').last().click();
    await page.getByRole('button', { name: 'Salvar feedback' }).click();
    await page.getByRole('dialog', { name: 'Dar um bonk nessa resposta' }).waitFor({ state: 'hidden' });
-   assert.equal(feedback, host === 'web' ? 2 : 4);
+   assert.equal(feedback, 2);
    await page.locator('textarea').fill('falha de lembrete');
    await page.getByLabel('Enviar mensagem').click();
    await page.getByText('Servidor de lembretes temporariamente indisponível.', { exact: true }).waitFor();
    assert.equal(await page.getByRole('button', { name: /Ativar notificações|Permitir notificações/ }).count(), 0,
      'A reminder tool failure preserves its cause and never offers browser push activation');
    assert.equal(await page.locator('.notification-control').count(), 0);
-   if (host === 'native') {
+   {
      await page.getByRole('link', { name: 'Link', exact: true }).click();
      await page.getByRole('link', { name: 'Conectar Google' }).click();
      await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // Return from the external OAuth browser.
@@ -535,7 +532,7 @@ try {
    await page.waitForFunction(()=>!document.querySelector('[aria-label="Mensagem da Aegis não lida"]'));
    assert.equal(proactiveRead,2);
 
-   if(host==='native') {
+   {
      await page.reload();await page.getByText(proactiveMessages[0].content,{exact:true}).waitFor();
      await page.evaluate(()=>localStorage.setItem('fixture.processSession','new-native-process'));await page.reload();
      await page.getByText('Digite ou fale uma mensagem.',{exact:true}).waitFor();
@@ -563,7 +560,7 @@ try {
    assert.equal(await page.locator('.global-navigation-floating').count(),0);
    await page.getByRole('button',{name:'Abrir histórico',exact:true}).click();
    if (process.env.PARITY_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.PARITY_SCREENSHOT_DIR}/${host}-parity.png` });
-   if(host==='native') {
+   {
      const trigger=page.getByRole('button',{name:'Configurações da Aegis',exact:true});await trigger.click();const settings=page.getByRole('dialog',{name:'Configurações',exact:true});await settings.waitFor();
      if(process.env.PARITY_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/native-settings-desktop.png`});
      await page.keyboard.press('Shift+Tab');assert.equal(await page.evaluate(()=>Boolean(document.activeElement.closest('dialog'))),true,'Modal focus must remain inside settings');
@@ -580,6 +577,6 @@ try {
    console.log(`${host}: UI, streaming before done, cancel, history, rename, Markdown, feedback, memory, mobile/resize PASS (fixture; native IPC mocked)`);
    await context.close(); fixture.title = 'Conversa de teste'; deletions = 0; renameFailures = 0; proactiveMessages = []; proactiveRead = 0;
  }
- assert.equal(feedback, 4); assert.equal(cancellations, 2);
+ assert.equal(feedback, 2); assert.equal(cancellations, 1);
 } catch(error) { if(process.env.PARITY_SCREENSHOT_DIR&&activePage&&!activePage.isClosed())await activePage.screenshot({path:`${process.env.PARITY_SCREENSHOT_DIR}/${activeHost}-failure.png`}).catch(()=>{});throw error;
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

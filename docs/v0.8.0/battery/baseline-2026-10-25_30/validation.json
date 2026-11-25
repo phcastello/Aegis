@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "validated_on": "2026-10-31",
+  "timezone": "America/Sao_Paulo",
+  "transport": {
+    "filename": "aegis-battery-baseline-2026-10-25_30.zip",
+    "sha256": "c95c6a3bd048e5bc48f5262e2d82b82d7a802bd9b6fedde4550f90bcc3a8a6de",
+    "source": "pacote fornecido pelo proprietário na raiz do checkout original"
+  },
+  "archive_validation": {
+    "crc": "passed",
+    "paths": "relative; one expected root; no traversal, backslashes, duplicates or symlinks",
+    "limits": "each entry <5 MiB; total <20 MiB",
+    "image_count": 6,
+    "image_bytes_and_sha256": "all 6 matched supplied manifest"
+  },
+  "private_storage": {
+    "status": "preserved",
+    "relative_to_private_battery_root": "aegis-battery-baseline-2026-10-25_30/",
+    "contents": "original archive plus every archive entry, byte for byte",
+    "directory_mode": "0700",
+    "file_mode": "0600"
+  },
+  "versioned_files": {
+    "baseline.md": "05ae829d22d637446745191c5fbe0d096f3ca46c936665dae5aaad54eec0a169",
+    "baseline.csv": "1195e9a654b30173041d070c1d090698aef7de055cf8bf36ff092dae71c0b1b1",
+    "baseline.json": "779ed713c7d3748662f523a12b2b49f5b046d4f08ecf653d00c0513789e81117",
+    "manifest.json": "78f87461f2b9b15f3ca17faec61fae84c232a30dffe82f8bb10313351fa37db0"
+  },
+  "numeric_validation": {
+    "csv_rows": 6,
+    "exact_values": "matched owner table",
+    "derived_summary": "recomputed; matched",
+    "total_displayed_minutes": 7809,
+    "secondary_sunday_tuesday_usage_mean_percent": 77.33333333333333
+  }
+}

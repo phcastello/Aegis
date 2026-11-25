@@ -7,16 +7,10 @@ const source = await readFile(new URL('../src/services/emailConnectionFeedback.t
 const compiled = typescript.transpileModule(source, {
   compilerOptions: { module: typescript.ModuleKind.ESNext, target: typescript.ScriptTarget.ES2022 }
 }).outputText;
-const { emailConnectionFailureMessage, emailConnectionSuccessMessage } =
+const { emailConnectionSuccessMessage } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
 test('successful OAuth displays the confirmed account when available', () => {
   assert.equal(emailConnectionSuccessMessage('name@gmail.com'), 'Conta Google conectada como name@gmail.com.');
   assert.equal(emailConnectionSuccessMessage(null), 'Conta Google conectada.');
-});
-
-test('OAuth errors are useful and never surface raw provider text', () => {
-  assert.match(emailConnectionFailureMessage('authorization_cancelled'), /cancelada/);
-  assert.match(emailConnectionFailureMessage('connection_unconfirmed'), /não confirmou/);
-  assert.equal(emailConnectionFailureMessage('stack trace secret'), 'Falha ao conectar a conta Google.');
 });

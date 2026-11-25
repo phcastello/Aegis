@@ -1,0 +1,226 @@
+{
+  "schema": 1,
+  "authorization": "Owner explicitly authorized Strong epoch2 for daily Android use; no acoustic reselection in this integration round.",
+  "branch": "feat/v0.8.0-wakeword-strong-production",
+  "baseCommit": "cd35c3f",
+  "implementationCommits": [
+    "5aea2a4",
+    "9f9a294"
+  ],
+  "publication": {
+    "created_at": "2026-11-05T21:34:46.160639+00:00",
+    "result": "PASS",
+    "version": "0.8.0-unstable.13",
+    "versionCode": 8000013,
+    "sourceCommit": "9f9a2949271f5e785eb5c0882cc6bde6a94c9196",
+    "run": "https://github.com/phcastello/Aegis/actions/runs/42112457332",
+    "apk": "/home/phc/.cache/aegis-wakeword-strong-production/official-0.8.0-unstable.13/Aegis-Android-arm64.apk",
+    "apk_url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.13/Aegis-Android-arm64.apk",
+    "apk_sha256": "1669f6cc9950625f31df69af765db4d7c543c95c55792dddbc261881c07d2cfe",
+    "apk_bytes": 27852221,
+    "official_certificate_sha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "signature_verified": true,
+    "actual_packaged_manifest_verified": true,
+    "archive_guard_verified": true,
+    "zipalign_16kb": true,
+    "abis": [
+      "arm64-v8a"
+    ],
+    "private_model_or_audio_or_keystore": "absent",
+    "authorized_model_sha_and_version_literals_in_dex": true,
+    "release_asset_manifest_equals_feed": true,
+    "public_feed_matches_api": true,
+    "tag_source_verified": true,
+    "limits": "Official workflow succeeded. Firebase and generated BuildConfig gates are evidence of that workflow; not rerun locally with fabricated source or provider configuration. No install, model import or physical activation.",
+    "script_sha256": "061ac3d80103300d6b52f72940274553b5f17a6a46bdf6e2d9cb15d9e0300c53"
+  },
+  "models": {
+    "strong": {
+      "file": "aegis-strong-epoch02.int8.tflite",
+      "sha256": "1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e",
+      "bytes": 39552,
+      "source": "/home/phc/.cache/aegis-wakeword-tradeoff/frozen-v1/strong/aegis.int8.tflite"
+    },
+    "baseline": {
+      "file": "aegis-baseline-rollback.int8.tflite",
+      "sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+      "bytes": 39552,
+      "source": "/home/phc/.cache/aegis-wakeword-tradeoff/frozen-v1/baseline/aegis.int8.tflite"
+    }
+  },
+  "detectorConfig": {
+    "threshold": 0.5,
+    "average_window": 5,
+    "release_below": 0.3,
+    "refractory_samples": 16000,
+    "architecture": "microWakeWord MixConv",
+    "streaming": true
+  },
+  "localValidation": {
+    "sourceCommit": "9f9a2949271f5e785eb5c0882cc6bde6a94c9196",
+    "kotlin": {
+      "suites": [
+        {
+          "name": "com.aegis.node.NodeHandsFreeActivationCollectionTest",
+          "tests": "13",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeAudioTest",
+          "tests": "23",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeBackendTest",
+          "tests": "32",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeContinuityTest",
+          "tests": "16",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeManualLeaseTest",
+          "tests": "4",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeMetricsTest",
+          "tests": "19",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeModelTest",
+          "tests": "8",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePanelTest",
+          "tests": "10",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePcmStreamTest",
+          "tests": "10",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreePresentationTest",
+          "tests": "4",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "com.aegis.node.NodeHandsFreeRealtimeTest",
+          "tests": "7",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ],
+      "tests": 146,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "node": {
+      "tests": 177,
+      "typecheck": "pass",
+      "vite_build": "pass",
+      "chromium_settings": "pass"
+    },
+    "contracts": {
+      "hands_free_ipc_r8_panel": 15,
+      "status": "pass"
+    },
+    "nativeStrongLoad": {
+      "native_create": true,
+      "native_reset": true,
+      "native_destroy": true,
+      "model_sha256": "1e7c686420f65d8da892f02c71d945f03a8dd528a1005de8c9c8482dce52ad2e",
+      "library_sha256": "e97e93581919b8542d5c05402af38642e06268bde26bc52f5169885cd0fd6e59",
+      "contract": {
+        "bytes": 39552,
+        "input_shape": [
+          1,
+          3,
+          40
+        ],
+        "input_type": "int8",
+        "input_quantization": [
+          0.10196078568696976,
+          -128
+        ],
+        "output_shape": [
+          1,
+          1
+        ],
+        "output_type": "uint8",
+        "output_quantization": [
+          0.00390625,
+          0
+        ],
+        "float_tensors": false
+      },
+      "scope": "Load and reset only in preserved unmodified Linux native kernel; no audio or acoustic evaluation; ARM64 build/pysical activation pending"
+    },
+    "physicalAndroid": {
+      "adb_devices": 0,
+      "installation": "pending owner update",
+      "StrongImportAndActivation": "not verified"
+    },
+    "acoustic_experiments": "none; owner-selected immutable weights"
+  },
+  "services": {
+    "publisherComponents": [
+      "native"
+    ],
+    "pendingMigrations": [],
+    "allPreviouslyRunningContainerIdentitiesImagesAndStartedAtUnchanged": true,
+    "backendDeployedOrRestarted": false,
+    "pwaDeployedOrRestarted": false,
+    "databaseDeployedOrRestarted": false,
+    "ttsChangedOrDeployed": false
+  },
+  "physicalAndroid": {
+    "connectedAdbDevices": 0,
+    "apkInstallation": "not verified; owner action pending",
+    "strongModelImport": "pending",
+    "newActivationStrongAudit": "pending; do not claim active before verification"
+  },
+  "privateArtifacts": {
+    "root": "/home/phc/.cache/aegis-wakeword-strong-production",
+    "transfer": "/home/phc/.cache/aegis-wakeword-strong-production/transfer",
+    "strongFile": "/home/phc/.cache/aegis-wakeword-strong-production/transfer/aegis-strong-epoch02.int8.tflite",
+    "baselineRollbackFile": "/home/phc/.cache/aegis-wakeword-strong-production/transfer/aegis-baseline-rollback.int8.tflite"
+  },
+  "rollback": [
+    "Disable hands-free",
+    "Import aegis-baseline-rollback.int8.tflite",
+    "Confirm Baseline and real SHA",
+    "Enable hands-free; confirm a new baseline-labelled activation"
+  ],
+  "dataPreservation": "Existing pairing, credentials, conversations, preferences, collection, labels, event metadata and attributed metric periods retained. No uninstall or data clear.",
+  "stableRelease": false,
+  "acousticExperiments": false
+}

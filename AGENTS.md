@@ -9,6 +9,14 @@ previsibilidade e baixo custo operacional orientam as decisões.
 **Maximizar a utilidade com o menor trabalho necessário, tornando a Aegis cada vez
 mais facilitadora.** Prefira soluções simples, eficientes e incrementais.
 
+## Pesquisa antes de implementar uma funcionalidade
+
+- Estude como empresas ou projetos reconhecidos resolvem o mesmo problema em uso real. Priorize fontes primárias e aproveite a pesquisa existente quando ela cobrir a decisão atual.
+- Registre na documentação da funcionalidade as referências, as condições de uso e o motivo da abordagem escolhida. Valide na Aegis o comportamento que motivou a escolha.
+- Prefira uma solução que sirva aos dispositivos e cenários previstos na etapa da versão. Quando ela depender de uma capacidade específica, detecte sua disponibilidade, avalie uma alternativa para os demais dispositivos e documente os limites de suporte.
+
+Veja a [filosofia de desenvolvimento](README.md#filosofia-de-desenvolvimento).
+
 ## Implementação
 
 - Prefira a menor solução correta. Leia o código, os contratos e a documentação
@@ -80,6 +88,12 @@ npm run test:rust --prefix apps/aegis-node
 npm run test:release --prefix apps/aegis-node
 dotnet test backend/Aegis.sln
 ```
+
+O diretório e serviço `aegis-pwa` conservam o nome histórico por compatibilidade
+operacional; abrigam o gateway estático de downloads, retorno OAuth, proxy da API
+e a transição do antigo service worker, não um terceiro cliente de chat. Para
+alterações nessa transição, exercite também os testes de página e migração do
+worker descritos em [desenvolvimento e testes](docs/testes.md).
 
 Consulte a documentação do componente para os testes específicos e seus requisitos.
 Se uma verificação não puder ser executada no ambiente disponível, informe a

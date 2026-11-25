@@ -1,7 +1,7 @@
 # Distribuição, atualizações e estágios de CI
 
 Para disponibilizar desenvolvimento para teste, use a operação única
-[publish-dev](publish-dev.md). Ela coordena API/PWA privadas e, quando o diff afeta
+[publish-dev](publish-dev.md). Ela coordena API e gateway web privados e, quando o diff afeta
 aplicativos, reserva, build, assinatura e recomendação em uma execução autônoma,
 sem aprovação interativa. Os comandos separados descritos abaixo permanecem para
 homologação focada, estáveis e manutenção explícita.
@@ -123,8 +123,15 @@ publicação, `latest.json`. Cada reserva é adicionada ao ledger com versão,
 código, SHA, run, controle confiável e procedência. Não há serviço ou banco novo.
 O piso inclui releases e runs admitidos anteriores, inclusive o primeiro run.
 
-A reserva é gravada **antes** da compilação. Uma falha ou cancelamento não
-devolve a versão nem o código. Nova tentativa de build usa nova distribuição;
+A reserva é gravada **antes** da compilação. Na distribuição estável, a fonte
+já integrada à `main` e a elegibilidade da versão são verificadas em um job
+somente de leitura; a matriz completa de aceite testa esse SHA exato antes
+de reservar. Se o aceite falhar ou for cancelado, nenhuma versão/código é
+consumido: um novo run pode verificar novamente a mesma versão ainda livre.
+O plano confiável revalida fonte e ledger após o aceite, e só então reserva a
+estável antes de compilar. Previews e recuperações continuam a reservar sem
+esse aceite completo. Uma falha após a reserva não devolve a versão nem o
+código. Nova tentativa de build usa nova distribuição;
 não reexecutar assinatura com o mesmo nome para produzir bytes diferentes.
 A promoção pode ser repetida com os mesmos artefatos assinados.
 
@@ -183,7 +190,7 @@ assinatura Windows. Assinatura do updater Windows não é Authenticode nem remov
 SmartScreen.
 
 Confira ledger, releases e runs admitidos antes de escolher uma distribuição.
-Uma falha consome a reserva; nova compilação exige versão/código novos. Nunca
+Uma falha após a reserva consome a versão; nova compilação exige versão/código novos. Nunca
 reutilize uma reserva antiga para bytes diferentes ou reexecute um run antigo
 para produzir outra assinatura. Artefatos expirados exigem uma nova distribuição.
 
@@ -297,6 +304,20 @@ A seleção permanece em [select-node-ci.mjs](../.github/scripts/select-node-ci.
 
 UI comum seleciona builds/testes dos hosts e navegador; backend seleciona .NET, PostgreSQL descartável, migrations, Compose apenas por `config` e contratos reais de transporte. Kotlin seleciona Android; Rust compartilhado também seleciona Android e Windows. Alterações de identidade conservam browser/WebView2/WebView Android; contratos de notificações/transportes conservam nativos. Lockfiles podem selecionar compilação ampla de integração sem habilitar consumo prolongado. Mudanças desconhecidas e na infraestrutura de CI continuam conservadoras.
 
+O Android usa o [WebView do sistema](https://v2.tauri.app/reference/webview-versions/),
+não um Chromium empacotado. O [alvo padrão de Vite 7](https://v7.vite.dev/guide/migration.html#default-browser-target-change)
+é Chromium 107. O diagnóstico da v0.8.0 na
+[imagem Google APIs API 26](https://github.com/phcastello/Aegis/actions/runs/45601522164)
+confirmou provedor Chromium 69: o IPC nativo e as flags iniciais funcionam,
+mas o módulo Vue não inicializa. O mesmo APK agora apresenta uma orientação
+de atualização local e visível nesse provedor. O gate exige a chamada real
+ao IPC antes de verificar a tela e exige o aviso (provedor anterior a 107)
+ou toda a interface de configuração (provedor compatível). Timeout ou tela
+vazia nunca contam como aprovação. As verificações de notificações, recepção
+geográfica, reinício e transporte nativos continuam nas APIs 26/35. O teste
+de WebView/IPC moderno na API 35 e o smoke do bundle sob CSP não demonstram
+suporte a versões antigas de WebView nem substituirão testes físicos.
+
 O workflow de identidade é reutilizado pelo CI principal, sem outro disparo automático duplicado. O agregador verifica todos os jobs selecionados, inclusive o resultado desse workflow. Falha, cancelamento, ausência ou skip inesperado de job selecionado impedem aprovação; não há `continue-on-error` nos gates. O SHA de origem e o SHA de evidência (merge de teste do PR ou merge queue) são registrados; todos os jobs usam o SHA resolvido. O gate consulta novamente o PR e recusa head/base diferentes, PR fechado ou retorno a draft. Concorrência por branch/PR cancela execuções substituídas.
 
 `Aegis Node CI result` é o contexto estável de integração. Release usa **Aegis Release Acceptance result**; preview e modos focados não substituem integração. Filtros manuais antigos continuam disponíveis para diagnóstico, com gate final recusando aceite parcial. `base_ref` só limita a homologação de release; integração manual permanece conservadora, impedindo escolher um diff vazio para obter aceite.
@@ -322,7 +343,8 @@ esse gate, que deve aprovar o candidato real antes do merge. PR #19 permanece
 draft; somente o PR separado de infraestrutura pode ser integrado nesta ativação.
 ## Backend, dados e lançamento estável
 
-`publish-dev` atualiza a API/PWA somente quando seus componentes mudam. Uma
+`publish-dev` atualiza a API e o gateway estático (componente histórico `pwa`)
+somente quando os respectivos componentes mudam. Uma
 alteração apenas de backend não compila Android/Windows. A preparação valida a
 saúde real e os contratos necessários aos clientes existentes; os metadados
 verificáveis acompanham a distribuição nativa, sem novos health checks durante
@@ -356,6 +378,21 @@ runtime Linux/headless, novos tipos de Node, protocolo remoto, armazenamento ou
 serviço privilegiado nesta etapa.
 
 ## Verificação e limites
+
+### Resolução de dependências Android em CI
+
+Os runners Android efêmeros reaproveitam as dependências Gradle e a distribuição
+do wrapper pelo cache da ação oficial [setup-java](https://github.com/actions/setup-java#caching-packages-dependencies),
+indexado pelos arquivos Gradle, propriedades e versão do wrapper. Isso evita
+downloads repetidos conforme o [cache de dependências do Gradle](https://docs.gradle.org/current/userguide/dependency_caching.html).
+Uma falha de configuração do repositório de plugins por HTTP 429 do Maven
+Central foi observada durante a integração da v0.8.0.
+`retry-gradle.mjs` repete o mesmo comando somente se ele falhar e o log
+confirmar um GET/HEAD ao Maven Central com status 429: no máximo três novas
+tentativas, com esperas de 30, 60 e 120 segundos e pequena variação aleatória.
+Outros erros ou novas falhas após o limite conservam o código de saída; os
+testes, verificações de artefatos e assinatura não são ignorados. A execução
+de preview usa a cópia confiável do script na `main`.
 
 ```bash
 node --test .github/scripts/*.test.mjs

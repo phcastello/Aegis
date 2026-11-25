@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "sourceCommit": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+  "branch": "feat/v0.8.0-hands-free",
+  "commits": {
+    "aclAndUi": "8c8b2cc",
+    "nativeAudioAndMetrics": "8a9025d",
+    "documentation": "99c0856",
+    "windowsFixtureCleanup": "fec7c18"
+  },
+  "local": {
+    "node": {
+      "passed": 160
+    },
+    "rust": {
+      "passed": 90,
+      "ignored": 2
+    },
+    "releaseContracts": {
+      "passed": 53
+    },
+    "previewContracts": {
+      "passed": 10
+    },
+    "androidJvm": {
+      "passed": 132,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vadHostNative": {
+      "passed": 16
+    },
+    "streamingSelectedJvm": {
+      "passed": 54,
+      "backendTests": 22,
+      "pcmTests": 8
+    },
+    "pwa": {
+      "passed": 91,
+      "build": "passed"
+    },
+    "nodeBuild": "passed",
+    "chromiumFailureRecovery": "passed",
+    "androidArm64DebugBuild": "passed",
+    "debugAndReleaseInstrumentationKotlin": "compiled"
+  },
+  "androidIntegration": {
+    "run": "https://github.com/phcastello/Aegis/actions/runs/41216496852",
+    "job": "https://github.com/phcastello/Aegis/actions/runs/41216496852/job/124582099696",
+    "sourceCommit": "99c0856adefdf0ff688623363e37591527b96743",
+    "runtimeCodeIdenticalToPublished": true,
+    "api": 35,
+    "abi": "x86_64",
+    "device": "disposable emulator",
+    "jobResult": "success",
+    "realIpc": true,
+    "modelPresent": false,
+    "microphoneGranted": false,
+    "assistantSelected": false,
+    "handsFreeEnabled": false,
+    "backendAvailable": false,
+    "debug": {
+      "result": "passed",
+      "initialStateTestSeconds": 7.078
+    },
+    "minifiedRelease": {
+      "result": "passed",
+      "initialStateTestSeconds": 6.076
+    },
+    "checkpoint": "hands_free_real_ipc_initial_state",
+    "workflowResult": "failure",
+    "aggregateReason": "Focused validation is not complete integration acceptance."
+  },
+  "publication": {
+    "schema": 1,
+    "sourceCommit": "fec7c18ea067e66ca6cf63d2e294e3d36191c44f",
+    "version": "0.8.0-unstable.4",
+    "versionCode": 8000004,
+    "apkSha256": "62ac3f14a20f37f1c327e046d829dd799f9693159be2a1d4b087cec35ed1e0bb",
+    "certificateSha256": "df5286c556657ddcee6ce79c510b967678bac8ced18d082db0e318bc47debb31",
+    "matches_previous_v072_certificate": true,
+    "previous_v072_sha256": "98e0d8c7ebadf08402a909dae181432a09b2f1a34989547dcec868c64bb5cf29",
+    "package": "com.aegis.node",
+    "nativeDetectorPresent": true,
+    "vadJniExportsPresent": true,
+    "licenseCount": 14,
+    "packagedLicenseBytesMatchSource": true,
+    "privateModelOrEvaluationAudioPresent": false,
+    "nativeGuardArchivePassed": true,
+    "manifestChecksPassed": true,
+    "manifestVerifier": "official AAPT2 package/release-flags/XMLtree checks; local APKAnalyzer not installed",
+    "apkCryptographicSignatureVerified": true,
+    "feedUrl": "https://raw.githubusercontent.com/phcastello/Aegis/aegis-distribution/latest.json",
+    "artifactUrl": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0-unstable.4/Aegis-Android-arm64.apk",
+    "kind": "normal",
+    "compatibility": {
+      "api": 1,
+      "nodeData": 1
+    },
+    "run": "https://github.com/phcastello/Aegis/actions/runs/41219028661",
+    "result": "success",
+    "release": "https://github.com/phcastello/Aegis/releases/tag/node-v0.8.0-unstable.4",
+    "publishedAt": "2026-10-31T16:28:25Z",
+    "feedPointerCommit": "e94cfe831a9eb9d65a7b1e56f7a6856ade47f537",
+    "windowsBuildAndUpgrade": "passed",
+    "windowsUpgradeFrom": "0.7.1",
+    "windowsInstallerSha256": "2c272a57d555b6e43fc250dac55ff2bda1a888f55d1c3474f6ca63daf1d3d572",
+    "windowsUpdaterSignature": "verified by trusted signing workflow"
+  },
+  "previousAttempt": {
+    "run": "https://github.com/phcastello/Aegis/actions/runs/41218097181",
+    "version": "0.8.0-unstable.3",
+    "code": 8000003,
+    "result": "failure",
+    "published": false,
+    "reason": "Windows disposable profile removal returned EPERM after real application identity passed; bounded cleanup retry extended; persistent errors still fail."
+  },
+  "detector": {
+    "canonicalModelBytes": 39552,
+    "sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+    "weightsOrDetectorConfigurationChanged": false,
+    "previousNumericalDivergencePreserved": true,
+    "arm64Replay": "pending"
+  },
+  "physicalPhoneAcceptance": "pending",
+  "batteryBaselineChanged": false,
+  "androidBatteryStatisticsReset": false,
+  "batteryBaselineGitTree": "298f807ea008399b036fadf76ea41d8e7f4ba3d1"
+}

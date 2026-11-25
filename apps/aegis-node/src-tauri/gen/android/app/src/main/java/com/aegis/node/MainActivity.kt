@@ -61,6 +61,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    volumeControlStream=android.media.AudioManager.STREAM_MUSIC
     NodeNativeNotifications.initialize(this)
     onBackPressedDispatcher.addCallback(this,settingsBack)
     NodeUpdates.cleanup(this)
@@ -68,9 +69,18 @@ class MainActivity : TauriActivity() {
   }
 
   private var connectivityCallback:android.net.ConnectivityManager.NetworkCallback?=null
+  private val conversationChanged: (org.json.JSONObject) -> Unit = { event ->
+    val payload=event.toString()
+    currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-conversation-changed',{detail:$payload}))",null) }
+  }
+  // Native Rust JNI only; replay is read-only so a failed WebView fetch never consumes an event.
+  fun conversationChanges(payload:String):String = synchronized(NodeConversationChanges) {
+    NodeConversationChanges.snapshot(NodeNativeSession.read(this))
+  }
   override fun onResume() {
     super.onResume()
     readResumed=true
+    NodeConversationChanges.listener=conversationChanged
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged={currentWebView?.post{currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-actions-changed'))",null)}}
     if(connectivityCallback==null) {
@@ -82,9 +92,11 @@ class MainActivity : TauriActivity() {
       try{getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(callback);connectivityCallback=callback}catch(_:Exception){}
     }
     NodeBackgroundWork.foregroundActions(this)
+    NodeHandsFree.runtime(this).recoverFromSystem()
   }
   override fun onPause() {
     readResumed=false
+    if(NodeConversationChanges.listener===conversationChanged)NodeConversationChanges.listener=null
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged=null
     connectivityCallback?.let{try{getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it)}catch(_:Exception){}}
@@ -150,4 +162,17 @@ class MainActivity : TauriActivity() {
     }
     ViewCompat.requestApplyInsets(content)
   }
+  fun handsFreeState(payload:String):String=NodeHandsFree.state(this)
+  fun handsFreeConfigure(payload:String):String=NodeHandsFree.configure(this,payload)
+  fun handsFreeBatteryStart(payload:String):String=NodeHandsFree.batteryStart(this,payload)
+  fun handsFreeBatteryFinish(payload:String):String=NodeHandsFree.batteryFinish(this)
+  fun handsFreeBatteryAutoStart(payload:String):String=NodeHandsFree.batteryAutoStart(this,payload)
+  fun handsFreeBatteryAutoCancel(payload:String):String=NodeHandsFree.batteryAutoCancel(this)
+  fun handsFreeManualAcquire(payload:String):String=NodeHandsFree.manualAcquire(this,payload)
+  fun handsFreeManualRelease(payload:String):String=NodeHandsFree.manualRelease(this,payload)
+  fun handsFreeCancel(payload:String):String=NodeHandsFree.cancel(this)
+  fun handsFreeCollectionConfigure(payload:String):String=NodeHandsFree.configureCollection(this,payload)
+  fun handsFreeCollectionDelete(payload:String):String=NodeHandsFree.deleteCollection(this)
+  override fun onDestroy(){NodeExternalPlaybackReference.cancelPendingConsent();NodeManualSpeech.cancel();super.onDestroy();NodeHandsFree.runtime(this).releaseActivityAudio()}
+
 }

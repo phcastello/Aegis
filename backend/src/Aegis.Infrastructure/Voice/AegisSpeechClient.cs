@@ -105,9 +105,11 @@ public sealed class AegisSpeechClient(
         metrics.TtsCancellations.Add(1);
         using var message = new HttpRequestMessage(HttpMethod.Delete, $"v1/aegis/speech/{Uri.EscapeDataString(nativeSpeechRequestId)}");
         ApplyToken(message, options.Value);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, options.Value.ConnectTimeoutSeconds)));
         try
         {
-            using var response = await httpClient.SendAsync(message, cancellationToken);
+            using var response = await httpClient.SendAsync(message, deadline.Token);
             if (response.StatusCode is not HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
             {
                 logger.LogWarning("{Event} {StatusCode}", "aegis_tts_cancel_failed", (int)response.StatusCode);
@@ -116,6 +118,10 @@ public sealed class AegisSpeechClient(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogWarning("{Event}", "aegis_tts_cancel_timeout");
         }
         catch (HttpRequestException exception)
         {

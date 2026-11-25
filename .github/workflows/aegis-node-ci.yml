@@ -139,12 +139,13 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/aegis-pwa/package-lock.json
+          cache-dependency-path: scripts/node-transport-probe/package-lock.json
       - name: Verify development and private Compose configuration without starting services
         run: node scripts/check-compose.mjs
       - name: Real authenticated transport through two Nginx proxy hops
         run: |
           npm ci --prefix scripts/node-transport-probe
+          node --test scripts/node-transport-probe/fixture-readiness.test.mjs
           AEGIS_PROBE_NOTIFICATIONS=true node scripts/node-transport-probe/proxy-chain.mjs
       - name: Immutable native fixture command replay and bounded cache
         timeout-minutes: 2
@@ -168,7 +169,7 @@ jobs:
             packages/aegis-client/package-lock.json
             frontend/aegis-pwa/package-lock.json
             apps/aegis-node/package-lock.json
-      - name: Build clients and check shared behavior
+      - name: Build native client and static gateway; check behavior
         run: |
           npm ci --prefix packages/aegis-client
           npm ci --prefix frontend/aegis-pwa
@@ -190,20 +191,23 @@ jobs:
               'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n')
           PYTHON
           npx playwright-core install --with-deps chromium
-      - name: Render real components and exercise sidebar/update navigation
+      - name: Render native host components and exercise sidebar/update navigation
         env:
           PARITY_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/v0.7.0-completion/ui
         run: |
-          npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092 > "$RUNNER_TEMP/web-preview.log" 2>&1 &
           npm run dev --prefix apps/aegis-node -- --host 127.0.0.1 > "$RUNNER_TEMP/native-vite.log" 2>&1 &
           npm run test:browser --prefix packages/aegis-client
           node apps/aegis-node/tests/update-notice-visual.mjs --output artifacts/v0.7.0-completion/ui/update-notice
           node apps/aegis-node/tests/places-browser.mjs
           node apps/aegis-node/tests/reminders-browser.mjs
-      - name: Exercise capture sessions and input meter in Chromium for web, Android and Windows IPC hosts
+      - name: Exercise capture sessions and input meter in Chromium for Android and Windows IPC hosts
         run: node packages/aegis-client/tests/transcription-browser.mjs
-      - name: Upgrade the legacy service worker while preserving queued actions and offline cache
-        run: node frontend/aegis-pwa/tests/worker-upgrade.mjs
+      - name: Verify production WebView bootstrap and unsupported-Android guidance
+        run: node apps/aegis-node/tests/webview-bootstrap-browser.mjs
+      - name: Retire the cached web app shell while preserving queued legacy actions
+        run: |
+          npm run test:worker --prefix frontend/aegis-pwa
+          npm run test:page --prefix frontend/aegis-pwa
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
@@ -326,7 +330,7 @@ jobs:
       - if: matrix.android == 'false'
         run: node scripts/package-artifacts.mjs windows
       - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
-        run: npm run build:android
+        run: node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run build:android
       - if: matrix.android == 'true'
         id: android_distribution_build
         name: Compile minified Android release with isolated CI signing key
@@ -336,7 +340,7 @@ jobs:
           keytool -genkeypair -keystore "$AEGIS_CI_KEYSTORE" -storetype PKCS12 -storepass ci-test-only -keypass ci-test-only -alias aegis-ci -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Aegis CI' > /dev/null 2>&1
           export ANDROID_KEYSTORE_PATH="$AEGIS_CI_KEYSTORE"
           export ANDROID_KEYSTORE_PASSWORD=ci-test-only ANDROID_KEY_ALIAS=aegis-ci ANDROID_KEY_PASSWORD=ci-test-only
-          npm run build:android:release
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run build:android:release
       - if: matrix.android == 'true'
         id: android_distribution_guard
         name: Verify ARM64 production flags and fixture exclusion before distribution
@@ -366,7 +370,7 @@ jobs:
           retention-days: 1
       - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
         name: Android native payload validation unit tests
-        run: src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
+        run: node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:testUniversalDebugUnitTest
       - if: matrix.android == 'true' && (needs.selection.outputs.full == 'true' || !inputs.android_distribution_only)
         run: node scripts/package-artifacts.mjs android --debug
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -422,8 +426,8 @@ jobs:
           # Refresh only Tauri codegen in both profiles before returning to this checkout.
           cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --profile dev
           cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --release
-          npm run tauri -- android build --debug --apk --target x86_64 --features android-framework-fixture
-          src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run tauri -- android build --debug --apk --target x86_64 --features android-framework-fixture
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:assembleUniversalDebugAndroidTest -x :app:rustBuildUniversalDebug -PabiList=x86_64
       - name: Test renderer, native geofence receiver fixture and native live path
         id: debug_test
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
@@ -438,8 +442,8 @@ jobs:
         id: release_build
         if: ${{ !cancelled() && steps.debug_test.outcome == 'success' }}
         run: |
-          npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
-          src-tauri/gen/android/gradlew -p src-tauri/gen/android :notificationFrameworkTest:assembleRelease
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" src-tauri/gen/android/gradlew -p src-tauri/gen/android :notificationFrameworkTest:assembleRelease
       - name: Test minified renderer, geofence receiver fixture and fixed JNI methods
         id: release_test
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
@@ -486,7 +490,7 @@ jobs:
           # Tauri2.12.1 codegen does not track changes to its Kotlin output directory.
           # Refresh that package when sharing dependency caches across immutable worktrees.
           cargo clean --manifest-path src-tauri/Cargo.toml --package tauri --target x86_64-linux-android --release
-          npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
+          node "$GITHUB_WORKSPACE/.github/scripts/retry-gradle.mjs" npm run tauri -- android build --apk --target x86_64 --features android-framework-fixture
           cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk "$RUNNER_TEMP/aegis-idle-before.apk"
       - name: Equivalent Android idle windows before and after (ten minutes each)
         if: ${{ !cancelled() && matrix.api == 35 && needs.selection.outputs.idle == 'true' && steps.idle_baseline_build.outcome == 'success' }}

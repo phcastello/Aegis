@@ -44,7 +44,7 @@ public sealed class PromptPayloadTests
         var root = payload.RootElement;
         Assert.Equal("gpt-6-luna", root.GetProperty("model").GetString());
         Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
-        Assert.Equal("medium", root.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.Equal("low", root.GetProperty("reasoning").GetProperty("effort").GetString());
         var input = root.GetProperty("input");
         Assert.Equal(new[] { "developer", "user", "assistant", "user", "developer" },
             input.EnumerateArray().Select(item => item.GetProperty("role").GetString()));

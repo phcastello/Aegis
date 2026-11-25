@@ -18,12 +18,15 @@ npm run test:release --prefix apps/aegis-node
 dotnet test backend/Aegis.sln
 ```
 
-O alias `npm run test:email --prefix frontend/aegis-pwa` delega ao pacote
-compartilhado. Os três arquivos são explícitos para não depender do glob do shell
-nem aceitar silenciosamente zero testes. `check-docs.mjs` confere scripts npm
-documentados, alvos dos runners e links locais; não executa builds.
+Os testes da interface de e-mail pertencem ao pacote compartilhado. O diretório
+legado `frontend/aegis-pwa` tem apenas a página estática, o gateway HTTP/OAuth e
+o worker de aposentadoria; seus testes são independentes dos aplicativos.
+`check-docs.mjs` confere scripts npm documentados, alvos dos runners e links locais;
+não executa builds.
 
-A API requer .NET SDK 8. Os testes PostgreSQL só são exercitados quando
+A API requer .NET SDK 8; o `global.json` da raiz seleciona a versão estável
+mais recente do SDK 8 instalada, inclusive no CI com SDKs preview pré-instalados.
+Os testes PostgreSQL só são exercitados quando
 `AEGIS_NODE_TEST_DATABASE`, `AEGIS_REMINDER_TEST_DATABASE` e
 `AEGIS_MEMORY_TEST_DATABASE` apontam para banco **descartável**. Sem essas variáveis,
 os testes de integração são ignorados; isso não comprova migrations nem persistência.
@@ -33,14 +36,13 @@ O teste de operação/migrations usa ainda `AEGIS_OPERATION_TEST_DATABASE`, acei
 somente o banco descartável `aegis_operation_test`; veja [operação privada](operacao-privada.md).
 
 Para paridade browser, instale Chromium com `npx playwright-core install chromium`
-em `packages/aegis-client`. Em dois terminais na raiz, mantenha os servidores locais:
+em `packages/aegis-client`. Em um terminal na raiz, mantenha o host nativo local:
 
 ```sh
-npm run preview --prefix frontend/aegis-pwa -- --host 127.0.0.1 --port 18092
 npm run dev --prefix apps/aegis-node -- --host 127.0.0.1
 ```
 
-Após os builds, em um terceiro terminal:
+Após os builds, em outro terminal:
 
 ```sh
 npm run test:browser --prefix packages/aegis-client
@@ -50,10 +52,14 @@ node apps/aegis-node/tests/reminders-browser.mjs
 node packages/aegis-client/tests/transcription-browser.mjs
 node packages/aegis-client/tests/ux-stream-browser.mjs
 node packages/aegis-client/tests/markdown-stream-browser.mjs
-node frontend/aegis-pwa/tests/worker-upgrade.mjs
+npm run test:worker --prefix frontend/aegis-pwa
+npm run test:page --prefix frontend/aegis-pwa
 ```
 
-São navegadores reais com API privada em memória e IPC Tauri simulado. Não atestam
+São navegadores reais com API privada em memória e IPC Tauri simulado, para os
+hosts Android e Windows. Os testes do gateway iniciam seu próprio servidor de
+fixture; o de migração do worker precisa do histórico Git do predecessor v0.8.0-unstable.45.
+Não atestam
 WebView2, Android físico, captura real, notificações do SO ou consumo do binário.
 Os scripts Windows/Android em `packages/aegis-client/tests/` e os workflows nativos
 exigem a plataforma correspondente. Aceite físico do microfone do proprietário

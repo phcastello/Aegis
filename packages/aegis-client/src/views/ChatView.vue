@@ -11,10 +11,13 @@ import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
+import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
+import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS } from '../services/streamTextPresentation';
 import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../services/navigation';
 import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
 import {
+  AegisApiError,
   deleteConversation,
   cancelTurn,
   completeTurnWithoutSpeech,
@@ -33,15 +36,16 @@ import { useAegisTranscription, type TranscriptionIntent } from '../composables/
 import { useSidebarGesture } from '../composables/useSidebarGesture';
 import { waitForEmailConnection } from '../services/emailConnectionPolling';
 import { pollMemoryActivity } from '../services/memoryActivityPolling';
-import { emailConnectionFailureMessage, emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
+import { emailConnectionSuccessMessage } from '../services/emailConnectionFeedback';
 import type {
+  Conversation,
   ConversationSummary,
   FeedbackRating,
   LocalChatMessage,
   SubmitMessageFeedbackRequest
 } from '../types/chat';
 
-defineProps<{ appVersion?: string }>();
+const props = defineProps<{ appVersion?: string; conversationPushActive?: boolean; nativeVoiceActive?: boolean }>();
 const emit = defineEmits<{ activityChanged: [active: boolean] }>();
 
 const STORAGE_KEY = 'aegis.currentConversationId';
@@ -56,6 +60,8 @@ type ConversationContext = {
   createdAt: string | null;
   error: string | null;
   loaded: boolean;
+  remoteUpdatedAt: string | null;
+  remoteMessageCount: number | null;
   revision: number;
   following: boolean;
   scrollTop: number | null;
@@ -65,7 +71,7 @@ type ConversationContext = {
 };
 function createConversationContext(id: string | null = null): ConversationContext {
   return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
-    loaded: false, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
+    loaded: false, remoteUpdatedAt: null, remoteMessageCount: null, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
 }
 const contexts = new Map<string, ConversationContext>();
 const deletedConversations = new Set<string>();
@@ -142,10 +148,13 @@ let activeSpeechOwner: ConversationContext | null = null;
 const activeSpeechMessageId = ref<string | null>(null);
 const voice = useAegisVoice();
 const transcription = useAegisTranscription(insertTranscriptIntoDraft);
+// Never hide the controls of a recording the user explicitly began.
+const nativeComposerActive = computed(() => Boolean(props.nativeVoiceActive && !transcription.isBusy.value));
 let capture: { owner: ConversationContext; text: string; start: number; end: number } | null = null;
 let streamScrollFrame: number | null = null;
 let layoutObserver: ResizeObserver | null = null;
 let conversationLoad = 0;
+let measuredScrollOwner: ConversationContext | null = null;
 let lastScrollTop = 0;
 let lastScrollHeight = 0;
 let lastViewportHeight = 0;
@@ -223,7 +232,7 @@ async function syncProactiveMessages(): Promise<void> {
     const activity = await getProactiveActivity(proactiveAbort.signal);
     if (proactiveAbort.signal.aborted) return;
     const signature = JSON.stringify([...activity].sort((a,b) => a.conversationId.localeCompare(b.conversationId)));
-    if (signature !== lastActivity) { if (activity.length) await refreshProactiveHistory(); lastActivity = signature; }
+    if (signature !== lastActivity) { if (activity.length) await refreshConversationHead(); lastActivity = signature; }
     for (const row of activity) {
       latestProactiveSequences.set(row.conversationId, Math.max(latestProactiveSequences.get(row.conversationId) ?? 0, row.lastProactiveSequence));
       const read = Math.max(readSequences.get(row.conversationId) ?? 0, row.readProactiveSequence);
@@ -301,15 +310,26 @@ function showToolStatus(message: string, state: 'started' | 'completed' | 'faile
   }
 }
 
-function scrollToLatest(): void {
+function scrollToLatest(protectUserScroll = false): void {
   const owner = selected.value;
   void nextTick(() => {
     const container = messagesContainer.value;
     if (!container || selected.value !== owner || !owner.following) return;
+    // A scrollbar/assistive upward movement can precede the scroll event while
+    // the continuously revealing text changes height. Do not overwrite it in
+    // this animation frame. A growing tail cannot itself move scrollTop up.
+    if (protectUserScroll && measuredScrollOwner === owner && container.clientHeight === lastViewportHeight && container.scrollHeight >= lastScrollHeight &&
+        container.scrollTop < lastScrollTop - 48) {
+      owner.following = false;
+      owner.scrollTop = container.scrollTop;
+      programmaticScrollTop = null;
+      return;
+    }
     // Scroll only this region. scrollIntoView also moved the host/viewport and
     // restarted smooth scrolling on every chunk and loading-state transition.
     container.scrollTop = container.scrollHeight;
     programmaticScrollTop = container.scrollTop;
+    measuredScrollOwner = owner;
     lastScrollTop = container.scrollTop;
     lastScrollHeight = container.scrollHeight;
     lastViewportHeight = container.clientHeight;
@@ -325,7 +345,7 @@ function scrollToLatestDuringStream(): void {
 
   streamScrollFrame = requestAnimationFrame(() => {
     streamScrollFrame = null;
-    scrollToLatest();
+    scrollToLatest(true);
   });
 }
 
@@ -367,11 +387,13 @@ function handleMessagesScroll(): void {
   const recentInput = manualScroll && performance.now() <= manualScrollUntil;
   // Scrollbar dragging and assistive navigation can scroll without DOM input
   // events. Stable geometry distinguishes them from reflow/keyboard resizing.
-  const stableGeometry = container.scrollHeight === lastScrollHeight && container.clientHeight === lastViewportHeight;
-  const userScroll = recentInput || stableGeometry;
+  const stableGeometry = measuredScrollOwner === selected.value && container.scrollHeight === lastScrollHeight && container.clientHeight === lastViewportHeight;
   const movingUp = top < lastScrollTop - 1;
+  const upwardDuringGrowth = measuredScrollOwner === selected.value && top < lastScrollTop - 48 && container.clientHeight === lastViewportHeight && container.scrollHeight >= lastScrollHeight;
+  const userScroll = recentInput || stableGeometry || upwardDuringGrowth;
   if (!ownScroll && userScroll && movingUp) selected.value.following = false;
   if (nearEnd && !ownScroll && userScroll && !movingUp && (recentInput ? manualDirection >= 0 : top > lastScrollTop + 1)) selected.value.following = true;
+  measuredScrollOwner = selected.value;
   lastScrollTop = top;
   lastScrollHeight = container.scrollHeight;
   lastViewportHeight = container.clientHeight;
@@ -387,6 +409,7 @@ function restoreReadingPosition(owner: ConversationContext): void {
     if (owner.following || owner.scrollTop === null) scrollToLatest();
     else {
       container.scrollTop = owner.scrollTop;
+      measuredScrollOwner = owner;
       lastScrollTop = container.scrollTop;
       lastScrollHeight = container.scrollHeight;
       lastViewportHeight = container.clientHeight;
@@ -399,6 +422,7 @@ function handleMessagesLayout(): void {
   if (selected.value.following) { scrollToLatestDuringStream(); return; }
   const container = messagesContainer.value;
   if (!container) return;
+  measuredScrollOwner = selected.value;
   lastScrollHeight = container.scrollHeight;
   lastViewportHeight = container.clientHeight;
   lastScrollTop = container.scrollTop;
@@ -418,7 +442,7 @@ function resizeComposer(): void {
 }
 
 function focusComposer(explicit = false): void {
-  if (isRestoring.value || (!explicit && (window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId))) return;
+  if (nativeComposerActive.value || isRestoring.value || (!explicit && (window.matchMedia('(pointer: coarse)').matches || clientEnvironment().processSessionId))) return;
 
   const owner = selected.value;
   // On touch, keep the immediate focus in the user activation when the existing
@@ -539,15 +563,141 @@ function createLocalAssistantMessage(): LocalChatMessage {
   });
 }
 
-function getCompletedWordPrefix(content: string): string {
-  let completedLength = 0;
-
-  for (const match of content.matchAll(/\s+/gu)) {
-    completedLength = (match.index ?? 0) + match[0].length;
-  }
-
-  return content.slice(0, completedLength);
+// Network reception and visible text are deliberately independent. One bounded
+// timer per actively revealing message coalesces bursts into real text prefixes.
+type TextPresentation = {
+  owner: ConversationContext; message: LocalChatMessage; reveal: StreamTextReveal;
+  timer?: ReturnType<typeof setTimeout>; complete: boolean; floor: string; onSettled?: () => void;
+};
+const textPresentations = new Map<LocalChatMessage, TextPresentation>();
+const reducedStreamMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+function createPresentation(owner: ConversationContext, message: LocalChatMessage, floor = '', onSettled?: () => void): TextPresentation {
+  const presentation: TextPresentation = { owner, message, reveal: new StreamTextReveal(), complete: false, floor, onSettled };
+  textPresentations.set(message, presentation);
+  return presentation;
 }
+function renderPresentation(p: TextPresentation, text: string): void {
+  // A snapshot that reached the screen before the local stream must never rewind.
+  if (p.floor && p.floor.startsWith(text) && text.length < p.floor.length) return;
+  p.floor = '';
+  if (p.message.content !== text) {
+    p.message.content = text;
+    if (selected.value === p.owner) scrollToLatestDuringStream();
+  }
+}
+function settlePresentation(p: TextPresentation, flush = false): void {
+  if (textPresentations.get(p.message) !== p) return;
+  clearTimeout(p.timer); p.timer = undefined;
+  if (flush) renderPresentation(p, p.reveal.finish());
+  p.message.streaming = false;
+  textPresentations.delete(p.message);
+  if (!disposed) p.onSettled?.();
+}
+function pumpPresentation(p: TextPresentation): void {
+  p.timer = undefined;
+  if (disposed || textPresentations.get(p.message) !== p) return;
+  if (!p.owner.messages.includes(p.message)) { settlePresentation(p); return; }
+  const immediate = reducedStreamMotion.matches || document.visibilityState !== 'visible' || selected.value !== p.owner;
+  renderPresentation(p, immediate ? p.reveal.finish() : p.reveal.step(performance.now()));
+  if (p.reveal.pending) p.timer = setTimeout(() => pumpPresentation(p), STREAM_FRAME_MS);
+  else if (p.complete) settlePresentation(p);
+}
+function appendPresentation(p: TextPresentation, text: string): void {
+  p.reveal.append(text, performance.now());
+  if (p.timer !== undefined) return;
+  if (reducedStreamMotion.matches || document.visibilityState !== 'visible' || selected.value !== p.owner) pumpPresentation(p);
+  else p.timer = setTimeout(() => pumpPresentation(p), STREAM_FRAME_MS);
+}
+function completePresentation(p: TextPresentation): void {
+  p.complete = true;
+  if (!p.reveal.pending) settlePresentation(p);
+  else if (p.timer === undefined) pumpPresentation(p);
+}
+function flushPresentationOnHidden(): void {
+  if (document.visibilityState === 'visible') return;
+  for (const p of textPresentations.values()) { clearTimeout(p.timer); pumpPresentation(p); }
+}
+
+// Native Windows hands-free sends only committed segments of an accepted turn.
+// Existing server snapshots still own history/metadata; the streaming marker
+// prevents a full snapshot from jumping ahead of this message's presentation.
+type NativeVoiceTurn = {
+  protocol: NativeVoiceSegments; owner: ConversationContext; presentation?: TextPresentation; generationDone: boolean;
+};
+const nativeVoiceTurns = new Map<string, NativeVoiceTurn>();
+const closedNativeVoiceTurns = new Set<string>();
+function rememberClosedNativeTurn(id: string): void {
+  closedNativeVoiceTurns.add(id);
+  if (closedNativeVoiceTurns.size > 64) closedNativeVoiceTurns.delete(closedNativeVoiceTurns.values().next().value!);
+}
+function finishNativeVoiceTurn(turnId: string, interrupted = false, reconcile = true): void {
+  const turn = nativeVoiceTurns.get(turnId);
+  if (!turn) { rememberClosedNativeTurn(turnId); return; }
+  nativeVoiceTurns.delete(turnId); rememberClosedNativeTurn(turnId);
+  if (turn.presentation) {
+    if (!turn.generationDone || interrupted) {
+      // Commit boundaries, not the displayed prefix, are authoritative at interruption.
+      settlePresentation(turn.presentation, true);
+      if (!turn.generationDone && interrupted) turn.presentation.message.interrupted = true;
+    } else completePresentation(turn.presentation);
+  }
+  if (reconcile) conversationChanged(turn.protocol.conversationId, false);
+}
+function acceptNativeVoiceStream(payload: unknown): void {
+  const event = parseNativeVoiceStreamEvent(payload);
+  if (!event || disposed) return;
+  const conversation = event.conversationId;
+  if (conversation && deletedConversations.has(conversation)) return;
+  if (closedNativeVoiceTurns.has(event.turnId)) {
+    if (conversation && (event.type === 'done' || event.type === 'error' || event.type === 'interrupted')) conversationChanged(conversation, false);
+    return;
+  }
+  let turn = nativeVoiceTurns.get(event.turnId);
+  if (!turn && conversation && (event.type === 'conversation' || event.type === 'final_segment' && event.sequence === 0)) {
+    // One node has at most one live microphone interaction. Complete old display
+    // tails without allowing a late event to attach to the new turn.
+    for (const id of [...nativeVoiceTurns.keys()]) finishNativeVoiceTurn(id, true);
+    const owner = contexts.get(conversation) ?? createConversationContext(conversation);
+    if (!contexts.has(conversation)) contexts.set(conversation, owner);
+    turn = { owner, protocol: new NativeVoiceSegments(event.turnId, conversation), generationDone: false };
+    nativeVoiceTurns.set(event.turnId, turn);
+    conversationChanged(conversation, false);
+  }
+  if (!turn) {
+    if (conversation) conversationChanged(conversation, false);
+    if (event.type !== 'conversation' && event.type !== 'final_segment') rememberClosedNativeTurn(event.turnId);
+    return;
+  }
+  if (!turn.protocol.matches(event)) return;
+  if (event.type === 'conversation') return;
+  if (event.type === 'final_segment') {
+    const text = turn.protocol.append(event);
+    if (text === null || !event.assistantMessageId) { finishNativeVoiceTurn(event.turnId, true); return; }
+    if (!text) return; // A byte-identical duplicate event is idempotent.
+    if (!turn.presentation) {
+      const existing = turn.owner.messages.find(message => (message.serverId ?? message.id) === event.assistantMessageId);
+      if (existing && existing.role !== 'assistant') { finishNativeVoiceTurn(event.turnId, true); return; }
+      const message: LocalChatMessage = existing ?? reactive({ id: event.assistantMessageId, serverId: event.assistantMessageId,
+        conversationId: turn.protocol.conversationId, role: 'assistant', content: '', createdAt: new Date().toISOString(), pending: false, streaming: true });
+      message.streaming = true;
+      if (!existing) turn.owner.messages.push(message);
+      const id = turn.protocol.conversationId;
+      turn.presentation = createPresentation(turn.owner, message, existing?.content ?? '', () => {
+        // Once the local animation no longer protects content, refresh metadata
+        // from the authoritative saved row (no additional polling).
+        if (contexts.has(id) && !deletedConversations.has(id)) conversationChanged(id, false);
+      });
+    }
+    appendPresentation(turn.presentation, text);
+  } else if (event.type === 'done') {
+    turn.generationDone = true;
+    finishNativeVoiceTurn(event.turnId);
+  } else finishNativeVoiceTurn(event.turnId, event.type !== 'ignored');
+}
+function clearNativeVoiceStreams(reconcile = false): void {
+  for (const id of [...nativeVoiceTurns.keys()]) finishNativeVoiceTurn(id, true, reconcile);
+}
+
 
 function cancelMemoryActivityPolling(): void {
   memoryActivityGeneration++;
@@ -584,8 +734,11 @@ async function restoreConversation(): Promise<void> {
   if (conversationId.value) await openConversation(conversationId.value, true);
 }
 
+let summaryRevision = 0;
+const summaryRevisions = new Map<string, number>();
 function mergeConversationSummary(summary: ConversationSummary): void {
   if (deletedConversations.has(summary.id)) return;
+  summaryRevisions.set(summary.id, ++summaryRevision);
   const context = contexts.get(summary.id);
   if (context) { context.title = summary.title ?? 'Nova conversa'; context.createdAt = summary.createdAt; }
   if (summary.id === conversationId.value) activeConversationCreatedAt.value = summary.createdAt;
@@ -596,16 +749,223 @@ function mergeConversationSummary(summary: ConversationSummary): void {
   });
 }
 
-async function refreshProactiveHistory(): Promise<void> {
-  const page = await getConversations(30, null);
-  if (conversations.value.length === 0) {
-    nextHistoryCursor.value = page.nextCursor ?? null; hasMoreHistory.value = page.hasMore;
+function applyRemoteConversationDeletion(id: string): void {
+  for (const [turnId, turn] of nativeVoiceTurns) if (turn.protocol.conversationId === id) finishNativeVoiceTurn(turnId, true, false);
+  deletedConversations.add(id);
+  summaryRevisions.set(id, ++summaryRevision);
+  const owner = contexts.get(id);
+  contexts.delete(id);
+  conversations.value = conversations.value.filter(row => row.id !== id);
+  let recovery: ConversationContext | undefined;
+  if (owner?.draft.trim()) {
+    recovery = createConversationContext();
+    recovery.draft = owner.draft;
+    unsentConversations.value = [...unsentConversations.value.filter(context => context !== owner), recovery];
   }
-  // Merge the current head without discarding pages the reader already loaded or their cursor.
-  for (const summary of page.items) mergeConversationSummary(summary);
-  const active = page.items.find(c => c.id === conversationId.value);
-  if (active) activeConversationTitle.value = active.title ?? 'Nova conversa';
+  if (conversationId.value === id) {
+    startNewConversation(false);
+    if (recovery) {
+      selected.value = recovery;
+      resizeComposer();
+      restoreReadingPosition(recovery);
+    }
+  }
+  if (infoTarget.value?.id === id) infoTarget.value = null;
+  if (renameTarget.value?.id === id) renameTarget.value = null;
+  if (deleteTarget.value?.id === id) deleteTarget.value = null;
 }
+
+// Invalidation never navigates to an unrelated chat or replaces a live turn.
+const conversationSync = new ConversationSyncQueue<{ snapshot: Conversation | null; revision: number; summaryRevision: number }>(async id => {
+  const revision = contexts.get(id)?.revision ?? 0;
+  const summaryRevision = summaryRevisions.get(id) ?? 0;
+  try {
+    return { snapshot: await getConversation(id), revision, summaryRevision };
+  } catch (error) {
+    if (error instanceof AegisApiError && error.status === 404) return { snapshot: null, revision, summaryRevision };
+    throw error;
+  }
+}, (id, { snapshot, revision, summaryRevision }) => {
+  if (disposed || deletedConversations.has(id)) return true;
+  const owner = contexts.get(id);
+  if ((owner && owner.revision !== revision) || (summaryRevisions.get(id) ?? 0) !== summaryRevision) return false;
+  if (!snapshot) { applyRemoteConversationDeletion(id); return true; }
+  mergeConversationSummary({ ...conversations.value.find(row => row.id === id), id,
+    title: snapshot.title, titleSource: snapshot.titleSource, createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt, messageCount: snapshot.messages.length,
+    lastMessagePreview: snapshot.messages.at(-1)?.content ?? null });
+  if (owner) {
+    owner.revision++;
+    owner.messages = mergeConversationMessages(owner.messages, snapshot.messages);
+    owner.remoteUpdatedAt = snapshot.updatedAt;
+    owner.remoteMessageCount = snapshot.messages.length;
+    owner.loaded = true;
+    if (owner === selected.value) { resumeMemoryActivityPolling(); void nextTick(observeProactiveMessages); }
+  }
+  return true;
+}, id => disposed || [...activeTurns.values()].some(turn => turn.owner.id === id), schedulePushRecovery);
+let conversationSyncTimer: ReturnType<typeof setTimeout> | undefined;
+const conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function flushConversationChanges(): void { void conversationSync.flush(); }
+function resetConversationChanges(): void {
+  clearNativeVoiceStreams();
+  conversationSync.reset(); clearTimeout(conversationSyncTimer); clearTimeout(pushRecoveryTimer); pushRecoveryTimer = undefined;
+  for (const timer of conversationRetryTimers.values()) clearTimeout(timer);
+  conversationRetryTimers.clear();
+}
+function conversationChanged(id: string, awaitTitle = true): void {
+  if (deletedConversations.has(id)) return;
+  conversationSync.invalidate(id);
+  clearTimeout(conversationSyncTimer);
+  conversationSyncTimer = setTimeout(flushConversationChanges, 120);
+  // Legacy/native local invalidations need bounded title reconciliation; a server
+  // push announces the title commit separately, so retry only failed reads.
+  const previous = conversationRetryTimers.get(id);
+  if (previous !== undefined) clearTimeout(previous);
+  conversationRetryTimers.delete(id);
+  if (!awaitTitle) return;
+  const retry = (attempt: number): void => {
+    conversationRetryTimers.set(id, setTimeout(async () => {
+      conversationRetryTimers.delete(id);
+      if (disposed || deletedConversations.has(id)) return;
+      conversationSync.invalidate(id); await conversationSync.flush();
+      const summary = conversations.value.find(row => row.id === id);
+      if (attempt < 3 && (conversationSync.pending(id) || !summary || summary.titleSource === 'default' || !summary.title || summary.title === 'Nova conversa')) retry(attempt + 1);
+    }, attempt === 0 ? 1800 : 3400));
+  };
+  retry(0);
+}
+async function reconcileConversations(allKnown = false): Promise<void> {
+  if (disposed || document.visibilityState !== 'visible') return;
+  if (allKnown) for (const [id, owner] of contexts) {
+    if (owner.loaded && !deletedConversations.has(id)) conversationSync.invalidate(id);
+  }
+  if (selected.value.id && !conversationSync.pending(selected.value.id)) conversationSync.invalidate(selected.value.id);
+  await Promise.allSettled([refreshConversationHead(allKnown), conversationSync.flush()]);
+  schedulePushRecovery();
+}
+watch(() => [...activeTurns.values()].map(turn => turn.owner.id).filter((id): id is string => !!id), (current, previous) => {
+  for (const id of new Set([...current, ...previous])) if (conversationSync.pending(id)) conversationSync.invalidate(id);
+  flushConversationChanges();
+});
+
+let conversationHeadRead: Promise<void> | undefined;
+let conversationHeadAbort: AbortController | undefined;
+let conversationHeadTimer: ReturnType<typeof setTimeout> | undefined;
+let requestedReconciliation = 0;
+let completedReconciliation = 0;
+let pushRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let pushRecoveryDelay = 1000;
+
+function summaryUnchanged(previous: ConversationSummary | undefined, incoming: ConversationSummary): boolean {
+  return previous !== undefined && previous.title === incoming.title && previous.titleSource === incoming.titleSource &&
+    previous.createdAt === incoming.createdAt && previous.updatedAt === incoming.updatedAt &&
+    previous.messageCount === incoming.messageCount && previous.lastMessagePreview === incoming.lastMessagePreview &&
+    previous.hasUnreadProactive === incoming.hasUnreadProactive;
+}
+
+function refreshConversationHead(allKnown = false): Promise<void> {
+  if (disposed) return Promise.resolve();
+  if (allKnown) requestedReconciliation++;
+  if (conversationHeadRead) return conversationHeadRead;
+  const reconcileRevision = requestedReconciliation;
+  const controller = new AbortController();
+  conversationHeadAbort = controller;
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const revision = summaryRevision;
+  conversationHeadRead = (async () => {
+    const page = await getConversations(30, null, controller.signal);
+    if (disposed || controller.signal.aborted) return;
+    const previous = new Map(conversations.value.map(summary => [summary.id, summary]));
+    // Retain loaded pages. If an entirely new head displaced every known row,
+    // restart pagination from that head so the intervening rows remain reachable.
+    if (previous.size === 0 || (page.hasMore && !page.items.some(row => previous.has(row.id)))) {
+      nextHistoryCursor.value = page.nextCursor ?? null;
+      hasMoreHistory.value = page.hasMore;
+    }
+    for (const summary of page.items) {
+      if (deletedConversations.has(summary.id) || (summaryRevisions.get(summary.id) ?? 0) > revision) continue;
+      const old = previous.get(summary.id);
+      if (!summaryUnchanged(old, summary)) mergeConversationSummary(summary);
+      const owner = contexts.get(summary.id);
+      const messageCountChanged = old?.messageCount !== summary.messageCount;
+      // Only fetch a detail snapshot when a loaded context is behind the server.
+      // The existing queue defers this work during a local streaming turn.
+      if (owner?.loaded && (owner.remoteUpdatedAt !== summary.updatedAt ||
+          (messageCountChanged && owner.remoteMessageCount !== summary.messageCount)) &&
+          !conversationSync.pending(summary.id)) conversationSync.invalidate(summary.id);
+    }
+    if (reconcileRevision > completedReconciliation) {
+      completedReconciliation = reconcileRevision;
+      const incoming = new Set(page.items.map(row => row.id));
+      // Reconnection recovered the recent head; reconcile older rows already
+      // loaded in the sidebar too, including deletions missed while disconnected.
+      for (const id of previous.keys()) if (!incoming.has(id) && !deletedConversations.has(id) && !conversationSync.pending(id))
+        conversationSync.invalidate(id);
+    }
+    flushConversationChanges();
+  })().finally(() => {
+    clearTimeout(timeout);
+    conversationHeadRead = undefined;
+    if (conversationHeadAbort === controller) conversationHeadAbort = undefined;
+    schedulePushRecovery();
+  });
+  return conversationHeadRead;
+}
+
+// Retry failed invalidations only. No timer remains once the push channel's
+// outstanding work is reconciled, even if a GET failed while the socket stayed online.
+function schedulePushRecovery(): void {
+  const headDirty = requestedReconciliation > completedReconciliation;
+  const active = props.conversationPushActive && !disposed && document.visibilityState === 'visible' && navigator.onLine;
+  const needsRetry = active && ((headDirty && !conversationHeadRead) || conversationSync.retryable());
+  if (!needsRetry) {
+    clearTimeout(pushRecoveryTimer);
+    pushRecoveryTimer = undefined;
+    if (!active || (!headDirty && !conversationSync.hasPending())) pushRecoveryDelay = 1000;
+    return;
+  }
+  if (pushRecoveryTimer !== undefined) return;
+  pushRecoveryTimer = setTimeout(async () => {
+    pushRecoveryTimer = undefined;
+    if (disposed || !props.conversationPushActive || document.visibilityState !== 'visible' || !navigator.onLine) { schedulePushRecovery(); return; }
+    pushRecoveryDelay = Math.min(pushRecoveryDelay * 2, 30000);
+    await Promise.allSettled([
+      requestedReconciliation > completedReconciliation ? refreshConversationHead() : Promise.resolve(),
+      conversationSync.flush()
+    ]);
+    schedulePushRecovery();
+  }, pushRecoveryDelay);
+}
+
+// Native Android writes already emit a targeted local invalidation. Poll less
+// frequently there, and only while its Activity is actually in the foreground.
+function scheduleConversationHeadSync(immediate = false): void {
+  clearTimeout(conversationHeadTimer);
+  if (disposed || document.visibilityState !== 'visible' || !navigator.onLine) return;
+  if (props.conversationPushActive) {
+    if (immediate) void reconcileConversations(true);
+    return;
+  }
+  const foreground = clientEnvironment().isForeground;
+  conversationHeadTimer = setTimeout(async () => {
+    if (disposed || document.visibilityState !== 'visible' || props.conversationPushActive) return;
+    try {
+      if (!foreground || await foreground()) await refreshConversationHead();
+    } catch { /* The next bounded poll or reconnect retries. */ }
+    scheduleConversationHeadSync();
+  }, immediate ? 0 : foreground ? 15000 : 5000);
+}
+
+function conversationHeadForeground(): void { scheduleConversationHeadSync(true); schedulePushRecovery(); }
+watch(() => props.conversationPushActive, active => {
+  if (active) {
+    for (const timer of historyRefreshTimers.values()) clearTimeout(timer);
+    historyRefreshTimers.clear();
+  }
+  scheduleConversationHeadSync(true);
+  schedulePushRecovery();
+});
 
 async function loadConversationHistory(reset = false): Promise<void> {
   if (isLoadingHistory.value) {
@@ -621,8 +981,11 @@ async function loadConversationHistory(reset = false): Promise<void> {
   historyErrorMessage.value = null;
 
   try {
+    const revision = summaryRevision;
     const page = await getConversations(30, reset ? null : nextHistoryCursor.value);
-    const incoming = reset ? page.items : [...conversations.value, ...page.items];
+    if (disposed) return;
+    const updatedDuringRead = conversations.value.filter(row => (summaryRevisions.get(row.id) ?? 0) > revision);
+    const incoming = reset ? [...updatedDuringRead, ...page.items] : [...updatedDuringRead, ...conversations.value, ...page.items];
     const seen = new Set<string>();
     conversations.value = incoming.filter((conversation) => {
       if (seen.has(conversation.id) || deletedConversations.has(conversation.id)) {
@@ -631,7 +994,8 @@ async function loadConversationHistory(reset = false): Promise<void> {
 
       seen.add(conversation.id);
       return true;
-    });
+    }).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime() || b.id.localeCompare(a.id));
+    for (const summary of page.items) if ((summaryRevisions.get(summary.id) ?? 0) <= revision) summaryRevisions.set(summary.id, ++summaryRevision);
     nextHistoryCursor.value = page.nextCursor ?? null;
     hasMoreHistory.value = page.hasMore;
 
@@ -649,6 +1013,7 @@ async function loadConversationHistory(reset = false): Promise<void> {
 }
 
 function refreshHistoryAfterResponse(ownerId: string): void {
+  if (props.conversationPushActive) return;
   const existing = historyRefreshTimers.get(ownerId);
   if (existing !== undefined) window.clearTimeout(existing);
   const refresh = async (attempt: number): Promise<void> => {
@@ -656,7 +1021,7 @@ function refreshHistoryAfterResponse(ownerId: string): void {
     if (disposed || deletedConversations.has(ownerId)) return;
     await loadConversationHistory(true);
     const title = conversations.value.find(c => c.id === ownerId)?.title?.trim();
-    if (disposed || attempt >= 4 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
+    if (disposed || props.conversationPushActive || attempt >= 4 || deletedConversations.has(ownerId) || (title && title !== 'Nova conversa')) return;
     historyRefreshTimers.set(ownerId, window.setTimeout(() => { void refresh(attempt + 1); }, attempt === 0 ? 1800 : 3400));
   };
   void refresh(0);
@@ -702,12 +1067,18 @@ async function openConversation(targetConversationId: string, restoring = false)
   }
   isRestoring.value = !owner.loaded;
   const revision = owner.revision;
+  const metadataRevision = summaryRevisions.get(targetConversationId) ?? 0;
   try {
     const conversation = await getConversation(targetConversationId);
     if (request !== conversationLoad || selected.value !== owner || owner.revision !== revision) return;
-    owner.title = conversation.title ?? 'Nova conversa';
-    owner.createdAt = conversation.createdAt;
-    owner.messages = conversation.messages.map(message => ({ ...message, serverId: message.id }));
+    if ((summaryRevisions.get(targetConversationId) ?? 0) === metadataRevision) {
+      owner.title = conversation.title ?? 'Nova conversa';
+      owner.createdAt = conversation.createdAt;
+    }
+    owner.revision++;
+    owner.messages = mergeConversationMessages(owner.messages, conversation.messages);
+    owner.remoteUpdatedAt = conversation.updatedAt;
+    owner.remoteMessageCount = conversation.messages.length;
     owner.loaded = true;
     resumeMemoryActivityPolling();
   } catch {
@@ -780,7 +1151,7 @@ async function handleSubmit(): Promise<void> {
   owner.messages.push(localMessage, assistantMessage);
   owner.following = true;
   scrollToLatest();
-  let streamedContent = '';
+  const presentation = createPresentation(owner, assistantMessage);
   const owns = (): boolean => activeTurns.get(turnId) === turn && !controller.signal.aborted;
 
   try {
@@ -791,10 +1162,8 @@ async function handleSubmit(): Promise<void> {
       },
       onToken: (eventTurnId, token) => {
         if (!owns() || eventTurnId !== turnId) return;
-        streamedContent += token;
         turn.status = 'responding';
-        assistantMessage.content = getCompletedWordPrefix(streamedContent);
-        if (selected.value === owner) scrollToLatestDuringStream();
+        appendPresentation(presentation, token);
       },
       onToolStatus: (eventTurnId, status) => {
         if (!owns() || eventTurnId !== turnId) return;
@@ -807,9 +1176,8 @@ async function handleSubmit(): Promise<void> {
         associateTurnConversation(turn, id, titleSource);
         assistantMessage.serverId = messageId;
         assistantMessage.memoryActivity = memoryActivity;
-        assistantMessage.content = streamedContent;
         assistantMessage.pending = false;
-        assistantMessage.streaming = false;
+        completePresentation(presentation);
         activeTurns.delete(turnId);
         if (owner.toolState === 'completed' || owner.toolState === 'failed') {
           showToolStatus(owner.toolMessage ?? '', owner.toolState, owner);
@@ -833,6 +1201,7 @@ async function handleSubmit(): Promise<void> {
     owner.error ??= error instanceof TypeError
       ? 'Servidor indisponível. Tente novamente em instantes.'
       : error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.';
+    settlePresentation(presentation, true);
     if (!turn.accepted) {
       // No acceptance acknowledgement: retain the prompt for a manual retry,
       // with the same turn ID. Never automatically resend a possibly accepted turn.
@@ -844,8 +1213,7 @@ async function handleSubmit(): Promise<void> {
       localMessage.pending = false;
       assistantMessage.pending = false;
       assistantMessage.streaming = false;
-      assistantMessage.content = streamedContent;
-      if (!streamedContent) owner.messages = owner.messages.filter(message => message !== assistantMessage);
+      if (!presentation.reveal.content) owner.messages = owner.messages.filter(message => message !== assistantMessage);
     }
   } finally {
     if (activeTurns.get(turnId) === turn) {
@@ -862,6 +1230,8 @@ async function stopActiveTurn(reason = 'user_stop', turn = selectedTurn.value): 
   clearToolStatus(turn.owner);
   turn.controller.abort();
   if (activeSpeechOwner === turn.owner) stopPlayback();
+  const presentation = textPresentations.get(turn.assistant);
+  if (presentation) settlePresentation(presentation, true);
   turn.assistant.pending = false;
   turn.assistant.streaming = false;
   turn.assistant.interrupted = true;
@@ -1078,16 +1448,35 @@ function navigateToConversation(id: string): void {
   if (isRestoring.value) { explicitDestination = id; return; }
   void openConversation(id);
 }
+// The native hands-free session selects its own chat without foregrounding the
+// window or focusing the keyboard. Drafts belong to their original contexts.
+function navigateNativeVoiceConversation(id: string | null): void {
+  if (transcription.isBusy.value) return;
+  if (id) {
+    if (conversationId.value !== id) void openConversation(id);
+    conversationChanged(id, false);
+  } else if (conversationId.value && !selectedHasActiveTurn.value) {
+    startNewConversation(false);
+  }
+}
+watch(nativeComposerActive, active => { if (!active) resizeComposer(); });
+watch(() => props.nativeVoiceActive, active => { if (!active) clearNativeVoiceStreams(true); });
 watch(isRestoring, restoring => {
   if (!restoring && explicitDestination) { const id = explicitDestination; explicitDestination = null; void openConversation(id); }
 });
-defineExpose({ openConversation: navigateToConversation });
+defineExpose({ openConversation: navigateToConversation, navigateNativeVoiceConversation, acceptNativeVoiceStream, conversationChanged, reconcileConversations, resetConversationChanges });
 onMounted(() => {
   document.addEventListener('visibilitychange', serverForeground);
+  document.addEventListener('visibilitychange', flushPresentationOnHidden);
   window.addEventListener('focus', serverForeground);
   window.addEventListener('aegis-app-visibility', serverForeground);
   window.addEventListener('online', serverNetworkChanged);
   window.addEventListener('offline', serverNetworkChanged);
+  document.addEventListener('visibilitychange', conversationHeadForeground);
+  window.addEventListener('focus', conversationHeadForeground);
+  window.addEventListener('online', conversationHeadForeground);
+  window.addEventListener('offline', conversationHeadForeground);
+  scheduleConversationHeadSync();
   syncViewportHeight();
   layoutObserver = new ResizeObserver(handleMessagesLayout);
   if (messagesContainer.value) layoutObserver.observe(messagesContainer.value);
@@ -1103,15 +1492,7 @@ onMounted(() => {
       emailConnectionState.value = 'pending';
       emailConnectionMessage.value = 'Conectando conta Google…';
     },
-    connected: () => void confirmEmailConnection(),
-    failed: (code) => {
-      const message = emailConnectionFailureMessage(code);
-      if (message) {
-        emailConnectionAbortController?.abort();
-        emailConnectionState.value = 'failed';
-        emailConnectionMessage.value = message;
-      }
-    }
+    connected: () => void confirmEmailConnection()
   });
   const handleViewportChange = (): void => {
     syncViewportHeight();
@@ -1142,8 +1523,18 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', flushPresentationOnHidden);
+  for (const p of textPresentations.values()) clearTimeout(p.timer);
+  textPresentations.clear(); nativeVoiceTurns.clear(); closedNativeVoiceTurns.clear();
   disposed = true;
+  conversationSync.dispose(); clearTimeout(conversationSyncTimer); clearTimeout(pushRecoveryTimer); for (const timer of conversationRetryTimers.values()) clearTimeout(timer); conversationRetryTimers.clear();
   healthController?.abort();
+  clearTimeout(conversationHeadTimer);
+  conversationHeadAbort?.abort();
+  document.removeEventListener('visibilitychange', conversationHeadForeground);
+  window.removeEventListener('focus', conversationHeadForeground);
+  window.removeEventListener('online', conversationHeadForeground);
+  window.removeEventListener('offline', conversationHeadForeground);
   document.removeEventListener('visibilitychange', serverForeground);
   window.removeEventListener('focus', serverForeground);
   window.removeEventListener('aegis-app-visibility', serverForeground);
@@ -1221,7 +1612,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="conversationId || healthState === 'offline'" class="chat-voice-controls">
+        <div v-if="$slots['voice-status'] || conversationId || healthState === 'offline'" class="chat-voice-controls">
+          <slot name="voice-status" />
           <span v-if="healthState === 'offline'" class="server-indicator" role="status" title="Servidor indisponível">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M9.5 4.4A16.4 16.4 0 0 1 22 8M2 8a16.6 16.6 0 0 1 3.3-2.1M13.5 9.2A11.3 11.3 0 0 1 18.5 12M5.5 12a11.2 11.2 0 0 1 3-1.9M9 16a4.7 4.7 0 0 1 6 0M12 20h.01" /></svg>
             <span class="sr-only">Servidor indisponível</span>
@@ -1271,13 +1663,15 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <form class="composer" @submit.prevent="selectedHasActiveTurn ? stopActiveTurn() : handleSubmit()">
+      <form class="composer" @submit.prevent="!nativeComposerActive && (selectedHasActiveTurn ? stopActiveTurn() : handleSubmit())">
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
           Uma mensagem não pôde ser enviada.
           <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
         </p>
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
+        <div v-show="nativeComposerActive"><slot name="native-voice-composer" /></div>
+        <template v-if="!nativeComposerActive">
         <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
           @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
         <div v-else class="composer-field">
@@ -1311,6 +1705,7 @@ onBeforeUnmount(() => {
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
         <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        </template>
       </form>
       </section>
     </div>

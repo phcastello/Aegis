@@ -115,16 +115,19 @@ public sealed class Conversation : AuditableEntity
 
     public ChatMessage AddMessage(string role, string content, DateTimeOffset? now = null)
     {
-        if (DeletedAt is not null)
-        {
-            throw new InvalidOperationException("Cannot add messages to a deleted conversation.");
-        }
-
         var message = new ChatMessage(Id, role, content, now);
+        AddMessage(message, now);
+        return message;
+    }
+
+    public void AddMessage(ChatMessage message, DateTimeOffset? now = null)
+    {
+        if (DeletedAt is not null)
+            throw new InvalidOperationException("Cannot add messages to a deleted conversation.");
+        if (message.ConversationId != Id)
+            throw new ArgumentException("Message belongs to a different conversation.", nameof(message));
         _messages.Add(message);
         Touch(now);
-
-        return message;
     }
 
     private static string? NormalizeTitle(string? title)

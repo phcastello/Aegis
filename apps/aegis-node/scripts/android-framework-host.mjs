@@ -1,3 +1,18 @@
+// The native test reports only fixed phases and a numeric WebView provider
+// major. Neither an absent UI checkpoint nor an arbitrary timeout is evidence.
+export const handsFreeWebViewPhases=['hands_free_real_ipc_initial_state','hands_free_real_setup_ui','hands_free_unsupported_webview_warning'];
+export function handsFreeWebViewEvidence(log) {
+  const lines=new Set(log.split(/\r?\n/));
+  const versions=[...lines].map(line=>line.match(/^phase=hands_free_webview_provider_major version=([1-9][0-9]{0,3})$/)?.[1]).filter(Boolean);
+  if(versions.length!==1)throw Error('hands_free_webview_provider_evidence_missing_or_ambiguous');
+  const providerMajor=Number(versions[0]);
+  const present=handsFreeWebViewPhases.filter(phase=>lines.has(`phase=${phase} errorType=Checkpoint`));
+  const expected=providerMajor<107?handsFreeWebViewPhases[2]:handsFreeWebViewPhases[1];
+  if(present.length!==2 || !present.includes(handsFreeWebViewPhases[0]) || !present.includes(expected))
+    throw Error('hands_free_webview_ipc_and_expected_ui_checkpoint_required');
+  return {providerMajor,expected,present};
+}
+
 // Disposable Android framework harness only. Never expose adb args/output in errors.
 const operationFor = args => {
   if(args[0]==='shell') {

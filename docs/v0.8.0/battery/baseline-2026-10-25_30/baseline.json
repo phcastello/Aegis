@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "project": "Aegis",
+  "experiment": "v0.8.0 hands-free Android: baseline naturalístico anterior à implementação",
+  "timezone_context": "America/Sao_Paulo",
+  "period_start": "2026-10-25",
+  "period_end": "2026-10-30",
+  "excluded_transition_date": "2026-10-31",
+  "feature_enabled": false,
+  "feature_state_source": "declaração do proprietário",
+  "capture_date_inferred_from_context": "2026-10-31",
+  "capture_clock_displayed": "09:54",
+  "capture_battery_displayed_percent": 30,
+  "display": {
+    "language": "pt-BR",
+    "theme": "dark",
+    "title": "Atividade da bateria",
+    "selected_dates": "25–30 de outubro, seis imagens",
+    "visible_week_dates": [
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "weekly_average_displayed_percent": 85,
+    "weekly_axis_labels": [
+      0,
+      85,
+      200
+    ],
+    "level_axis_labels": [
+      0,
+      85,
+      100
+    ],
+    "level_time_axis_labels": [
+      "0",
+      "12"
+    ],
+    "level_legend": [
+      "Nível da bateria",
+      "Nível estimado da bateria",
+      "Carregando"
+    ],
+    "week_legend": "Esta semana"
+  },
+  "not_established": {
+    "device_model": null,
+    "android_version": null,
+    "oneui_version": null,
+    "battery_capacity_mah": null,
+    "battery_health_percent": null,
+    "charging_limit_enabled": null,
+    "power_saving_enabled": null,
+    "historical_aegis_app_energy": null
+  },
+  "days": [
+    {
+      "date": "2026-10-25",
+      "weekday": "domingo",
+      "daily_battery_usage_percent": 60,
+      "screen_on_hhmm": "02:34",
+      "screen_on_minutes": 154,
+      "screen_off_hhmm": "18:59",
+      "screen_off_minutes": 1139,
+      "screen_on_off_sum_minutes": 1293,
+      "unaccounted_to_24h_minutes": 147,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-25.jpg",
+      "source_sha256": "b303c5375dad348a5e472426092494b1edab0d92008778e52c5cbd7e7c912cc2"
+    },
+    {
+      "date": "2026-10-26",
+      "weekday": "segunda-feira",
+      "daily_battery_usage_percent": 90,
+      "screen_on_hhmm": "05:01",
+      "screen_on_minutes": 301,
+      "screen_off_hhmm": "18:20",
+      "screen_off_minutes": 1100,
+      "screen_on_off_sum_minutes": 1401,
+      "unaccounted_to_24h_minutes": 39,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-26.jpg",
+      "source_sha256": "9daa3b13a364df20e066d7f3eb634fd9b69d367d3acf7ed864b8aef28b79d1a7"
+    },
+    {
+      "date": "2026-10-27",
+      "weekday": "terça-feira",
+      "daily_battery_usage_percent": 82,
+      "screen_on_hhmm": "05:51",
+      "screen_on_minutes": 351,
+      "screen_off_hhmm": "15:45",
+      "screen_off_minutes": 945,
+      "screen_on_off_sum_minutes": 1296,
+      "unaccounted_to_24h_minutes": 144,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-27.jpg",
+      "source_sha256": "2089e9cc8cff8e7b513645e26b322007cb29851289671b4cbd54f1b79d61bcfc"
+    },
+    {
+      "date": "2026-10-28",
+      "weekday": "quarta-feira",
+      "daily_battery_usage_percent": 113,
+      "screen_on_hhmm": "06:38",
+      "screen_on_minutes": 398,
+      "screen_off_hhmm": "16:25",
+      "screen_off_minutes": 985,
+      "screen_on_off_sum_minutes": 1383,
+      "unaccounted_to_24h_minutes": 57,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-28.jpg",
+      "source_sha256": "ef1fc7ad1420371ff8ea1377803733e9335fae79ba5bb012a9d42eea27061d72"
+    },
+    {
+      "date": "2026-10-29",
+      "weekday": "quinta-feira",
+      "daily_battery_usage_percent": 87,
+      "screen_on_hhmm": "04:11",
+      "screen_on_minutes": 251,
+      "screen_off_hhmm": "14:34",
+      "screen_off_minutes": 874,
+      "screen_on_off_sum_minutes": 1125,
+      "unaccounted_to_24h_minutes": 315,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-29.jpg",
+      "source_sha256": "64908a0ef8eb66d832fb0193627176faef96ca4f4dcc3dfea820ff55726652c8"
+    },
+    {
+      "date": "2026-10-30",
+      "weekday": "sexta-feira",
+      "daily_battery_usage_percent": 97,
+      "screen_on_hhmm": "03:26",
+      "screen_on_minutes": 206,
+      "screen_off_hhmm": "18:25",
+      "screen_off_minutes": 1105,
+      "screen_on_off_sum_minutes": 1311,
+      "unaccounted_to_24h_minutes": 129,
+      "weekly_average_displayed_percent": 85,
+      "source_image": "screenshots/2026-10-30.jpg",
+      "source_sha256": "2a6978359c245085dc0b7bcdb7845e5834e6d774b0d27af82fa28674aedec7a1"
+    }
+  ],
+  "derived_summary": {
+    "days": 6,
+    "sum_daily_usage_percentage_points": 529,
+    "mean_daily_usage_percent": 88.16666666666667,
+    "median_daily_usage_percent": 88.5,
+    "min_daily_usage_percent": 60,
+    "max_daily_usage_percent": 113,
+    "sample_standard_deviation_daily_usage_percentage_points": 17.497618885627457,
+    "total_screen_on_minutes": 1661,
+    "total_screen_off_minutes": 6148,
+    "mean_screen_on_minutes": 276.8333333333333,
+    "mean_screen_off_minutes": 1024.6666666666667,
+    "total_screen_on_hhmm": "27:41",
+    "total_screen_off_hhmm": "102:28",
+    "mean_screen_on_hhmmss": "04:36:50",
+    "mean_screen_off_hhmmss": "17:04:40"
+  },
+  "graph_estimates": [
+    {
+      "date": "2026-10-25",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "45–50",
+      "last_visible_level_percent_range": "65–70",
+      "minimum_visible_level_percent_range": "5–10",
+      "maximum_visible_level_percent_range": "80–85",
+      "observations": "Duas faixas verdes, aproximadamente 15h30–16h30 e 17h30–19h30. Queda ao longo da madrugada/manhã; recargas na tarde/início da noite; queda após a última recarga.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    },
+    {
+      "date": "2026-10-26",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "65–70",
+      "last_visible_level_percent_range": "35–40",
+      "minimum_visible_level_percent_range": "0–5",
+      "maximum_visible_level_percent_range": "65–70",
+      "observations": "Uma faixa verde, aproximadamente 18h–19h. Descarga até perto da base do gráfico antes da recarga; pico pós-recarga por volta de 55–60%; depois queda.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    },
+    {
+      "date": "2026-10-27",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "35–40",
+      "last_visible_level_percent_range": "65–75",
+      "minimum_visible_level_percent_range": "10–15",
+      "maximum_visible_level_percent_range": "80–85",
+      "observations": "Duas faixas verdes, aproximadamente 3h30–4h30 e 20h30–22h30. Primeira elevação até cerca de 65–70%, descarga durante o dia e segunda elevação até cerca de 85%.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    },
+    {
+      "date": "2026-10-28",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "65–75",
+      "last_visible_level_percent_range": "15–25",
+      "minimum_visible_level_percent_range": "15–25",
+      "maximum_visible_level_percent_range": "80–85",
+      "observations": "Uma faixa verde, aproximadamente 14h30–15h30. Descarga até cerca de 20%, recarga até cerca de 85% e nova descarga até cerca de 20% no fim do gráfico.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    },
+    {
+      "date": "2026-10-29",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "15–25",
+      "last_visible_level_percent_range": "80–85",
+      "minimum_visible_level_percent_range": "0–5",
+      "maximum_visible_level_percent_range": "80–85",
+      "observations": "Duas faixas verdes, aproximadamente 0h30–4h e 21h–23h. Patamar próximo de 85% durante parte da primeira faixa; descarga até perto da base no fim da tarde/noite; nova recarga até cerca de 85%.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    },
+    {
+      "date": "2026-10-30",
+      "kind": "visual_estimate_not_measurement",
+      "first_visible_level_percent_range": "80–85",
+      "last_visible_level_percent_range": "50–55",
+      "minimum_visible_level_percent_range": "15–20",
+      "maximum_visible_level_percent_range": "80–85",
+      "observations": "Uma faixa verde, aproximadamente 13h–15h30. Descarga da madrugada até cerca de 15–20%; recarga até cerca de 85%; depois queda até aproximadamente 50–55%.",
+      "charging_intervals_accuracy": "Aproximações visuais em escala diária, não horários instrumentados. Barras verdes separadas não provam conexões físicas distintas."
+    }
+  ],
+  "limitations": [
+    "Valores diários e tempos foram transcritos das imagens fornecidas pelo proprietário; não foram medidos por adb.",
+    "O ano 2026 e a data de captura presumida 2026-10-31 vêm do contexto da conversa; as imagens mostram dia e mês, não o ano nem a data completa da captura.",
+    "09:54 e 30% na barra de status descrevem o momento das capturas, não os níveis dos dias históricos selecionados.",
+    "O valor 85% do gráfico semanal é uma métrica exibida pelo sistema; não é a média calculada dos seis dias. A janela visível inclui o dia 31, excluído deste baseline.",
+    "Não se conhece a fórmula exata nem o período completo usado para a média semanal da interface.",
+    "Os valores >100% de uso diário não devem ser truncados; descrevem consumo acumulado, não nível de carga restante.",
+    "A soma de tela ligada e desligada não é 24h. A diferença é apenas aritmética; não equivale automaticamente a tempo carregando, desligado ou não utilizado.",
+    "Os gráficos indicam barras verdes de carregamento e níveis aproximados; não medem energia em mAh/Wh, quantidade precisa de cargas, potência, temperatura ou saúde da bateria.",
+    "Os patamares perto de 85% são compatíveis com um limite de carga, mas as capturas não comprovam essa configuração.",
+    "Tela desligada não comprova suspensão da CPU, repouso real nem ausência de apps em segundo plano.",
+    "Não estão visíveis consumo individual da Aegis, lista completa de apps, modelo do celular, versão Android/One UI, brilho, estado de economia de energia confirmado ou capacidade real da bateria.",
+    "Ícones de Wi-Fi, sinal móvel/VoLTE e chave compatível com VPN são visíveis no momento das capturas, não como histórico de seis dias. Há também alarme/som silenciado e um pequeno símbolo de bateria cuja configuração não foi confirmada.",
+    "Os 6 dias são uso naturalístico relatado pelo proprietário, sem wake word. A janela posterior de cerca de 3 dias será exploratória, não teste causal controlado.",
+    "Dia 2026-10-31 excluído por solicitação do proprietário como transição; excluir também qualquer outro dia parcial de instalação/ativação efetiva.",
+    "Conservar as imagens originais na área privada, sem substituí-las por estimativas ou recortes. Dados estruturados e relatório podem ser versionados conforme solicitado."
+  ],
+  "original_images": [
+    {
+      "source_attachment_filename": "1000115529.jpg",
+      "preserved_path": "screenshots/2026-10-25.jpg",
+      "bytes": 99620,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "b303c5375dad348a5e472426092494b1edab0d92008778e52c5cbd7e7c912cc2"
+    },
+    {
+      "source_attachment_filename": "1000115530.jpg",
+      "preserved_path": "screenshots/2026-10-26.jpg",
+      "bytes": 98373,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "9daa3b13a364df20e066d7f3eb634fd9b69d367d3acf7ed864b8aef28b79d1a7"
+    },
+    {
+      "source_attachment_filename": "1000115531.jpg",
+      "preserved_path": "screenshots/2026-10-27.jpg",
+      "bytes": 98988,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "2089e9cc8cff8e7b513645e26b322007cb29851289671b4cbd54f1b79d61bcfc"
+    },
+    {
+      "source_attachment_filename": "1000115532.jpg",
+      "preserved_path": "screenshots/2026-10-28.jpg",
+      "bytes": 100895,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "ef1fc7ad1420371ff8ea1377803733e9335fae79ba5bb012a9d42eea27061d72"
+    },
+    {
+      "source_attachment_filename": "1000115533.jpg",
+      "preserved_path": "screenshots/2026-10-29.jpg",
+      "bytes": 102214,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "64908a0ef8eb66d832fb0193627176faef96ca4f4dcc3dfea820ff55726652c8"
+    },
+    {
+      "source_attachment_filename": "1000115534.jpg",
+      "preserved_path": "screenshots/2026-10-30.jpg",
+      "bytes": 102580,
+      "width_px": 691,
+      "height_px": 1536,
+      "sha256": "2a6978359c245085dc0b7bcdb7845e5834e6d774b0d27af82fa28674aedec7a1"
+    }
+  ]
+}

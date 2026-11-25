@@ -1,0 +1,1504 @@
+{
+  "schema": 1,
+  "date": "2026-11-24",
+  "scope": "Local replay and S20 API probes; no field validation of full distributed media cancellation yet",
+  "syntheticPrimaryBeforeCoverageGate": {
+    "cleanAcceptedSyntheticWakeCount": 15,
+    "independentPublicEchoSources": 4,
+    "syntheticMusicSources": 4,
+    "modelSha256": "1efa802e2765a6ba276dbeaf0b171901c421570236c31332cf5d6ecc63dc5291",
+    "nominalNearToEchoRmsDb": [
+      0,
+      6,
+      12
+    ],
+    "quietReferenceByteIdentical": true,
+    "hostAecProcessCpu": {
+      "processedAudioSeconds": 763.0,
+      "cpuSeconds": 23.599991000000003,
+      "cpuMillisecondsPerAudioSecond": 30.930525557011798,
+      "gatedLinearThreadCpuMillisecondsPerAudioSecond": 14.413097771952819,
+      "wallSecondsIncludingPipe": 68.83172657294199
+    },
+    "methods": [
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": -80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.011,
+            "nearProjectionSnrMedianDb": -0.011
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.006,
+            "nearProjectionSnrMedianDb": 5.994
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.003,
+            "nearProjectionSnrMedianDb": 11.997
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": -80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 3.429,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.39,
+            "nearProjectionSnrMedianDb": 3.29
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.426,
+            "nearProjectionSnrMedianDb": 6.757
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.472,
+            "nearProjectionSnrMedianDb": 9.243
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": -80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 25.889,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -2.555,
+            "nearProjectionSnrMedianDb": 4.506
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.78,
+            "nearProjectionSnrMedianDb": 6.439
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.029,
+            "nearProjectionSnrMedianDb": 7.969
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": -80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 3.184,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.373,
+            "nearProjectionSnrMedianDb": 3.051
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.423,
+            "nearProjectionSnrMedianDb": 6.531
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.468,
+            "nearProjectionSnrMedianDb": 9.109
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 0,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": 0.012,
+            "nearProjectionSnrMedianDb": 0.012
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": 0.006,
+            "nearProjectionSnrMedianDb": 6.006
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": 0.003,
+            "nearProjectionSnrMedianDb": 12.003
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 0,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 3.521,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -0.486,
+            "nearProjectionSnrMedianDb": 3.562
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.454,
+            "nearProjectionSnrMedianDb": 7.43
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.465,
+            "nearProjectionSnrMedianDb": 9.626
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 0,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 29.345,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -3.072,
+            "nearProjectionSnrMedianDb": 4.3
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.813,
+            "nearProjectionSnrMedianDb": 6.689
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 3,
+            "nearGainMedianDb": -1.482,
+            "nearProjectionSnrMedianDb": 7.784
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 0,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 3.154,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -0.486,
+            "nearProjectionSnrMedianDb": 3.162
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.449,
+            "nearProjectionSnrMedianDb": 6.922
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.434,
+            "nearProjectionSnrMedianDb": 9.529
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.078,
+            "nearProjectionSnrMedianDb": -0.077
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.039,
+            "nearProjectionSnrMedianDb": 5.962
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -0.02,
+            "nearProjectionSnrMedianDb": 11.981
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 2.224,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.551,
+            "nearProjectionSnrMedianDb": 0.501
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.598,
+            "nearProjectionSnrMedianDb": 4.794
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -0.615,
+            "nearProjectionSnrMedianDb": 7.511
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 10.629,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.809,
+            "nearProjectionSnrMedianDb": -1.519
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -2.181,
+            "nearProjectionSnrMedianDb": 2.689
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -2.218,
+            "nearProjectionSnrMedianDb": 4.739
+          }
+        }
+      },
+      {
+        "source": "public-speech",
+        "referenceOffsetMs": 80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 0.141,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.235,
+            "nearProjectionSnrMedianDb": 0.598
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -0.21,
+            "nearProjectionSnrMedianDb": 5.964
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -0.219,
+            "nearProjectionSnrMedianDb": 10.608
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": -80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": 0.112,
+            "nearProjectionSnrMedianDb": 0.112
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": 0.056,
+            "nearProjectionSnrMedianDb": 6.057
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": 0.028,
+            "nearProjectionSnrMedianDb": 12.029
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": -80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 5.883,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.765,
+            "nearProjectionSnrMedianDb": 2.292
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.85,
+            "nearProjectionSnrMedianDb": 4.913
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.858,
+            "nearProjectionSnrMedianDb": 6.898
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": -80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 31.814,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -19.072,
+            "nearProjectionSnrMedianDb": -6.3
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -9.912,
+            "nearProjectionSnrMedianDb": -1.968
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -7.415,
+            "nearProjectionSnrMedianDb": -0.216
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": -80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 6.762,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.765,
+            "nearProjectionSnrMedianDb": 2.172
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.85,
+            "nearProjectionSnrMedianDb": 4.864
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -0.858,
+            "nearProjectionSnrMedianDb": 6.888
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 0,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": 0.056,
+            "nearProjectionSnrMedianDb": 0.056
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": 0.028,
+            "nearProjectionSnrMedianDb": 6.028
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": 0.014,
+            "nearProjectionSnrMedianDb": 12.014
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 0,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 6.468,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.13,
+            "nearProjectionSnrMedianDb": 3.056
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.113,
+            "nearProjectionSnrMedianDb": 5.66
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.083,
+            "nearProjectionSnrMedianDb": 6.612
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 0,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 25.632,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -8.217,
+            "nearProjectionSnrMedianDb": -0.644
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -4.746,
+            "nearProjectionSnrMedianDb": 2.399
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -2.72,
+            "nearProjectionSnrMedianDb": 4.532
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 0,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 7.116,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.13,
+            "nearProjectionSnrMedianDb": 3.056
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.113,
+            "nearProjectionSnrMedianDb": 5.66
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.083,
+            "nearProjectionSnrMedianDb": 6.612
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 3,
+            "nearGainMedianDb": 0.132,
+            "nearProjectionSnrMedianDb": 0.134
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 3,
+            "nearGainMedianDb": 0.067,
+            "nearProjectionSnrMedianDb": 6.068
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 3,
+            "nearGainMedianDb": 0.033,
+            "nearProjectionSnrMedianDb": 12.035
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 1.423,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -1.025,
+            "nearProjectionSnrMedianDb": -0.694
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.083,
+            "nearProjectionSnrMedianDb": 3.423
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.073,
+            "nearProjectionSnrMedianDb": 5.847
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 5.906,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -4.874,
+            "nearProjectionSnrMedianDb": -2.913
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 1,
+            "nearGainMedianDb": -3.745,
+            "nearProjectionSnrMedianDb": 1.0
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 0,
+            "nearGainMedianDb": -2.887,
+            "nearProjectionSnrMedianDb": 3.398
+          }
+        }
+      },
+      {
+        "source": "synthetic-instrumental",
+        "referenceOffsetMs": 80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 12,
+        "echoReductionMedianDb": 1.68,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {
+          "0": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.045,
+            "nearProjectionSnrMedianDb": -0.433
+          },
+          "6": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.11,
+            "nearProjectionSnrMedianDb": 3.416
+          },
+          "12": {
+            "cases": 4,
+            "wakeHits": 2,
+            "nearGainMedianDb": -1.125,
+            "nearProjectionSnrMedianDb": 5.75
+          }
+        }
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": -80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": -80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 4.499,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": -80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 30.119,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": -80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 5.136,
+        "falseWakeEvents": 3,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 0,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 0,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 5.673,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 0,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 31.465,
+        "falseWakeEvents": 0,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 0,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 6.584,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 80,
+        "method": "raw",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": -0.0,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 80,
+        "method": "linear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 1.761,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 80,
+        "method": "nonlinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 6.254,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      },
+      {
+        "source": "synthetic-wake-media",
+        "referenceOffsetMs": 80,
+        "method": "gatedLinear",
+        "echoOnlyCases": 4,
+        "speechCases": 0,
+        "echoReductionMedianDb": 2.021,
+        "falseWakeEvents": 2,
+        "nearBySnrDb": {}
+      }
+    ]
+  },
+  "heldoutCascade": {
+    "modelHashes": {
+      "aegis.int8.tflite": "1efa802e2765a6ba276dbeaf0b171901c421570236c31332cf5d6ecc63dc5291",
+      "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+      "embedding_model.onnx": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+      "aegis.onnx": "f8972e52ef82db7735132ff54a725e69c0462ebda2bff14446a612633aa46c8b",
+      "initial_features.f32le": "b4ee1271c05d64fed3032f8ddac4d9731c06e03e142052cf231858657e86df16"
+    },
+    "threshold": 0.0692,
+    "heldoutClipCount": 19,
+    "cleanBaseline": {
+      "cases": 19,
+      "primaryHits": 19,
+      "cascadeHits": 17,
+      "referencePrimaryWouldVeto": 0,
+      "referenceCascadeWouldVeto": 0
+    },
+    "priorGate": {
+      "aligned": {
+        "nearOverMedia": {
+          "public-speech": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 4,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 1,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 14,
+                "cascadeHits": 5,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 17,
+                "cascadeHits": 11,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          },
+          "synthetic-instrumental": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 11,
+                "cascadeHits": 9,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 9,
+                "cascadeHits": 8,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 15,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 16,
+                "cascadeHits": 11,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 18,
+                "cascadeHits": 17,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 16,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          }
+        },
+        "wakeLikeMediaControls": {
+          "raw": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 6,
+              "cascadeHits": 6,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          },
+          "gatedLinear": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 4,
+              "cascadeHits": 4,
+              "referencePrimaryWouldVeto": 4,
+              "referenceCascadeWouldVeto": 4
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 7,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          }
+        },
+        "hostAecProcessCpu": {
+          "processedAudioSeconds": 910.0,
+          "cpuSeconds": 28.060415000000003,
+          "cpuMillisecondsPerAudioSecond": 30.83562087912088,
+          "gatedLinearThreadCpuMillisecondsPerAudioSecond": 14.634938021978023,
+          "wallSecondsIncludingPipe": 85.93050490505993
+        }
+      },
+      "twoNewestFramesMissing": {
+        "nearOverMedia": {
+          "public-speech": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 4,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 3,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          },
+          "synthetic-instrumental": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 11,
+                "cascadeHits": 9,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 8,
+                "cascadeHits": 7,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 15,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 13,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 18,
+                "cascadeHits": 17,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 17,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          }
+        },
+        "wakeLikeMediaControls": {
+          "raw": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 6,
+              "cascadeHits": 6,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          },
+          "gatedLinear": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 4,
+              "cascadeHits": 4,
+              "referencePrimaryWouldVeto": 4,
+              "referenceCascadeWouldVeto": 4
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 8,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          }
+        },
+        "hostAecProcessCpu": {
+          "processedAudioSeconds": 910.0,
+          "cpuSeconds": 28.713008,
+          "cpuMillisecondsPerAudioSecond": 31.55275604395604,
+          "gatedLinearThreadCpuMillisecondsPerAudioSecond": 15.019094835164836,
+          "wallSecondsIncludingPipe": 84.20198516501114
+        }
+      }
+    },
+    "productionCoverageGate": {
+      "aligned": {
+        "nearOverMedia": {
+          "public-speech": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 4,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 1,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 14,
+                "cascadeHits": 5,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 17,
+                "cascadeHits": 11,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          },
+          "synthetic-instrumental": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 11,
+                "cascadeHits": 9,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 9,
+                "cascadeHits": 8,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 15,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 16,
+                "cascadeHits": 11,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 18,
+                "cascadeHits": 17,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 16,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          }
+        },
+        "wakeLikeMediaControls": {
+          "raw": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 6,
+              "cascadeHits": 6,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          },
+          "gatedLinear": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 4,
+              "cascadeHits": 4,
+              "referencePrimaryWouldVeto": 4,
+              "referenceCascadeWouldVeto": 4
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 7,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          }
+        },
+        "hostAecProcessCpu": {
+          "processedAudioSeconds": 910.0,
+          "cpuSeconds": 33.107488000000004,
+          "cpuMillisecondsPerAudioSecond": 36.38185494505495,
+          "gatedLinearThreadCpuMillisecondsPerAudioSecond": 17.02684098901099,
+          "wallSecondsIncludingPipe": 85.82314252573997
+        }
+      },
+      "twoNewestFramesMissing": {
+        "nearOverMedia": {
+          "public-speech": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 4,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 4,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 6,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 13,
+                "cascadeHits": 0,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          },
+          "synthetic-instrumental": {
+            "0": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 11,
+                "cascadeHits": 9,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 11,
+                "cascadeHits": 9,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "6": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 15,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 15,
+                "cascadeHits": 15,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            },
+            "12": {
+              "raw": {
+                "cases": 19,
+                "primaryHits": 18,
+                "cascadeHits": 17,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              },
+              "gatedLinear": {
+                "cases": 19,
+                "primaryHits": 18,
+                "cascadeHits": 17,
+                "referencePrimaryWouldVeto": 0,
+                "referenceCascadeWouldVeto": 0
+              }
+            }
+          }
+        },
+        "wakeLikeMediaControls": {
+          "raw": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 6,
+              "cascadeHits": 6,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          },
+          "gatedLinear": {
+            "mediaOnly": {
+              "cases": 8,
+              "primaryHits": 6,
+              "cascadeHits": 6,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            },
+            "coincidentNear": {
+              "cases": 8,
+              "primaryHits": 8,
+              "cascadeHits": 7,
+              "referencePrimaryWouldVeto": 6,
+              "referenceCascadeWouldVeto": 6
+            }
+          }
+        },
+        "hostAecProcessCpu": {
+          "processedAudioSeconds": 910.0,
+          "cpuSeconds": 20.816579,
+          "cpuMillisecondsPerAudioSecond": 22.87536153846154,
+          "gatedLinearThreadCpuMillisecondsPerAudioSecond": 0.5705885714285714,
+          "wallSecondsIncludingPipe": 77.27591313095763
+        }
+      },
+      "coverageWindowFrames": 50,
+      "maximumMissingFraction": 0.1,
+      "syntheticPcmIdenticalCases": {
+        "idealToPriorGate": 3,
+        "missingToOriginalMic": 3
+      }
+    },
+    "note": "Data were evaluated previously for wake-model selection; these local replay results are not new independent wakeword field validation."
+  },
+  "physicalApiProbe": {
+    "model": "SM-G781B",
+    "androidSdk": 33,
+    "rate": 16000,
+    "samplesPerMicAndReference": 48000,
+    "timestampsAvailable": true,
+    "captureReportedSilenced": false,
+    "mediaSource": "Separate UID, synthetic signal, USAGE_MEDIA",
+    "runs": [
+      {
+        "micModeOff": {
+          "referenceRms": 2394.9,
+          "micRms": 5339.9
+        },
+        "micModeOn": {
+          "referenceRms": 2359.45,
+          "micRms": 5860.19
+        },
+        "commModeOffMicRms": 4628.31,
+        "commModeOnMicRms": 0.0,
+        "focusReferenceRms": [
+          1054.59,
+          0.0,
+          2703.84
+        ]
+      },
+      {
+        "micModeOff": {
+          "referenceRms": 2341.98,
+          "micRms": 5652.35
+        },
+        "micModeOn": {
+          "referenceRms": 2419.52,
+          "micRms": 6045.35
+        },
+        "commModeOffMicRms": 4336.25,
+        "commModeOnMicRms": 0.0,
+        "focusReferenceRms": [
+          849.42,
+          0.0,
+          2659.41
+        ],
+        "commAndFocusScreenInteractive": false,
+        "commAndFocusLocked": true
+      }
+    ],
+    "focusSourceEvents": [
+      "LOSS_TRANSIENT",
+      "GAIN"
+    ],
+    "nativeEffectEnabledWhenRequested": true,
+    "note": "Reference captured on SDK33 including locked screen. No independent near speech in COMM echo-only probe; altered route makes permanent idle COMM unsuitable. Physical integrated processor remains unverified."
+  }
+}

@@ -56,12 +56,12 @@ public sealed class MemoryHybridRetriever(IMemoryStore store, MemorySemanticSear
         {
             try
             {
-                exact = (await MemoryEntityMentions.FindAsync(store, query, 5, ct))
+                exact = (await TurnLatencyProfile.MeasureAsync("memory.entity_mentions", () => MemoryEntityMentions.FindAsync(store, query, 5, ct)))
                     .Select(x => new MemoryGraphEntity(x.Id, x.CanonicalName, x.EntityType)).ToList();
                 seeds = exact.Where(x => !IsPersonalHub(x.CanonicalName)).Select(x => x.Id).ToList();
                 if (seeds.Count == 0 && IsBroadPersonalQuery(query))
                     seeds = exact.Select(x => x.Id).ToList();
-                evidence = (await store.FindRelationsByMemoryAsync(memories.Select(x => x.Id).ToArray(), instant, 10, ct)).ToList();
+                evidence = (await TurnLatencyProfile.MeasureAsync("memory.evidence", () => store.FindRelationsByMemoryAsync(memories.Select(x => x.Id).ToArray(), instant, 10, ct))).ToList();
                 foreach (var relation in evidence)
                 {
                     // The evidence relation itself is an anchor. Only its non-personal frontier
@@ -76,6 +76,7 @@ public sealed class MemoryHybridRetriever(IMemoryStore store, MemorySemanticSear
                 }
                 if (seeds.Count > 0)
                 {
+                    using var graphTiming = TurnLatencyProfile.Measure("memory.graph");
                     paths.AddRange(await graph.TraverseAsync(new MemoryGraphTraversalRequest(seeds.Take(10).ToArray(),
                         MemoryGraphDirection.Both, MaxDepth: Math.Min(1,
                             graphOptions.MaxTraversalDepth), Limit: Math.Min(automatic ? autoOptions.GraphPathLimit : limit,
@@ -177,6 +178,7 @@ public sealed class MemoryHybridRetriever(IMemoryStore store, MemorySemanticSear
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            TurnLatencyProfile.Mark("memory.automatic_timeout");
             metrics.MemoryAutoContextTimeouts.Add(1); return MemoryAutomaticContextResult.Empty;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

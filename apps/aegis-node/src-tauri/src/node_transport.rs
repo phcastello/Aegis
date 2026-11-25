@@ -44,6 +44,7 @@ pub struct TransportStatus {
     pub transport_state: &'static str,
     pub last_error: Option<&'static str>,
     pub last_diagnostic: Option<TransportDiagnostic>,
+    pub conversation_changes: bool,
 }
 impl Default for TransportStatus {
     fn default() -> Self {
@@ -51,9 +52,20 @@ impl Default for TransportStatus {
             transport_state: "offline",
             last_error: None,
             last_diagnostic: None,
+            conversation_changes: false,
         }
     }
 }
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ConversationSyncEvent {
+    Status { active: bool },
+    Changed {
+        #[serde(rename = "conversationId")]
+        conversation_id: Option<uuid::Uuid>,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) struct TransportConfig {
     pub url: String,
@@ -63,6 +75,7 @@ pub(crate) struct TransportConfig {
     pub healthy_reset: Duration,
     pub disabled_retry: Duration,
     pub notifications: Option<Arc<crate::node_notification::NotificationExecutor>>,
+    pub conversation_sync: Option<Arc<dyn Fn(ConversationSyncEvent) + Send + Sync>>,
 }
 impl TransportConfig {
     pub fn new(origin: &str, version: &str, allow_http: bool) -> Result<Self, &'static str> {
@@ -79,6 +92,7 @@ impl TransportConfig {
             healthy_reset: Duration::from_secs(120),
             disabled_retry: Duration::from_secs(30),
             notifications: None,
+            conversation_sync: None,
         })
     }
 }
@@ -166,6 +180,17 @@ fn state(status: &Mutex<TransportStatus>, value: &'static str, error: Option<&'s
     status.last_error = error;
     if value == "online" {
         status.last_diagnostic = None;
+    }
+}
+fn conversation_sync_status(config: &TransportConfig, status: &Mutex<TransportStatus>, active: bool) {
+    let previous = {
+        let mut status = status.lock().unwrap();
+        std::mem::replace(&mut status.conversation_changes, active)
+    };
+    if previous != active {
+        if let Some(publish) = &config.conversation_sync {
+            publish(ConversationSyncEvent::Status { active });
+        }
     }
 }
 fn diagnose(
@@ -316,9 +341,10 @@ async fn run<S: CredentialSource>(
         let mut online_since = None;
         let result = tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = wake.notified() => continue,
+            _ = wake.notified() => { conversation_sync_status(&config, &status, false); continue; },
             result = session(&config, &secret, &status, &cancel, &mut online_since) => result,
         };
+        conversation_sync_status(&config, &status, false);
         if let Some(since) = online_since {
             backoff.reset_if_healthy(since.elapsed(), config.healthy_reset);
         }
@@ -364,6 +390,7 @@ async fn run<S: CredentialSource>(
         };
         tokio::select! { _ = cancel.cancelled() => break, _ = wake.notified() => {}, _ = tokio::time::sleep(delay) => {} }
     }
+    conversation_sync_status(&config, &status, false);
     if cancel.is_cancelled() {
         state(&status, "offline", None);
     }
@@ -405,6 +432,20 @@ fn ack(message: Message, kind: &str, id: &str) -> Result<Envelope, Outcome> {
             Ok(parsed)
         }
         _ => Err(Outcome::Retry),
+    }
+}
+fn changed_conversation(payload: Option<serde_json::Value>) -> Option<Option<uuid::Uuid>> {
+    let payload = payload?;
+    let fields = payload.as_object()?;
+    if fields.len() != 1 {
+        return None;
+    }
+    match fields.get("conversationId")? {
+        serde_json::Value::Null => Some(None),
+        value => uuid::Uuid::parse_str(value.as_str()?)
+            .ok()
+            .filter(|id| !id.is_nil())
+            .map(Some),
     }
 }
 async fn session(
@@ -484,6 +525,10 @@ async fn session(
     }
     *online_since = Some(Instant::now());
     state(status, "online", None);
+    let conversation_changes = config.conversation_sync.is_some()
+        && config.capabilities.iter().any(|capability| capability.name == "conversation.sync" && capability.version == 1)
+        && payload["conversationChanges"].as_bool() == Some(true);
+    conversation_sync_status(config, status, conversation_changes);
     if let Some(executor) = &config.notifications {
         executor.connected();
     }
@@ -522,7 +567,20 @@ async fn session(
                     Some(Ok(message)) => {
                         if let Message::Text(text) = &message {
                             let parsed: Result<Envelope, _> = serde_json::from_str(text);
-                            if let Ok(command) = parsed { if command.kind == "command" {
+                            if let Ok(command) = parsed {
+                                if command.kind == "conversation_changed" {
+                                    if !conversation_changes || command.protocol_version != 1 || uuid::Uuid::parse_str(&command.message_id).is_err() || chrono::DateTime::parse_from_rfc3339(&command.sent_at).is_err() {
+                                        return retry(status, "conversation_sync", "protocol_error");
+                                    }
+                                    let Some(conversation_id) = changed_conversation(command.payload) else {
+                                        return retry(status, "conversation_sync", "protocol_error");
+                                    };
+                                    if let Some(publish) = &config.conversation_sync {
+                                        publish(ConversationSyncEvent::Changed { conversation_id });
+                                    }
+                                    continue;
+                                }
+                                if command.kind == "command" {
                                 if command.protocol_version != 1 || uuid::Uuid::parse_str(&command.message_id).is_err() || chrono::DateTime::parse_from_rfc3339(&command.sent_at).is_err() || commands.len() >= 4 { return retry(status,"command","protocol_error"); }
                                 let input = match serde_json::from_value::<crate::node_notification::NotificationCommand>(command.payload.unwrap_or_default()) { Ok(c) => c, Err(_) => return retry(status,"command","protocol_error") };
                                 let executor = config.notifications.clone();
@@ -860,6 +918,93 @@ mod tests {
         assert!(!serde_json::to_string(&TransportStatus::default())
             .unwrap()
             .contains("secret"));
+    }
+    #[test]
+    fn conversation_change_payload_is_only_an_id_or_explicit_global_invalidation() {
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(changed_conversation(Some(serde_json::json!({"conversationId":id}))), Some(Some(id)));
+        assert_eq!(changed_conversation(Some(serde_json::json!({"conversationId":null}))), Some(None));
+        for payload in [
+            serde_json::json!({}),
+            serde_json::json!({"conversationId":uuid::Uuid::nil()}),
+            serde_json::json!({"conversationId":"invalid"}),
+            serde_json::json!({"conversationId":id, "privateContent":"never forwarded"}),
+        ] {
+            assert_eq!(changed_conversation(Some(payload)), None);
+        }
+    }
+    #[tokio::test]
+    async fn negotiated_conversation_change_events_share_the_socket_and_legacy_reconnect_disables_push() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let changed = uuid::Uuid::new_v4();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let accepted = connections.clone();
+        let server = tokio::spawn(async move {
+            for connection in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let hello: serde_json::Value = serde_json::from_str(
+                    socket.next().await.unwrap().unwrap().to_text().unwrap(),
+                ).unwrap();
+                assert!(hello["payload"]["capabilities"].as_array().unwrap().iter().any(
+                    |capability| capability == &serde_json::json!({"name":"conversation.sync","version":1})
+                ));
+                let mut payload = serde_json::json!({"heartbeatSeconds":1,"timeoutSeconds":3});
+                if connection == 0 {
+                    payload["conversationChanges"] = serde_json::json!(true);
+                }
+                socket.send(Message::Text(serde_json::json!({
+                    "protocolVersion":1,"type":"hello_ack","messageId":hello["messageId"],
+                    "sentAt":chrono::Utc::now().to_rfc3339(),"payload":payload
+                }).to_string().into())).await.unwrap();
+                accepted.fetch_add(1, Ordering::SeqCst);
+                if connection == 0 {
+                    for id in [Some(changed), None] {
+                        socket.send(Message::Text(serde_json::json!({
+                            "protocolVersion":1,"type":"conversation_changed","messageId":uuid::Uuid::new_v4(),
+                            "sentAt":chrono::Utc::now().to_rfc3339(),"payload":{"conversationId":id}
+                        }).to_string().into())).await.unwrap();
+                    }
+                }
+                while let Some(Ok(message)) = socket.next().await {
+                    if message.is_close() { break; }
+                    let heartbeat: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                    assert_eq!(heartbeat["type"], "heartbeat");
+                    socket.send(Message::Text(serde_json::json!({
+                        "protocolVersion":1,"type":"heartbeat_ack","messageId":heartbeat["messageId"],
+                        "sentAt":chrono::Utc::now().to_rfc3339()
+                    }).to_string().into())).await.unwrap();
+                    if connection == 0 {
+                        socket.send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Normal, reason: "fixture_reconnect".into(),
+                        }))).await.unwrap();
+                        break;
+                    }
+                }
+            }
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let mut options = config(port);
+        options.capabilities.push(crate::node_capabilities::NodeCapability {
+            name: "conversation.sync".into(), version: 1,
+        });
+        options.conversation_sync = Some(Arc::new(move |event| captured.lock().unwrap().push(event)));
+        let manager = NodeTransportManager::default();
+        manager.start(Source::paired(), options);
+        until(|| events.lock().unwrap().len() >= 3).await;
+        assert!(manager.state().conversation_changes);
+        until(|| connections.load(Ordering::SeqCst) == 2 && manager.state().transport_state == "online").await;
+        assert!(!manager.state().conversation_changes);
+        assert_eq!(*events.lock().unwrap(), vec![
+            ConversationSyncEvent::Status { active: true },
+            ConversationSyncEvent::Changed { conversation_id: Some(changed) },
+            ConversationSyncEvent::Changed { conversation_id: None },
+            ConversationSyncEvent::Status { active: false },
+        ]);
+        manager.stop().await;
+        server.await.unwrap();
     }
     #[tokio::test]
     async fn connect_authenticate_heartbeat_duplicate_start_and_shutdown() {

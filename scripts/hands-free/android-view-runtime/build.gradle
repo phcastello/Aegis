@@ -1,0 +1,77 @@
+plugins { id 'java' }
+repositories {
+ google { metadataSources { mavenPom(); artifact(); ignoreGradleMetadataRedirection() } }
+ mavenCentral()
+}
+import org.gradle.api.artifacts.transform.*
+import org.gradle.api.artifacts.type.ArtifactTypeDefinition
+import org.gradle.api.attributes.*
+import org.gradle.api.file.*
+import org.gradle.api.provider.*
+import org.gradle.api.tasks.*
+import java.util.zip.ZipFile
+abstract class AarToJar implements TransformAction<TransformParameters.None> {
+ @InputArtifact abstract Provider<FileSystemLocation> getInputArtifact()
+ void transform(TransformOutputs outputs) {
+  File artifact = inputArtifact.get().asFile
+  File out = outputs.file(artifact.name + '.jar')
+  new ZipFile(artifact).withCloseable { zip ->
+   def entry=zip.getEntry('classes.jar')
+   if(entry!=null)out.withOutputStream { dest -> zip.getInputStream(entry).withCloseable { src -> dest << src } }
+   else new java.util.jar.JarOutputStream(new FileOutputStream(out)).close()
+  }
+ }
+}
+configurations {
+ coreFixtureResources
+}
+dependencies {
+ attributesSchema { attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE) }
+ registerTransform(AarToJar) {
+  from.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, 'aar')
+  to.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, 'jar')
+ }
+ testImplementation files(providers.gradleProperty('productionJar').get())
+ testImplementation('androidx.core:core:1.13.1@aar') { transitive = false }
+ coreFixtureResources('androidx.core:core:1.13.1@aar') { transitive = false }
+ testImplementation 'org.jetbrains.kotlin:kotlin-stdlib:2.3.21'
+ testImplementation 'junit:junit:4.13.2'
+ testImplementation 'org.robolectric:robolectric:4.17'
+ testImplementation 'org.robolectric:android-all:15-robolectric-12650502'
+}
+// No Android plugin processes AAR resources in this isolated JVM harness.
+// ViewCompat uses R.id constants for keyed View tags during content creation.
+// Generate distinct app-range IDs from the pinned AAR's own R.txt, only for tests.
+def fixtureIds = layout.buildDirectory.dir('generated/core-fixture-ids')
+def generateCoreFixtureIds = tasks.register('generateCoreFixtureIds') {
+ inputs.files(configurations.coreFixtureResources)
+ outputs.dir(fixtureIds)
+ doLast {
+  def ids = []
+  new ZipFile(configurations.coreFixtureResources.singleFile).withCloseable { zip ->
+   zip.getInputStream(zip.getEntry('R.txt')).withCloseable { input ->
+    input.readLines('UTF-8').each { line ->
+     def match = line =~ /^int id ([a-zA-Z_][a-zA-Z0-9_]*) .+$/
+     if (match.matches()) ids.add(match.group(1))
+    }
+   }
+  }
+  assert !ids.isEmpty()
+  def output=fixtureIds.get().file('androidx/core/R.java').asFile
+  output.parentFile.mkdirs()
+  output.text='package androidx.core; public final class R { public static final class id {\n' +
+   ids.withIndex().collect { name,index -> "public static final int ${name} = ${0x7f010000 + index};" }.join('\n') + '\n} }\n'
+ }
+}
+sourceSets.test.java.srcDir(fixtureIds)
+tasks.named('compileTestJava').configure { dependsOn(generateCoreFixtureIds) }
+configurations.testRuntimeClasspath.attributes.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, 'jar')
+configurations.testCompileClasspath.attributes.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, 'jar')
+test {
+ maxHeapSize = '2g'
+ systemProperty 'user.home', providers.gradleProperty('robolectricHome').getOrElse(System.getProperty('user.home'))
+ systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+ systemProperty 'robolectric.graphicsMode', 'NATIVE'
+ jvmArgs '--enable-native-access=ALL-UNNAMED', '--add-opens=java.base/java.security=ALL-UNNAMED', '--add-opens=java.base/java.text=ALL-UNNAMED', '--add-opens=java.base/jdk.internal.access=ALL-UNNAMED', '--add-opens=java.desktop/java.awt.font=ALL-UNNAMED', '--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED', '--add-opens=java.base/java.lang=ALL-UNNAMED', '--add-opens=java.base/java.lang.reflect=ALL-UNNAMED', '--add-opens=java.base/java.io=ALL-UNNAMED', '--add-opens=java.base/java.net=ALL-UNNAMED', '--add-opens=java.base/java.util=ALL-UNNAMED', '--add-opens=java.base/java.util.concurrent=ALL-UNNAMED'
+ testLogging { events 'passed', 'skipped', 'failed'; showStandardStreams = true; exceptionFormat = 'full' }
+}

@@ -29,6 +29,13 @@ runs:
       with:
         distribution: temurin
         java-version: '17'
+        # Reuse dependencies and wrapper distributions between ephemeral CI jobs.
+        cache: gradle
+        cache-dependency-path: |
+          apps/aegis-node/src-tauri/gen/android/**/*.gradle
+          apps/aegis-node/src-tauri/gen/android/**/*.gradle.kts
+          apps/aegis-node/src-tauri/gen/android/**/gradle.properties
+          apps/aegis-node/src-tauri/gen/android/**/gradle-wrapper.properties
     - if: inputs.android == 'true'
       uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       with:

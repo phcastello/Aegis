@@ -1,0 +1,7 @@
+{
+  "identifier": "android-hands-free",
+  "description": "Local Android and Windows hands-free controls.",
+  "windows": ["main"],
+  "platforms": ["android", "windows"],
+  "permissions": ["allow-node-hands-free"]
+}

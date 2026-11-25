@@ -1,6 +1,7 @@
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Voice;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
@@ -47,6 +48,8 @@ public sealed class OpenAIResponsesClient(
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: false, request.Tools, request.PreviousResponseId,
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+        TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
+        TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
@@ -58,6 +61,7 @@ public sealed class OpenAIResponsesClient(
             using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             httpStatusCode = (int)response.StatusCode;
             responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            TurnLatencyProfile.Mark("model.response_complete");
 
             if (!response.IsSuccessStatusCode)
             {
@@ -129,6 +133,8 @@ public sealed class OpenAIResponsesClient(
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: true, request.Tools, request.PreviousResponseId,
             request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+        TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
+        TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
         var responseBody = new StringBuilder();
         var completedResponseBody = new StringBuilder();
@@ -138,6 +144,11 @@ public sealed class OpenAIResponsesClient(
         HttpResponseMessage? response = null;
         JsonElement? completedResponse = null;
         string responseModel = model;
+        var firstText = false;
+        var firstArguments = false;
+        var segmentParser = request.Tools.Any(t => t.Name == FinalSpeechSegments.ToolName) ? new FinalSpeechSegmentParser() : null;
+        string? terminalItemId = null;
+        var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -266,6 +277,32 @@ public sealed class OpenAIResponsesClient(
                             ? typeElement.GetString()
                             : null;
 
+                        if (!firstArguments && eventType == "response.function_call_arguments.delta" &&
+                            root.TryGetProperty("delta", out var argumentDelta) && !string.IsNullOrWhiteSpace(argumentDelta.GetString()))
+                        {
+                            firstArguments = true;
+                            // Arguments are not speech. This mark only bounds the potential
+                            // overlap; the terminal call still requires full validation.
+                            TurnLatencyProfile.Mark("model.first_argument_delta");
+                        }
+                        if (segmentParser is not null && eventType == "response.output_item.added" &&
+                            root.TryGetProperty("item", out var outputItem) &&
+                            outputItem.TryGetProperty("type", out var outputType) && outputType.GetString() == "function_call")
+                        {
+                            var itemId = outputItem.GetProperty("id").GetString()!;
+                            functionItemIds.Add(itemId);
+                            if (functionItemIds.Count > 1) throw new InvalidOperationException("Parallel calls are forbidden for final speech.");
+                            if (outputItem.GetProperty("name").GetString() == FinalSpeechSegments.ToolName) terminalItemId = itemId;
+                        }
+                        if (segmentParser is not null && terminalItemId is not null && eventType == "response.function_call_arguments.delta" &&
+                            root.TryGetProperty("item_id", out var argumentItem) && argumentItem.GetString() == terminalItemId)
+                        {
+                            foreach (var segment in segmentParser.Append(root.GetProperty("delta").GetString() ?? ""))
+                            {
+                                TurnLatencyProfile.Mark("model.final_segment", segment.Length);
+                                yield return new ModelToolStreamChunk(null, false, [], [], FinalSpeechSegment: segment);
+                            }
+                        }
                         TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
 
                         if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
@@ -275,6 +312,11 @@ public sealed class OpenAIResponsesClient(
                             if (!string.IsNullOrEmpty(delta) &&
                                 IsFinalAnswerTextDelta(root, outputPhasesByIndex, outputPhasesByItemId))
                             {
+                                if (!firstText && !string.IsNullOrWhiteSpace(delta))
+                                {
+                                    firstText = true;
+                                    TurnLatencyProfile.Mark("model.first_final_text_delta");
+                                }
                                 emittedContent.Append(delta);
                                 yield return new ModelToolStreamChunk(
                                     delta,
@@ -289,6 +331,7 @@ public sealed class OpenAIResponsesClient(
                         if (string.Equals(eventType, "response.completed", StringComparison.Ordinal) &&
                             root.TryGetProperty("response", out var responseElement))
                         {
+                            TurnLatencyProfile.Mark("model.response_complete");
                             completedResponse = responseElement.Clone();
                             responseModel = ExtractResponseModel(responseElement, model);
                             completedResponseBody.Append(responseElement.GetRawText());
@@ -450,7 +493,7 @@ public sealed class OpenAIResponsesClient(
             prompt_cache_options = new { mode = "implicit" },
             stream,
             max_output_tokens = Math.Max(1, openAIOptions.MaxOutputTokens),
-            store = openAIOptions.StoreResponses,
+            store = openAIOptions.StoreResponses && !(tools?.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName) ?? false),
             previous_response_id = string.IsNullOrWhiteSpace(previousResponseId) ? null : previousResponseId,
             service_tier = string.IsNullOrWhiteSpace(openAIOptions.ServiceTier)
                 ? null
@@ -462,7 +505,7 @@ public sealed class OpenAIResponsesClient(
                 name = tool.Name,
                 description = tool.Description,
                 parameters = tool.ParametersSchema,
-                strict = false
+                strict = tool.Name is FinalSpeechSegments.ToolName or HandsFreeDirection.IgnoreToolName
             }),
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = tools is { Count: > 0 } ? "auto" : null

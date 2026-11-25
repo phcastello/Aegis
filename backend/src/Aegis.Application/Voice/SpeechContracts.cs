@@ -18,6 +18,8 @@ public class SpeechStreamResponse(Stream stream, SpeechAudioFormat format) : IAs
 
 public sealed record SpeechServiceStatus(bool Enabled, bool Available, string Profile, int SampleRate, int Channels);
 
+public sealed record StartSegmentSpeechRequest(Guid TurnId, Guid SpeechRequestId, Guid AssistantMessageId, Guid SegmentId, int Sequence);
+
 public sealed record StartSpeechRequest(Guid TurnId, Guid SpeechRequestId, Guid AssistantMessageId);
 
 public sealed class VoiceStream : IAsyncDisposable

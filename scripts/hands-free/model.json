@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "modelVersion": "aegis-mww-fleurs-dev-2026-10-31",
+  "keyword": "Aegis",
+  "pronunciation": "/aˈɛʒis/",
+  "bytes": 39552,
+  "sha256": "f9be8104b6a82dc91ed38febd1601e07eca0ef51f2ebbec4899e06f6e3aea514",
+  "trainingSourceCommit": "4665173cd35f1cff9a61e06fc427f124766c488e",
+  "trainingManifestSha256": "b1b408ddaaaf40c9e74cad74097bd4590c0712fcd239642df23bbc8c0081c726",
+  "realNegativeManifestSha256": "39e95adc759332e8a046f5ee3adaa6a0292019da6ef0ee7fbe30997f733a3978",
+  "sampleRate": 16000,
+  "channels": 1,
+  "encoding": "PCM16 little-endian",
+  "frontend": {
+    "windowMs": 30,
+    "stepMs": 10,
+    "features": 40,
+    "lowerBandHz": 125,
+    "upperBandHz": 7500,
+    "outputScale": 0.0390625,
+    "normalization": "microfrontend noise reduction + PCAN + log scale; no per-recording normalization"
+  },
+  "input": {
+    "shape": [
+      1,
+      3,
+      40
+    ],
+    "dtype": "int8",
+    "scale": 0.10196078568696976,
+    "zeroPoint": -128,
+    "rounding": "ties-to-even"
+  },
+  "output": {
+    "shape": [
+      1,
+      1
+    ],
+    "dtype": "uint8",
+    "scale": 0.00390625,
+    "zeroPoint": 0
+  },
+  "events": {
+    "threshold": 0.5,
+    "averageWindow": 5,
+    "releaseBelow": 0.3,
+    "refractorySamples": 16000,
+    "warmupDiscard": 0
+  },
+  "reset": "fresh interpreter variables, frontend, pending samples, stride, score window and latch; cached unchanged model bytes",
+  "partialBlocks": "retain until 160 samples; EOF padding belongs to replay harness only",
+  "distribution": "private explicit file import only; never bundle weights in public APK or Git"
+}

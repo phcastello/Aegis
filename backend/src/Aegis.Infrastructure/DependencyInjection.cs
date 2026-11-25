@@ -35,8 +35,9 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("AegisDatabase")
             ?? throw new InvalidOperationException("Connection string 'AegisDatabase' was not found.");
 
-        services.AddDbContext<AegisDbContext>(options =>
-            options.UseNpgsql(connectionString));
+        services.AddSingleton<ConversationChangeCommitInterceptor>();
+        services.AddDbContext<AegisDbContext>((provider, options) =>
+            options.UseNpgsql(connectionString).AddInterceptors(provider.GetRequiredService<ConversationChangeCommitInterceptor>()));
 
         services.AddScoped<Aegis.Application.Nodes.INodeTransportHistory, Aegis.Infrastructure.Nodes.NodeTransportHistory>();
         services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();
@@ -95,6 +96,7 @@ public static class DependencyInjection
         {
             configuration.GetSection(SttOptions.SectionName).Bind(options);
             options.Enabled = ReadBool(configuration, "AEGIS_STT_ENABLED", options.Enabled);
+            options.RealtimeEnabled = ReadBool(configuration, "AEGIS_STT_REALTIME_ENABLED", options.RealtimeEnabled);
             options.PrimaryProvider = Read(configuration, "AEGIS_STT_PRIMARY_PROVIDER", options.PrimaryProvider);
             options.FallbackEnabled = ReadBool(configuration, "AEGIS_STT_FALLBACK_ENABLED", options.FallbackEnabled);
             options.FallbackProvider = Read(configuration, "AEGIS_STT_FALLBACK_PROVIDER", options.FallbackProvider);
@@ -119,6 +121,8 @@ public static class DependencyInjection
             options.BaseUrl = Read(configuration, "AEGIS_STT_OPENAI_BASE_URL", options.BaseUrl);
         });
         services.AddSingleton<ISttKeytermProvider, SttKeytermProvider>();
+        services.AddSingleton<IRealtimeTranscriptionConnector, RealtimeTranscriptionConnector>();
+        services.AddScoped<ElevenLabsRealtimeTranscription>();
         services.AddHttpClient<ElevenLabsTranscriptionClient>((provider, client) =>
         {
             var stt = provider.GetRequiredService<IOptions<ElevenLabsSttOptions>>().Value;
@@ -251,6 +255,7 @@ public static class DependencyInjection
             !System.Text.RegularExpressions.Regex.IsMatch(semantic.CollectionName, "^[A-Za-z0-9_-]{1,100}$"))
             throw new InvalidOperationException("Invalid MemorySemantic configuration.");
         services.AddSingleton(semantic);
+        services.AddSingleton<MemoryEmbeddingCache>();
         services.AddHttpClient<IMemoryEmbeddingClient, OpenAiMemoryEmbeddingClient>(client =>
         {
             client.BaseAddress = new Uri(semantic.EmbeddingBaseUrl.TrimEnd('/') + "/");

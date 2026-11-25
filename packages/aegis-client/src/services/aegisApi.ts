@@ -20,6 +20,10 @@ function getApiBaseUrl(): string {
   return clientEnvironment().apiBaseUrl;
 }
 
+export class AegisApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 export async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...options,
@@ -40,7 +44,7 @@ export async function requestJson<T>(path: string, options?: RequestInit): Promi
       message = response.statusText || message;
     }
 
-    throw new Error(message);
+    throw new AegisApiError(message, response.status);
   }
 
   if (response.status === 204) {
@@ -283,7 +287,7 @@ export async function transcribeAudio(
 }
 
 export async function getConversation(conversationId: string): Promise<Conversation> {
-  return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`);
+  return requestJson<Conversation>(`/api/chat/conversations/${conversationId}`, { cache: 'no-store' });
 }
 
 export function getMemoryActivity(assistantMessageId: string, signal?: AbortSignal): Promise<MemoryActivitySnapshot> {
@@ -292,13 +296,13 @@ export function getMemoryActivity(assistantMessageId: string, signal?: AbortSign
   });
 }
 
-export async function getConversations(limit = 30, cursor?: string | null): Promise<ConversationPage> {
+export async function getConversations(limit = 30, cursor?: string | null, signal?: AbortSignal): Promise<ConversationPage> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) {
     params.set('cursor', cursor);
   }
 
-  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`);
+  return requestJson<ConversationPage>(`/api/chat/conversations?${params.toString()}`, { cache: 'no-store', signal });
 }
 
 export async function renameConversation(

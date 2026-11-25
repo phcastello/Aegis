@@ -1,0 +1,10 @@
+candidate,config,audio_seconds,activations
+microwakeword,default,2100.0,16
+microwakeword,strict,2100.0,10
+microwakeword-realneg,default,2100.0,4
+microwakeword-realneg,strict,2100.0,4
+openwakeword,default,2100.0,8
+openwakeword,strict,2100.0,6
+pocketsphinx,default,2100.0,145
+raven,default,2100.0,0
+whisper,prompt,2100.0,1

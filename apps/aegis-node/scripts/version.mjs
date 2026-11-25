@@ -99,6 +99,8 @@ export function synchronize(write = false, options = {}) {
   const nextCargoLock = cargoLock.replace(/(name = "aegis-node"\nversion = )"[^"]+"/, `$1"${version}"`);
   const npmLockPath = new URL('package-lock.json', root);
   const npmLock = JSON.parse(readFileSync(npmLockPath, 'utf8'));
+  // The second manifest belongs to the HTTP gateway/legacy worker, not a browser chat client.
+  // Preserve its historical path for the trusted preview version-preparation workflow.
   const companionRoots = ['../../packages/aegis-client/', '../../frontend/aegis-pwa/'].map(path => new URL(path, root));
   const companions = companionRoots.map(directory => {
     const manifestPath = new URL('package.json', directory), lockPath = new URL('package-lock.json', directory);

@@ -1,6 +1,7 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Memory;
+using Aegis.Application.Observability;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Microsoft.AspNetCore.Mvc;
@@ -33,7 +34,11 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         try
         {
             var response = await chatService.SendMessageAsync(request, cancellationToken);
-            return Ok(response);
+            return response is null ? NoContent() : Ok(response);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
         }
         catch (ConversationNotFoundException exception)
         {
@@ -69,6 +74,20 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             return;
         }
 
+        try
+        {
+            HandsFreeReply.UserContent(request);
+        }
+        catch (ArgumentException exception)
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(new { error = exception.Message }, cancellationToken);
+            return;
+        }
+
+        // Establish profiling in the consumer, outside the async iterator. Its
+        // execution context then flows into every MoveNext, including after yield.
+        using var profile = TurnLatencyProfile.Begin(turnId, logger);
         Response.ContentType = "application/x-ndjson";
         Response.Headers.CacheControl = "no-cache";
         Response.Headers.Append("X-Accel-Buffering", "no");
@@ -87,6 +106,13 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         catch (ConversationNotFoundException exception)
         {
             await WriteStreamErrorAsync(exception.Message, "conversation_not_found", StatusCodes.Status404NotFound, cancellationToken);
+        }
+        catch (ArgumentException exception) when (request.InterruptedGeneration is not null && !Response.HasStarted)
+        {
+            // The receipt's session/conversation ownership can only be checked
+            // while preparing the stream. A bad handoff is a client error, not
+            // an unexpected server/model failure.
+            await WriteStreamErrorAsync(exception.Message, "invalid_voice_generation_interruption", StatusCodes.Status400BadRequest, cancellationToken);
         }
         catch (LlmRequestException exception)
         {

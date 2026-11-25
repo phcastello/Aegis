@@ -1,4 +1,9 @@
 mod config;
+#[cfg(test)]
+#[path = "../hands_free_acl.rs"]
+mod hands_free_acl_contract;
+#[cfg(feature = "native-runtime")]
+mod hands_free;
 mod health;
 #[cfg(feature = "native-runtime")]
 mod native_notifications;
@@ -21,6 +26,19 @@ mod windows_notifications;
 
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_updates;
+
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_voice_audio;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_voice_backend;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_hands_free;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_wakeword;
+#[cfg(any(test, all(feature = "native-runtime", windows)))]
+mod windows_voice_signal;
+#[cfg(any(test, all(feature = "native-runtime", windows)))]
+mod windows_barge_in_signal;
 
 #[cfg(feature = "native-runtime")]
 #[derive(Clone, serde::Serialize)]
@@ -146,7 +164,7 @@ async fn install_android_update(
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, version);
-        Err("Atualização Android disponível somente no celular.".into())
+        Err("AtualizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o Android disponÃƒÆ’Ã‚Â­vel somente no celular.".into())
     }
 }
 
@@ -207,6 +225,11 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(node_commands::NodeRuntime::initialize(app.handle().clone()));
+            #[cfg(windows)]
+            {
+                native_notifications::tray(app.handle())?;
+                app.manage(windows_hands_free::WindowsHandsFree::start(app.handle())?);
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 handle
@@ -217,7 +240,7 @@ pub fn run() {
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
-            tauri::WebviewWindowBuilder::from_config(app, config)?
+            let window = tauri::WebviewWindowBuilder::from_config(app, config)?
                 .visible(
                     !(cfg!(windows)
                         && node_window_activation::background_launch(
@@ -239,9 +262,14 @@ pub fn run() {
                     _ => PermissionResponse::Deny,
                 })
                 .build()?;
+            #[cfg(not(windows))]
+            let _ = window;
             #[cfg(windows)]
             {
-                native_notifications::tray(app.handle())?;
+                if let Ok(hwnd) = window.hwnd() {
+                    app.state::<windows_hands_free::WindowsHandsFree>()
+                        .set_window_handle(hwnd.0 as isize);
+                }
                 let opened_window = windows_notifications::initialize(app.handle());
                 if node_window_activation::hide_after_activation(
                     &std::env::args().collect::<Vec<_>>(),
@@ -292,6 +320,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_info,
+            hands_free::node_hands_free,
             check_backend,
             check_android_update,
             prepare_windows_update,
@@ -342,6 +371,8 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
+                #[cfg(windows)]
+                app.state::<windows_hands_free::WindowsHandsFree>().shutdown();
                 app.state::<node_commands::NodeRuntime>().shutdown();
             }
         });

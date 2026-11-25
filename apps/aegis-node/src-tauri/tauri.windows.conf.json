@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": [
+      "licenses/windows-voice/Sonora-WebRTC-BSD-3-Clause.txt"
+    ]
+  }
+}

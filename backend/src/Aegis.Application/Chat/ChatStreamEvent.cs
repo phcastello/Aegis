@@ -14,13 +14,21 @@ public sealed record ChatStreamEvent(
     string? Category = null,
     string? State = null,
     string? Message = null,
-    MemoryActivitySnapshot? MemoryActivity = null)
+    MemoryActivitySnapshot? MemoryActivity = null,
+    string? VoiceContinuation = null,
+    Guid? SegmentId = null,
+    int? Sequence = null)
 {
+    public static ChatStreamEvent Ignored(Guid turnId) => new("ignored", turnId);
+
     public static ChatStreamEvent Conversation(Guid turnId, Guid conversationId) =>
         new("conversation", turnId, ConversationId: conversationId);
 
     public static ChatStreamEvent Token(Guid turnId, string content) =>
         new("token", turnId, Content: content);
+
+    public static ChatStreamEvent FinalSegment(Guid turnId, Guid conversationId, Guid messageId, Guid segmentId, int sequence, string content) =>
+        new("final_segment", turnId, conversationId, Content: content, AssistantMessageId: messageId, SegmentId: segmentId, Sequence: sequence);
 
     public static ChatStreamEvent ToolStatus(Guid turnId, string category, string state, string message) =>
         new("tool_status", turnId, Category: category, State: state, Message: message);
@@ -31,7 +39,8 @@ public sealed record ChatStreamEvent(
         Guid messageId,
         string? conversationTitle,
         string? titleSource,
-        MemoryActivitySnapshot? memoryActivity = null) =>
+        MemoryActivitySnapshot? memoryActivity = null,
+        string? voiceContinuation = null) =>
         new(
             "done",
             turnId,
@@ -40,5 +49,6 @@ public sealed record ChatStreamEvent(
             AssistantMessageId: messageId,
             ConversationTitle: conversationTitle,
             TitleSource: titleSource,
-            MemoryActivity: memoryActivity);
+            MemoryActivity: memoryActivity,
+            VoiceContinuation: voiceContinuation);
 }

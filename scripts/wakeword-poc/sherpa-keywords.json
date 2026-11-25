@@ -1,0 +1,46 @@
+{
+  "keyword": "Aegis",
+  "model": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
+  "modeling_unit": "phone+ppinyin",
+  "selection_status": "The initial primary representation was frozen and tested before the owner clarified the pronunciation as Aéjis. The confirmed representation below was selected after that textual clarification and before testing it. The unused EY1 secondary hypothesis was discarded without private tests. No additional phonetic representations are planned.",
+  "representations": [
+    {
+      "id": "primary",
+      "tokens": [
+        "EH1",
+        "ZH",
+        "IY0",
+        "S"
+      ],
+      "approximation": "/ˈɛ.ʒis/ (é-jis)",
+      "rationale": "Initial open-front-vowel hypothesis made before the owner clarified the initial A in Aéjis. Kept only to make the already executed baseline transparent; not the owner-confirmed pronunciation.",
+      "keyword_line": "EH1 ZH IY0 S @Aegis"
+    },
+    {
+      "id": "confirmed",
+      "tokens": [
+        "AA0",
+        "EH1",
+        "ZH",
+        "IY0",
+        "S"
+      ],
+      "approximation": "/aˈɛ.ʒis/ (A-é-jis), interpreted from the owner's written Aéjis",
+      "rationale": "Adds the initial unstressed open A explicitly given by the owner. AA0 preserves a low open unrounded vowel; AH0 would impose a central reduced/schwa-like vowel not specified by the owner. English AA0 is more back than Portuguese /a/, so this remains an approximation. EH1 marks stress on é; ZH approximates Portuguese j, IY0 the unstressed high front vowel and S the final s. No separate Hey/Ei word is added.",
+      "keyword_line": "AA0 EH1 ZH IY0 S @Aegis"
+    }
+  ],
+  "limitations": [
+    "The owner clarified the pronunciation in text as Aéjis after the initial representation had already been tested. This is interpreted as an initial unstressed A followed by stressed é and jis; it is not a phonetic recording or professional transcription.",
+    "No human listening or phonetic alignment established the exact vowel qualities, final fricative or timing. The prior local Portuguese ASR misspelled the proper name and omitted/confused its initial sounds.",
+    "CMU English AA0 approximates Portuguese initial /a/ but is not identical to it. English EH1, ZH, IY0 and S also approximate Brazilian Portuguese phones. The owner's written j supports ZH more directly than the original unconfirmed hypothesis.",
+    "The bundled en.phone maps AEGIS to IY1 JH AH0 S. That English dictionary pronunciation was inspected but not adopted as evidence of how the owner says Aegis.",
+    "The model was trained for Chinese and English, not Portuguese. Valid token sequences do not establish Portuguese acoustic coverage."
+  ],
+  "construction": "Write the selected keyword_line directly to a private keywords.txt file; all tokens were checked against the bundled tokens.txt. Passing Aegis through text2token with en.phone would instead choose the English lexicon pronunciation.",
+  "sources": [
+    "https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/index.html#customize-your-own-keywords",
+    "https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/text2token.py"
+  ],
+  "owner_pronunciation_text": "Aéjis"
+}

@@ -1,4 +1,5 @@
 using Aegis.Application.Voice;
+using Aegis.Application.Observability;
 using Aegis.Application.Voice.Transcription;
 using Aegis.Infrastructure.Voice.Transcription;
 using Microsoft.AspNetCore.Mvc;
@@ -11,7 +12,8 @@ namespace Aegis.Api.Controllers;
 public sealed class VoiceController(
     IVoiceService voiceService,
     ISpeechTranscriptionService transcriptionService,
-    IOptions<SttOptions> sttOptions) : ControllerBase
+    IOptions<SttOptions> sttOptions,
+    ILogger<VoiceController>? logger = null) : ControllerBase
 {
     [HttpGet("status")]
     public async Task<ActionResult<SpeechServiceStatus>> GetStatus(CancellationToken cancellationToken)
@@ -148,12 +150,16 @@ public sealed class VoiceController(
             return StatusCode(StatusCodes.Status413PayloadTooLarge, new { error = "O áudio excede o limite permitido." });
         }
 
+        var correlationId = Guid.TryParse(Request.Headers["X-Aegis-Turn-Id"], out var turnId) && turnId != Guid.Empty
+            ? turnId : requestId;
+        using var profile = TurnLatencyProfile.Begin(correlationId, logger, "stt");
+        TurnLatencyProfile.Mark("stt.request_bytes", audio.Length);
         byte[]? audioBytes = null;
         try
         {
             await using var input = audio.OpenReadStream();
             using var buffer = new MemoryStream(checked((int)Math.Min(audio.Length, int.MaxValue)));
-            await input.CopyToAsync(buffer, cancellationToken);
+            await TurnLatencyProfile.MeasureAsync("stt.prepare", () => input.CopyToAsync(buffer, cancellationToken));
             audioBytes = buffer.ToArray();
             var request = new TranscriptionRequest(
                 requestId,
@@ -161,7 +167,10 @@ public sealed class VoiceController(
                 audio.FileName,
                 audio.ContentType,
                 clientDurationMilliseconds.Value);
-            return Ok(await transcriptionService.TranscribeAsync(request, cancellationToken));
+            TurnLatencyProfile.Mark("stt.forward");
+            var result = await transcriptionService.TranscribeAsync(request, cancellationToken);
+            TurnLatencyProfile.Mark("stt.transcript_ready");
+            return Ok(result);
         }
         catch (TranscriptionRequestException exception)
         {

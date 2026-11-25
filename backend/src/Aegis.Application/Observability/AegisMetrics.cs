@@ -15,6 +15,7 @@ public sealed class AegisMetrics : IDisposable
     public Histogram<long> MemorySearchResults { get; }
     public Counter<long> MemoryProjectionJobsCreated { get; }
     public Counter<long> MemoryEmbeddingRequests { get; }
+    public Counter<long> MemoryEmbeddingCacheHits { get; }
     public Counter<long> MemoryEmbeddingFailures { get; }
     public Counter<long> MemoryEmbeddingInputTokens { get; }
     public Counter<long> MemorySemanticProjectionCompleted { get; }
@@ -69,6 +70,8 @@ public sealed class AegisMetrics : IDisposable
     public Histogram<double> ReminderTriggerDelay { get; }
 
 
+    public Histogram<double> ChatPreparationSeconds { get; }
+    public Histogram<double> ChatPersistenceSeconds { get; }
     public Counter<long> TurnsStarted { get; }
     public Counter<long> TurnsCompleted { get; }
     public Counter<long> TurnsCancelled { get; }
@@ -104,6 +107,7 @@ public sealed class AegisMetrics : IDisposable
         MemorySearchResults = meter.CreateHistogram<long>("aegis_memory_search_results");
         MemoryProjectionJobsCreated = meter.CreateCounter<long>("aegis_memory_projection_jobs_created_total");
         MemoryEmbeddingRequests = meter.CreateCounter<long>("aegis_memory_embedding_requests_total");
+        MemoryEmbeddingCacheHits = meter.CreateCounter<long>("aegis_memory_embedding_cache_hits_total");
         MemoryEmbeddingFailures = meter.CreateCounter<long>("aegis_memory_embedding_failures_total");
         MemoryEmbeddingInputTokens = meter.CreateCounter<long>("aegis_memory_embedding_input_tokens_total");
         MemorySemanticProjectionCompleted = meter.CreateCounter<long>("aegis_memory_semantic_projection_completed_total");
@@ -158,6 +162,8 @@ public sealed class AegisMetrics : IDisposable
         PushFailed = meter.CreateCounter<long>("aegis_push_failed_total");
         ReminderTriggerDelay = meter.CreateHistogram<double>("aegis_reminder_trigger_delay_ms", "ms");
         meter.CreateObservableGauge("aegis_turns_active", () => Volatile.Read(ref activeTurns));
+        ChatPreparationSeconds = meter.CreateHistogram<double>("aegis_chat_preparation_seconds", "s");
+        ChatPersistenceSeconds = meter.CreateHistogram<double>("aegis_chat_persistence_seconds", "s");
         TurnsStarted = meter.CreateCounter<long>("aegis_turns_started_total");
         TurnsCompleted = meter.CreateCounter<long>("aegis_turns_completed_total");
         TurnsCancelled = meter.CreateCounter<long>("aegis_turns_cancelled_total");

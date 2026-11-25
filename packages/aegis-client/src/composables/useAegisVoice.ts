@@ -1,6 +1,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { cancelSpeech, getVoiceStatus, streamSpeech } from '../services/aegisApi';
 import { VoicePlaybackService, type VoicePlaybackState } from '../services/voicePlaybackService';
+import { acquireAudio } from '../services/audioOwnership';
+import { clientEnvironment } from '../services/clientEnvironment';
 
 import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 
@@ -13,6 +15,7 @@ export function useAegisVoice() {
   let activeSpeechRequestId: string | null = null;
   let controller: AbortController | null = null;
   let playbackRequest = 0;
+  let releaseAudio: (() => Promise<void>) | null = null;
   player.onState((state) => { playbackState.value = state; });
 
   const isBusy = computed(() => playbackState.value === 'buffering' || playbackState.value === 'playing' || playbackState.value === 'initializing');
@@ -24,7 +27,7 @@ export function useAegisVoice() {
 
   async function prepare(): Promise<boolean> {
     try {
-      await player.ensureReady();
+      if (!clientEnvironment().nativeSpeech) await player.ensureReady();
       return true;
     } catch {
       voiceAvailable.value = false;
@@ -39,6 +42,11 @@ export function useAegisVoice() {
     await stopping;
     if (request !== playbackRequest || !(await prepare()) || request !== playbackRequest) return;
     if (!manual && !autoSpeak.value) return;
+    let lease: () => Promise<void>;
+    try { lease = await acquireAudio('playback'); }
+    catch { if (request === playbackRequest) voiceMessage.value = 'O áudio está em uso pela sessão hands-free. Aguarde ou cancele a sessão.'; return; }
+    if (request !== playbackRequest) { await lease().catch(() => undefined); return; }
+    releaseAudio = lease;
     const speechRequestId = crypto.randomUUID();
     const generation = player.begin();
     activeTurnId = turnId;
@@ -49,12 +57,19 @@ export function useAegisVoice() {
       activeSpeechRequestId === speechRequestId && !speechController.signal.aborted;
     voiceMessage.value = 'Preparando voz';
     try {
-      await streamSpeech({ turnId, speechRequestId, assistantMessageId }, async (chunk) => {
-        if (!ownsSpeech()) return;
-        await player.enqueuePcm(chunk, generation);
-        if (ownsSpeech()) voiceMessage.value = 'Falando';
-      }, speechController.signal);
-      await player.finish(generation);
+      const native = clientEnvironment().nativeSpeech;
+      if (native) {
+        playbackState.value = 'buffering';
+        await native.speak(turnId, assistantMessageId, speechRequestId);
+        if (ownsSpeech()) playbackState.value = 'idle';
+      } else {
+        await streamSpeech({ turnId, speechRequestId, assistantMessageId }, async (chunk) => {
+          if (!ownsSpeech()) return;
+          await player.enqueuePcm(chunk, generation);
+          if (ownsSpeech()) voiceMessage.value = 'Falando';
+        }, speechController.signal);
+        await player.finish(generation);
+      }
       if (ownsSpeech()) {
         voiceAvailable.value = true;
         voiceMessage.value = null;
@@ -66,6 +81,9 @@ export function useAegisVoice() {
         voiceMessage.value = error instanceof TypeError ? 'Serviço de voz indisponível.'
           : error instanceof Error ? error.message : 'Não consegui reproduzir a voz.';
       }
+    } finally {
+      if (releaseAudio === lease) releaseAudio = null;
+      await lease().catch(() => undefined);
     }
   }
 
@@ -74,10 +92,17 @@ export function useAegisVoice() {
     const speechRequestId = activeSpeechRequestId;
     activeTurnId = null;
     activeSpeechRequestId = null;
-    player.stop();
-    controller?.abort();
+    const stoppedController = controller;
     controller = null;
+    const release = releaseAudio;
+    releaseAudio = null;
+    player.stop();
+    stoppedController?.abort();
     voiceMessage.value = null;
+    // Snapshot ownership before asynchronous native cancellation; an old stop must
+    // never abort the controller or release the lease of a newer replay.
+    if (speechRequestId) await clientEnvironment().nativeSpeech?.stop(speechRequestId).catch(() => undefined);
+    if (release) await release().catch(() => undefined);
     if (speechRequestId) {
       try { await cancelSpeech(speechRequestId); } catch { /* local stop is already complete */ }
     }

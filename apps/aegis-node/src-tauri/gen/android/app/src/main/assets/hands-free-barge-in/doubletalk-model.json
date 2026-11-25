@@ -1,0 +1,101 @@
+{
+  "schema": "AGD4",
+  "epoch": 13,
+  "rank": [
+    38,
+    64,
+    -12
+  ],
+  "auxiliaryMask": true,
+  "input": {
+    "frameSamples": 320,
+    "spectralBins": 192,
+    "featureCount": 193,
+    "historyFrames": 61
+  },
+  "requiredVotes": 6,
+  "windowFrames": 12,
+  "softwareThreshold": 0.7636805384367361,
+  "hardwareThreshold": 0.7694030592393393,
+  "softwareDevelopment": {
+    "origin": [
+      18,
+      64,
+      0,
+      32
+    ],
+    "old": [
+      20,
+      128,
+      0,
+      96
+    ],
+    "mute": [
+      24,
+      32,
+      0,
+      0
+    ]
+  },
+  "hardwareDevelopment": {
+    "hw": [
+      40,
+      64,
+      0,
+      64
+    ],
+    "old": [
+      6,
+      128,
+      0,
+      96
+    ],
+    "mute": [
+      25,
+      32,
+      0,
+      0
+    ]
+  },
+  "sha256": "548fbc2679660dceed0aa47e5f737e5797ac7165e7d8f7fdb494969e5f77c0b7",
+  "bytes": 403072,
+  "independentReplay": {
+    "priorSuite": {
+      "continuous": {"hits": 18, "speechTrials": 96, "echoCuts": 0, "echoControls": 56},
+      "quantized": {"hits": 16, "speechTrials": 96, "echoCuts": 0, "echoControls": 32}
+    },
+    "finalBlindSuite": {
+      "sources": 20,
+      "continuous": {"overlapHits": 8, "overlapTrials": 120, "mutedHits": 19, "mutedTrials": 20, "echoCuts": 1, "echoControls": 80},
+      "quantized": {"overlapHits": 10, "overlapTrials": 120, "mutedHits": 19, "mutedTrials": 20, "echoCuts": 3, "echoControls": 80, "cutsBeforeSpeech": 4},
+      "simulatedNativeUncorrected": {"overlapHits": 1, "overlapTrials": 120, "echoCuts": 0, "echoControls": 80},
+      "simulatedNativeClean": {"overlapHits": 92, "overlapTrials": 120, "mutedHits": 19, "mutedTrials": 20},
+      "dry": {"hits": 132, "speechTrials": 140}
+    },
+    "genericSoftwareFallbackReady": false
+  },
+  "nativeAdaptive": {
+    "thresholdWhenSuppressionMeasured": 0.70,
+    "qualification": {"quietActiveFrames": 8, "historyFrames": 40, "recentQuietFrames": 20, "minRenderRms": 500, "maxResidualRmsFloor": 32, "maxResidualRenderRatio": 0.01},
+    "replayedBlindSuite": {
+      "strongAttenuation": {"hits": 104, "speechTrials": 140, "echoCuts": 0, "echoControls": 80},
+      "moderateAttenuation": {"hits": 73, "speechTrials": 140, "echoCuts": 0, "echoControls": 80},
+      "clean": {"hits": 104, "speechTrials": 140},
+      "uncorrected": {"hits": 18, "speechTrials": 140, "echoCuts": 0, "echoControls": 80},
+      "simulatedAbruptLoss": {"hits": 48, "speechTrials": 140, "echoCuts": 24, "echoControls": 80, "unrelatedCuts": 28}
+    },
+    "physicalDiagnostic": {
+      "device": "Samsung SM-G781B",
+      "androidApi": 33,
+      "nativeEffect": "Qualcomm Fluence",
+      "echoAttenuationDbInTwoComparisons": [70.54, 48.99],
+      "echoOnlyConfirmed": 0,
+      "strictSpeechConfirmed": 0,
+      "strictSpeechTrials": 3,
+      "qualifiedThresholdSweep": {"threshold": 0.70, "maxVotesIn12": 12, "confirmed": true},
+      "note": "Disposable diagnostic scores only; actual native adaptive runtime and dialogue handoff require preview testing."
+    },
+    "genericReleaseReady": false,
+    "previewPurpose": "Physical validation with effective native AEC; software fallback and abrupt loss remain experimental."
+  }
+}

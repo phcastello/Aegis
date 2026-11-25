@@ -17,13 +17,34 @@ Todos os binds publicados no host usam loopback por padrão:
 
 | Configuração | Efeito |
 | --- | --- |
-| `AEGIS_HTTP_BIND_ADDRESS=127.0.0.1` | PWA e API acessíveis pelo próprio host, por exemplo atrás do proxy privado existente. |
+| `AEGIS_HTTP_BIND_ADDRESS=127.0.0.1` | Gateway estático e API acessíveis pelo próprio host, por exemplo atrás do proxy privado existente. |
 | `AEGIS_HTTP_BIND_ADDRESS=<IP da interface privada>` | Opção explícita para acesso pela interface VPN/LAN escolhida. Configure a política de rede e HTTPS correspondente. |
 | `AEGIS_DATA_BIND_ADDRESS=127.0.0.1` | PostgreSQL, Qdrant e Neo4j permanecem no loopback do host. Os serviços Docker continuam se comunicando pela rede interna. |
 
 Não é necessário publicar os bancos em outras interfaces para que a API Docker os alcance. A mudança dos padrões versionados não comprova a exposição efetiva da instalação atual: firewall, VPN e proxy reais não foram inspecionados nesta tarefa.
 
 Os nomes dos containers e dos quatro volumes (`postgres_data`, `qdrant_data`, `neo4j_data`, `data_protection_keys`) continuam iguais. Em uma instalação existente, execute na mesma pasta e com o mesmo projeto Compose usado antes; preserve um eventual `COMPOSE_PROJECT_NAME` ou `-p` já adotado. Trocar o nome do projeto pode selecionar volumes novos e aparentar perda de dados. Não remova volumes para atualizar. Preserve o key ring Data Protection, os arquivos FCM e as identidades pareadas.
+
+## Gateway HTTP e aposentadoria do cliente web
+
+O domínio privado continua atendido pelo serviço Nginx `aegis-pwa`, na mesma
+porta HTTP publicada (5173). O nome histórico, o caminho de build e a chave `pwa`
+no registro de publicação são conservados para não exigir reconfiguração do proxy
+externo nem dos aplicativos instalados. A página raiz oferece downloads nativos
+e o resultado da autorização Google; não existe rota de chat web. O callback
+OAuth permanece em `/api/email/oauth/callback`, com o resultado redirecionado a
+`/?email=connected` ou `/?email=connect_failed`. `/api/` continua encaminhado à
+API `aegis-api:8090`, incluindo streaming e WebSocket sem buffering.
+
+Não altere domínio, endereço/porta do proxy, identidade da API nem redirect URI
+para atualizar a página. `VITE_AEGIS_API_BASE_URL` permanece um argumento legado
+sem efeito no gateway estático. Os endpoints `/sw.js` e `/dev-sw.js` servem a
+implementação transitória sem cache de navegação, para que os navegadores que
+ainda tenham o antigo cliente instalado possam passar à página nova e preservar
+ações de lembretes já colocadas na fila. O manifesto antigo deixa de oferecer a
+instalação da PWA. A retirada futura desses endpoints depende da verificação da
+transição (a antiga fila admitia retenção de até 30 dias), não de uma limpeza
+geral dos dados do navegador.
 
 ## Banco novo: migrations antes da API
 

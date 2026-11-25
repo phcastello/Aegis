@@ -3,8 +3,10 @@ using Aegis.Application.Email;
 using Aegis.Application.Google;
 using Aegis.Application.Llm;
 using Aegis.Application.Observability;
+using Aegis.Application.Voice;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -33,21 +35,55 @@ public sealed class AegisToolLoop(
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
+        var handsFree = context.Origin == HandsFreeReply.Origin;
+        if (handsFree) tools.Add(HandsFreeReply.Definition);
         List<JsonElement>? inputItems = null;
         List<JsonElement>? auditInputItems = null;
         var responses = new List<ModelToolResponse>();
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
+        var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var response = await modelClient.RespondWithToolsAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+            var response = await TurnLatencyProfile.MeasureAsync("model.round", () => modelClient.RespondWithToolsAsync(
+                new ModelToolRequest(request, decisionPending ? [.. tools, HandsFreeDirection.IgnoreDefinition] :
+                    iteration <= DefaultMaxIterations ? tools : handsFree ? [HandsFreeReply.Definition] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
-                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken);
+                    AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken));
             responses.Add(response);
+            TurnLatencyProfile.Mark("model.round_completed", iteration);
+            TurnLatencyProfile.Mark("model.tool_calls", response.ToolCalls.Count);
+
+            if (HandsFreeDirection.Requested(response.ToolCalls))
+            {
+                if (!decisionPending) throw new InvalidOperationException("Descarte fora da decisão inicial.");
+                // Even a malformed mixed batch containing ignore is suppressed before tools or persistence.
+                TurnLatencyProfile.Mark("chat.voice_ignored");
+                return response with { Content = string.Empty, ToolCalls = [], Ignored = true };
+            }
+
+            if (handsFree && HandsFreeReply.TryRead(response.ToolCalls, out var speech, out var continuation))
+            {
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                return response with
+                {
+                    Content = speech,
+                    ToolCalls = [],
+                    VoiceContinuation = continuation,
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
+                };
+            }
+
+            if (decisionPending)
+            {
+                await context.AcceptVoiceTurn!(cancellationToken);
+                decisionPending = false;
+            }
 
             if (response.ToolCalls.Count == 0 || iteration > DefaultMaxIterations)
             {
@@ -58,7 +94,8 @@ public sealed class AegisToolLoop(
                     Content = response.ToolCalls.Count == 0 && !string.IsNullOrWhiteSpace(response.Content)
                         ? response.Content.Trim()
                         : "Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.",
-                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation = handsFree ? HandsFreeReply.Close : null
                 };
             }
 
@@ -106,19 +143,27 @@ public sealed class AegisToolLoop(
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
+        var handsFree = context.Origin == HandsFreeReply.Origin;
+        var segmented = handsFree && context.VoiceSegments;
+        var terminal = segmented ? FinalSpeechSegments.Definition : HandsFreeReply.Definition;
+        if (handsFree) tools.Add(terminal);
         var inputItems = request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
         var auditInputItems = request.AuditInputItems?.ToList() ?? request.InputItems?.ToList() ?? [CreateUserInputItem(request.Input)];
         var responses = new List<ModelToolStreamChunk>();
         var executions = new List<object>();
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
+        var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ModelToolStreamChunk? completed = null;
+            var finalSegments = new List<string>();
+            var bufferedVoice = handsFree ? new StringBuilder() : null;
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(
-                new ModelToolRequest(request, iteration <= DefaultMaxIterations ? tools : [],
+                new ModelToolRequest(request, decisionPending ? [.. tools, HandsFreeDirection.IgnoreDefinition] :
+                    iteration <= DefaultMaxIterations ? tools : handsFree ? [terminal] : [],
                     DefaultMaxIterations, InputItems: WithIdentityReminder(inputItems, request.Instructions, iteration > 1),
                     AuditInputItems: WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1)), cancellationToken))
             {
@@ -127,9 +172,24 @@ public sealed class AegisToolLoop(
                     completed = chunk;
                     break;
                 }
+                if (chunk.FinalSpeechSegment is { } finalSegment)
+                {
+                    if (!segmented) throw new InvalidOperationException("Unexpected speech segment.");
+                    FinalSpeechSegments.Validate(finalSegment);
+                    if (decisionPending)
+                    {
+                        // The provider enforces a single function call per round. A validated segment
+                        // from the terminal speech call is an irrevocable decision to attend.
+                        await context.AcceptVoiceTurn!(cancellationToken);
+                        decisionPending = false;
+                    }
+                    finalSegments.Add(finalSegment);
+                    yield return new ModelStreamChunk(null, false, FinalSpeechSegment: finalSegment);
+                }
                 if (!string.IsNullOrEmpty(chunk.Content))
                 {
-                    yield return new ModelStreamChunk(chunk.Content, IsDone: false);
+                    if (handsFree) bufferedVoice!.Append(chunk.Content);
+                    else yield return new ModelStreamChunk(chunk.Content, IsDone: false);
                 }
             }
 
@@ -138,6 +198,49 @@ public sealed class AegisToolLoop(
                 throw new InvalidOperationException("Tool streaming ended without a complete response.");
             }
             responses.Add(completed);
+            TurnLatencyProfile.Mark("model.round_completed", iteration);
+            TurnLatencyProfile.Mark("model.tool_calls", completed.ToolCalls.Count);
+            if (HandsFreeDirection.Requested(completed.ToolCalls))
+            {
+                if (!decisionPending) throw new InvalidOperationException("Descarte fora da decisão inicial.");
+                TurnLatencyProfile.Mark("chat.voice_ignored");
+                yield return new ModelStreamChunk(null, true, Ignored: true);
+                yield break;
+            }
+
+            if (segmented && completed.ToolCalls.Any(c => c.Name == FinalSpeechSegments.ToolName))
+            {
+                var validated = FinalSpeechSegments.Read(completed.ToolCalls, out var segmentDecision);
+                if (!validated.Take(finalSegments.Count).SequenceEqual(finalSegments) || validated.Length < finalSegments.Count)
+                    throw new InvalidOperationException("Final speech units were changed by the provider.");
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
+                foreach (var segment in validated.Skip(finalSegments.Count))
+                    yield return new ModelStreamChunk(null, false, FinalSpeechSegment: segment);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model, completed.Purpose, completed.MetadataJson,
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds), VoiceContinuation: segmentDecision);
+                yield break;
+            }
+            if (finalSegments.Count > 0) throw new InvalidOperationException("Incomplete terminal speech response.");
+            if (handsFree && HandsFreeReply.TryRead(completed.ToolCalls, out var speech, out var continuation))
+            {
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                if (segmented) yield return new ModelStreamChunk(null, false, FinalSpeechSegment: speech);
+                else yield return new ModelStreamChunk(speech, false);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
+                    completed.Purpose, completed.MetadataJson,
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: continuation);
+                yield break;
+            }
+            if (decisionPending)
+            {
+                await context.AcceptVoiceTurn!(cancellationToken);
+                decisionPending = false;
+            }
             inputItems.AddRange(completed.OutputItems);
             auditInputItems.AddRange(completed.OutputItems.Select(RedactMemoryCall));
 
@@ -145,20 +248,29 @@ public sealed class AegisToolLoop(
             {
                 stopwatch.Stop();
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                if (handsFree && bufferedVoice!.Length > 0)
+                {
+                    if (segmented) yield return new ModelStreamChunk(null, false, FinalSpeechSegment: bufferedVoice.ToString());
+                    else yield return new ModelStreamChunk(bufferedVoice.ToString(), false);
+                }
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, completed.MetadataJson,
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
 
             if (iteration > DefaultMaxIterations)
             {
-                yield return new ModelStreamChunk("Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.", false);
+                const string limitReply = "Não consegui concluir a operação porque ela excedeu o limite de etapas. Tente novamente com um pedido mais específico.";
+                if (segmented) yield return new ModelStreamChunk(null, false, FinalSpeechSegment: limitReply);
+                else yield return new ModelStreamChunk(limitReply, false);
                 stopwatch.Stop();
                 RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, completed.MetadataJson,
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds));
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
 
@@ -221,6 +333,8 @@ public sealed class AegisToolLoop(
 
     private void RecordTurn(Guid conversationId, int modelCalls, int toolCalls, long elapsedMilliseconds)
     {
+        TurnLatencyProfile.Mark("chat.model_calls", modelCalls);
+        TurnLatencyProfile.Mark("chat.executed_tools", toolCalls);
         metrics.LlmToolCalls.Add(toolCalls);
         metrics.LlmToolIterations.Record(Math.Max(0, modelCalls - 1));
         metrics.LlmTurnModelCalls.Record(modelCalls);
@@ -268,6 +382,7 @@ public sealed class AegisToolLoop(
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
+        using var timing = TurnLatencyProfile.Measure("tool." + tool.Name);
         try
         {
             return await tool.ExecuteAsync(toolCall.Arguments, context, cancellationToken);

@@ -1,7 +1,9 @@
 # Documentação da Aegis
 
-O [README principal](../README.md) apresenta a versão publicada. As mudanças de
-manutenção nesta branch ainda precisam de distribuição posterior da API/PWA/apps.
+O [README principal](../README.md) apresenta a linha atual do projeto. Esta
+documentação reúne os contratos e limites das funcionalidades, os registros de
+verificação e os procedimentos de distribuição da API, do gateway estático e
+dos aplicativos nativos.
 
 - [Desenvolvimento nativo](../apps/aegis-node/README.md): requisitos e comandos atuais.
 - [Desenvolvimento e testes](testes.md): suítes, execução e limites das evidências.
@@ -13,7 +15,8 @@ manutenção nesta branch ainda precisam de distribuição posterior da API/PWA/
 - [Cliente de modelo](reducao-cliente-modelo.md) e [dependências](reducao-dependencias.md):
   remoções seletivas e consumidores preservados.
 - [Configuração de FCM Android](android-fcm-setup.md): entrega nativa, distinta do Web Push antigo.
-- [Notas da v0.7.0](v0.7.0-release-notes.md) e [v0.7.1](v0.7.1-release-notes.md).
+- Notas de lançamento: [v0.7.0](v0.7.0-release-notes.md), [v0.7.1](v0.7.1-release-notes.md),
+  [v0.7.2](v0.7.2-release-notes.md) e [v0.8.0](v0.8.0-release-notes.md).
 
 O [registro integrado da v0.7.0](v0.7.0-completion.md), seus documentos Stage 01–07,
 os relatórios de verificação e o [README anterior](arquivo/README-ate-v0.7.1.md)

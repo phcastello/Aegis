@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -7,7 +7,15 @@
   </head>
 
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main id="aegis-webview-unsupported" role="alert" hidden style="padding:32px;font-family:sans-serif;color:#e8edf7;background:#101827;min-height:100vh;box-sizing:border-box;">
+        <h1>Atualize o Android System WebView</h1>
+        <p>Atualize o Android System WebView pela Play Store (ou o Chrome, se for o provedor) e reabra a Aegis.</p>
+      </main>
+    </div>
+    <!-- This classic, same-origin script runs even when the module bundle
+         cannot be parsed by an old Android WebView. -->
+    <script src="/webview-bootstrap.js"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

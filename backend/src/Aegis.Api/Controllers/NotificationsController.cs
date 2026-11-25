@@ -12,7 +12,7 @@ namespace Aegis.Api.Controllers;
 public sealed class NotificationsController(ReminderStore reminders, ILegacyReminderInteractionTokens interactions,
     TimeProvider clock) : ControllerBase
 {
-    private const string RetirementMessage = "O Web Push foi encerrado. Para receber lembretes, use um aplicativo Android ou Windows pareado. O chat web continua podendo criar lembretes para esses dispositivos.";
+    private const string RetirementMessage = "O Web Push foi encerrado. Para criar e receber lembretes, use um aplicativo Aegis Android ou Windows pareado.";
     public sealed record SubscriptionRequest(Guid DeviceId, string Endpoint, string P256dh, string Auth, string? UserAgent);
     public sealed record TokenRequest(string Token);
     public sealed record StatusRequest(string Token, string? Endpoint = null);

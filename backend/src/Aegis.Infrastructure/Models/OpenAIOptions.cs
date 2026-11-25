@@ -12,7 +12,7 @@ public sealed class OpenAIOptions
 
     public string ChatModel { get; set; } = DefaultChatModel;
 
-    public string ChatReasoningEffort { get; set; } = "medium";
+    public string ChatReasoningEffort { get; set; } = "low";
 
     public bool StoreResponses { get; set; }
 

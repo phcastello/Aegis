@@ -7,6 +7,8 @@ using Aegis.Api.Controllers;
 using Aegis.Api.Nodes;
 using Aegis.Api.Nodes.Transport;
 using Aegis.Application.Nodes;
+using Aegis.Application.Chat;
+using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -98,14 +100,90 @@ public sealed class NodeTransportTests
         var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), deadline.Token);
         return (result, result.MessageType == WebSocketMessageType.Text ? JsonSerializer.Deserialize<JsonElement>(buffer.AsSpan(0, result.Count)) : default);
     }
-    private static async Task Hello(WebSocket ws) { await Send(ws, Message()); var ack = await Read(ws); Assert.Equal("hello_ack", ack.Json.GetProperty("type").GetString()); }
+    private static async Task<JsonElement> Hello(WebSocket ws) { await Send(ws, Message()); var ack = await Read(ws); Assert.Equal("hello_ack", ack.Json.GetProperty("type").GetString()); return ack.Json; }
     private static async Task Eventually(Func<Task<bool>> predicate)
     { using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5)); while (!await predicate()) await Task.Delay(10, limit.Token); }
-    private static async Task Advertise(WebSocket socket, params NodeCapability[] capabilities)
+    private static async Task<JsonElement> Advertise(WebSocket socket, params NodeCapability[] capabilities)
     {
         await Send(socket, new { protocolVersion = 1, type = "hello", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow,
             payload = new { appVersion = "0.7.0-stage.7", capabilities = capabilities.Select(c => new { name = c.Name, version = c.Version }) } });
-        Assert.Equal("hello_ack", (await Read(socket)).Json.GetProperty("type").GetString());
+        var ack = (await Read(socket)).Json;
+        Assert.Equal("hello_ack", ack.GetProperty("type").GetString());
+        return ack;
+    }
+
+    private static async Task AssertConversationChanged(WebSocket socket, Guid? conversationId)
+    {
+        var message = (await Read(socket)).Json;
+        Assert.Equal("conversation_changed", message.GetProperty("type").GetString());
+        var payload = message.GetProperty("payload");
+        Assert.Single(payload.EnumerateObject());
+        var id = payload.GetProperty("conversationId");
+        if (conversationId is null) Assert.Equal(JsonValueKind.Null, id.ValueKind);
+        else Assert.Equal(conversationId.Value, id.GetGuid());
+    }
+
+    [Fact]
+    public async Task CommittedConversationChangesReachOnlyNegotiatedTransport()
+    {
+        await using var f = await Host();
+        var (_, legacySecret) = await f.Pair();
+        var (_, modernSecret) = await f.Pair();
+        using var legacy = await f.Connect(legacySecret);
+        using var modern = await f.Connect(modernSecret);
+        var oldAck = await Hello(legacy);
+        Assert.False(oldAck.GetProperty("payload").TryGetProperty("conversationChanges", out _));
+        var ack = await Advertise(modern, new NodeCapability(NodeCapabilityCatalog.ConversationSync, 1));
+        Assert.True(ack.GetProperty("payload").GetProperty("conversationChanges").GetBoolean());
+
+        await using var scope = f.App.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        var conversation = new Conversation(Conversation.DefaultTitle);
+        db.AddConversation(conversation);
+        db.AddChatMessage(conversation.AddMessage("user", "A synthetic test message."));
+        await db.SaveChangesAsync();
+        await AssertConversationChanged(modern, conversation.Id);
+
+        var assistant = conversation.AddMessage("assistant", "First synthetic segment.");
+        db.AddChatMessage(assistant);
+        await db.SaveChangesAsync();
+        await AssertConversationChanged(modern, conversation.Id);
+        assistant.UpdateContent("First and second synthetic segments.");
+        await db.SaveChangesAsync();
+        await AssertConversationChanged(modern, conversation.Id);
+
+        Assert.True(await db.SetGeneratedTitleIfEligibleAsync(conversation.Id, "Synthetic title", null, default));
+        await AssertConversationChanged(modern, conversation.Id);
+        conversation.Rename("Manual title");
+        await db.SaveChangesAsync();
+        await AssertConversationChanged(modern, conversation.Id);
+        conversation.Delete();
+        await db.SaveChangesAsync();
+        await AssertConversationChanged(modern, conversation.Id);
+
+        // Wait for a complete transport fan-out before checking the legacy socket.
+        var sentinel = Guid.NewGuid();
+        await f.Connections.BroadcastConversationChangedAsync(sentinel, default);
+        await AssertConversationChanged(modern, sentinel);
+        await Send(legacy, new { protocolVersion = 1, type = "heartbeat", messageId = Guid.NewGuid(), sentAt = DateTimeOffset.UtcNow });
+        Assert.Equal("heartbeat_ack", (await Read(legacy)).Json.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task ExcessPendingConversationChangesRequestGlobalReconciliation()
+    {
+        await using var f = await Host();
+        var (_, secret) = await f.Pair();
+        using var socket = await f.Connect(secret);
+        await Advertise(socket, new NodeCapability(NodeCapabilityCatalog.ConversationSync, 1));
+        var publisher = f.App.Services.GetRequiredService<IConversationChangePublisher>();
+        var repeated = Guid.NewGuid();
+        for (var i = 0; i < 100; i++) publisher.Publish(repeated);
+        await AssertConversationChanged(socket, repeated);
+
+        // More concurrent IDs than the bounded batch can retain are represented by null.
+        for (var i = 0; i < 100; i++) publisher.Publish(Guid.NewGuid());
+        await AssertConversationChanged(socket, null);
     }
     [Fact] public async Task OldAndNewHelloReplacePersistedAndCurrentSessionCapabilities()
     {

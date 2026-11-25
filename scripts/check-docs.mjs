@@ -5,6 +5,7 @@ import { dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// The legacy frontend path is a standalone static gateway, not another chat host.
 const packages = ['packages/aegis-client', 'frontend/aegis-pwa', 'apps/aegis-node'];
 const manifests = new Map(packages.map(path => [path, JSON.parse(readFileSync(resolve(root, path, 'package.json'), 'utf8'))]));
 for (const [path, manifest] of manifests) {
@@ -47,4 +48,4 @@ for (const path of [resolve(root, 'README.md'), resolve(root, 'apps/aegis-node/R
     links++;
   }
 }
-console.log(`Documentation OK: ${packages.length} package runners, documented npm commands, ${links} local links.`);
+console.log(`Documentation OK: ${packages.length} native/shared/gateway package runners, documented npm commands, ${links} local links.`);

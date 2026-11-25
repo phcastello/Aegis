@@ -3,11 +3,10 @@
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-
-const codename = "It's Not Stalking. It's a Feature.";
-const tagline = "You're terrible at hiding.";
+import { expectedReleaseIdentity, legacyReleaseIdentity } from './release-identity-expectations.mjs';
 
 export async function assertNativeReleaseIdentity(page, { version, platform, output }) {
+  const { codename, tagline } = expectedReleaseIdentity(version);
   mkdirSync(output, { recursive: true });
   await page.getByRole('region', { name: 'Conversa com a Aegis' }).waitFor();
   const runtime = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('runtime_info'));
@@ -22,7 +21,7 @@ export async function assertNativeReleaseIdentity(page, { version, platform, out
   assert.equal((await card.locator('h1').innerText()).trim(), 'Aegis');
   assert.equal((await card.locator('.identity-card__title span').innerText()).trim(), `v${version}`);
   assert.equal((await card.locator('.identity-card__codename').innerText()).trim(), codename);
-  assert.equal(await card.getByText(tagline, { exact: true }).count(), 0, 'Sidebar must omit the secondary phrase.');
+  assert.equal(await card.getByText(legacyReleaseIdentity.tagline, { exact: true }).count(), 0, 'Sidebar must omit the secondary phrase.');
   const collapse = page.getByRole('button', { name: 'Fechar histórico', exact: true });
   assert.equal(await collapse.isVisible(), true);
   assert.equal(await collapse.isEnabled(), true);
@@ -51,7 +50,8 @@ export async function assertNativeReleaseIdentity(page, { version, platform, out
   await page.getByRole('button', { name: 'Sobre', exact: true }).click();
   const about = page.locator('.settings-content');
   assert.equal((await about.locator('.about-release-codename').innerText()).trim(), codename);
-  assert.equal((await about.locator('.about-release-tagline').innerText()).trim(), tagline);
+  if (tagline) assert.equal((await about.locator('.about-release-tagline').innerText()).trim(), tagline);
+  else assert.equal(await about.locator('.about-release-tagline').count(), 0, 'Unassigned release families must not inherit another release tagline.');
   assert.equal((await about.locator('.settings-badge').innerText()).trim(), `v${version}`);
   assert.equal(await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).count(), 0);
   assert.equal(await about.getByRole('button', { name: 'Abrir Atualizações', exact: true }).count(), 0);

@@ -71,6 +71,14 @@ impl NodeRuntime {
             });
         if let Some(config) = config.as_mut() {
             config.notifications = Some(crate::native_notifications::executor(&app));
+            #[cfg(windows)]
+            {
+                use tauri::Emitter;
+                let app = app.clone();
+                config.conversation_sync = Some(Arc::new(move |event| {
+                    let _ = app.emit("aegis-conversation-sync", event);
+                }));
+            }
         }
         Self {
             identity: Arc::new(tokio::sync::Mutex::new(identity)),
@@ -138,6 +146,16 @@ impl NodeRuntime {
             .ok()
             .and_then(|i| i.transport_credential().ok().flatten())
             .is_some()
+    }
+    /// A native voice session pins an enabled, paired identity and rechecks it
+    /// before delivering each authenticated request or streaming audio.
+    #[cfg(windows)]
+    pub(crate) async fn voice_credential(&self) -> Option<String> {
+        let guard = self.identity.lock().await;
+        let identity = guard.as_ref().ok()?;
+        let node = identity.cached_node().ok()??;
+        if !node.enabled || node.revoked_at.is_some() { return None; }
+        identity.transport_credential().ok().flatten()
     }
     pub fn shutdown(&self) {
         self.cancel.cancel();
@@ -374,7 +392,7 @@ pub async fn node_set_reminders(
     id: String,
     receive_reminders: bool,
 ) -> Result<serde_json::Value, String> {
-    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo inválido.")?;
+    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo invÃ¡lido.")?;
     runtime
         .domain_call(
             reqwest::Method::PUT,
@@ -388,7 +406,7 @@ pub async fn node_remove(
     runtime: tauri::State<'_, NodeRuntime>,
     id: String,
 ) -> Result<serde_json::Value, String> {
-    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo inválido.")?;
+    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Dispositivo invÃ¡lido.")?;
     runtime
         .domain_call(
             reqwest::Method::DELETE,

@@ -50,8 +50,7 @@ public sealed class NodeTransportController(NodeConnectionRegistry connections, 
             await connections.AnnounceAsync(lease, () => WithHistory(h => h.AnnouncedAsync(nodeId, version, lease.LastSeenAt, capabilities, session.Token)), session.Token);
             using (var scope = scopes.CreateScope()) await scope.ServiceProvider.GetRequiredService<INodeRegistry>().MeAsync(nodeId, session.Token);
             if (!connections.Activate(lease)) throw new OperationCanceledException();
-            await connections.WriteAsync(lease, "hello_ack", hello.MessageId,
-                new { heartbeatSeconds = options.HeartbeatSeconds, timeoutSeconds = options.TimeoutSeconds }, session.Token);
+            await connections.AcknowledgeAsync(lease, hello.MessageId, session.Token);
             logger.LogInformation("Node transport acknowledged NodeId={NodeId} ConnectionId={ConnectionId} Phase=hello_ack", nodeId, lease.ConnectionId);
             var lastPersisted = clock.GetUtcNow();
             while (!session.IsCancellationRequested)

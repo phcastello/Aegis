@@ -1,11 +1,8 @@
 FROM node:24-alpine AS build
 WORKDIR /workspace/frontend/aegis-pwa
 
+# This legacy Compose argument is intentionally unused: the gateway is same-origin.
 ARG VITE_AEGIS_API_BASE_URL
-ENV VITE_AEGIS_API_BASE_URL=$VITE_AEGIS_API_BASE_URL
-
-COPY packages/aegis-client /workspace/packages/aegis-client
-RUN npm ci --prefix /workspace/packages/aegis-client
 COPY frontend/aegis-pwa/package*.json ./
 RUN npm ci
 

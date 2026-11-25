@@ -5,22 +5,29 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
+import { createServer as createPortProbe } from 'node:net';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const requireNative = createRequire(join(root, 'apps/aegis-node/package.json'));
-const { createServer } = await import(requireNative.resolve('vite'));
+const { createServer } = await import(pathToFileURL(requireNative.resolve('vite')).href);
 const moduleId = '/markdown-renderer-test-entry.js';
 const source = `
 import { createApp, h, ref, nextTick } from 'vue';
-import MarkdownMessage from ${JSON.stringify(join(root, 'packages/aegis-client/src/components/MarkdownMessage.vue'))};
-import ${JSON.stringify(join(root, 'packages/aegis-client/src/styles.css'))};
+import MarkdownMessage from '@aegis/client/components/MarkdownMessage.vue';
+import '@aegis/client/styles.css';
 const content = ref('');
 createApp({ render: () => h(MarkdownMessage, { content: content.value, animateChanges: true }) }).mount('#fixture');
 window.updateMarkdown = async text => { content.value = text; await nextTick(); };
 `;
-const vite = await createServer({ root: join(root, 'apps/aegis-node'), cacheDir: `/tmp/aegis-markdown-vite-${process.pid}`,
-  server: { host: '127.0.0.1', port: 0, strictPort: false },
+const port = await new Promise((resolve, reject) => {
+  const probe = createPortProbe(); probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolve(port)); });
+});
+const vite = await createServer({ root: join(root, 'apps/aegis-node'), cacheDir: join(tmpdir(), `aegis-markdown-vite-${process.pid}`),
+  resolve: { alias: { '@aegis/client': join(root, 'packages/aegis-client/src') } },
+  server: { host: '127.0.0.1', port, strictPort: false },
   plugins: [{ name: 'markdown-stream-regression',
     resolveId(id) { if (id === moduleId) return id; },
     load(id) { if (id === moduleId) return source; },
@@ -66,11 +73,51 @@ try {
     if (text.startsWith('https:')) assert.equal(initial.scrollWidth, initial.width, 'Long prose/links still wrap');
     if (text.startsWith('```')) assert.ok(await page.locator('pre').evaluate(el => el.scrollWidth > el.clientWidth), 'Long code remains horizontally scrollable');
   }
+  // A single accumulated plain-text update is not wrapped per word. During
+  // rapid character/group arrivals, wrappers remain confined to at most six
+  // recent groups and disappear once their animation finishes.
+  await page.evaluate(() => window.updateMarkdown(''));
+  const paragraph = 'Antigo conteúdo estável. '.repeat(40).trimEnd();
+  await page.evaluate(text => window.updateMarkdown(text), paragraph);
+  const fragmentStats = () => page.locator('.markdown-message').evaluate(el => ({
+    spans: el.querySelectorAll('.stream-fade-fragment').length,
+    animations: el.getAnimations({ subtree: true }).length,
+    text: el.textContent.trimEnd()
+  }));
+  assert.ok((await fragmentStats()).spans <= 1, 'Accumulated words form a single recent fade group, not one span per word');
+  let progression = paragraph;
+  for (const char of Array.from(' Texto novo, caractere por caractere, com música 🎵.')) {
+    progression += char;
+    await page.evaluate(text => window.updateMarkdown(text), progression);
+    const current = await fragmentStats();
+    assert.equal(current.text, progression.trimEnd());
+    assert.ok(current.spans <= 6, 'At most six recent groups in ordinary text');
+    assert.ok(current.animations <= 6, 'Animation tree stays bounded as the answer grows');
+  }
+  await page.waitForTimeout(260);
+  const settled = await fragmentStats();
+  assert.equal(settled.spans, 0, 'Expired fade wrappers become ordinary text nodes');
+  assert.equal(settled.animations, 0);
+  assert.equal(settled.text, progression);
+
+  // Partial Markdown re-rendering must preserve sanitization and native link
+  // safety even when the text contains a potential HTML or URI injection.
+  await page.evaluate(() => window.updateMarkdown('# Título seguro\n\n[Link válido](https://example.test/) [malicioso](javascript:alert(1))\n\n<img src=x onerror=alert(1)>\n\n**Negrito** e `código`.'));
+  const markup = await page.locator('.markdown-message').evaluate(el => ({
+    unsafe: el.querySelectorAll('script,img,[onerror],[onclick],a[href^="javascript:"]').length,
+    heading: el.querySelector('h1')?.textContent,
+    strong: el.querySelector('strong')?.textContent,
+    code: el.querySelector('code')?.textContent,
+    href: el.querySelector('a[href^="https:"]')?.getAttribute('href'),
+    rel: el.querySelector('a[href^="https:"]')?.getAttribute('rel')
+  }));
+  assert.deepEqual(markup, { unsafe: 0, heading: 'Título seguro', strong: 'Negrito', code: 'código', href: 'https://example.test/', rel: 'noopener noreferrer' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.evaluate(() => window.updateMarkdown('Movimento reduzido preservado.'));
   assert.equal(await page.locator('.markdown-message').evaluate(el => el.getAnimations({ subtree: true }).length), 0);
+  assert.equal(await page.locator('.stream-fade-fragment').count(), 0);
   assert.deepEqual(errors, []);
-  console.log(`Markdown streaming regression passed: ${samples} layout samples, long prose, code, table and reduced motion.`);
+  console.log(`Markdown streaming regression passed: ${samples} layout samples, long prose, code, table, bounded/unwrapped recent fading, sanitization and reduced motion.`);
 } finally {
   await browser?.close(); await vite.close();
 }

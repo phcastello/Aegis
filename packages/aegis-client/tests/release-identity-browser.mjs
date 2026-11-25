@@ -3,30 +3,30 @@ import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
+import { expectedReleaseIdentity, legacyReleaseIdentity, newerAvailableFixture } from './release-identity-expectations.mjs';
 
-// Run from any directory after npm ci in both hosts and @aegis/client:
+// Run from any directory after npm ci in the native host and @aegis/client:
 //   node packages/aegis-client/tests/release-identity-browser.mjs
 // IDENTITY_SCREENSHOT_DIR changes the report/PNG destination. A compatible
 // Chromium from Playwright's cache or PLAYWRIGHT_CHROMIUM_EXECUTABLE is required.
-// --before captures both actual Apps and intentionally fails on absent names;
+// --before captures the actual native App and intentionally fails on absent names;
 // a screenshot baseline without the codename never counts as a passing result.
-// Exercise both production entry points, including App -> ChatView ->
+// Exercise the production entry point on both platforms, including App -> ChatView ->
 // ConversationSidebar -> AegisIdentityCard. Only external API/IPC are fixtures.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const requireNative = createRequire(join(root, 'apps/aegis-node/package.json'));
-const { createServer } = await import(requireNative.resolve('vite'));
+const { createServer } = await import(pathToFileURL(requireNative.resolve('vite')).href);
 const phase = process.argv.includes('--before') ? 'before' : 'after';
 const output = resolve(process.env.IDENTITY_SCREENSHOT_DIR ?? join(root, '.artifacts/release-identity', phase));
 mkdirSync(output, { recursive: true });
 const installed = JSON.parse(readFileSync(join(root, 'apps/aegis-node/package.json'), 'utf8')).version;
-const codename = "It's Not Stalking. It's a Feature.";
-const tagline = "You're terrible at hiding.";
+const { codename, tagline } = expectedReleaseIdentity(installed);
+const availableVersion = newerAvailableFixture(installed);
 const sourceFiles = [
   'apps/aegis-node/src/main.ts', 'apps/aegis-node/src/App.vue',
-  'frontend/aegis-pwa/src/main.ts', 'frontend/aegis-pwa/src/App.vue',
   'packages/aegis-client/src/views/ChatView.vue',
   'packages/aegis-client/src/components/ConversationSidebar.vue',
   'packages/aegis-client/src/components/AegisIdentityCard.vue',
@@ -36,7 +36,7 @@ const sourceFiles = [
 const sourceHashes = () => Object.fromEntries(sourceFiles.map(file => [file, createHash('sha256').update(readFileSync(join(root, file))).digest('hex')]));
 const report = {
   phase, installed, sourceHashes: sourceHashes(),
-  rendering: 'Production web and native main.ts/App.vue and shared components; browser Chromium with simulated native IPC, not installed Android or Windows/WebView2.',
+  rendering: 'Production native main.ts/App.vue and shared components; browser Chromium with simulated Android and Windows IPC, not installed Android or Windows/WebView2.',
   scaling: 'Root font size 100%/200%, no CSS transform; no Android system-font hardware claim.',
   cases: [], failures: [], pageErrors: [],
 };
@@ -71,9 +71,9 @@ async function api(route) {
 }
 
 async function nativeFixture(context, version, platform = 'android') {
-  await context.addInitScript(({ version, platform }) => {
+  await context.addInitScript(({ version, platform, availableVersion }) => {
     window.__identityNativeCalls = [];
-    window.__identityAvailableVersion = '0.8.0';
+    window.__identityAvailableVersion = availableVersion;
     window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       window.__identityNativeCalls.push(command);
       if (command === 'runtime_info') return { platform, backendUrl: location.origin, version };
@@ -93,7 +93,7 @@ async function nativeFixture(context, version, platform = 'android') {
       throw new Error(`Unavailable in isolated identity IPC fixture: ${command}`);
     } };
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
-  }, { version, platform });
+  }, { version, platform, availableVersion });
 }
 
 async function openSidebar(page) {
@@ -144,8 +144,9 @@ let browser;
 const servers = [];
 try {
   process.env.npm_package_version = installed;
-  for (const host of ['native', 'web']) {
-    const appRoot = join(root, host === 'native' ? 'apps/aegis-node' : 'frontend/aegis-pwa');
+  {
+    const host = 'native';
+    const appRoot = join(root, 'apps/aegis-node');
     const port = await availablePort();
     const server = await createServer({ root: appRoot, configFile: join(appRoot, 'vite.config.ts'), server: { port, host: '127.0.0.1', strictPort: true }, clearScreen: false });
     await server.listen();
@@ -180,7 +181,7 @@ try {
         check(await identity.getByRole('heading', { name: 'Aegis', exact: true }).isVisible(), 'Aegis heading must be visible');
         check(await identity.getByText(`v${installed}`, { exact: true }).isVisible(), `installed version v${installed} missing or duplicated prefix`);
         check(await identity.getByText(codename, { exact: true }).isVisible().catch(() => false), 'full release codename missing from actual App sidebar chain');
-        check(!(await identity.innerText()).includes(tagline), 'sidebar must not include secondary tagline');
+        check(!(await identity.innerText()).includes(legacyReleaseIdentity.tagline), 'sidebar must not include secondary tagline');
         entry.open = await measure(page);
         check(!entry.open.horizontalOverflow, 'document horizontal overflow');
         check(!entry.open.identityOverflow, 'identity horizontal overflow');
@@ -226,11 +227,13 @@ try {
         const about = page.getByRole('dialog', { name: 'Configurações', exact: true });
         await about.getByRole('button', { name: 'Sobre', exact: true }).click();
         check(await about.getByText(codename, { exact: true }).isVisible().catch(() => false), 'full release codename missing in About');
-        check((await about.getByText(tagline, { exact: true }).count()) <= 1, 'About tagline duplicated');
-        if (phase === 'after') check(await about.getByText(tagline, { exact: true }).isVisible(), 'About secondary tagline missing');
+        if (tagline) {
+          check((await about.getByText(tagline, { exact: true }).count()) <= 1, 'About tagline duplicated');
+          if (phase === 'after') check(await about.getByText(tagline, { exact: true }).isVisible(), 'About secondary tagline missing');
+        } else check(await about.locator('.about-release-tagline').count() === 0, 'Unassigned release family inherited another tagline');
         check((await about.getByRole('button', { name: 'Verificar atualizações', exact: true }).count()) === 0, 'About must not duplicate update check');
         check((await about.innerText()).includes(installed), 'About omits installed/build version');
-        check(!(await about.innerText()).includes('0.8.0'), 'available updater version substituted for installed identity');
+        check(!(await about.innerText()).includes(availableVersion), 'available updater version substituted for installed identity');
         entry.about = await about.evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
         check(entry.about.scrollWidth <= entry.about.clientWidth + 1, 'About horizontal overflow');
         await save('about');
@@ -247,7 +250,7 @@ try {
   if (phase === 'after') {
     const nativeUrl = servers.find(server => server.host === 'native').url;
     report.runtimeVersions = [];
-    for (const runtimeVersion of ['0.7.0', '0.7.2', 'v0.7.1', undefined, 'not-a-version', '0.8.0']) {
+    for (const runtimeVersion of ['0.7.0', '0.7.2', 'v0.7.1', undefined, 'not-a-version', '0.8.0', '0.8.0-unstable.11', '0.8.2', '0.9.0']) {
       const context = await browser.newContext({ viewport: { width: 360, height: 1000 } });
       await context.route('**/api/**', api);
       await nativeFixture(context, runtimeVersion);
@@ -260,9 +263,9 @@ try {
         const sidebar = await openSidebar(page);
         const identity = sidebar.getByRole('region', { name: 'Identidade da Aegis', exact: true });
         const known = typeof runtimeVersion === 'string' && /^v?0\.7\./.test(runtimeVersion);
-        const valid = known || runtimeVersion === '0.8.0';
+        const valid = typeof runtimeVersion === 'string' && /^v?\d+\.\d+\.\d+(?:-unstable\.\d+)?$/.test(runtimeVersion);
         const expectedVersion = valid ? `v${runtimeVersion.replace(/^v/, '')}` : 'Versão indisponível';
-        const expectedCodename = known ? codename : 'Codinome indisponível';
+        const expectedCodename = valid ? expectedReleaseIdentity(runtimeVersion).codename : 'Codinome indisponível';
         assert.equal(await identity.getByText(expectedVersion, { exact: true }).isVisible(), true, `version fallback/normalization for ${runtimeVersion}`);
         assert.equal(await identity.getByText(expectedCodename, { exact: true }).isVisible(), true, `family/fallback for ${runtimeVersion}`);
         assert.equal((await identity.innerText()).includes('vv'), false, 'duplicate version prefix');
@@ -271,7 +274,7 @@ try {
         await about.getByRole('button', { name: 'Sobre', exact: true }).click();
         assert.equal(await about.getByText(expectedVersion, { exact: true }).isVisible(), true);
         assert.equal(await about.getByText(expectedCodename, { exact: true }).isVisible(), true);
-        assert.equal(await about.getByText(tagline, { exact: true }).count(), known ? 1 : 0);
+        assert.equal(await about.getByText(legacyReleaseIdentity.tagline, { exact: true }).count(), known ? 1 : 0);
         if (!valid || !known) await page.screenshot({ path: join(output, `native-runtime-${runtimeVersion ?? 'missing'}-about.png`), fullPage: true });
       } catch (error) {
         versionCase.failures.push(error.message);

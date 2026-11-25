@@ -12,4 +12,6 @@ public sealed record ModelToolResponse(
     IReadOnlyList<JsonElement> OutputItems,
     string? ResponseId,
     string? MetadataJson,
-    LlmRequestAuditData AuditData);
+    LlmRequestAuditData AuditData,
+    string? VoiceContinuation = null,
+    bool Ignored = false);

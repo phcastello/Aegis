@@ -12,6 +12,7 @@ using Aegis.Domain;
 using Aegis.Domain.Entities;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace Aegis.Application.Chat;
 
@@ -28,12 +29,13 @@ public sealed class ChatService(
     TimeProvider? clock = null,
     AegisMetrics? metrics = null,
     MemoryHybridRetriever? hybrid = null,
-    IMemoryActivityStore? activity = null) : IChatService
+    IMemoryActivityStore? activity = null,
+    ILogger<ChatService>? logger = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
 
-    public async Task<SendMessageResponse> SendMessageAsync(
+    public async Task<SendMessageResponse?> SendMessageAsync(
         SendMessageRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -42,34 +44,46 @@ public sealed class ChatService(
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
 
-        var userContent = request.Content.Trim();
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = await voiceService.RegisterTurnAsync(request.TurnId ?? Guid.NewGuid(), conversation.Id, cancellationToken);
-        turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText);
-        using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
-        var turnToken = turnCancellation.Token;
-        var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
-        turn.UserMessageId = userMessage.Id;
-        dbContext.AddChatMessage(userMessage);
-        if (automaticMemory?.Enabled == true)
+        var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
+        using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
+        var userContent = HandsFreeReply.UserContent(request);
+        var defer = request.IsHandsFree && request.AllowSilentIgnore;
+        if (defer && userContent.Length == 0)
         {
-            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
-                (clock ?? TimeProvider.System).GetUtcNow()));
+            cancellationToken.ThrowIfCancellationRequested();
+            return null;
         }
 
-        await dbContext.SaveChangesAsync(turnToken);
-        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
+        using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
+        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
+        var conversation = pending.Conversation;
+        var userMessage = pending.UserMessage;
+        userContent = userMessage.Content;
+        var turnToken = pending.Token;
+        if (!defer) await AcceptTurnAsync(pending, request, effectiveTurnId, turnToken);
 
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
+        promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
 
         try
         {
-            var modelRequest = CreateModelRequest(promptResult, userContent);
-            var completion = await RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, turnToken);
+            var modelRequest = CreateModelRequest(promptResult, userContent, request);
+            var completion = await TurnLatencyProfile.MeasureAsync("chat.model_and_tools", () =>
+                RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, turnToken,
+                    defer ? ct => AcceptTurnAsync(pending, request, effectiveTurnId, ct) : null));
+            if (completion.Ignored)
+            {
+                if (!defer || pending.Turn is not null) throw new InvalidOperationException("Unexpected ignored turn.");
+                pending.MarkIgnored();
+                turnToken.ThrowIfCancellationRequested();
+                return null;
+            }
+            var turn = pending.Turn ?? throw new InvalidOperationException("Voice turn was not accepted.");
             EnsureCurrent(turn);
+            TurnLatencyProfile.Mark("chat.text_ready", completion.Content.Length);
             var finalContent = completion.Content;
             var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
@@ -92,20 +106,20 @@ public sealed class ChatService(
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
-                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+                await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
             }
 
             return new SendMessageResponse(
                 conversation.Id,
                 conversation.Title,
                 conversation.TitleSource,
-                MapMessage(assistantMessage, memoryActivity));
+                MapMessage(assistantMessage, memoryActivity), completion.VoiceContinuation);
         }
         catch (OperationCanceledException) when (turnToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (LlmRequestException exception)
+        catch (LlmRequestException exception) when (pending.Turn is not null)
         {
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(
                 conversation.Id,
@@ -132,46 +146,94 @@ public sealed class ChatService(
             throw new ArgumentException("A valid turnId is required for streaming chat.", nameof(request));
         }
 
-        var userContent = request.Content.Trim();
-        var conversation = await GetOrCreateConversationAsync(request.ConversationId, cancellationToken);
-        var turn = await voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken);
-        if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
+        var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
+        using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
+        var userContent = HandsFreeReply.UserContent(request);
+        var defer = request.IsHandsFree && request.AllowSilentIgnore;
+        if (defer && userContent.Length == 0)
         {
-            throw new OperationCanceledException(turn.Cancellation.Token);
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return ChatStreamEvent.Ignored(turnId);
+            yield break;
         }
 
-        using var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
-        var turnToken = turnCancellation.Token;
-        var userMessage = conversation.AddMessage(ChatRoles.User, userContent);
-        turn.UserMessageId = userMessage.Id;
-        dbContext.AddChatMessage(userMessage);
-        if (automaticMemory?.Enabled == true)
+        using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
+        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
+        var conversation = pending.Conversation;
+        var userMessage = pending.UserMessage;
+        userContent = userMessage.Content;
+        var turnToken = pending.Token;
+        var announced = false;
+        if (!defer)
         {
-            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
-                (clock ?? TimeProvider.System).GetUtcNow()));
+            await AcceptTurnAsync(pending, request, turnId, turnToken);
+            announced = true;
+            yield return ChatStreamEvent.Conversation(turnId, conversation.Id);
         }
-        await dbContext.SaveChangesAsync(turnToken);
-        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
-        yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
 
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, turnToken);
-        var modelRequest = CreateModelRequest(promptResult, userContent);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
+        promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
+        var modelRequest = CreateModelRequest(promptResult, userContent, request);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
-            modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent), turnToken);
+            modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
+                request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments,
+                defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null), turnToken);
 
         var content = new StringBuilder();
+        ChatMessage? segmentedMessage = null;
+        var segments = new List<FinalSpeechSegment>();
+        var streamCompleted = false;
+        try
+        {
         await foreach (var chunk in chunks.WithCancellation(turnToken))
         {
+            if (chunk.Ignored)
+            {
+                if (!defer || pending.Turn is not null) throw new InvalidOperationException("Unexpected ignored turn.");
+                pending.MarkIgnored();
+                turnToken.ThrowIfCancellationRequested();
+                streamCompleted = true;
+                yield return ChatStreamEvent.Ignored(turnId);
+                yield break;
+            }
+            var turn = pending.Turn ?? throw new InvalidOperationException("Voice turn was not accepted.");
             EnsureCurrent(turn);
+            if (!announced)
+            {
+                announced = true;
+                yield return ChatStreamEvent.Conversation(turn.TurnId, conversation.Id);
+            }
             if (chunk.ToolStatus is { } status)
             {
                 yield return ChatStreamEvent.ToolStatus(turn.TurnId, status.Category, status.State, status.Message);
             }
+            if (chunk.FinalSpeechSegment is { } segmentContent)
+            {
+                if (!request.IsHandsFree || !request.VoiceSegments) throw new InvalidOperationException("Unexpected speech segment.");
+                FinalSpeechSegments.Validate(segmentContent);
+                if (segments.Count > 0) content.Append(' ');
+                content.Append(segmentContent);
+                if (segmentedMessage is null)
+                {
+                    segmentedMessage = conversation.AddMessage(ChatRoles.Assistant, content.ToString());
+                    dbContext.AddChatMessage(segmentedMessage);
+                }
+                else segmentedMessage.UpdateContent(content.ToString());
+                var segment = new FinalSpeechSegment(Guid.NewGuid(), segments.Count, segmentedMessage.Id, segmentContent);
+                segments.Add(segment);
+                segmentedMessage.AttachAuditData(null, null, null, SpeechSegmentMetadata(turn.TurnId, "generating", segments));
+                await dbContext.SaveChangesAsync(turnToken);
+                EnsureCurrent(turn);
+                if (!turnRegistry.TryAuthorizeSpeechSegment(turn.TurnId, segment)) throw new OperationCanceledException(turnToken);
+                TurnLatencyProfile.Mark("chat.final_segment", segment.Sequence);
+                yield return ChatStreamEvent.FinalSegment(turn.TurnId, conversation.Id, segmentedMessage.Id, segment.Id, segment.Sequence, segmentContent);
+            }
             if (!string.IsNullOrEmpty(chunk.Content))
             {
+                if (segments.Count > 0) throw new InvalidOperationException("A committed voice response cannot be replaced.");
                 content.Append(chunk.Content);
                 yield return ChatStreamEvent.Token(turn.TurnId, chunk.Content);
             }
@@ -187,29 +249,51 @@ public sealed class ChatService(
             }
 
             EnsureCurrent(turn);
+            TurnLatencyProfile.Mark("chat.text_ready", content.Length);
             var finalContent = content.ToString();
-            var assistantMessage = conversation.AddMessage(ChatRoles.Assistant, finalContent);
+            var assistantMessage = segmentedMessage ?? conversation.AddMessage(ChatRoles.Assistant, finalContent);
             if (!turnRegistry.TrySetTextCompleted(turn.TurnId, assistantMessage.Id))
             {
                 throw new OperationCanceledException(turnToken);
             }
 
-            dbContext.AddChatMessage(assistantMessage);
+            if (segmentedMessage is null) dbContext.AddChatMessage(assistantMessage);
             assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
-                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext, chunk.MetadataJson);
+                promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
+                segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
             {
-                await QueueConversationTitleGenerationAsync(conversation, CancellationToken.None);
+                await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
+                streamCompleted = true;
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
-                    conversation.Title, conversation.TitleSource, memoryActivity);
+                    conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation);
             }
+            streamCompleted = true;
             yield break;
         }
 
         throw new InvalidOperationException("Model streaming ended before a final event was received.");
+        }
+        finally
+        {
+            if (!streamCompleted && pending.Turn is { } turn)
+            {
+                if (segmentedMessage is not null)
+                {
+                    segmentedMessage.AttachAuditData(segmentedMessage.Model, segmentedMessage.PromptSnapshot,
+                        segmentedMessage.RuntimeContextSnapshot, SpeechSegmentMetadata(turn.TurnId, "interrupted", segments));
+                    await dbContext.SaveChangesAsync(CancellationToken.None);
+                }
+                // Persistence (including interrupted segment metadata) is now
+                // settled. An unrelated native TTS DELETE must not hold up a
+                // successor's read of this completed database boundary.
+                pending.MarkSettled();
+                await voiceService.CancelTurnAsync(turn.TurnId, "text_stream_interrupted", CancellationToken.None);
+            }
+        }
     }
 
     public async Task<ConversationResponse?> GetConversationAsync(
@@ -313,36 +397,158 @@ public sealed class ChatService(
         return true;
     }
 
-    private async Task<Conversation> GetOrCreateConversationAsync(
-        Guid? conversationId,
+    private async Task<PendingChatTurn> PrepareTurnAsync(SendMessageRequest request, string userContent,
         CancellationToken cancellationToken)
     {
-        if (conversationId is null)
+        cancellationToken.ThrowIfCancellationRequested();
+        var destination = request.ConversationId;
+        Conversation? conversation = null;
+        var playback = request.InterruptedPlayback;
+        if (request.InterruptedGeneration is { } interruption)
         {
-            var conversation = new Conversation(Conversation.DefaultTitle);
-            dbContext.AddConversation(conversation);
-            return conversation;
+            // Cancellation is idempotent and tombstones a request that has not
+            // registered yet. The old HTTP stream may disconnect before its
+            // database write settles, so do not infer persistence from it.
+            var prior = await voiceService.CancelVoiceGenerationAsync(interruption.TurnId, request.VoiceSessionId!.Value,
+                destination, cancellationToken);
+            if (prior is not null)
+            {
+                await prior.Settled.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                conversation = await dbContext.GetConversationWithMessagesAsync(prior.ConversationId, cancellationToken);
+                if (conversation is not null)
+                {
+                    destination = conversation.Id;
+                    if (conversation.Messages.Any(message => message.Id == prior.UserMessageId && message.Role == ChatRoles.User))
+                        playback = VoicePlaybackContext.FirstUnplayed(interruption.TurnId, conversation.Id, conversation.Messages);
+                    else
+                    {
+                        // An explicitly ignored background utterance must not
+                        // reappear just because its terminal event was lost.
+                        if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                        playback = prior.Playback;
+                    }
+                }
+                else
+                {
+                    if (destination is { } known) throw new ConversationNotFoundException(known);
+                    if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                }
+            }
+            else
+                userContent = MergeInterruptedContent(interruption.PreviousContent, userContent);
+        }
+        var isNewConversation = destination is null;
+        conversation ??= await TurnLatencyProfile.MeasureAsync("chat.conversation_load", async () =>
+            destination is { } conversationId
+                ? await dbContext.GetConversationWithMessagesAsync(conversationId, cancellationToken)
+                    ?? throw new ConversationNotFoundException(conversationId)
+                : new Conversation(Conversation.DefaultTitle));
+        // Before the model decides, keep the provisional message detached even for
+        // an existing conversation. A discarded utterance must not affect its history.
+        var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, userContent);
+        if (request.InterruptedGeneration is not null)
+            VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
+        else
+            VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
+        return new PendingChatTurn(conversation, userMessage, isNewConversation, playback, cancellationToken);
+    }
+
+    private static string MergeInterruptedContent(string? previous, string current)
+    {
+        if (string.IsNullOrWhiteSpace(previous)) return current;
+        var retained = previous.Trim();
+        if (retained.Length > 16384) retained = retained[^16384..];
+        return $"Pedido anterior interrompido: {retained}\nNova fala (complemento ou correção): {current}";
+    }
+
+    private async Task AcceptTurnAsync(PendingChatTurn pending, SendMessageRequest request,
+        Guid turnId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var conversation = pending.Conversation;
+        var userMessage = pending.UserMessage;
+        // A cancellation before registration is retained by the registry. Registration
+        // happens only after acceptance so an ignored utterance never supersedes a turn.
+        var turn = await TurnLatencyProfile.MeasureAsync("chat.turn_register", () =>
+            voiceService.RegisterTurnAsync(turnId, conversation.Id, cancellationToken));
+        if (!turnRegistry.TryTransition(turn.TurnId, TurnStatus.Created, TurnStatus.GeneratingText))
+            throw new OperationCanceledException(turn.Cancellation.Token);
+        pending.Activate(turn);
+        pending.Token.ThrowIfCancellationRequested();
+        if (pending.IsNewConversation) dbContext.AddConversation(conversation);
+        conversation.AddMessage(userMessage);
+        turn.UserMessageId = userMessage.Id;
+        dbContext.AddChatMessage(userMessage);
+        if (automaticMemory?.Enabled == true)
+        {
+            dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
+                (clock ?? TimeProvider.System).GetUtcNow()));
+        }
+        await TurnLatencyProfile.MeasureAsync("chat.user_persist", () => dbContext.SaveChangesAsync(pending.Token));
+        if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
+    }
+
+    private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage,
+        bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
+    {
+        private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        private CancellationTokenRegistration registration;
+        private IDisposable? reservation;
+        private VoiceGenerationReceipt? generationReceipt;
+        public Conversation Conversation { get; } = conversation;
+        public ChatMessage UserMessage { get; } = userMessage;
+        public bool IsNewConversation { get; } = isNewConversation;
+        public ActiveTurn? Turn { get; private set; }
+        public CancellationToken Token => cancellation.Token;
+
+        public void Track(IActiveTurnRegistry registry, Guid turnId, SendMessageRequest request)
+        {
+            var receipt = request.VoiceSegments && request.VoiceSessionId is { } sessionId
+                ? new VoiceGenerationReceipt(sessionId, Conversation.Id, UserMessage.Id, UserMessage.Content, playback)
+                : null;
+            reservation = registry.TrackPendingTurn(turnId, Conversation.Id, cancellation, receipt);
+            generationReceipt = receipt;
         }
 
-        return await dbContext.GetConversationWithMessagesAsync(conversationId.Value, cancellationToken)
-            ?? throw new ConversationNotFoundException(conversationId.Value);
+        public void MarkIgnored() => generationReceipt?.MarkIgnored();
+        public void MarkSettled() => generationReceipt?.Settle();
+
+        public void Activate(ActiveTurn turn)
+        {
+            Turn = turn;
+            registration = turn.Cancellation.Token.Register(() => cancellation.Cancel());
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                reservation?.Dispose();
+                registration.Dispose();
+                cancellation.Dispose();
+            }
+            finally { generationReceipt?.Settle(); }
+        }
     }
 
     private async Task<PromptBuildResult> BuildPromptForTurnAsync(
         IReadOnlyList<ChatMessage> history,
         string userContent,
         Guid conversationId,
+        bool handsFree,
+        ChatMessage userMessage,
         CancellationToken cancellationToken)
     {
+        using var timing = TurnLatencyProfile.Measure("chat.prepare", metrics?.ChatPreparationSeconds);
         var states = new List<string>();
-        var email = (await dbContext.GetUnresolvedPendingEmailActionsAsync(conversationId, cancellationToken))
+        var email = (await TurnLatencyProfile.MeasureAsync("context.pending_email", () => dbContext.GetUnresolvedPendingEmailActionsAsync(conversationId, cancellationToken)))
             .FirstOrDefault(action => action.IsOpen() || action.MayHaveAppliedChanges);
         if (email is not null)
             states.Add($"Ação pendente Gmail: {email.HumanSummary}; válida até {email.ExpiresAt:O}. " +
                 (email.MayHaveAppliedChanges ? "Uma tentativa anterior pode ter aplicado alterações; retry é idempotente. " : "") +
                 (email.IsOpen() ? "Aceitação: email_confirm_pending_action; desistência: email_cancel_pending_action; correção: prepare uma nova proposta." :
                     "A proposta expirou, mas possíveis efeitos permanecem; consulte os emails. Cancelar a tentativa não reverte alterações."));
-        var calendarActions = await dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken);
+        var calendarActions = await TurnLatencyProfile.MeasureAsync("context.pending_calendar", () => dbContext.GetUnresolvedPendingCalendarActionsAsync(conversationId, cancellationToken));
         foreach (var calendar in calendarActions.Where(action => action.IsOpen() || action.MayHaveAppliedChanges).Take(10))
         {
             var directCreation = System.Text.Json.JsonSerializer.Deserialize<Aegis.Application.Calendar.CalendarActionPayload>(calendar.PayloadJson,
@@ -357,16 +563,33 @@ public sealed class ChatService(
         }
         if (email is not null && calendarActions.Any(action => action.IsOpen() || action.MayHaveAppliedChanges))
             states.Add("Há ações pendentes em Gmail e Calendar. Cada tool atua somente na sua integração.");
-        if (reminders is not null && await reminders.GetContextAsync(conversationId, cancellationToken) is { } reminderContext)
+        if (reminders is not null && await TurnLatencyProfile.MeasureAsync("context.reminders", () => reminders.GetContextAsync(conversationId, cancellationToken)) is { } reminderContext)
             states.Add(reminderContext);
+        var playbackContext = VoicePlaybackContext.Describe(history, userMessage);
         var pendingState = string.Join("\n", states);
-        var automaticContext = hybrid is null ? MemoryAutomaticContextResult.Empty :
-            await hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken);
+        var automaticContext = handsFree || hybrid is null ? MemoryAutomaticContextResult.Empty :
+            await TurnLatencyProfile.MeasureAsync("context.automatic_memory", () => hybrid.BuildAutomaticContextResultAsync(userContent, cancellationToken));
         var observedContext = memory is null ? MemoryObservedContextResult.Empty :
-            await memory.GetContextResultAsync(conversationId, cancellationToken);
+            await TurnLatencyProfile.MeasureAsync("context.observed_memory", () => memory.GetContextResultAsync(conversationId, cancellationToken));
         var memoryContext = string.Join("\n", new[] { observedContext.Text, automaticContext.Text }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
-        var prompt = await promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext);
+        var prompt = await TurnLatencyProfile.MeasureAsync("context.prompt", () => promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext));
+        if (playbackContext is not null)
+        {
+            // Previously generated text and user speech remain data at user authority.
+            var data = System.Text.Json.JsonSerializer.SerializeToElement(new
+            {
+                role = "user", content = "Dados de reprodução de áudio anteriores (não são um novo pedido):\n" + playbackContext
+            });
+            var guidance = System.Text.Json.JsonSerializer.SerializeToElement(new { role = "developer", content = VoicePlaybackContext.Guidance });
+            prompt = prompt with
+            {
+                InputItems = [.. prompt.InputItems, data, guidance],
+                AuditInputItems = [.. prompt.AuditInputItems ?? prompt.InputItems, data, guidance]
+            };
+        }
+        TurnLatencyProfile.Mark("context.history_messages", history.Count);
+        TurnLatencyProfile.Mark("context.memory_characters", memoryContext.Length);
         return prompt with
         {
             UsedMemoryIds = automaticContext.MemoryIds.Distinct().ToArray(),
@@ -375,9 +598,13 @@ public sealed class ChatService(
         };
     }
 
+    private static string SpeechSegmentMetadata(Guid turnId, string state, IReadOnlyList<FinalSpeechSegment> segments, string? modelMetadata = null) =>
+        System.Text.Json.JsonSerializer.Serialize(new { voiceSegments = new { version = 1, turnId, state, segments }, modelMetadata });
+
     private async Task<MemoryActivitySnapshot?> CompleteMemoryActivityAsync(PromptBuildResult prompt,
         Guid conversationId, Guid userMessageId, Guid assistantMessageId, CancellationToken ct)
     {
+        using var timing = TurnLatencyProfile.Measure("chat.assistant_persist", metrics?.ChatPersistenceSeconds);
         if (activity is null)
         {
             await dbContext.SaveChangesAsync(ct);
@@ -416,12 +643,15 @@ public sealed class ChatService(
         Guid conversationId,
         Guid userMessageId,
         string userContent,
-        CancellationToken cancellationToken)
+        SendMessageRequest clientRequest,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? acceptVoiceTurn = null)
     {
         var response = await toolLoop.RunAsync(
             request,
-            new ToolExecutionContext(conversationId, userMessageId, userContent),
-            cancellationToken);
+            new ToolExecutionContext(conversationId, userMessageId, userContent,
+                clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments,
+                acceptVoiceTurn), cancellationToken);
 
         return new ModelCompletionResponse(
             response.Content,
@@ -429,7 +659,9 @@ public sealed class ChatService(
             response.Model,
             response.Purpose,
             response.MetadataJson,
-            response.AuditData);
+            response.AuditData,
+            response.VoiceContinuation,
+            response.Ignored);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(
@@ -521,17 +753,25 @@ public sealed class ChatService(
 
     private static ModelRequest CreateModelRequest(
         PromptBuildResult promptResult,
-        string userContent)
+        string userContent,
+        SendMessageRequest request)
     {
+        var metadata = new Dictionary<string, string>
+        {
+            ["aegis_version"] = "0.6.1",
+            ["purpose"] = "Chat"
+        };
+        if (request.IsHandsFree)
+        {
+            metadata["origin"] = HandsFreeReply.Origin;
+            if (request.VoiceSegments) metadata["voice_segments"] = "1";
+            metadata["voice_session_id"] = request.VoiceSessionId!.Value.ToString("D");
+        }
         return new ModelRequest(
             promptResult.Prompt,
             userContent,
             ModelPurpose.Chat,
-            new Dictionary<string, string>
-            {
-                ["aegis_version"] = "0.6.1",
-                ["purpose"] = "Chat"
-            },
+            metadata,
             promptResult.InputItems,
             promptResult.AuditInputItems);
     }

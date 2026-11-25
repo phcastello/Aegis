@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Aegis.Application.Nodes;
@@ -9,6 +10,10 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
     UrlEncoder encoder, INodeRegistry nodes) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "AegisNode";
+    public const string TargetPriorityClaim = "aegis_node_target_priority";
+    // Per-request duration only, never a credential or identity. The voice claim
+    // controller selectively exposes it after a successful authenticated claim.
+    internal static readonly object VoiceAuthenticationTimingKey = new();
     private string failure = "node_authentication_required";
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -19,9 +24,13 @@ public sealed class NodeAuthenticationHandler(IOptionsMonitor<AuthenticationSche
         }
         var header = Request.Headers.Authorization.ToString();
         if (header.Length > 180 || !header.StartsWith(SchemeName + " ", StringComparison.Ordinal)) return AuthenticateResult.NoResult();
+        var measureVoice = HttpMethods.IsPost(Request.Method) && Request.Path.StartsWithSegments("/api/nodes/me/voice-activations/claim");
+        var started = measureVoice ? Stopwatch.GetTimestamp() : 0;
         var authentication = await nodes.AuthenticateAsync(header[(SchemeName.Length + 1)..], Context.RequestAborted);
         if (!authentication.Authenticated) { failure = authentication.Error!; return AuthenticateResult.Fail("Node authentication rejected."); }
-        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, authentication.Node!.Id.ToString()) };
+        if (measureVoice) Context.Items[VoiceAuthenticationTimingKey] = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, authentication.Node!.Id.ToString()),
+            new Claim(TargetPriorityClaim, authentication.Node.TargetPriority.ToString(System.Globalization.CultureInfo.InvariantCulture)) };
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName)), SchemeName));
     }
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)

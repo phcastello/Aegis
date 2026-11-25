@@ -81,6 +81,6 @@ public static class NodeProtocol
     }
     public static int CloseCode(string reason) => reason switch {
         "node_revoked" => 4001, "node_disabled" => 4003, "protocol_mismatch" => 4006,
-        "heartbeat_timeout" => 4008, "replaced" => 4000, "server_shutdown" => 1001,
+        "heartbeat_timeout" => 4008, "replaced" => 4000, "server_shutdown" => 1001, "conversation_sync_failed" => 1011,
         "message_too_large" => 1009, "disconnected" => 1000, _ => 1008 };
 }

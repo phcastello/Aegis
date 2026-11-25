@@ -2,6 +2,8 @@ namespace Aegis.Application.Turns;
 
 public interface IActiveTurnRegistry
 {
+    IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation, VoiceGenerationReceipt? receipt = null);
+    VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination, CancellationToken cancellationToken = default);
     ActiveTurn Register(Guid turnId, Guid conversationId);
     TurnRegistrationInfo RegisterAndGetSuperseded(Guid turnId, Guid conversationId);
     ActiveTurn? Find(Guid turnId);
@@ -9,6 +11,10 @@ public interface IActiveTurnRegistry
     bool IsCurrent(Guid conversationId, Guid turnId);
     bool IsActive(Guid turnId);
     bool TryTransition(Guid turnId, TurnStatus expected, TurnStatus next);
+    bool TryAuthorizeSpeechSegment(Guid turnId, FinalSpeechSegment segment);
+    FinalSpeechSegment? FindSpeechSegment(Guid turnId, Guid segmentId);
+    bool TryBeginSegmentSpeech(Guid turnId, Guid segmentId, Guid speechRequestId, string nativeRequestId);
+    bool CompleteSegmentSpeech(Guid speechRequestId);
     bool TrySetTextCompleted(Guid turnId, Guid assistantMessageId);
     bool TryBeginSpeech(Guid turnId, Guid speechRequestId, string nativeSpeechRequestId);
     bool TrySetStreamingAudio(Guid turnId, Guid speechRequestId);

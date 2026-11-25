@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+const exports = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/services/streamTextPresentation.ts', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports });
+const { StreamTextReveal, STREAM_FRAME_MS, NativeVoiceSegments, parseNativeVoiceStreamEvent } = exports;
+
+test('one burst unfolds in small real prefixes and settles with byte-for-byte original text', () => {
+  const text = 'Uma resposta que chegou de uma vez, com **Markdown**, links e emojis 🚀. '.repeat(10).trim();
+  const reveal = new StreamTextReveal(); reveal.append(text, 0);
+  let previous = '', frames = 0;
+  for (let now = 0; reveal.pending && now <= 1850; now += STREAM_FRAME_MS) {
+    const next = reveal.step(now); assert.ok(next.startsWith(previous) && text.startsWith(next));
+    assert.ok(!/[\uD800-\uDBFF]$/.test(next), 'never split a surrogate pair');
+    assert.ok(next.length > previous.length); previous = next; frames++;
+  }
+  assert.ok(frames > 10, 'should be a real sequence, not one giant jump');
+  assert.equal(previous, text); assert.equal(reveal.pending, false);
+});
+
+test('later pieces extend the same text; interrupt flushes exactly what arrived', () => {
+  const reveal = new StreamTextReveal(); reveal.append('Primeiro ', 0); const first = reveal.step(32);
+  assert.ok(first.length > 0 && first.length < 9);
+  reveal.append('e segundo 🚀.', 40);
+  assert.ok(reveal.step(64).startsWith(first));
+  assert.equal(reveal.finish(), 'Primeiro e segundo 🚀.'); assert.equal(reveal.pending, false);
+});
+
+const turnId = '0b06330a-9942-47dc-8587-2434ca56c6fd';
+const conversationId = '0b06330a-9942-47dc-8587-2434ca56c6fe';
+const assistantMessageId = '0b06330a-9942-47dc-8587-2434ca56c6ff';
+const segmentId = '0b06330a-9942-47dc-8587-2434ca56c6f0';
+const segment = { type: 'final_segment', turnId, conversationId, assistantMessageId, segmentId, sequence: 0, content: 'Olá.' };
+test('native stream only accepts consecutive committed segments within the same turn, conversation and message', () => {
+  const stream = new NativeVoiceSegments(turnId, conversationId);
+  assert.equal(stream.append(parseNativeVoiceStreamEvent(segment)), 'Olá.');
+  assert.equal(stream.append(parseNativeVoiceStreamEvent(segment)), '');
+  assert.equal(stream.append(parseNativeVoiceStreamEvent({...segment, content: 'Conflicting duplicate'})), null);
+  assert.equal(stream.append(parseNativeVoiceStreamEvent({...segment, sequence: 2, segmentId: assistantMessageId})), null);
+  assert.equal(stream.append(parseNativeVoiceStreamEvent({...segment, sequence: 1, segmentId: assistantMessageId, conversationId: turnId})), null);
+  assert.equal(stream.append(parseNativeVoiceStreamEvent({...segment, sequence: 1, segmentId: assistantMessageId, assistantMessageId: turnId})), null);
+  assert.equal(stream.append(parseNativeVoiceStreamEvent({...segment, sequence: 1, segmentId: assistantMessageId, content: 'Tudo bem?'})), ' Tudo bem?');
+  assert.equal(stream.assistantMessageId, assistantMessageId);
+});
+test('reject invalid event shapes and accept no-conversation terminal ignored/cancelled', () => {
+  for (const value of [null, {}, { ...segment, type: 'token' }, { ...segment, sequence: -1 }, { ...segment, content: '' }, { ...segment, assistantMessageId: 'x' }, { ...segment, segmentId: undefined }, { ...segment, content: 'x'.repeat(16001) }]) assert.equal(parseNativeVoiceStreamEvent(value), null);
+  assert.ok(parseNativeVoiceStreamEvent({type:'ignored',turnId,conversationId:null,assistantMessageId:null}));
+  assert.equal(parseNativeVoiceStreamEvent({type:'done',turnId,conversationId:null,assistantMessageId:null}), null);
+});

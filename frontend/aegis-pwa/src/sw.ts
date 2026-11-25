@@ -1,16 +1,16 @@
 /// <reference lib="webworker" />
-import { clientsClaim } from 'workbox-core';
-import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
-import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { Queue } from 'workbox-background-sync';
 import { handleReminderClick, parseReminderPush } from './services/reminderNotification';
 
-declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<string | { url: string; revision: string | null }> };
-self.skipWaiting();
-clientsClaim();
-cleanupOutdatedCaches();
-precacheAndRoute(self.__WB_MANIFEST);
-registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/api(?:\/|$)/] }));
+declare const self: ServiceWorkerGlobalScope;
+self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
+self.addEventListener('activate', event => {
+  // Retire only the previous Aegis shell. Do not clear user data or other caches.
+  event.waitUntil((async () => {
+    await caches.delete(`workbox-precache-v2-${self.registration.scope}`);
+    await self.clients.claim();
+  })());
+});
 
 // Only explicit human interactions are queued. No reminder generation or snooze.
 const interactionQueue = new Queue('aegis-reminder-interactions-v1', {
@@ -29,9 +29,8 @@ const interactionQueue = new Queue('aegis-reminder-interactions-v1', {
     }
   }
 });
-const apiBase = (import.meta.env.VITE_AEGIS_API_BASE_URL ?? '').trim().replace(/\/+$/, '');
 async function recordInteraction(id: string, action: 'acknowledge' | 'open', token: string): Promise<void> {
-  const request = new Request(`${apiBase || self.location.origin}/api/notifications/reminders/${id}/${action}`, {
+  const request = new Request(`${self.location.origin}/api/notifications/reminders/${id}/${action}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token })
   });
   try {

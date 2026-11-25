@@ -13,6 +13,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     private readonly Dictionary<Guid, Guid> currentByConversation = [];
     private readonly Dictionary<Guid, Guid> turnBySpeechRequest = [];
     private readonly Dictionary<Guid, DateTimeOffset> cancelledBeforeRegistration = [];
+    private readonly Dictionary<Guid, PendingTurn> pendingTurns = [];
+    private readonly Dictionary<Guid, VoiceGenerationReceipt> voiceGenerations = [];
+    private long turnSequence;
     private readonly Timer cleanupTimer;
     private readonly AegisMetrics metrics;
     private bool stopping;
@@ -21,6 +24,80 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     {
         this.metrics = metrics;
         cleanupTimer = new(_ => Cleanup(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    // A speculative voice turn can be cancelled without making it the active turn.
+    // A silent discard simply disposes the reservation, leaving the current turn untouched.
+    public IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation, VoiceGenerationReceipt? receipt = null)
+    {
+        if (turnId == Guid.Empty || conversationId == Guid.Empty)
+            throw new ArgumentException("Turn and conversation identifiers are required.");
+        if (receipt is not null && (receipt.SessionId == Guid.Empty || receipt.ConversationId != conversationId))
+            throw new ArgumentException("The voice receipt belongs to another session or conversation.");
+        lock (gate)
+        {
+            ThrowIfStopping();
+            CleanupUnsafe();
+            if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId) || voiceGenerations.ContainsKey(turnId))
+                throw new InvalidOperationException("The turn identifier has already been used.");
+            if (pendingTurns.Count >= MaxTurns)
+                throw new InvalidOperationException("Too many pending turns.");
+            if (receipt is not null && voiceGenerations.Count >= MaxTurns)
+            {
+                var oldest = voiceGenerations.Where(pair => pair.Value.SettledAt is not null &&
+                        (!turns.TryGetValue(pair.Key, out var active) || !IsActiveUnsafe(active)))
+                    .OrderBy(pair => pair.Value.SettledAt).FirstOrDefault();
+                if (oldest.Value is null) throw new InvalidOperationException("Too many pending voice turns.");
+                voiceGenerations.Remove(oldest.Key);
+            }
+            if (cancelledBeforeRegistration.ContainsKey(turnId)) cancellation.Cancel();
+            var pending = new PendingTurn(conversationId, ++turnSequence, cancellation);
+            pendingTurns.Add(turnId, pending);
+            // The authorization/reservation and its handoff receipt are one atomic
+            // registration. A rejected duplicate cannot publish a forged receipt.
+            if (receipt is not null) voiceGenerations.Add(turnId, receipt);
+            return new PendingRegistration(this, turnId, pending);
+        }
+    }
+
+    private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation);
+
+    public VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (turnId == Guid.Empty || sessionId == Guid.Empty)
+            throw new ArgumentException("A interrupção da geração por voz é inválida.");
+        lock (gate)
+        {
+            ThrowIfStopping();
+            CleanupUnsafe();
+            var receipt = voiceGenerations.GetValueOrDefault(turnId);
+            if (receipt is not null)
+            {
+                if (receipt.SessionId != sessionId || destination is { } requested && requested != receipt.ConversationId)
+                    throw new ArgumentException("A interrupção não pertence a esta sessão de voz.");
+            }
+            else if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
+                throw new ArgumentException("O turno interrompido não é uma geração desta sessão de voz.");
+
+            // Validate ownership and reserve cancellation in one critical section.
+            // If no prior registration exists, the tombstone prevents a late POST
+            // from accepting while a successor is already being prepared.
+            return new(receipt, CancelAndGetInfoUnsafe(turnId, "voice_generation_interrupted", activeSegmentsOnly: true));
+        }
+    }
+
+    private sealed class PendingRegistration(ActiveTurnRegistry registry, Guid turnId, PendingTurn pending) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (registry.gate)
+            {
+                if (registry.pendingTurns.TryGetValue(turnId, out var tracked) && ReferenceEquals(tracked, pending))
+                    registry.pendingTurns.Remove(turnId);
+            }
+        }
     }
 
     public ActiveTurn Register(Guid turnId, Guid conversationId)
@@ -37,24 +114,40 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             ThrowIfStopping();
             CleanupUnsafe();
-            if (turns.ContainsKey(turnId))
+            // A settled segmented receipt is also a used identifier even if its
+            // speculative turn never became active. It may only be registered
+            // by its own still-live pending reservation.
+            if (turns.ContainsKey(turnId) || (voiceGenerations.ContainsKey(turnId) && !pendingTurns.ContainsKey(turnId)))
             {
                 throw new InvalidOperationException("The turn identifier has already been used.");
             }
 
+            pendingTurns.TryGetValue(turnId, out var pending);
+            if (pending is not null && pending.ConversationId != conversationId)
+                throw new InvalidOperationException("The pending turn belongs to another conversation.");
+            pendingTurns.Remove(turnId);
             var turn = new ActiveTurn(turnId, conversationId);
-            if (cancelledBeforeRegistration.Remove(turnId))
+            if (cancelledBeforeRegistration.Remove(turnId) || pending?.Cancellation.IsCancellationRequested == true)
             {
                 CancelUnsafe(turn, "cancelled_before_registration");
                 turns.Add(turnId, turn);
                 return new TurnRegistrationInfo(turn, null);
             }
 
+            // Only an accepted turn cancels older speculative candidates. A newer
+            // reservation by itself does not interrupt speech or an active text turn.
+            var acceptedSequence = pending?.Sequence ?? ++turnSequence;
+            foreach (var candidate in pendingTurns.Values.Where(candidate =>
+                candidate.ConversationId == conversationId && candidate.Sequence < acceptedSequence).ToList())
+                candidate.Cancellation.Cancel();
+
             string? supersededNativeSpeechRequestId = null;
+            IReadOnlyList<string>? supersededSegments = null;
             if (currentByConversation.TryGetValue(conversationId, out var priorId) &&
                 turns.TryGetValue(priorId, out var prior))
             {
                 supersededNativeSpeechRequestId = prior.NativeSpeechRequestId;
+                supersededSegments = prior.SegmentRequests.Values.ToArray();
                 CancelUnsafe(prior, "superseded_by_new_turn");
             }
 
@@ -62,7 +155,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             turns.Add(turnId, turn);
             metrics.TurnsStarted.Add(1);
             metrics.ActiveTurnStarted();
-            return new TurnRegistrationInfo(turn, supersededNativeSpeechRequestId);
+            return new TurnRegistrationInfo(turn, supersededNativeSpeechRequestId, supersededSegments);
         }
     }
 
@@ -117,12 +210,61 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         }
     }
 
+    public bool TryAuthorizeSpeechSegment(Guid turnId, FinalSpeechSegment segment)
+    {
+        lock (gate)
+        {
+            if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) || turn.Status != TurnStatus.GeneratingText ||
+                segment.Sequence != turn.SpeechSegments.Count || segment.Sequence >= 48 ||
+                turn.SpeechSegments.Any(s => s.Id == segment.Id) ||
+                (turn.AssistantMessageId is { } messageId && messageId != segment.AssistantMessageId)) return false;
+            turn.AssistantMessageId = segment.AssistantMessageId;
+            turn.SpeechSegments.Add(segment);
+            return true;
+        }
+    }
+
+    public FinalSpeechSegment? FindSpeechSegment(Guid turnId, Guid segmentId)
+    {
+        lock (gate)
+            return turns.TryGetValue(turnId, out var turn) && IsActiveUnsafe(turn)
+                ? turn.SpeechSegments.FirstOrDefault(s => s.Id == segmentId) : null;
+    }
+
+    public bool TryBeginSegmentSpeech(Guid turnId, Guid segmentId, Guid speechRequestId, string nativeRequestId)
+    {
+        lock (gate)
+        {
+            if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
+                turn.Status is not (TurnStatus.GeneratingText or TurnStatus.TextCompleted) || turn.SpeechRequestId is not null ||
+                turnBySpeechRequest.ContainsKey(speechRequestId) ||
+                turn.SegmentRequests.Count - turn.CompletedSegmentRequests.Count >= 2) return false;
+            var segment = turn.SpeechSegments.FirstOrDefault(s => s.Id == segmentId);
+            if (segment is null || segment.Sequence != turn.SegmentRequests.Count) return false;
+            turn.SegmentRequests[speechRequestId] = nativeRequestId;
+            turnBySpeechRequest[speechRequestId] = turnId;
+            return true;
+        }
+    }
+
+    public bool CompleteSegmentSpeech(Guid speechRequestId)
+    {
+        lock (gate)
+        {
+            if (!turnBySpeechRequest.TryGetValue(speechRequestId, out var id) || !turns.TryGetValue(id, out var turn) ||
+                !turn.SegmentRequests.ContainsKey(speechRequestId)) return false;
+            turn.CompletedSegmentRequests.Add(speechRequestId);
+            if (turn.TextCompletedAt is not null) turn.TextCompletedAt = DateTimeOffset.UtcNow;
+            return true;
+        }
+    }
+
     public bool TrySetTextCompleted(Guid turnId, Guid assistantMessageId)
     {
         lock (gate)
         {
             if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
-                turn.Status != TurnStatus.GeneratingText)
+                turn.Status != TurnStatus.GeneratingText || (turn.AssistantMessageId is { } known && known != assistantMessageId))
             {
                 return false;
             }
@@ -139,7 +281,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         lock (gate)
         {
             if (!turns.TryGetValue(turnId, out var turn) || !IsActiveUnsafe(turn) ||
-                turn.Status != TurnStatus.TextCompleted)
+                turn.Status != TurnStatus.TextCompleted || turn.SpeechSegments.Count > 0)
             {
                 return false;
             }
@@ -196,7 +338,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             if (!turns.TryGetValue(turnId, out var turn)) return false;
             if (turn.Status == TurnStatus.Completed) return true;
-            if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null)
+            if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null ||
+                (turn.SpeechSegments.Count > 0 && (turn.SegmentRequests.Count != turn.SpeechSegments.Count ||
+                    turn.CompletedSegmentRequests.Count != turn.SegmentRequests.Count)))
             {
                 return false;
             }
@@ -225,23 +369,39 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     public TurnCancellationInfo CancelAndGetInfo(Guid turnId, string reason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (gate)
-        {
-            if (!turns.TryGetValue(turnId, out var turn))
-            {
-                cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
-                TrimCancelledBeforeRegistrationUnsafe();
-                return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
-            }
+        lock (gate) return CancelAndGetInfoUnsafe(turnId, reason);
+    }
 
-            var wasSpeech = turn.SpeechRequestId is not null;
-            var nativeSpeechRequestId = turn.NativeSpeechRequestId;
-            var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
-            CancelUnsafe(turn, reason);
-            return new TurnCancellationInfo(
-                new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
-                nativeSpeechRequestId);
+    private TurnCancellationInfo CancelAndGetInfoUnsafe(Guid turnId, string reason, bool activeSegmentsOnly = false)
+    {
+        if (!turns.TryGetValue(turnId, out var turn))
+        {
+            cancelledBeforeRegistration[turnId] = DateTimeOffset.UtcNow;
+            TrimCancelledBeforeRegistrationUnsafe();
+            if (pendingTurns.TryGetValue(turnId, out var pending)) pending.Cancellation.Cancel();
+            return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", true, true), null);
         }
+
+        // A native DELETE or old stream's finally may race with the handoff.
+        // Receipt-backed segmented turns use the same unfinished-only cleanup
+        // policy regardless of which of those cancellation paths arrived first.
+        activeSegmentsOnly |= voiceGenerations.ContainsKey(turnId);
+
+        // Recovering a receipt must not turn a completed/failed earlier response
+        // into a new cancellation or decrement the active-turn metric twice.
+        if (activeSegmentsOnly && turn.Status is TurnStatus.Completed or TurnStatus.Failed)
+            return new TurnCancellationInfo(new CancelTurnResult(turnId, "cancelled", false, false), null);
+
+        var segmentRequests = activeSegmentsOnly
+            ? turn.SegmentRequests.Where(pair => !turn.CompletedSegmentRequests.Contains(pair.Key)).Select(pair => pair.Value).ToArray()
+            : turn.SegmentRequests.Values.ToArray();
+        var wasSpeech = turn.SpeechRequestId is not null || segmentRequests.Length > 0;
+        var nativeSpeechRequestId = turn.NativeSpeechRequestId;
+        var newlyCancelled = !turn.Cancellation.IsCancellationRequested;
+        CancelUnsafe(turn, reason);
+        return new TurnCancellationInfo(
+            new CancelTurnResult(turnId, "cancelled", newlyCancelled, newlyCancelled && wasSpeech),
+            nativeSpeechRequestId, segmentRequests);
     }
 
     public IReadOnlyList<TurnCancellationInfo> BeginShutdownAndCancelAll(string reason)
@@ -249,15 +409,16 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         lock (gate)
         {
             stopping = true;
+            foreach (var pending in pendingTurns.Values.ToList()) pending.Cancellation.Cancel();
             var cancellations = new List<TurnCancellationInfo>();
             foreach (var turn in turns.Values.Where(IsActiveUnsafe).ToList())
             {
-                var wasSpeech = turn.SpeechRequestId is not null;
+                var wasSpeech = turn.SpeechRequestId is not null || turn.SegmentRequests.Count > 0;
                 var nativeSpeechRequestId = turn.NativeSpeechRequestId;
                 CancelUnsafe(turn, reason);
                 cancellations.Add(new TurnCancellationInfo(
                     new CancelTurnResult(turn.TurnId, "cancelled", true, wasSpeech),
-                    nativeSpeechRequestId));
+                    nativeSpeechRequestId, turn.SegmentRequests.Values.ToArray()));
             }
 
             return cancellations;
@@ -281,6 +442,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             currentByConversation.Clear();
             turnBySpeechRequest.Clear();
             cancelledBeforeRegistration.Clear();
+            foreach (var pending in pendingTurns.Values.ToList()) pending.Cancellation.Cancel();
+            pendingTurns.Clear();
+            voiceGenerations.Clear();
         }
     }
 
@@ -321,7 +485,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
     private void CleanupUnsafe()
     {
         var cutoff = DateTimeOffset.UtcNow - TerminalRetention;
-        foreach (var turn in turns.Values.Where(turn => turn.Status == TurnStatus.TextCompleted && turn.TextCompletedAt < DateTimeOffset.UtcNow - TextCompletionGrace).ToList())
+        foreach (var turn in turns.Values.Where(turn => turn.Status == TurnStatus.TextCompleted && turn.SegmentRequests.Count == turn.CompletedSegmentRequests.Count && turn.TextCompletedAt < DateTimeOffset.UtcNow - TextCompletionGrace).ToList())
         {
             CompleteUnsafe(turn);
         }
@@ -330,6 +494,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             turns.Remove(pair.Key);
             if (pair.Value.SpeechRequestId is { } speechRequestId) turnBySpeechRequest.Remove(speechRequestId);
+            foreach (var requestId in pair.Value.SegmentRequests.Keys) turnBySpeechRequest.Remove(requestId);
             pair.Value.Dispose();
         }
 
@@ -337,6 +502,9 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             cancelledBeforeRegistration.Remove(pair.Key);
         }
+        foreach (var pair in voiceGenerations.Where(pair => pair.Value.SettledAt < cutoff &&
+            (!turns.TryGetValue(pair.Key, out var active) || !IsActiveUnsafe(active))).ToList())
+            voiceGenerations.Remove(pair.Key);
         TrimCancelledBeforeRegistrationUnsafe();
 
         while (turns.Count > MaxTurns)
@@ -345,6 +513,7 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             if (IsActiveUnsafe(oldest)) break;
             turns.Remove(oldest.TurnId);
             if (oldest.SpeechRequestId is { } speechRequestId) turnBySpeechRequest.Remove(speechRequestId);
+            foreach (var requestId in oldest.SegmentRequests.Keys) turnBySpeechRequest.Remove(requestId);
             oldest.Dispose();
         }
     }
