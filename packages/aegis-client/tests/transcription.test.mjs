@@ -306,13 +306,17 @@ test('wide input waveform keeps all measured samples; narrow windows keep newest
   assert.ok(narrow.every(x => x >= 0 && x <= 1));
 });
 
-test('voice history is more expressive without changing silent dots, cadence or measured levels', () => {
+test('desktop and mobile use different visual amplitude profiles, preserving zero and 60ms cadence', () => {
   const height = waveformExport.voiceHistoryBarHeight;
   assert.equal(height(0), 3);
-  assert.equal(height(1), 52);
-  assert.equal(height(.25), 27.5);
-  assert.equal(height(.04), 12.8);
-  assert.equal(height(2), 52);
+  assert.equal(height(1), 58);
+  assert.equal(height(1, 'mobile'), 42);
+  assert.equal(height(.25, 'mobile'), 22.5);
+  assert.ok(height(.04) > 20, 'low desktop levels visibly expand');
+  assert.ok(height(.04, 'mobile') < 12, 'mobile uses a more restrained height');
+  assert.ok(height(.01) < height(.04) && height(.04) < height(.25) && height(.25) < height(1));
+  assert.equal(height(2), 58);
   assert.equal(height(-1), 3);
+  assert.equal(height(NaN), 3);
   assert.equal(waveformExport.VOICE_HISTORY_STEP_MS, 60);
 });

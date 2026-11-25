@@ -268,7 +268,7 @@ No renderer, a linha do tempo é reamostrada em snapshots de 60 ms; cada
 posição interpola linearmente somente sua própria altura visual entre
 snapshots próximos, sem deslocar barras ou gerar novos valores acústicos.
 O desenho segue a referência da gravação manual: barras fixas de até 3 dp
-de largura, altura total de `3 + sqrt(nível) × 49` dp (3 a 52 dp), simétricas
+de largura, altura total de `3 + sqrt(nível) × 39` dp (3 a 42 dp), simétricas
 em torno do centro vertical. Na área estreita, a largura diminui para
 preservar o espaço entre posições, sem alongar barras ou alterar a escala
 da amplitude capturada. O silêncio é representado pelos pontos de 3 dp.
@@ -352,3 +352,11 @@ Android. A altura mínima de 3 px/dp, a espessura das barras, a posição dos sl
 a cadência de 60 ms e a interpolação permanecem. É apenas escala visual:
 não altera os dados medidos, ganho do microfone, wakeword, VAD, STT ou o
 espectro da fala da Aegis.
+
+Após o teste físico da .44, a revisão seguinte ajusta a escala visual por
+plataforma: no Android, a altura passa para **3 + sqrt(nível) × 39 dp**
+(máximo 42 dp), intermediária entre as duas escalas anteriores. No desktop,
+a gravação manual e o hands-free usam **3 + nível^0,32 × 55 px** (máximo 58
+px), tornando níveis baixos/intermediários mais visíveis. Silêncio continua
+com 3 dp/px; cadência de 60 ms, posições, espessura, interpolação, captação,
+detecção e espectro de voz da Aegis permanecem inalterados.

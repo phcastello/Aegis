@@ -1,6 +1,7 @@
 export interface ClientEnvironment {
   apiBaseUrl: string;
   processSessionId?: string;
+  voiceMeterProfile?: 'desktop' | 'mobile';
   dismissKeyboard?: () => Promise<void>;
   // Native hosts can distinguish Activity/window visibility from WebView input
   // focus, which Android deliberately clears when dismissing the keyboard.

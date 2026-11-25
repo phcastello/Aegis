@@ -24,7 +24,7 @@ private fun handsFreePanelEnergy(energy:Double,count:Int):Float {
  * measured PCM levels or letting wider panels stretch an individual bar. */
 internal fun handsFreeInputBarHeight(level:Float,density:Float,availableHeight:Float):Float {
     val normalized=if(level.isFinite())level.coerceIn(0f,1f) else 0f
-    return minOf(availableHeight,(3f+sqrt(normalized)*49f)*density).coerceAtLeast(0f)
+    return minOf(availableHeight,(3f+sqrt(normalized)*39f)*density).coerceAtLeast(0f)
 }
 internal fun handsFreeInputBarWidth(slot:Float,density:Float):Float =
     minOf(3f*density,slot*.75f).coerceAtLeast(0f)

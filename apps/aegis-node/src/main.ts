@@ -12,6 +12,7 @@ async function start(): Promise<void> {
   const runtime = await diagnosticServices.runtimeInfo();
   if (!runtime.backendUrl) throw new Error('URL do backend inválida. Verifique AEGIS_NODE_API_BASE_URL.');
   configureClient({ apiBaseUrl: runtime.backendUrl, externalLinks: 'system', openExternalUrl: openUrl, processSessionId: runtime.processSessionId, dismissKeyboard: () => invoke<void>('node_hide_keyboard'),
+    voiceMeterProfile: runtime.platform === 'android' ? 'mobile' : 'desktop',
     isForeground: runtime.platform === 'android' ? () => invoke<boolean>('node_read_visibility') : undefined,
     nativeSpeech: runtime.platform === 'android' ? nativeSpeech : undefined,
     acquireAudio: ['android', 'windows'].includes(runtime.platform) ? acquireNativeAudio : undefined });

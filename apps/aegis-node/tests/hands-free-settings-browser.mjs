@@ -381,8 +381,8 @@ try {
   assert.equal(await meter.getAttribute('data-meter'), 'input');
   const heights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
   assert.equal(heights.length, 32);
-  const compactExpected = values => values.slice(-32).map(level => 3 + Math.sqrt(level) * 49);
-  assert.ok(heights.every((height, i) => Math.abs(height - compactExpected(sample)[i]) < 1e-10), 'input bars preserve square-root RMS height curve with increased amplitude and newest time slots');
+  const compactExpected = values => values.slice(-32).map(level => 3 + Math.pow(level, .32) * 55);
+  assert.ok(heights.every((height, i) => Math.abs(height - compactExpected(sample)[i]) < 1e-10), 'input bars emphasize low measured levels with the desktop profile and newest time slots');
   await desktop.evaluate(levels => {
     const f = window.hfFixture;
     f.waveEvent(levels.slice(1));

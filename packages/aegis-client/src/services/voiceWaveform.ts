@@ -9,6 +9,11 @@ export function recentVoiceHistory(levels: readonly number[], width: number): nu
 }
 
 // Visual height only: keep silent dots, the measured level and cadence intact.
-export function voiceHistoryBarHeight(level: number): number {
-  return 3 + Math.sqrt(Math.max(0, Math.min(1, level))) * 49;
+export type VoiceMeterProfile = 'desktop' | 'mobile';
+export function voiceHistoryBarHeight(level: number, profile: VoiceMeterProfile = 'desktop'): number {
+  const normalized = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0;
+  // Desktop microphones tend to deliver modest normalized levels. Emphasize
+  // smaller real variations without clipping the upper range or changing gain.
+  // The compact mobile panel instead keeps the quieter square-root profile.
+  return profile === 'mobile' ? 3 + Math.sqrt(normalized) * 39 : 3 + Math.pow(normalized, .32) * 55;
 }
