@@ -25,7 +25,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import kotlin.math.sin
 import java.util.concurrent.atomic.AtomicBoolean
 
 class NodeVoiceInteractionSessionService:VoiceInteractionSessionService() {
@@ -190,7 +189,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}
 }
 
-/** Vsync presentation of measured history; playback/processing are distinct state indicators. */
+/** Vsync presentation of measured input history and playback spectrum. */
 internal class HandsFreePanelView(context:Context):View(context) {
     private var lifecycleReady=false
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
@@ -205,13 +204,25 @@ internal class HandsFreePanelView(context:Context):View(context) {
     @Volatile private var signalBound=false
     private var scaleObserved=false
     private var framePending=false
+    private var playbackFramePending=false
+    // Each set of six values is one three-dot cluster. Interpolate smoothly between
+    // spread, diagonal, gathered and rotated formations, matching the desktop.
+    private val thoughtPositions=floatArrayOf(
+        -4f,-6f,5f,0f,-1f,6f,
+        6f,-4f,0f,0f,-6f,4f,
+        1.5f,.4f,-.8f,-1.5f,-1f,1.5f,
+        -5f,3.5f,0f,-6f,6f,2.5f
+    )
     private var state=HandsFreePanelState.IDLE
     private var reduceMotion=true
     private val frame=Runnable{framePending=false;if(canRender())invalidate()}
+    private val playbackFrame=Runnable{playbackFramePending=false;if(canRender() && state==HandsFreePanelState.SPEAKING)invalidate()}
     private val staleFrame=Runnable{if(canRender() && inputState()){amplitudes.fill(0f);invalidate()}}
     private val wakeFrame=Runnable{
         wakePosted.set(false)
-        if(canRender() && inputState()) {
+        if(canRender() && state==HandsFreePanelState.SPEAKING) {
+            schedulePlaybackFrame()
+        }else if(canRender() && inputState()) {
             if(reduceMotion) {
                 // Real data still updates at capture cadence when the owner removes motion.
                 // A single expiry also clears a stalled producer; this is not a drawing loop.
@@ -236,11 +247,15 @@ internal class HandsFreePanelView(context:Context):View(context) {
     }
     internal fun state(next:HandsFreePanelState) {
         if(state!=next) {
-            owner?.let{HandsFreePanelSignal.reset(it,SystemClock.elapsedRealtime())}
+            owner?.let {
+                HandsFreePanelSignal.reset(it,SystemClock.elapsedRealtime())
+                HandsFreePlaybackSpectrum.phaseChanged(it,state,next)
+            }
             amplitudes.fill(0f)
         }
         state=next
         removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
+        removeCallbacks(playbackFrame);playbackFramePending=false
         if(canRender())invalidate()
     }
     private fun inputState()=state==HandsFreePanelState.CAPTURING || state==HandsFreePanelState.CONTINUATION
@@ -252,11 +267,19 @@ internal class HandsFreePanelView(context:Context):View(context) {
             postOnAnimation(frame)
         }
     }
+    private fun schedulePlaybackFrame() {
+        if(canRender() && !playbackFramePending) {
+            playbackFramePending=true
+            postDelayed(playbackFrame,40L)
+        }
+    }
     private fun resumeVisibleResources() {
         if(!canRender())return
         if(!signalBound)owner?.let {
             HandsFreePanelSignal.attach(it,session)
             HandsFreePanelSignal.setListener(it,dataChanged)
+            HandsFreePlaybackSpectrum.attach(it,session)
+            HandsFreePlaybackSpectrum.setListener(it,dataChanged)
             signalBound=true
         }
         if(!scaleObserved)try {
@@ -268,7 +291,11 @@ internal class HandsFreePanelView(context:Context):View(context) {
     private fun pauseVisibleResources() {
         removeCallbacks(frame);framePending=false
         removeCallbacks(wakeFrame);wakePosted.set(false);removeCallbacks(staleFrame)
-        owner?.let{HandsFreePanelSignal.setListener(it,null);HandsFreePanelSignal.detach(it)}
+        removeCallbacks(playbackFrame);playbackFramePending=false
+        owner?.let{
+            HandsFreePanelSignal.setListener(it,null);HandsFreePanelSignal.detach(it)
+            HandsFreePlaybackSpectrum.setListener(it,null);HandsFreePlaybackSpectrum.detach(it)
+        }
         signalBound=false;amplitudes.fill(0f)
         if(scaleObserved){context.contentResolver.unregisterContentObserver(scaleChanged);scaleObserved=false}
     }
@@ -280,6 +307,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
         val animations=handsFreePanelMotionAllowed(scale,platformEnabled)
         reduceMotion=!animations
         removeCallbacks(frame);framePending=false;removeCallbacks(staleFrame)
+        removeCallbacks(playbackFrame);playbackFramePending=false
         if(canRender()) {
             if(reduceMotion && inputState())postDelayed(staleFrame,HandsFreePanelSignal.STALE_CLEAR_MS)
             invalidate()
@@ -320,28 +348,44 @@ internal class HandsFreePanelView(context:Context):View(context) {
                 if(motion && active)scheduleFrame()
             }
             HandsFreePanelState.PROCESSING->{
+                val phase=if(motion)(now%1800)/450f else 0f
+                val current=phase.toInt()
+                val next=(current+1)%4
+                val fraction=phase-current
+                val progress=fraction*fraction*(3f-2f*fraction)
                 for(index in 0..2) {
-                    val phase=(now%1500)/1500f*6.283185f-index*.85f
-                    val pulse=if(motion)(sin(phase)+1f)/2 else 0.5f
-                    paint.alpha=(100+pulse*140).toInt()
-                    canvas.drawCircle(centerX+(index-1)*16f*density,centerY+if(motion)sin(phase)*2f*density else 0f,3.3f*density,paint)
+                    val offset=index*2
+                    val x=thoughtPositions[current*6+offset]
+                    val y=thoughtPositions[current*6+offset+1]
+                    val dx=thoughtPositions[next*6+offset]-x
+                    val dy=thoughtPositions[next*6+offset+1]-y
+                    canvas.drawCircle(centerX+(x+dx*progress)*1.75f*density,
+                        centerY+(y+dy*progress)*1.75f*density,2.8f*density,paint)
                 }
                 if(motion)scheduleFrame()
             }
             HandsFreePanelState.SPEAKING->{
-                // Playback status, deliberately not a fabricated input waveform or TTS meter.
-                val pulse=if(motion)(sin((now%1800)/1800f*6.283185f)+1f)/2 else .5f
-                paint.alpha=(150+90*pulse).toInt();canvas.drawCircle(centerX,centerY,2.7f*density,paint)
-                paint.style=Paint.Style.STROKE;paint.strokeWidth=2f*density;paint.strokeCap=Paint.Cap.ROUND
-                for(index in 0..1) {
-                    val radius=(12f+index*9f+if(motion)pulse*1.5f else 0f)*density
-                    paint.alpha=(180-index*50+40*pulse).toInt()
-                    bounds.set(centerX-radius,centerY-radius,centerX+radius,centerY+radius)
-                    canvas.drawArc(bounds,-40f,80f,false,paint)
-                    canvas.drawArc(bounds,140f,80f,false,paint)
+                val active=HandsFreePlaybackSpectrum.render(owner,amplitudes)
+                val left=width*.06f;val right=width*.94f
+                val slot=(right-left)/amplitudes.size
+                val bar=minOf(3.2f*density,slot*.46f)
+                val base=height*.89f
+                var hasVoice=false
+                for(index in amplitudes.indices) {
+                    val amplitude=amplitudes[index]
+                    if(amplitude<=.002f)continue
+                    hasVoice=true
+                    val x=left+(index+.5f)*slot
+                    paint.alpha=(102+153*amplitude).toInt().coerceIn(0,255)
+                    bounds.set(x-bar/2,base-.65f*density-amplitude*(height*.80f),x+bar/2,base)
+                    canvas.drawRoundRect(bounds,bar/2,bar/2,paint)
                 }
-                paint.style=Paint.Style.FILL;paint.strokeCap=Paint.Cap.BUTT
-                if(motion)scheduleFrame()
+                if(!hasVoice) {
+                    paint.alpha=24;paint.strokeWidth=density
+                    canvas.drawLine(left,base,right,base,paint)
+                }
+                // Real output levels are still updated with reduced motion.
+                if(active)schedulePlaybackFrame()
             }
             HandsFreePanelState.ERROR->{
                 paint.color=0xfff2b5b5.toInt();paint.textSize=27f*density;paint.textAlign=Paint.Align.CENTER

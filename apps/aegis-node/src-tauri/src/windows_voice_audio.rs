@@ -1,11 +1,15 @@
 //! Windows multimedia's shared PCM devices perform conversion to the requested
 //! sample rate. Buffers stay pinned until the driver returns their headers.
-use crate::windows_voice_signal::BLOCK;
+use crate::windows_voice_signal::{PlaybackSpectrum, BLOCK, SPECTRUM_BANDS, SPEECH_RATE};
 use std::{
     cell::UnsafeCell,
     collections::VecDeque,
     mem::size_of,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -13,7 +17,7 @@ use windows::{
     core::PSTR,
     Win32::{
         Foundation::{CloseHandle, HANDLE, WAIT_FAILED},
-        Media::{Audio::*, MM_WIM_DATA, MM_WOM_DONE},
+        Media::{Audio::*, MMTIME, MM_WIM_DATA, MM_WOM_DONE, TIME_BYTES, TIME_MS, TIME_SAMPLES},
         System::Threading::{CreateEventW, SetEvent, WaitForSingleObject},
     },
 };
@@ -222,11 +226,113 @@ impl Drop for Input {
     }
 }
 
+fn playback_position(handle: HWAVEOUT) -> Option<u64> {
+    let mut position = MMTIME {
+        wType: TIME_SAMPLES,
+        ..Default::default()
+    };
+    if unsafe { waveOutGetPosition(handle, &mut position, size_of::<MMTIME>() as u32) } != 0 {
+        return None;
+    }
+    // WinMM may choose a different supported unit, even when asked for samples.
+    match position.wType {
+        TIME_SAMPLES => Some(u64::from(unsafe { position.u.sample })),
+        TIME_BYTES => Some(u64::from(unsafe { position.u.cb }) / 2),
+        TIME_MS => Some(u64::from(unsafe { position.u.ms }) * u64::from(SPEECH_RATE) / 1000),
+        _ => None,
+    }
+}
+
+/// TTS can continue playing its existing buffers while the HTTP worker awaits
+/// the next chunk. Observe the device cursor on a bounded, playback-only thread
+/// instead of reporting samples as they arrive from the response.
+struct SpectrumObservation {
+    timeline: Arc<Mutex<PlaybackSpectrum>>,
+    visible: Arc<dyn Fn() -> bool + Send + Sync>,
+    stop: Arc<AtomicBool>,
+    worker: JoinHandle<()>,
+}
+impl SpectrumObservation {
+    fn start(
+        handle: HWAVEOUT,
+        visible: impl Fn() -> bool + Send + Sync + 'static,
+        publish: impl Fn([f32; SPECTRUM_BANDS]) + Send + 'static,
+    ) -> Option<Self> {
+        let timeline = Arc::new(Mutex::new(PlaybackSpectrum::default()));
+        let visible: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(visible);
+        let stop = Arc::new(AtomicBool::new(false));
+        let observed = timeline.clone();
+        let display = visible.clone();
+        let stopped = stop.clone();
+        // The raw handle stays valid until Drop joins this observer, before
+        // resetting or closing the output device. No PCM or driver callback
+        // state crosses the UI boundary.
+        let raw_handle = handle.0 as usize;
+        let worker = thread::Builder::new()
+            .name("AegisSpectrum".into())
+            .spawn(move || {
+                let handle = HWAVEOUT(raw_handle as *mut _);
+                let quiet = [0.0; SPECTRUM_BANDS];
+                let mut previous = None;
+                let mut last_movement = Instant::now();
+                while !stopped.load(Ordering::Acquire) {
+                    if !display() {
+                        if let Ok(mut timeline) = observed.lock() {
+                            timeline.submit(&[], false);
+                        }
+                        previous = None;
+                        last_movement = Instant::now();
+                        thread::park_timeout(Duration::from_millis(160));
+                        continue;
+                    }
+                    let levels = if let Some(position) = playback_position(handle) {
+                        if previous != Some(position) {
+                            previous = Some(position);
+                            last_movement = Instant::now();
+                        }
+                        if last_movement.elapsed() >= Duration::from_millis(100) {
+                            quiet
+                        } else {
+                            observed
+                                .lock()
+                                .map(|mut timeline| timeline.at(position))
+                                .unwrap_or(quiet)
+                        }
+                    } else {
+                        quiet
+                    };
+                    if !stopped.load(Ordering::Acquire) {
+                        publish(levels);
+                    }
+                    thread::park_timeout(Duration::from_millis(40));
+                }
+            })
+            .ok()?;
+        Some(Self {
+            timeline,
+            visible,
+            stop,
+            worker,
+        })
+    }
+    fn submit(&self, samples: &[i16]) {
+        if let Ok(mut timeline) = self.timeline.lock() {
+            timeline.submit(samples, (self.visible)());
+        }
+    }
+    fn finish(self) {
+        self.stop.store(true, Ordering::Release);
+        self.worker.thread().unpark();
+        let _ = self.worker.join();
+    }
+}
+
 pub(crate) struct Output {
     handle: HWAVEOUT,
     event: Event,
     buffers: VecDeque<Buffer>,
     deadline: Instant,
+    spectrum: Option<SpectrumObservation>,
 }
 impl Output {
     pub fn open() -> Result<Self, &'static str> {
@@ -236,7 +342,7 @@ impl Output {
             waveOutOpen(
                 Some(&mut handle),
                 WAVE_MAPPER,
-                &format(24000),
+                &format(SPEECH_RATE),
                 Some(completed as *const () as usize),
                 Some(event.0 .0 as usize),
                 CALLBACK_FUNCTION,
@@ -250,7 +356,18 @@ impl Output {
             event,
             buffers: VecDeque::new(),
             deadline: Instant::now() + Duration::from_secs(300),
+            spectrum: None,
         })
+    }
+    pub fn observe_spectrum(
+        &mut self,
+        visible: impl Fn() -> bool + Send + Sync + 'static,
+        publish: impl Fn([f32; SPECTRUM_BANDS]) + Send + 'static,
+    ) {
+        // A visualization failure must never prevent the actual reply.
+        if self.spectrum.is_none() {
+            self.spectrum = SpectrumObservation::start(self.handle, visible, publish);
+        }
     }
     fn reclaim(&mut self, cancel: &CancellationToken) -> Result<(), &'static str> {
         let deadline = self.deadline.min(Instant::now() + Duration::from_secs(3));
@@ -286,6 +403,9 @@ impl Output {
             if unsafe { waveOutWrite(self.handle, hdr, HEADER) } != 0 {
                 return Err("audio_error");
             }
+            if let Some(observer) = &self.spectrum {
+                observer.submit(chunk);
+            }
         }
         Ok(())
     }
@@ -298,6 +418,9 @@ impl Output {
 }
 impl Drop for Output {
     fn drop(&mut self) {
+        if let Some(observer) = self.spectrum.take() {
+            observer.finish();
+        }
         unsafe { waveOutReset(self.handle) };
         for buf in self.buffers.drain(..) {
             if unsafe { waveOutUnprepareHeader(self.handle, buf.header.get(), HEADER) } != 0 {

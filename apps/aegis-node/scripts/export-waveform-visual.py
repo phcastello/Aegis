@@ -34,12 +34,14 @@ def main():
              artifact(cache,'org.jetbrains','annotations','23.0.0')]
     scripts=Path(__file__).resolve().parent
     source=scripts.parent/'src-tauri/gen/android/app/src/main/java/com/aegis/node/NodeHandsFreePanel.kt'
+    spectrum=source.with_name('NodeHandsFreePlaybackSpectrum.kt')
+    clock=source.with_name('NodeHandsFreeBargeInTiming.kt')
     fixture=scripts/'HandsFreeWaveformVisualFixture.kt'
     classes=args.output/'classes';classes.mkdir(mode=0o700)
     classpath=os.pathsep.join(map(str,jars))
     compile_cmd=['java','-cp',classpath,'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
                  '-no-stdlib','-no-reflect','-classpath',classpath,'-jvm-target','1.8',
-                 '-d',str(classes),str(source),str(fixture)]
+                 '-d',str(classes),str(source),str(spectrum),str(clock),str(fixture)]
     with (args.output/'compile.log').open('x') as log:
         subprocess.run(compile_cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
     frames=args.output/'frames.json'
@@ -47,7 +49,7 @@ def main():
                     'com.aegis.node.HandsFreeWaveformVisualFixture',str(frames)],check=True)
     data=json.loads(frames.read_text())
     digest=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
-    provenance={'production_signal_sha256':digest(source),'fixture_sha256':digest(fixture),
+    provenance={'production_signal_sha256':digest(source),'production_spectrum_sha256':digest(spectrum),'playback_clock_sha256':digest(clock),'fixture_sha256':digest(fixture),
                 'frames_sha256':digest(frames),'compiler_version':version,
                 'frames':len(data['frames']),'frame_rate':data['fps'],
                 'scope':'Synthetic signal verification and host drawing fixture; not Android physical execution.'}

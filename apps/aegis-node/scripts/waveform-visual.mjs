@@ -49,23 +49,25 @@ window.drawFrame=function(index,reduced=false){
       roundRect(left+(i+.5)*slot-bar/2,cy-half,bar,2*half,bar/2);
     });
   }else if(frame.state==='processing'){
+    const poses=[[-4,-6,5,0,-1,6],[6,-4,0,0,-6,4],[1.5,.4,-.8,-1.5,-1,1.5],[-5,3.5,0,-6,6,2.5]];
+    const phase=reduced?0:(now%1800)/450,current=Math.floor(phase),next=(current+1)%4,
+      fraction=phase-current,progress=fraction*fraction*(3-2*fraction);
+    ctx.fillStyle='#91a9ee';
     for(let i=0;i<3;i++){
-      const phase=(now%1500)/1500*2*Math.PI-i*.85;
-      const pulse=reduced ? .5 : (Math.sin(phase)+1)/2;
-      ctx.fillStyle='rgba(145,169,238,'+(Math.trunc(100+140*pulse)/255)+')';
-      ctx.beginPath();ctx.arc(cx+(i-1)*16,cy+(reduced?0:Math.sin(phase)*2),3.3,0,Math.PI*2);ctx.fill();
+      const x=poses[current][i*2],y=poses[current][i*2+1];
+      const dx=poses[next][i*2]-x,dy=poses[next][i*2+1]-y;
+      ctx.beginPath();ctx.arc(cx+(x+dx*progress)*1.75,cy+(y+dy*progress)*1.75,2.8,0,Math.PI*2);ctx.fill();
     }
   }else if(frame.state==='speaking'){
-    const pulse=reduced ? .5 : (Math.sin((now%1800)/1800*2*Math.PI)+1)/2;
-    ctx.fillStyle='rgba(145,169,238,'+(Math.trunc(150+90*pulse)/255)+')';
-    ctx.beginPath();ctx.arc(cx,cy,2.7,0,Math.PI*2);ctx.fill();
-    ctx.lineWidth=2;ctx.lineCap='round';
-    for(let i=0;i<2;i++){
-      const radius=12+i*9+(reduced?0:pulse*1.5);
-      ctx.strokeStyle='rgba(145,169,238,'+(Math.trunc(180-i*50+40*pulse)/255)+')';
-      for(const degrees of [-40,140]){ctx.beginPath();ctx.arc(cx,cy,radius,degrees*Math.PI/180,(degrees+80)*Math.PI/180);ctx.stroke();}
+    const base=y+height*.89;
+    if(frame.bars.every(value=>value<=.002)){
+      ctx.strokeStyle='rgba(145,169,238,'+(24/255)+')';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(left,base);ctx.lineTo(right,base);ctx.stroke();
     }
-    ctx.lineCap='butt';
+    frame.bars.forEach((amp,i)=>{if(amp<=.002)return;const h=.65+amp*height*.80;
+      ctx.fillStyle='rgba(145,169,238,'+(Math.trunc(102+153*amp)/255)+')';
+      roundRect(left+(i+.5)*slot-bar/2,base-h,bar,h,bar/2);
+    });
   }else if(frame.state==='error'){
     ctx.fillStyle='#f2b5b5';ctx.font='27px sans-serif';ctx.textAlign='center';ctx.fillText('!',cx,cy+9);
   }
@@ -100,6 +102,9 @@ try {
   const mean=values=>values.reduce((a,b)=>a+b,0)/values.length;
   const diff=(a,b)=>mean(a.map((x,i)=>Math.abs(x-b[i])));
   const voice=data.frames.filter(f=>f.atMs>=2400 && f.atMs<5000);
+  const playback=data.frames.filter(f=>f.atMs>=10850 && f.atMs<12000);
+  assert.ok(playback.some(frame=>frame.bars.filter(v=>v>.002).length>4),'Real synthetic TTS spectrum exposes multiple measured bands');
+  assert.ok(new Set(playback.map(frame=>frame.bars.join(','))).size>8,'Measured spectrum changes with played PCM');
   const nearSilence=data.frames.filter(f=>f.atMs<800 || (f.atMs>=9200&&f.atMs<9600));
   const interior=[];const boundary=[];let varied=0;
   for(let i=1;i<data.frames.length;i++){

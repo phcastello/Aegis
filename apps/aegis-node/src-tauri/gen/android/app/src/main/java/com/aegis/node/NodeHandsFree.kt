@@ -1055,6 +1055,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         onPlaybackReady = { head ->
                             if (response!=null) startResponseCapture(response,generation,session,active,sink,head)
                         },
+                        spectrumSession = if (response == null) null else session,
                         sessionFocus = if (response == null) null else {
                             {
                                 synchronized(lock) {

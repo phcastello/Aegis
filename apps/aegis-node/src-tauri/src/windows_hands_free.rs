@@ -3,7 +3,7 @@
 use crate::{
     windows_voice_audio::{self, Input},
     windows_voice_backend::{Backend, Result},
-    windows_voice_signal::{Background, Capture, Endpoint},
+    windows_voice_signal::{Background, Capture, Endpoint, Waveform},
     windows_wakeword,
 };
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,10 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicIsize, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -24,7 +27,11 @@ use windows::{
         GlobalSystemMediaTransportControlsSessionManager as MediaManager,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as Playback,
     },
-    Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
+    Win32::{
+        Foundation::HWND,
+        System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
+        UI::WindowsAndMessaging::{IsIconic, IsWindowVisible},
+    },
 };
 
 #[derive(Default, Copy, Clone, Deserialize, Serialize)]
@@ -52,6 +59,7 @@ impl RecentConversation {
 struct State {
     settings: Settings,
     status: &'static str,
+    generation: u64,
     lease: Option<Uuid>,
     importing: bool,
     recent: Option<RecentConversation>,
@@ -63,6 +71,7 @@ struct Shared {
     dir: PathBuf,
     state: Mutex<State>,
     changed: Condvar,
+    window_handle: Arc<AtomicIsize>,
 }
 pub(crate) struct WindowsHandsFree(Arc<Shared>);
 
@@ -91,22 +100,45 @@ fn message(status: &str) -> &'static str {
 }
 
 impl Shared {
-    fn publish(&self, status: &'static str) {
-        {
+    fn publish(&self, status: &'static str) -> u64 {
+        let generation = {
             let mut state = self.state.lock().unwrap();
             if state.status == status {
-                return;
+                return state.generation;
             }
             state.status = status;
-        }
+            state.generation += 1;
+            state.generation
+        };
         let _ = self.app.emit(
             "aegis-windows-voice-state",
-            json!({"status":status,"message":message(status)}),
+            json!({"status":status,"message":message(status),"generation":generation}),
         );
         crate::native_notifications::set_voice_tooltip(
             &self.app,
             (status != "disabled").then(|| message(status)),
         );
+        generation
+    }
+    fn waveform_visible(&self) -> bool {
+        // Use the existing window's native handle without a synchronous round trip
+        // to the UI thread. No signal work or IPC while it is hidden/minimized.
+        waveform_visible(&self.window_handle)
+    }
+    fn publish_waveform(
+        &self,
+        waveform: &mut Waveform,
+        samples: &[i16],
+        status: &'static str,
+        generation: u64,
+    ) {
+        if let Some(levels) = waveform.push(samples, self.waveform_visible(), Instant::now()) {
+            let _ = self.app.emit_to(
+                "main",
+                "aegis-windows-voice-waveform",
+                json!({"status":status,"generation":generation,"levels":levels}),
+            );
+        }
     }
     fn view(&self) -> Value {
         let installed = windows_wakeword::installed(&self.dir);
@@ -115,9 +147,18 @@ impl Shared {
             "assistantSelected":true,"permissionGranted":!matches!(state.status,"microphone_unavailable"|"microphone_disconnected"|"device_unavailable"),
             "captureConfirmed":matches!(state.status,"listening"|"capturing"|"continuation"),
             "modelReady":installed,"modelName":installed.then_some("Aegis Open v2"),
-            "status":state.status,"message":message(state.status)})
+            "status":state.status,"message":message(state.status),"generation":state.generation})
     }
 }
+fn waveform_visible(window_handle: &AtomicIsize) -> bool {
+    let handle = window_handle.load(Ordering::Acquire);
+    if handle == 0 {
+        return false;
+    }
+    let window = HWND(handle as *mut _);
+    unsafe { IsWindowVisible(window).as_bool() && !IsIconic(window).as_bool() }
+}
+
 impl WindowsHandsFree {
     pub fn start(app: &AppHandle) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let dir = app.path().app_local_data_dir()?.join("hands-free");
@@ -135,6 +176,7 @@ impl WindowsHandsFree {
                 } else {
                     "disabled"
                 },
+                generation: 0,
                 lease: None,
                 importing: false,
                 recent: None,
@@ -142,12 +184,16 @@ impl WindowsHandsFree {
                 exiting: false,
             }),
             changed: Condvar::new(),
+            window_handle: Arc::new(AtomicIsize::new(0)),
         });
         let worker = shared.clone();
         thread::Builder::new()
             .name("AegisVoice".into())
             .spawn(move || worker_loop(worker))?;
         Ok(Self(shared))
+    }
+    pub fn set_window_handle(&self, handle: isize) {
+        self.0.window_handle.store(handle, Ordering::Release);
     }
     pub fn shutdown(&self) {
         let mut s = self.0.state.lock().unwrap();
@@ -372,7 +418,7 @@ fn cycle(
     if cancel.is_cancelled() {
         return Err("cancelled");
     }
-    shared.publish("capturing");
+    let mut generation = shared.publish("capturing");
     windows_voice_audio::cue(cancel)?;
     let scope = backend.scope_key();
     let mut destination = shared
@@ -389,8 +435,12 @@ fn cycle(
         if first {
             endpoint.after_cue(mic.pending());
         }
+        let mut waveform = Waveform::default();
+        let status = if first { "capturing" } else { "continuation" };
         let samples = loop {
-            match endpoint.push(&mic.read(cancel)?) {
+            let block = mic.read(cancel)?;
+            shared.publish_waveform(&mut waveform, &block, status, generation);
+            match endpoint.push(&block) {
                 Capture::More => {}
                 Capture::Empty => return Ok(()),
                 Capture::Complete(audio) => break audio,
@@ -408,8 +458,18 @@ fn cycle(
             // and the next cycle reopens the microphone for the wake word.
             return Ok(());
         };
-        shared.publish("speaking");
-        backend.speak(&reply)?;
+        let speaking_generation = shared.publish("speaking");
+        let app = shared.app.clone();
+        let window = shared.window_handle.clone();
+        backend.speak(&reply, |output| {
+            output.observe_spectrum(
+                move || waveform_visible(&window),
+                move |levels| {
+                    let _ = app.emit_to("main", "aegis-windows-voice-waveform",
+                        json!({"status":"speaking","generation":speaking_generation,"levels":levels}));
+                },
+            );
+        })?;
         {
             let mut state = shared.state.lock().unwrap();
             if cancel.is_cancelled() {
@@ -427,7 +487,7 @@ fn cycle(
         }
         mic = Input::open()?;
         destination = Some(reply.conversation);
-        shared.publish("continuation");
+        generation = shared.publish("continuation");
     }
 }
 

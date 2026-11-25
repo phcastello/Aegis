@@ -11,6 +11,7 @@ export interface HandsFreeState {
   modelSha256?: string | null;
   status: string;
   message: string;
+  generation?: number;
   captureConfirmed?: boolean;
   mediaReference?: HandsFreeMediaReference;
   batteryDiagnostics?: HandsFreeBatteryDiagnostics;
@@ -227,7 +228,8 @@ function stateResponse(value: unknown): HandsFreeState {
   const row = value as Record<string, unknown>;
   if (!['enabled', 'diagnostic', 'assistantSelected', 'permissionGranted', 'modelReady'].every(key => typeof row[key] === 'boolean') ||
       typeof row.status !== 'string' || !/^[a-z_]{1,64}$/.test(row.status) || typeof row.message !== 'string' || row.message.length > 400 ||
-      (row.captureConfirmed !== undefined && typeof row.captureConfirmed !== 'boolean')) throw new HandsFreeError('invalid_response');
+      (row.captureConfirmed !== undefined && typeof row.captureConfirmed !== 'boolean') ||
+      (row.generation !== undefined && (typeof row.generation !== 'number' || !Number.isSafeInteger(row.generation) || row.generation < 0))) throw new HandsFreeError('invalid_response');
   for (const field of ['modelName', 'modelVersion'] as const) {
     if (row[field] !== undefined && row[field] !== null && (typeof row[field] !== 'string' || row[field].length < 1 || row[field].length > 100))
       throw new HandsFreeError('invalid_response');

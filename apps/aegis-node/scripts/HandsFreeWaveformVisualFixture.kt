@@ -30,13 +30,32 @@ object HandsFreeWaveformVisualFixture {
         val carrier=sin(2.0*PI*173*t)+.28*sin(2.0*PI*346*t)+.12*sin(2.0*PI*519*t)
         (amplitude(timeMs)*carrier).roundToInt().coerceIn(-32768,32767).toShort()
     }
+    private fun playbackPcm(startFrame:Long):ByteArray {
+        val samples=HandsFreePlaybackSpectrum.WINDOW_FRAMES
+        return ByteArray(samples*2).also { bytes ->
+            for (i in 0 until samples) {
+                val t=(startFrame+i)/24000.0
+                val fundamental=180+80*sin(2*PI*.8*t)
+                val envelope=.18*(.35+.65*max(0.0,sin(2*PI*3.1*t)))
+                val sample=(32768*envelope*(sin(2*PI*fundamental*t)+.5*sin(2*PI*620*t)+
+                    .28*sin(2*PI*1500*t)+.1*sin(2*PI*3500*t))).roundToInt().coerceIn(-32768,32767)
+                bytes[i*2]=(sample and 255).toByte()
+                bytes[i*2+1]=(sample shr 8).toByte()
+            }
+        }
+    }
     @JvmStatic fun main(args:Array<String>) {
         val owner=Any()
         val session="synthetic-visual-fixture"
         val bars=FloatArray(HandsFreePanelSignal.BAR_COUNT)
         val frames=StringBuilder(320000)
         var nextBlockEnd=200
+        var playbackHead=0L
+        var offeredFrames=0L
+        var playbackStarted=false
+        val playback=HandsFreePlaybackSpectrum.Stream(session)
         HandsFreePanelSignal.attach(owner,session)
+        HandsFreePlaybackSpectrum.attach(owner,session)
         try {
             frames.append("{\"scope\":\"Production Kotlin signal; synthetic PCM; host visualization, not Android physical\",")
             frames.append("\"fps\":60,\"barCount\":${HandsFreePanelSignal.BAR_COUNT},\"windowMs\":${HandsFreePanelSignal.WINDOW_MS},")
@@ -56,7 +75,22 @@ object HandsFreeWaveformVisualFixture {
                     else->"idle"
                 }
                 if(now>=9600)HandsFreePanelSignal.reset(owner,now.toLong())
-                val active=HandsFreePanelSignal.render(owner,now.toLong(),bars)
+                val active=if(state=="speaking") {
+                    if(!playbackStarted) {
+                        playback.start(HandsFreePlaybackClock({playbackHead}))
+                        playbackStarted=true
+                    }
+                    playbackHead=(now-10700L)*24
+                    while(offeredFrames+HandsFreePlaybackSpectrum.WINDOW_FRAMES<=playbackHead) {
+                        val bytes=playbackPcm(offeredFrames)
+                        playback.offer(bytes,0,bytes.size,offeredFrames)
+                        offeredFrames+=HandsFreePlaybackSpectrum.WINDOW_FRAMES
+                    }
+                    HandsFreePlaybackSpectrum.render(owner,bars,now*1000000L)
+                } else {
+                    if(playbackStarted){playback.close();playbackStarted=false}
+                    HandsFreePanelSignal.render(owner,now.toLong(),bars)
+                }
                 if(frame>0)frames.append(',')
                 frames.append("{\"atMs\":$now,\"state\":\"$state\",\"active\":$active,\"bars\":[")
                 bars.forEachIndexed { i,value->if(i>0)frames.append(',');frames.append(value) }
@@ -64,6 +98,6 @@ object HandsFreeWaveformVisualFixture {
             }
             frames.append("]}\n")
             File(args.single()).writeText(frames.toString())
-        }finally{HandsFreePanelSignal.detach(owner)}
+        }finally{playback.close();HandsFreePlaybackSpectrum.detach(owner);HandsFreePanelSignal.detach(owner)}
     }
 }

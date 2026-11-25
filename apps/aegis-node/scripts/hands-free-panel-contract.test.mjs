@@ -82,13 +82,22 @@ test('reduced motion redraws measured batches and expires stalled history withou
   assert.match(panel, /override fun onWindowVisibilityChanged[^\n]*pauseVisibleResources\(\)/);
 });
 
-test('processing and playback use distinct state animations and idle does not schedule frames', () => {
+test('processing uses an animated cluster and playback the measured spectrum with scoped scheduling', () => {
   const panel = android('NodeVoiceInteractionSession');
   const processing = panel.slice(panel.indexOf('HandsFreePanelState.PROCESSING->{'), panel.indexOf('HandsFreePanelState.SPEAKING->{'));
   const playback = panel.slice(panel.indexOf('HandsFreePanelState.SPEAKING->{'), panel.indexOf('HandsFreePanelState.ERROR->{'));
   assert.match(processing, /canvas\.drawCircle/);
-  assert.match(playback, /canvas\.drawArc/);
-  assert.doesNotMatch(processing + playback, /HandsFreePanelSignal\.render|MicroWakeWordNative|HandsFreePlayback/);
+  assert.match(processing, /thoughtPositions/);
+  assert.match(processing, /fraction\*fraction\*\(3f-2f\*fraction\)/);
+  assert.match(processing, /if\(motion\)scheduleFrame\(\)/);
+  assert.match(playback, /HandsFreePlaybackSpectrum\.render\(owner,amplitudes\)/);
+  assert.match(playback, /canvas\.drawRoundRect/);
+  assert.match(playback, /if\(active\)schedulePlaybackFrame\(\)/);
+  assert.doesNotMatch(playback, /canvas\.drawArc|kotlin\.math\.sin|HandsFreePanelSignal\.render/);
+  assert.match(panel, /postDelayed\(playbackFrame,40L\)/);
+  assert.match(panel, /removeCallbacks\(playbackFrame\);playbackFramePending=false/);
+  assert.match(panel, /HandsFreePlaybackSpectrum\.attach\(it,session\)/);
+  assert.match(panel, /HandsFreePlaybackSpectrum\.setListener\(it,null\);HandsFreePlaybackSpectrum\.detach\(it\)/);
   assert.match(panel, /else->Unit\s*\n\s*\}\s*\n\s*paint.alpha=255/);
 });
 

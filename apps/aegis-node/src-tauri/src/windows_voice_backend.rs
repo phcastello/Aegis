@@ -215,12 +215,17 @@ impl Backend {
             continuation: result["voiceContinuation"] == "continue",
         }))
     }
-    pub fn speak(&mut self, reply: &Reply) -> Result<()> {
+    pub fn speak(&mut self, reply: &Reply, observe: impl FnOnce(&mut Output)) -> Result<()> {
         let mut output = None;
+        let mut observe = Some(observe);
         let cancel = self.cancel.clone();
         self.speech_pcm(reply, |pcm| {
             if output.is_none() {
-                output = Some(Output::open()?);
+                let mut device = Output::open()?;
+                if let Some(callback) = observe.take() {
+                    callback(&mut device);
+                }
+                output = Some(device);
             }
             output.as_mut().unwrap().write(pcm, &cancel)
         })?;

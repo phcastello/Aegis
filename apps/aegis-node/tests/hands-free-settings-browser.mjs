@@ -20,14 +20,20 @@ try {
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
     const initial = { enabled: false, diagnostic: false, assistantSelected: false, permissionGranted: false, modelReady: false, captureConfirmed: false, status: 'disabled', message: 'Escuta desligada.' };
     const windows = new URLSearchParams(location.search).has('windows');
-    if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; }
+    if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; initial.generation = 0; }
     window.hfFixture = { fail: windows ? null : 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
     const callbacks = new Map();
     const events = new Map();
     let nextId = 1;
     window.hfFixture.voiceEvent = status => {
+      Object.assign(initial, { status, generation: initial.generation + 1 });
       for (const [id, name] of events) {
-        if (name === 'aegis-windows-voice-state') callbacks.get(id)({ id, event: name, payload: { status } });
+        if (name === 'aegis-windows-voice-state') callbacks.get(id)({ id, event: name, payload: { status, generation: initial.generation } });
+      }
+    };
+    window.hfFixture.waveEvent = (levels, generation = initial.generation, status = initial.status) => {
+      for (const [id, name] of events) {
+        if (name === 'aegis-windows-voice-waveform') callbacks.get(id)({ id, event: name, payload: { status, generation, levels } });
       }
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_name, id) => { events.delete(id); callbacks.delete(id); } };
@@ -325,26 +331,122 @@ try {
     capturing: 'Escutando', processing: 'Preparando resposta', speaking: 'Falando', continuation: 'Aguardando você'
   })) {
     await desktop.evaluate(status => window.hfFixture.voiceEvent(status), phase);
-    await indicator.and(desktop.getByText(label, { exact: true })).waitFor();
+    await indicator.and(desktop.locator(`[data-phase="${phase}"]`)).waitFor();
+    assert.equal((await indicator.innerText()).trim(), label);
     assert.equal(await historyTrigger.evaluate(button => document.activeElement === button), true, 'voice updates preserve keyboard focus');
     assert.equal(await indicator.locator('svg[aria-hidden="true"]').count(), 1);
   }
+  const sample = Array.from({ length: 32 }, (_, i) =>
+    Math.abs(Math.sin(i * .31) * Math.sin(i * .09)) * .92);
+  const meter = indicator.locator('.desktop-voice-waveform');
+  const bars = meter.locator('rect');
+  await desktop.evaluate(levels => { window.hfFixture.voiceEvent('capturing'); window.hfFixture.waveEvent(levels); }, sample);
+  await bars.nth(31).waitFor({ state: 'attached' });
+  assert.equal(await meter.getAttribute('data-meter'), 'input');
+  const heights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
+  assert.equal(heights.length, 32);
+  assert.ok(new Set(heights).size > 20 && heights[0] === 0, 'input bars represent the individual measured levels');
+  await desktop.evaluate(levels => {
+    const f = window.hfFixture;
+    f.waveEvent(levels.slice(1));
+    f.waveEvent(levels.map((value, i) => i === 0 ? 2 : value));
+    f.waveEvent(levels.map((value, i) => i === 0 ? NaN : value));
+    f.waveEvent(levels.map(() => .8), f.initial.generation - 1);
+  }, sample);
+  assert.deepEqual(await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height')))), heights,
+    'reject invalid frames and previous generations without applying partial data');
   await desktop.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
-  await desktop.evaluate(() => window.hfFixture.voiceEvent('capturing'));
-  await indicator.and(desktop.getByText('Escutando', { exact: true })).waitFor();
   assert.equal(await indicator.evaluate(el => getComputedStyle(el).color !== getComputedStyle(el).backgroundColor), true);
   assert.equal(await indicator.evaluate(el => el.getAnimations({ subtree: true }).length), 0);
+  const fill = await bars.nth(6).evaluate(bar => getComputedStyle(bar).fill);
+  assert.notEqual(fill, 'none');
   await desktop.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
   await desktop.setViewportSize({ width: 1180, height: 800 });
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png` });
   await desktop.setViewportSize({ width: 390, height: 844 });
+  await desktop.locator('#conversation-sidebar[aria-hidden="true"]').waitFor({ state: 'attached' });
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-narrow.png`, animations: 'disabled' });
+  await desktop.setViewportSize({ width: 320, height: 844 });
+  const box = await indicator.boundingBox();
+  const navBox = await historyTrigger.boundingBox();
+  assert.ok(box && navBox && box.x >= navBox.x + navBox.width, 'indicator does not cover navigation in narrow layout');
+  assert.equal(await desktop.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await desktop.setViewportSize({ width: 390, height: 844 });
+  await desktop.evaluate(() => window.hfFixture.voiceEvent('continuation'));
+  await meter.locator('line').waitFor({ state: 'attached' });
+  await desktop.evaluate(levels => {
+    const f = window.hfFixture;
+    f.waveEvent(levels, f.initial.generation - 1, 'capturing');
+  }, sample);
+  assert.equal(await bars.count(), 0, 'previous capture cannot appear in continuation');
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
+  await bars.nth(31).waitFor({ state: 'attached' });
+  await meter.locator('line').waitFor({ state: 'attached', timeout: 2500 });
+  assert.equal(await bars.count(), 0, 'stalled meter expires');
+  await desktop.evaluate(levels => {
+    const f = window.hfFixture; f.waveEvent(levels);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    f.waveEvent(levels);
+  }, sample);
+  await meter.locator('line').waitFor({ state: 'attached' });
+  assert.equal(await bars.count(), 0, 'hidden UI clears and rejects data');
+  await desktop.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+  await desktop.waitForFunction(() => window.hfFixture.active === 0);
+  // Output bars are acoustic frequency bins, aligned to the bottom with the
+  // exact same source generation guard used for microphone history.
+  await desktop.evaluate(() => window.hfFixture.voiceEvent('speaking'));
+  await meter.locator('line').waitFor({ state: 'attached' });
+  assert.equal(await meter.getAttribute('data-meter'), 'output');
+  await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? .95 : i === 23 ? .5 : 0)));
+  await bars.nth(31).waitFor({ state: 'attached' });
+  assert.ok(Number(await bars.nth(7).getAttribute('height')) > Number(await bars.nth(23).getAttribute('height')));
+  assert.ok(Math.abs(Number(await bars.nth(7).getAttribute('y')) + Number(await bars.nth(7).getAttribute('height')) - 32) < 1e-6);
+  await desktop.setViewportSize({ width: 1180, height: 800 });
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-speaking.png` });
+  const meterSize = await indicator.boundingBox();
+  await desktop.evaluate(() => window.hfFixture.voiceEvent('processing'));
+  await indicator.and(desktop.locator('[data-phase="processing"]')).waitFor();
+  const thoughtSize = await indicator.boundingBox();
+  assert.ok(meterSize && thoughtSize && Math.abs(meterSize.width - thoughtSize.width) <= 1 &&
+    Math.abs(meterSize.height - thoughtSize.height) <= 1, 'the visualizer retains its position and size between phases');
+  assert.equal((await indicator.innerText()).trim(), 'Preparando resposta');
+  const thoughts = indicator.locator('.desktop-voice-thoughts');
+  assert.equal(await thoughts.locator('circle').count(), 3);
+  const clusterPositions = await thoughts.evaluate(g => {
+    const points = Array.from(g.querySelectorAll('circle'));
+    const animations = g.getAnimations({ subtree: true });
+    const sample = time => {
+      for (const animation of animations) { animation.pause(); animation.currentTime = time; }
+      return points.map(point => {
+        const m = new DOMMatrix(getComputedStyle(point).transform);
+        return [m.e, m.f];
+      });
+    };
+    const spread = sample(0), diagonal = sample(450), gathered = sample(900), rotate = sample(1350);
+    return { animations: animations.length, spread, diagonal, gathered, rotate };
+  });
+  const spread = points => Math.max(...points.map(([x, y]) => Math.hypot(x, y)));
+  assert.equal(clusterPositions.animations, 3);
+  assert.ok(spread(clusterPositions.gathered) < spread(clusterPositions.spread) / 2, 'thinking particles draw together');
+  assert.notDeepEqual(clusterPositions.spread, clusterPositions.diagonal);
+  assert.notDeepEqual(clusterPositions.gathered, clusterPositions.rotate);
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-processing.png` });
+  await desktop.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await thoughts.evaluate(g => g.getAnimations({ subtree: true }).length), 0);
+  await desktop.emulateMedia({ reducedMotion: 'no-preference' });
+  await desktop.setViewportSize({ width: 390, height: 844 });
+  console.log('Windows voice meters: 32 measured levels, stale/session/visibility isolation, responsive layout, output bands and reduced motion PASS');
   await desktop.evaluate(() => { window.hfFixture.hold = true; document.dispatchEvent(new Event('visibilitychange')); });
   await desktop.waitForFunction(() => typeof window.hfFixture.resolve === 'function');
   await desktop.evaluate(() => {
     window.hfFixture.voiceEvent('speaking');
     window.hfFixture.resolve({ ...window.hfFixture.initial, status: 'capturing' });
   });
-  await indicator.and(desktop.getByText('Falando', { exact: true })).waitFor();
+  await indicator.and(desktop.locator('[data-phase="speaking"]')).waitFor();
+  assert.equal((await indicator.innerText()).trim(), 'Falando');
   for (const status of ['listening', 'diagnostic', 'unexpected']) {
     await desktop.evaluate(state => window.hfFixture.voiceEvent(state), status);
     await indicator.waitFor({ state: 'detached' });

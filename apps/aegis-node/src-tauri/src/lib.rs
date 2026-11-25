@@ -238,7 +238,7 @@ pub fn run() {
             use tauri::webview::{PermissionKind, PermissionResponse};
             let config = &app.config().app.windows[0];
             let dev_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
-            tauri::WebviewWindowBuilder::from_config(app, config)?
+            let window = tauri::WebviewWindowBuilder::from_config(app, config)?
                 .visible(
                     !(cfg!(windows)
                         && node_window_activation::background_launch(
@@ -260,8 +260,14 @@ pub fn run() {
                     _ => PermissionResponse::Deny,
                 })
                 .build()?;
+            #[cfg(not(windows))]
+            let _ = window;
             #[cfg(windows)]
             {
+                if let Ok(hwnd) = window.hwnd() {
+                    app.state::<windows_hands_free::WindowsHandsFree>()
+                        .set_window_handle(hwnd.0 as isize);
+                }
                 let opened_window = windows_notifications::initialize(app.handle());
                 if node_window_activation::hide_after_activation(
                     &std::env::args().collect::<Vec<_>>(),

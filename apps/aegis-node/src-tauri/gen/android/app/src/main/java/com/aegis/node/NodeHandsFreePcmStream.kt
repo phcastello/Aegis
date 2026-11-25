@@ -102,13 +102,15 @@ internal class HandsFreeStreamingPcmSink(
     private val onPlaybackEvent:(String)->Unit={},
     private val echo: HandsFreeBargeInEcho? = null,
     private val onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {},
-    boostSpeechVolume: Boolean = false
+    boostSpeechVolume: Boolean = false,
+    spectrumSession: String? = null
 ) : HandsFreePcmSink {
     private val cancelled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val finished = AtomicBoolean(false)
     private val creationLock = Any()
     private val completion = CountDownLatch(1)
+    private val spectrum = spectrumSession?.let { HandsFreePlaybackSpectrum.Stream(it) }
     private val boostedPcm = if (boostSpeechVolume) ByteArray(WRITE_CHUNK_BYTES) else null
     @Volatile private var device: HandsFreePcmDevice? = null
     @Volatile private var writtenFrames = 0L
@@ -123,17 +125,20 @@ internal class HandsFreeStreamingPcmSink(
                 fun currentDevice() = it.takeUnless { target ->
                     cancelled.get() || closed.get() || device !== target
                 }
-                onPlaybackReady(HandsFreePlaybackClock(
+                val clock = HandsFreePlaybackClock(
                     playedFrames = { currentDevice()?.playedFrames() },
                     timestamp = { currentDevice()?.timestamp() },
                     discontinuity = { currentDevice()?.discontinuity() ?: 0 },
                     enqueuedFrames = { if (currentDevice() != null) writtenFrames else 0L }
-                ))
+                )
+                spectrum?.start(clock)
+                onPlaybackReady(clock)
                 checkCurrent()
                 it.play()
                 onPlaybackEvent("player_play_called")
             } catch (error: Exception) {
                 device = null
+                spectrum?.close()
                 it.close()
                 throw error
             }
@@ -162,6 +167,7 @@ internal class HandsFreeStreamingPcmSink(
                     // device, including our speech gain and peak compression.
                     val start = outputOffset + chunkConsumed
                     echo?.offer(outputBytes, start, remaining, writtenFrames)
+                    spectrum?.offer(outputBytes, start, remaining, writtenFrames)
                     val written = target.write(outputBytes, start, remaining)
                     check(written > 0 && written % 2 == 0 && written <= remaining) { "audio_playback_failed" }
                     chunkConsumed += written
@@ -194,15 +200,18 @@ internal class HandsFreeStreamingPcmSink(
         }
         checkCurrent()
         check(target.playedFrames() >= writtenFrames) { "audio_playback_incomplete" }
+        spectrum?.close()
         onPlaybackEvent("player_drained")
     }
     override fun abort() {
         if (!cancelled.compareAndSet(false, true)) return
+        spectrum?.close()
         completion.countDown()
         try { device?.stop() } catch (_: Exception) { }
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        spectrum?.close()
         completion.countDown()
         synchronized(creationLock) { try { device?.close() } finally { device = null; onClosed() } }
     }
