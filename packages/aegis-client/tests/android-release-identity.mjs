@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _android } from 'playwright-core';
 import { assertNativeReleaseIdentity, routeOfflineIdentityApi } from './native-release-identity.mjs';
+import { attachAndroidReleaseWebView } from './android-webview-attach.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const [apk, outputArgument] = process.argv.slice(2);
@@ -24,16 +25,33 @@ assert.equal(runAdb('shell', 'getprop', 'ro.kernel.qemu'), '1', 'Only an isolate
 assert.equal(runAdb('shell', 'getprop', 'ro.product.cpu.abi'), 'x86_64');
 const version = JSON.parse(readFileSync(join(repository, 'apps/aegis-node/package.json'), 'utf8')).version;
 runAdb('install', '-r', resolve(apk));
-runAdb('shell', 'am', 'force-stop', 'com.aegis.node');
-runAdb('shell', 'am', 'start', '-W', '-n', 'com.aegis.node/.MainActivity');
+const launch = () => {
+  runAdb('shell', 'am', 'force-stop', 'com.aegis.node');
+  const started = runAdb('shell', 'am', 'start', '-W', '-n', 'com.aegis.node/.MainActivity');
+  assert.match(started, /^Status:\s*ok$/im, 'Actual Android Activity must launch successfully.');
+};
+const processId = () => {
+  const result = spawnSync(adb, [...serialArguments, 'shell', 'pidof', 'com.aegis.node'], { encoding:'utf8', timeout:15000 });
+  const raw = result.status === 0 ? result.stdout.trim() : '';
+  return /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
+};
+const socketCount = pid => {
+  const result = spawnSync(adb, [...serialArguments, 'shell', 'cat', '/proc/net/unix'], { encoding:'utf8', timeout:15000 });
+  if (result.status !== 0) return null;
+  return result.stdout.split(/\r?\n/).filter(line => line.trim().endsWith(`@webview_devtools_remote_${pid}`)).length;
+};
 let device;
 try {
   // Android WebViews do not support desktop Browser.setDownloadBehavior. The
   // Android-specific connector attaches without changing downloads or native IPC.
-  const devices = await _android.devices({ omitDriverInstall: true });
-  device = serial ? devices.find(candidate => candidate.serial() === serial) : devices.length === 1 ? devices[0] : undefined;
-  assert.ok(device, 'The selected isolated emulator must be unambiguous.');
-  const webview = await device.webView({ pkg: 'com.aegis.node' }, { timeout: 45000 });
+  const attached = await attachAndroidReleaseWebView({ launch, processId, socketCount, openDevice: async () => {
+    const devices = await _android.devices({ omitDriverInstall: true });
+    const selected = serial ? devices.find(candidate => candidate.serial() === serial) : devices.length === 1 ? devices[0] : undefined;
+    assert.ok(selected, 'The selected isolated emulator must be unambiguous.');
+    return selected;
+  } });
+  device = attached.device;
+  const webview = attached.webview;
   const page = await webview.page();
   await routeOfflineIdentityApi(page);
   await page.reload({ waitUntil: 'domcontentloaded' });

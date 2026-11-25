@@ -90,6 +90,18 @@ test('shared Rust selects Windows and Android integration, including capability 
   assert.equal(selected.matrix.length, 2);
 });
 
+test('installed release identity harnesses and Android attach helper select real identity validation', () => {
+  for (const harness of ['android-release-identity.mjs', 'native-release-identity.mjs', 'release-identity-browser.mjs', 'android-webview-attach.mjs', 'android-webview-attach.test.mjs']) {
+    const selected = selectJobs([`packages/aegis-client/tests/${harness}`], pr());
+    assert.equal(selected.identity, true, harness);
+    assert.equal(selected.ui, true, harness);
+    assert.equal(selected.backend, false, harness);
+    assert.equal(selected.idle, false, harness);
+    assert.equal(selected.full, false, harness);
+    assertNoBuilds(selectJobs([`packages/aegis-client/tests/${harness}`], pr(true)));
+  }
+});
+
 test('dependencies, lockfiles, build config and workflows do not promote integration to prolonged acceptance', () => {
   for (const path of ['apps/aegis-node/package-lock.json', 'packages/aegis-client/tsconfig.json', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/src-tauri/build.rs', '.github/scripts/select-node-ci.mjs', '.github/workflows/aegis-node-ci.yml']) {
     const selected = selectJobs([path]);

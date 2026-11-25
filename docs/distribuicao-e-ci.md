@@ -318,6 +318,17 @@ geográfica, reinício e transporte nativos continuam nas APIs 26/35. O teste
 de WebView/IPC moderno na API 35 e o smoke do bundle sob CSP não demonstram
 suporte a versões antigas de WebView nem substituirão testes físicos.
 
+O smoke de identidade do APK instalado usa o [conector Android do Playwright](https://playwright.dev/docs/api/class-androiddevice#android-device-web-view).
+Na [aceitação da v0.8.0](https://github.com/phcastello/Aegis/actions/runs/45612125835),
+o mesmo código aprovado no PR e na integração falhou antes das asserções:
+a descoberta do WebView expirou aguardando seu evento por 45 segundos.
+Somente esse `TimeoutError`, confirmado com o mesmo processo da Activity
+ainda vivo, permite desconectar e relançar a Activity uma vez, sem reinstalar
+o APK ou repetir as asserções. Uma segunda expiração, falha de desconexão,
+morte ou troca do processo, erro de DOM ou divergência de identidade continua
+sendo falha de aceitação. O teste registra apenas liveness e contagem dos
+sockets de depuração do processo, sem expor conteúdo da interface.
+
 O workflow de identidade é reutilizado pelo CI principal, sem outro disparo automático duplicado. O agregador verifica todos os jobs selecionados, inclusive o resultado desse workflow. Falha, cancelamento, ausência ou skip inesperado de job selecionado impedem aprovação; não há `continue-on-error` nos gates. O SHA de origem e o SHA de evidência (merge de teste do PR ou merge queue) são registrados; todos os jobs usam o SHA resolvido. O gate consulta novamente o PR e recusa head/base diferentes, PR fechado ou retorno a draft. Concorrência por branch/PR cancela execuções substituídas.
 
 `Aegis Node CI result` é o contexto estável de integração. Release usa **Aegis Release Acceptance result**; preview e modos focados não substituem integração. Filtros manuais antigos continuam disponíveis para diagnóstico, com gate final recusando aceite parcial. `base_ref` só limita a homologação de release; integração manual permanece conservadora, impedindo escolher um diff vazio para obter aceite.
