@@ -87,8 +87,13 @@ test('processing uses an animated cluster and playback the measured spectrum wit
   const processing = panel.slice(panel.indexOf('HandsFreePanelState.PROCESSING->{'), panel.indexOf('HandsFreePanelState.SPEAKING->{'));
   const playback = panel.slice(panel.indexOf('HandsFreePanelState.SPEAKING->{'), panel.indexOf('HandsFreePanelState.ERROR->{'));
   assert.match(processing, /canvas\.drawCircle/);
-  assert.match(processing, /thoughtPositions/);
-  assert.match(processing, /fraction\*fraction\*\(3f-2f\*fraction\)/);
+  assert.match(panel, /private val thoughtPositions=FloatArray\(6\)/);
+  assert.match(panel, /if\(next==HandsFreePanelState\.PROCESSING\)thoughtStartedAtMs=now/);
+  assert.match(processing, /val elapsed=if\(motion\)\(now-thoughtStartedAtMs\)\.coerceAtLeast\(0L\) else 0L/);
+  assert.match(processing, /HandsFreeThinkingMotion\.sample\(elapsed,thoughtPositions\)/);
+  assert.match(processing, /thoughtPositions\[offset\]\*1\.75f\*density/);
+  assert.match(processing, /3\.5f\*density,paint/);
+  assert.doesNotMatch(processing, /FloatArray\(|now%1800/);
   assert.match(processing, /if\(motion\)scheduleFrame\(\)/);
   assert.match(playback, /HandsFreePlaybackSpectrum\.render\(owner,amplitudes\)/);
   assert.match(playback, /canvas\.drawRoundRect/);

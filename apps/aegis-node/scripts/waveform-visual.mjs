@@ -14,6 +14,8 @@ const output=resolve(args.output);mkdirSync(output,{recursive:false,mode:0o700})
 const png=join(output,'frames');mkdirSync(png,{mode:0o700});
 const data=JSON.parse(readFileSync(args.frames,'utf8'));
 assert.equal(data.fps,60);assert.equal(data.barCount,32);
+assert.equal(data.thinkingStill.length,6);
+assert.ok(data.frames.filter(frame=>frame.state==='processing').every(frame=>frame.thinking.length===6));
 const require=createRequire(import.meta.url);
 const {chromium}=require(process.env.AEGIS_PLAYWRIGHT_CORE || 'playwright-core');
 const browser=await chromium.launch({
@@ -49,14 +51,10 @@ window.drawFrame=function(index,reduced=false){
       roundRect(left+(i+.5)*slot-bar/2,cy-half,bar,2*half,bar/2);
     });
   }else if(frame.state==='processing'){
-    const poses=[[-4,-6,5,0,-1,6],[6,-4,0,0,-6,4],[1.5,.4,-.8,-1.5,-1,1.5],[-5,3.5,0,-6,6,2.5]];
-    const phase=reduced?0:(now%1800)/450,current=Math.floor(phase),next=(current+1)%4,
-      fraction=phase-current,progress=fraction*fraction*(3-2*fraction);
+    const points=reduced?DATA.thinkingStill:frame.thinking;
     ctx.fillStyle='#91a9ee';
     for(let i=0;i<3;i++){
-      const x=poses[current][i*2],y=poses[current][i*2+1];
-      const dx=poses[next][i*2]-x,dy=poses[next][i*2+1]-y;
-      ctx.beginPath();ctx.arc(cx+(x+dx*progress)*1.75,cy+(y+dy*progress)*1.75,2.8,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx+points[i*2]*1.75,cy+points[i*2+1]*1.75,3.5,0,Math.PI*2);ctx.fill();
     }
   }else if(frame.state==='speaking'){
     const base=y+height*.89;

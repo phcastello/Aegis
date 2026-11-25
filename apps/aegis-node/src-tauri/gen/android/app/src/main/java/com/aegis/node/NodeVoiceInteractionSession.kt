@@ -205,14 +205,9 @@ internal class HandsFreePanelView(context:Context):View(context) {
     private var scaleObserved=false
     private var framePending=false
     private var playbackFramePending=false
-    // Each set of six values is one three-dot cluster. Interpolate smoothly between
-    // spread, diagonal, gathered and rotated formations, matching the desktop.
-    private val thoughtPositions=floatArrayOf(
-        -4f,-6f,5f,0f,-1f,6f,
-        6f,-4f,0f,0f,-6f,4f,
-        1.5f,.4f,-.8f,-1.5f,-1f,1.5f,
-        -5f,3.5f,0f,-6f,6f,2.5f
-    )
+    // Reused drawing buffer: the approved three-dot motion is sampled in 28 x 28 coordinates.
+    private val thoughtPositions=FloatArray(6)
+    private var thoughtStartedAtMs=0L
     private var state=HandsFreePanelState.IDLE
     private var reduceMotion=true
     private val frame=Runnable{framePending=false;if(canRender())invalidate()}
@@ -238,6 +233,7 @@ internal class HandsFreePanelView(context:Context):View(context) {
     internal fun show(observer:Any,token:String?) {
         hide()
         owner=observer;session=token;shown=true
+        thoughtStartedAtMs=SystemClock.elapsedRealtime()
         resumeVisibleResources()
     }
     internal fun hide() {
@@ -247,8 +243,10 @@ internal class HandsFreePanelView(context:Context):View(context) {
     }
     internal fun state(next:HandsFreePanelState) {
         if(state!=next) {
+            val now=SystemClock.elapsedRealtime()
+            if(next==HandsFreePanelState.PROCESSING)thoughtStartedAtMs=now
             owner?.let {
-                HandsFreePanelSignal.reset(it,SystemClock.elapsedRealtime())
+                HandsFreePanelSignal.reset(it,now)
                 HandsFreePlaybackSpectrum.phaseChanged(it,state,next)
             }
             amplitudes.fill(0f)
@@ -348,19 +346,13 @@ internal class HandsFreePanelView(context:Context):View(context) {
                 if(motion && active)scheduleFrame()
             }
             HandsFreePanelState.PROCESSING->{
-                val phase=if(motion)(now%1800)/450f else 0f
-                val current=phase.toInt()
-                val next=(current+1)%4
-                val fraction=phase-current
-                val progress=fraction*fraction*(3f-2f*fraction)
+                // Match the desktop's start of cycle and keep the first frame for reduced motion.
+                val elapsed=if(motion)(now-thoughtStartedAtMs).coerceAtLeast(0L) else 0L
+                HandsFreeThinkingMotion.sample(elapsed,thoughtPositions)
                 for(index in 0..2) {
                     val offset=index*2
-                    val x=thoughtPositions[current*6+offset]
-                    val y=thoughtPositions[current*6+offset+1]
-                    val dx=thoughtPositions[next*6+offset]-x
-                    val dy=thoughtPositions[next*6+offset+1]-y
-                    canvas.drawCircle(centerX+(x+dx*progress)*1.75f*density,
-                        centerY+(y+dy*progress)*1.75f*density,2.8f*density,paint)
+                    canvas.drawCircle(centerX+thoughtPositions[offset]*1.75f*density,
+                        centerY+thoughtPositions[offset+1]*1.75f*density,3.5f*density,paint)
                 }
                 if(motion)scheduleFrame()
             }

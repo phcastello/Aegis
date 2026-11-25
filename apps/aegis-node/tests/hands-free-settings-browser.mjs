@@ -1,15 +1,27 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createServer as createNetServer } from 'node:net';
 
 // UI integration only. This IPC fixture cannot prove Tauri ACL or Android execution.
 const require = createRequire(new URL('../package.json', import.meta.url));
 const clientRequire = createRequire(new URL('../../../packages/aegis-client/package.json', import.meta.url));
 const { chromium } = clientRequire('playwright-core');
-const { createServer } = await import(require.resolve('vite'));
-const root = new URL('../', import.meta.url).pathname;
+const { createServer } = await import(pathToFileURL(require.resolve('vite')).href);
+const root = fileURLToPath(new URL('../', import.meta.url));
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
-const server = await createServer({ root, server: { host: '127.0.0.1', port: 0, strictPort: false } });
+// Vite treats port 0 as its default rather than as an ephemeral port; allocate
+// a free loopback port to avoid colliding with local development or Windows reservations.
+const port = await new Promise((resolve, reject) => {
+  const probe = createNetServer();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const { port } = probe.address();
+    probe.close(error => error ? reject(error) : resolve(port));
+  });
+});
+const server = await createServer({ root, server: { host: '127.0.0.1', port, strictPort: false } });
 await server.listen();
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
@@ -425,17 +437,42 @@ try {
         return [m.e, m.f];
       });
     };
-    const spread = sample(0), diagonal = sample(450), gathered = sample(900), rotate = sample(1350);
-    return { animations: animations.length, spread, diagonal, gathered, rotate };
+    return {
+      animations: animations.length,
+      durations: animations.map(animation => animation.effect.getTiming().duration),
+      start: sample(0),
+      vertical: sample(400),
+      rotated: sample(3200),
+      nearEnd: sample(10333),
+      nextLoop: sample(10334),
+    };
   });
-  const spread = points => Math.max(...points.map(([x, y]) => Math.hypot(x, y)));
   assert.equal(clusterPositions.animations, 3);
-  assert.ok(spread(clusterPositions.gathered) < spread(clusterPositions.spread) / 2, 'thinking particles draw together');
-  assert.notDeepEqual(clusterPositions.spread, clusterPositions.diagonal);
-  assert.notDeepEqual(clusterPositions.gathered, clusterPositions.rotate);
+  assert.deepEqual(clusterPositions.durations, [10334, 10334, 10334],
+    'thinking motion uses the approved shortened loop duration');
+  const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const nearPositions = (a, b, tolerance) => a.every((point, i) => distance(point, b[i]) < tolerance);
+  assert.ok(nearPositions(clusterPositions.start, [[-6.6, 3.744], [0, -2.963], [6.6, -5]], 0.05),
+    'thinking motion starts at the approved first frame');
+  assert.ok(clusterPositions.start.every(([x], i) => Math.abs(x - clusterPositions.vertical[i][0]) < .1),
+    'the first phase keeps horizontal positions while the dots rise and fall');
+  assert.ok(!nearPositions(clusterPositions.start, clusterPositions.vertical, 0.5),
+    'the vertical phase actually moves the dots');
+  assert.ok(clusterPositions.start.some(([x], i) => Math.abs(x - clusterPositions.rotated[i][0]) > 2),
+    'the exchange phase moves the dots through new horizontal positions');
+  assert.ok(nearPositions(clusterPositions.nearEnd, clusterPositions.start, 0.2),
+    'the loop closes without a visible jump');
+  assert.ok(nearPositions(clusterPositions.nextLoop, clusterPositions.start, 0.05),
+    'the next iteration restarts at the same formation');
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-processing.png` });
   await desktop.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await thoughts.evaluate(g => g.getAnimations({ subtree: true }).length), 0);
+  const staticPoints = await thoughts.locator('circle').evaluateAll(points => points.map(point => {
+    const m = new DOMMatrix(getComputedStyle(point).transform);
+    return [m.e, m.f];
+  }));
+  assert.ok(nearPositions(staticPoints, clusterPositions.start, 0.05),
+    'reduced motion shows the static first formation');
   await desktop.emulateMedia({ reducedMotion: 'no-preference' });
   await desktop.setViewportSize({ width: 390, height: 844 });
   console.log('Windows voice meters: 32 measured levels, stale/session/visibility isolation, responsive layout, output bands and reduced motion PASS');

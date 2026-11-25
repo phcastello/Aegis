@@ -2,6 +2,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { handsFree } from '../services/handsFree';
+import './thinking-motion.css';
 
 const labels = new Map([
   ['capturing', 'Escutando'],
@@ -119,11 +120,11 @@ onBeforeUnmount(() => {
         </svg>
       </template>
       <template v-else>
-        <svg class="desktop-voice-state-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="desktop-voice-state-icon" viewBox="0 0 28 28" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <g class="desktop-voice-thoughts" fill="currentColor" stroke="none">
-            <circle cx="12" cy="12" r="2" style="transform: translate(-4px, -6px)" />
-            <circle cx="12" cy="12" r="2" style="transform: translate(5px, 0px)" />
-            <circle cx="12" cy="12" r="2" style="transform: translate(-1px, 6px)" />
+            <circle cx="14" cy="14" r="2" style="transform: translate(-6.6px, 3.744px)" />
+            <circle cx="14" cy="14" r="2" style="transform: translate(0px, -2.963px)" />
+            <circle cx="14" cy="14" r="2" style="transform: translate(6.6px, -5px)" />
           </g>
         </svg>
       </template>
@@ -150,28 +151,10 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .desktop-voice-state-icon { width: 34px; height: 34px; color: var(--accent-strong); }
-.desktop-voice-thoughts circle { animation: 1.8s ease-in-out infinite; }
-.desktop-voice-thoughts circle:nth-child(1) { animation-name: desktop-thought-first; }
-.desktop-voice-thoughts circle:nth-child(2) { animation-name: desktop-thought-second; }
-.desktop-voice-thoughts circle:nth-child(3) { animation-name: desktop-thought-third; }
-@keyframes desktop-thought-first {
-  0%, 100% { transform: translate(-4px, -6px); }
-  25% { transform: translate(6px, -4px); }
-  50% { transform: translate(1.5px, .4px); }
-  75% { transform: translate(-5px, 3.5px); }
-}
-@keyframes desktop-thought-second {
-  0%, 100% { transform: translate(5px, 0); }
-  25% { transform: translate(0, 0); }
-  50% { transform: translate(-.8px, -1.5px); }
-  75% { transform: translate(0, -6px); }
-}
-@keyframes desktop-thought-third {
-  0%, 100% { transform: translate(-1px, 6px); }
-  25% { transform: translate(-6px, 4px); }
-  50% { transform: translate(-1px, 1.5px); }
-  75% { transform: translate(6px, 2.5px); }
-}
+.desktop-voice-thoughts circle { animation: 10334ms linear infinite; }
+.desktop-voice-thoughts circle:nth-child(1) { animation-name: aegis-thought-dot-1; }
+.desktop-voice-thoughts circle:nth-child(2) { animation-name: aegis-thought-dot-2; }
+.desktop-voice-thoughts circle:nth-child(3) { animation-name: aegis-thought-dot-3; }
 @media (prefers-reduced-motion: reduce) { .desktop-voice-thoughts circle { animation: none; } }
 .desktop-voice-waveform { display: block; width: 100%; height: 34px; fill: var(--accent); }
 .desktop-voice-baseline { stroke: var(--accent); stroke-opacity: .24; stroke-width: 1; }

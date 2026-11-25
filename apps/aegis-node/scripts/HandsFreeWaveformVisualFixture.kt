@@ -48,6 +48,8 @@ object HandsFreeWaveformVisualFixture {
         val owner=Any()
         val session="synthetic-visual-fixture"
         val bars=FloatArray(HandsFreePanelSignal.BAR_COUNT)
+        val thoughts=FloatArray(6)
+        HandsFreeThinkingMotion.sample(0L,thoughts)
         val frames=StringBuilder(320000)
         var nextBlockEnd=200
         var playbackHead=0L
@@ -59,7 +61,8 @@ object HandsFreeWaveformVisualFixture {
         try {
             frames.append("{\"scope\":\"Production Kotlin signal; synthetic PCM; host visualization, not Android physical\",")
             frames.append("\"fps\":60,\"barCount\":${HandsFreePanelSignal.BAR_COUNT},\"windowMs\":${HandsFreePanelSignal.WINDOW_MS},")
-            frames.append("\"historyMs\":${HandsFreePanelSignal.HISTORY_MS},\"presentationDelayMs\":${HandsFreePanelSignal.PRESENTATION_DELAY_MS},\"frames\":[")
+            frames.append("\"historyMs\":${HandsFreePanelSignal.HISTORY_MS},\"presentationDelayMs\":${HandsFreePanelSignal.PRESENTATION_DELAY_MS},")
+            frames.append("\"thinkingStill\":[${thoughts.joinToString(",")}],\"frames\":[")
             for(frame in 0..780) {
                 val now=(frame*1000.0/60).roundToInt()
                 while(nextBlockEnd<=now && nextBlockEnd<=9600) {
@@ -94,7 +97,12 @@ object HandsFreeWaveformVisualFixture {
                 if(frame>0)frames.append(',')
                 frames.append("{\"atMs\":$now,\"state\":\"$state\",\"active\":$active,\"bars\":[")
                 bars.forEachIndexed { i,value->if(i>0)frames.append(',');frames.append(value) }
-                frames.append("]}")
+                frames.append(']')
+                if(state=="processing") {
+                    HandsFreeThinkingMotion.sample(now-9600L,thoughts)
+                    frames.append(",\"thinking\":[${thoughts.joinToString(",")}]")
+                }
+                frames.append('}')
             }
             frames.append("]}\n")
             File(args.single()).writeText(frames.toString())
