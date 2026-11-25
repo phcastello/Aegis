@@ -59,6 +59,7 @@ export function affectedSubsystems(paths, { unknown = false } = {}) {
     if (/(?:transcription|voice|audio|microphone|capture)/i.test(path)) enable('audio');
     if (/(?:geofenc|location|background|idle|efficiency|lifecycle|runtime|node_transport|battery|power|AndroidManifest|ReminderReliability|ReminderActivation)/i.test(path)) enable('energy');
     if (/(?:releaseIdentity|ReleaseIdentity|AboutPanel|Sidebar|NodeDrawer|\/App\.vue|\/version\.mjs|native_capabilities|node_capabilities)/i.test(path)) enable('identity');
+    if (/^packages\/aegis-client\/tests\/(?:[^/]*release-identity[^/]*|android-webview-attach(?:\.test)?)\.mjs$/.test(path)) enable('identity');
     if (!/^(?:backend\/|deploy\/|docker-compose|\.env\.example$|packages\/aegis-client\/|frontend\/aegis-pwa\/|apps\/aegis-node\/(?:src\/|src-tauri\/|scripts\/|tests\/)|scripts\/node-transport-probe\/)/.test(path)) {
       all(); enable('unknown');
     }
