@@ -142,7 +142,7 @@ impl Shared {
             let _ = self.app.emit_to(
                 "main",
                 "aegis-windows-voice-waveform",
-                json!({"status":status,"generation":generation,"levels":levels}),
+                json!({"status":status,"generation":generation,"levels":levels.as_slice()}),
             );
         }
     }

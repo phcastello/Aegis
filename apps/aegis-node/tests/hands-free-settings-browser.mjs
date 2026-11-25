@@ -345,6 +345,7 @@ try {
   assert.equal(await indicator.count(), 0, 'idle desktop has no visual indicator');
   const historyTrigger = desktop.getByRole('button', { name: 'Abrir histórico', exact: true });
   await historyTrigger.focus();
+  let narrowPhaseBounds;
   for (const [phase, label] of Object.entries({
     capturing: 'Escutando', processing: 'Preparando resposta', speaking: 'Falando', continuation: 'Aguardando você'
   })) {
@@ -353,20 +354,25 @@ try {
     assert.equal((await indicator.innerText()).trim(), label);
     assert.equal(await historyTrigger.evaluate(button => document.activeElement === button), true, 'voice updates preserve keyboard focus');
     assert.equal(await indicator.locator('svg[aria-hidden="true"]').count(), 1);
+    const bounds = await indicator.boundingBox();
+    assert.ok(bounds);
+    if (narrowPhaseBounds) assert.deepEqual(bounds, narrowPhaseBounds, 'all active phases share one narrow header');
+    narrowPhaseBounds = bounds;
   }
-  const sample = Array.from({ length: 32 }, (_, i) =>
-    Math.abs(Math.sin(i * .31) * Math.sin(i * .09)) * .92);
+  const sample = Array.from({ length: 64 }, (_, i) =>
+    Math.abs(Math.sin(i * .155) * Math.sin(i * .045)) * .92);
   const meter = indicator.locator('.desktop-voice-waveform');
   const bars = meter.locator('rect');
   await desktop.evaluate(levels => { window.hfFixture.voiceEvent('capturing'); window.hfFixture.waveEvent(levels); }, sample);
-  await bars.nth(31).waitFor({ state: 'attached' });
+  await bars.nth(63).waitFor({ state: 'attached' });
   assert.equal(await meter.getAttribute('data-meter'), 'input');
   const heights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
-  assert.equal(heights.length, 32);
-  assert.ok(new Set(heights).size > 20 && heights[0] === 0, 'input bars represent the individual measured levels');
+  assert.equal(heights.length, 64);
+  assert.ok(new Set(heights).size > 40 && heights[0] === 0, 'input bars represent the individual measured levels');
   await desktop.evaluate(levels => {
     const f = window.hfFixture;
     f.waveEvent(levels.slice(1));
+    f.waveEvent(levels.slice(0, 32)); // Output-only raw count is not a valid capture frame.
     f.waveEvent(levels.map((value, i) => i === 0 ? 2 : value));
     f.waveEvent(levels.map((value, i) => i === 0 ? NaN : value));
     f.waveEvent(levels.map(() => .8), f.initial.generation - 1);
@@ -391,9 +397,12 @@ try {
   assert.ok(wideIndicator && wideMeter && frame && wideIndicator.width > frame.width * .8 && wideMeter.width > frame.width * .7,
     'microphone waveform occupies the available horizontal chat header instead of a small card');
   assert.equal(wideMeter.height, 40, 'the input waveform grows vertically as well');
+  await bars.nth(63).waitFor({ state: 'attached' });
   const wideBars = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
-  assert.ok(wideBars[31].x - wideBars[0].x > wideMeter.width * .8, 'the 32 measured bars span the meter width');
-  assert.ok(wideBars.every(bar => bar.width <= 8.01), 'wide layouts never stretch bars into blocks');
+  assert.equal(wideBars.length, 64);
+  assert.ok(wideBars[63].x - wideBars[0].x > wideMeter.width * .8, 'the 64 measured bars span the meter width');
+  assert.ok(wideBars.every(bar => Math.abs(bar.width - 2) < .01), 'capture bars are exactly 2 CSS pixels, even in wide layouts');
+  assert.equal(await meter.getAttribute('viewBox'), null, 'capture geometry is never scaled by a viewBox');
   assert.equal(await indicator.evaluate(el => getComputedStyle(el.closest('.chat-voice-controls')).pointerEvents), 'none',
     'the expanded area does not intercept clicks');
   if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png`, animations: 'disabled' });
@@ -426,6 +435,16 @@ try {
     && activeNarrowBounds.x >= activeNavBounds.x + activeNavBounds.width
     && activeNarrowBounds.x + activeNarrowBounds.width < activeMenuBounds.x,
     'even a narrow active conversation leaves history and menu visible');
+  await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
+  await desktop.waitForFunction(() => document.querySelectorAll('.desktop-voice-waveform rect').length === 32);
+  const compactHeights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
+  const expectedCompact = Array.from({ length: 32 }, (_, i) => {
+    const peak = Math.max(sample[i * 2], sample[i * 2 + 1]);
+    return peak > .002 ? 1.3 + 34.7 * peak : 0;
+  });
+  assert.deepEqual(compactHeights, expectedCompact, 'narrow capture preserves every adjacent pair by its real peak');
+  assert.ok(await bars.evaluateAll(nodes => nodes.every(node => Math.abs(node.getBoundingClientRect().width - 2) < .01)),
+    'compact capture never changes the actual bar thickness');
   await desktop.setViewportSize({ width: 1180, height: 800 });
   await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
   await sidebar.getByRole('button', { name: 'Nova conversa', exact: true }).click();
@@ -453,7 +472,7 @@ try {
   }, sample);
   assert.equal(await bars.count(), 0, 'previous capture cannot appear in continuation');
   await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), sample);
-  await bars.nth(31).waitFor({ state: 'attached' });
+  await bars.nth(63).waitFor({ state: 'attached' });
   await meter.locator('line').waitFor({ state: 'attached', timeout: 2500 });
   assert.equal(await bars.count(), 0, 'stalled meter expires');
   await desktop.evaluate(levels => {
@@ -473,11 +492,13 @@ try {
   assert.equal(await meter.getAttribute('data-meter'), 'output');
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? .95 : i === 23 ? .5 : 0)));
   await bars.nth(15).waitFor({ state: 'attached' });
-  assert.equal(await bars.count(), 16, 'speaking merges adjacent bins while capture retains 32 bars');
+  assert.equal(await bars.count(), 16, 'speaking merges adjacent bins while capture retains 64 measured samples');
+  assert.equal(await meter.getAttribute('viewBox'), null, 'playback geometry is never scaled by a viewBox');
+  assert.ok(await bars.evaluateAll(nodes => nodes.every(node => Math.abs(node.getBoundingClientRect().width - 3) < .01)));
   const peak = Number(await bars.nth(3).getAttribute('height'));
   assert.ok(peak > Number(await bars.nth(11).getAttribute('height')));
   assert.ok(peak > 0 && peak < 15, 'first output frame uses the softened attack');
-  assert.ok(Math.abs(Number(await bars.nth(3).getAttribute('y')) + peak - 32) < 1e-6);
+  assert.ok(Math.abs(Number(await bars.nth(3).getAttribute('y')) + peak - 36) < 1e-6);
   await desktop.emulateMedia({ reducedMotion: 'reduce' });
   await desktop.evaluate(() => window.hfFixture.waveEvent(Array.from({ length: 32 }, (_, i) => i === 7 ? 1 : 0)));
   assert.ok(Math.abs(Number(await bars.nth(3).getAttribute('height')) - 20.8) < 1e-6, 'lower output height cap');
@@ -553,7 +574,52 @@ try {
     'reduced motion shows the static first formation');
   await desktop.emulateMedia({ reducedMotion: 'no-preference' });
   await desktop.setViewportSize({ width: 390, height: 844 });
-  console.log('Windows voice meters: 32 capture levels, 16 smoothed output bands, stale/session/visibility isolation, responsive layout and reduced motion PASS');
+  // Visual evidence and a geometric invariant in both sizes: every active state
+  // occupies the exact same header; only the central content changes. This also
+  // verifies the output bars are never stretched by a wide viewport.
+  const speechSample = Array.from({ length: 32 }, (_, i) => .05 + .85 * Math.abs(Math.sin(i * .51) * Math.cos(i * .16)));
+  for (const width of [1180, 390]) {
+    await desktop.setViewportSize({ width, height: 844 });
+    if (width > 900) {
+      await desktop.locator('#conversation-sidebar[aria-hidden="false"]').waitFor({ state: 'attached' });
+      await sidebar.getByRole('button', { name: 'Fechar histórico', exact: true }).click();
+    }
+    let phaseBounds;
+    for (const phase of ['capturing', 'processing', 'speaking', 'continuation']) {
+      await desktop.evaluate(status => window.hfFixture.voiceEvent(status), phase);
+      await indicator.and(desktop.locator(`[data-phase="${phase}"]`)).waitFor();
+      const bounds = await indicator.boundingBox();
+      assert.ok(bounds);
+      if (phaseBounds) assert.deepEqual(bounds, phaseBounds, 'every active phase keeps the exact same header geometry');
+      phaseBounds = bounds;
+      if (phase === 'processing') {
+        const shape = await indicator.locator('.desktop-voice-state-icon').boundingBox();
+        assert.ok(shape && shape.width === 34 && shape.height === 34, 'the approved thinking SVG keeps its fixed dimensions');
+      } else {
+        const frames = phase === 'speaking' ? 9 : 1;
+        for (let frame = 0; frame < frames; frame++) {
+          await desktop.evaluate(levels => window.hfFixture.waveEvent(levels), phase === 'speaking' ? speechSample : sample);
+          if (frames > 1 && frame + 1 < frames) await desktop.waitForTimeout(40);
+        }
+        await bars.first().waitFor({ state: 'attached' });
+        if (phase === 'speaking') {
+          const spectrumBox = await meter.boundingBox();
+          const visualBox = await indicator.locator('.desktop-voice-visual').boundingBox();
+          assert.ok(spectrumBox && visualBox && Math.abs(spectrumBox.width - Math.min(280, visualBox.width)) < .1,
+            'sixteen frequency bands remain legible in a bounded visual area');
+          assert.ok(Math.abs(spectrumBox.x + spectrumBox.width / 2 - visualBox.x - visualBox.width / 2) < .1,
+            'the bounded spectrum is centered without shrinking the header');
+          const currentHeights = await bars.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('height'))));
+          assert.ok(Math.max(...currentHeights) > 15, 'the visual fixture represents ongoing speech, not just the first attack frame');
+        }
+        const widths = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+        assert.ok(widths.every(value => Math.abs(value - (phase === 'speaking' ? 3 : 2)) < .01));
+        assert.equal(widths.length, phase === 'speaking' ? 16 : 64);
+      }
+      if (evidence) await desktop.screenshot({ path: `${evidence}/windows-voice-${width === 1180 ? 'wide' : 'narrow'}-${phase}.png`, animations: 'disabled' });
+    }
+  }
+  console.log('Windows voice meters: 64 capture levels, 16 smoothed output bands, fixed bar widths, stable full-width active header, responsive layout and reduced motion PASS');
   await desktop.evaluate(() => { window.hfFixture.hold = true; document.dispatchEvent(new Event('visibilitychange')); });
   await desktop.waitForFunction(() => typeof window.hfFixture.resolve === 'function');
   await desktop.evaluate(() => {

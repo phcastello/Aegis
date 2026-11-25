@@ -16,10 +16,13 @@ fn power(samples: &[i16]) -> f64 {
 // Same fixed display scale as the Android interaction panel: -58 to -12
 // dBFS, 40 ms attack, 150 ms release. Display only; never affects detection,
 // the transmitted command, or the microphone's gain.
-const WAVEFORM_BARS: usize = 32;
+const WAVEFORM_BARS: usize = 64;
 const WAVEFORM_WINDOW: Duration = Duration::from_millis(20);
-const WAVEFORM_STEP: Duration = Duration::from_millis(40);
-const WAVEFORM_DELAY: Duration = WAVEFORM_STEP;
+const WAVEFORM_STEP: Duration = WAVEFORM_WINDOW;
+// These are independent of display density: don't shorten the capture jitter
+// allowance or the presentation delay when the header gains more bars.
+const WAVEFORM_DELAY: Duration = Duration::from_millis(40);
+const WAVEFORM_JITTER_TOLERANCE: Duration = Duration::from_millis(40);
 const WAVEFORM_GAP: Duration = Duration::from_millis(400);
 const WAVEFORM_CAPACITY: usize = 80; // 1.6 s: 1.28 s history plus presentation delay.
 const WAVEFORM_QUIET: f64 = 0.002;
@@ -35,7 +38,7 @@ fn waveform_level(samples: &[i16]) -> f64 {
 
 /// Capture delivers fixed 20 ms blocks. Retain only normalized envelopes and
 /// their estimated acquisition times, even when queued blocks arrive together.
-/// Presentation resamples the real history (32 bars spaced 40 ms apart),
+/// Presentation resamples the real history (64 bars spaced 20 ms apart),
 /// delayed by 40 ms to absorb normal recording/delivery jitter. No PCM is
 /// retained, and no audio or capture decisions depend on the visual timeline.
 #[derive(Default)]
@@ -83,7 +86,7 @@ impl Waveform {
             // Real acquisition/delivery gaps decay rather than extending the
             // previous measurement through missing time; smaller variations
             // in the driver's return time don't distort the sample spacing.
-            if estimate.saturating_duration_since(next) > WAVEFORM_STEP {
+            if estimate.saturating_duration_since(next) > WAVEFORM_JITTER_TOLERANCE {
                 let gap_ms = estimate.saturating_duration_since(next).as_secs_f64() * 1000.;
                 self.envelope *= (-gap_ms / 150.).exp();
                 self.silent_frames = 0;
@@ -117,8 +120,8 @@ impl Waveform {
 
         // Do not send a partially drained pre-roll as a current frame. Once
         // the delayed head is covered, publish at most once per 20 ms source
-        // window: a half-bar interpolation at the intermediate times moves
-        // the wider history smoothly without creating another timer or input.
+        // window. Each bar has its own measured temporal position rather
+        // than stretching or repeating a coarser series to fill the header.
         if age > WAVEFORM_DELAY {
             return None;
         }
@@ -160,7 +163,7 @@ impl Waveform {
         for &(right_time, right_level) in self.points.iter().skip(1) {
             if at <= right_time {
                 let span = right_time.duration_since(left_time);
-                if span > WAVEFORM_WINDOW + WAVEFORM_STEP {
+                if span > WAVEFORM_WINDOW + WAVEFORM_JITTER_TOLERANCE {
                     let start = right_time - WAVEFORM_WINDOW;
                     if at < start {
                         return decay(left_level, at.duration_since(left_time));
@@ -521,17 +524,18 @@ mod tests {
         let first = meter
             .push(&[10000; BLOCK], true, start + Duration::from_millis(440), 0)
             .unwrap();
-        assert!(first[..31].iter().all(|level| *level == 0.));
-        assert!(first[31] > 0. && first[31] < 1.);
+        assert!(first[..WAVEFORM_BARS - 1].iter().all(|level| *level == 0.));
+        assert!(first[WAVEFORM_BARS - 1] > 0. && first[WAVEFORM_BARS - 1] < 1.);
         let intermediate = meter
             .push(&[10000; BLOCK], true, start + Duration::from_millis(460), 0)
             .unwrap();
         let second = meter
             .push(&[10000; BLOCK], true, start + Duration::from_millis(480), 0)
             .unwrap();
-        assert_eq!(second[30], first[31]);
-        assert!(second[31] > intermediate[31]);
-        assert!(intermediate[31] > first[31]);
+        assert_eq!(second[WAVEFORM_BARS - 3], first[WAVEFORM_BARS - 1]);
+        assert_eq!(second[WAVEFORM_BARS - 2], intermediate[WAVEFORM_BARS - 1]);
+        assert!(second[WAVEFORM_BARS - 1] > intermediate[WAVEFORM_BARS - 1]);
+        assert!(intermediate[WAVEFORM_BARS - 1] > first[WAVEFORM_BARS - 1]);
         for index in 25..110 {
             meter.push(
                 &[0; BLOCK],
@@ -543,6 +547,37 @@ mod tests {
         assert_eq!(
             meter.history(start + Duration::from_millis(2180)),
             [0.; WAVEFORM_BARS]
+        );
+    }
+
+    #[test]
+    fn waveform_exposes_all_64_measured_windows_without_changing_history_or_delay() {
+        let start = Instant::now();
+        let mut meter = Waveform::default();
+        let mut latest = [0.; WAVEFORM_BARS];
+        // A varying synthetic input offers a different observation on every
+        // block. With an aligned driver, every bar must use exactly its own
+        // measured window rather than repeated/interpolated 40 ms bars.
+        for index in 0..WAVEFORM_CAPACITY {
+            let when = start + WAVEFORM_WINDOW * index as u32;
+            let amplitude = (500 + 90 * index) as i16;
+            latest = meter.push(&[amplitude; BLOCK], true, when, 0).unwrap();
+        }
+        assert_eq!(WAVEFORM_BARS, 64);
+        assert_eq!(
+            WAVEFORM_STEP * WAVEFORM_BARS as u32,
+            Duration::from_millis(1280)
+        );
+        assert_eq!(WAVEFORM_DELAY, Duration::from_millis(40));
+        assert_eq!(meter.points.len(), WAVEFORM_CAPACITY);
+        let last_measured = WAVEFORM_CAPACITY - 1 - 2; // delayed head remains two complete blocks behind capture.
+        let first_measured = last_measured + 1 - WAVEFORM_BARS;
+        for (index, level) in latest.iter().enumerate() {
+            assert_eq!(*level, meter.points[first_measured + index].1 as f32);
+        }
+        assert!(
+            latest.windows(2).all(|pair| pair[0] < pair[1]),
+            "individual measured windows are retained"
         );
     }
 
