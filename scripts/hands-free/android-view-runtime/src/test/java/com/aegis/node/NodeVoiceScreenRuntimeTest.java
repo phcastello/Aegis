@@ -4,14 +4,20 @@ import static org.junit.Assert.*;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
 import android.widget.TextView;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function1;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -34,6 +40,7 @@ import org.robolectric.shadows.ShadowVoiceInteractionSession;
 public class NodeVoiceScreenRuntimeTest {
     private Object session;
     private Window window;
+    private final List<String> cancellations = new ArrayList<>();
 
     private static void setField(Object value, String name, Object member) throws Exception {
         Field field = value.getClass().getDeclaredField(name);
@@ -60,7 +67,9 @@ public class NodeVoiceScreenRuntimeTest {
 
     @Before public void createProductionSession() throws Exception {
         Class<?> type = Class.forName("com.aegis.node.NodeVoiceInteractionSession");
-        session = type.getConstructor(Context.class).newInstance(RuntimeEnvironment.getApplication());
+        Function1<String, Unit> cancel = token -> { cancellations.add(token); return Unit.INSTANCE; };
+        session = type.getConstructor(Context.class, Function1.class)
+                .newInstance(RuntimeEnvironment.getApplication(),cancel);
         ShadowVoiceInteractionSession shadow = Shadows.shadowOf((android.service.voice.VoiceInteractionSession) session);
         shadow.create();
         Dialog dialog = ((android.service.voice.VoiceInteractionSession) session).getWindow();
@@ -80,6 +89,13 @@ public class NodeVoiceScreenRuntimeTest {
     private void state(String state) throws Exception { call(session, "refresh", state, ""); }
     private boolean keepScreenOn() {
         return (window.getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
+    }
+    private boolean watchesOutside() {
+        return (window.getAttributes().flags & WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH) != 0;
+    }
+    private boolean dispatch(Window.Callback target,int action) {
+        MotionEvent event=MotionEvent.obtain(0,0,action,24,24,0);
+        try { return target.dispatchTouchEvent(event); } finally { event.recycle(); }
     }
 
     @Test public void visibleInputProcessingAndPlaybackKeepTheScreenOn() throws Exception {
@@ -140,7 +156,7 @@ public class NodeVoiceScreenRuntimeTest {
         assertFalse("Terminal error must release display before delayed dismissal", keepScreenOn());
     }
 
-    @Test public void cleanActivePanelCentersItsVisualAndKeepsCancelErrorTranscriptAndAccessibility() throws Exception {
+    @Test public void titledPanelHasFullCenteredVisualNoButtonAndPreservesErrorTranscriptAndAccessibility() throws Exception {
         View root = (View) call(session, "onCreateContentView");
         state("capturing");
         TextView status = (TextView) getField(session, "label");
@@ -158,15 +174,18 @@ public class NodeVoiceScreenRuntimeTest {
         root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
         root.layout(0,0,width,height);
-        ViewGroup row=(ViewGroup)visual.getParent();
-        assertEquals("The animation must be centered, independent of the cancel affordance",
-                row.getWidth(), visual.getLeft()+visual.getRight(),1);
-        Button cancel=null;
-        for(int i=0;i<row.getChildCount();i++)if(row.getChildAt(i) instanceof Button)cancel=(Button)row.getChildAt(i);
-        assertNotNull(cancel);
-        assertEquals("Cancelar interação",cancel.getContentDescription());
-        assertTrue(cancel.getWidth()>=Math.round(48*root.getResources().getDisplayMetrics().density));
-        assertTrue(visual.getRight()<=cancel.getLeft());
+        ViewGroup panel=(ViewGroup)visual.getParent();
+        assertEquals("The animation must be centered in the card",
+                panel.getWidth(), visual.getLeft()+visual.getRight(),1);
+        assertEquals(panel.getWidth()-panel.getPaddingLeft()-panel.getPaddingRight(),visual.getWidth());
+        TextView title=(TextView)panel.getChildAt(0);
+        assertEquals("Aegis",title.getText().toString());
+        assertTrue(title.getBottom()<=visual.getTop());
+        assertEquals(panel.getWidth(),title.getLeft()+title.getRight(),1);
+        for(int i=0;i<panel.getChildCount();i++)assertFalse(panel.getChildAt(i) instanceof Button);
+        AccessibilityNodeInfo info=visual.createAccessibilityNodeInfo();
+        assertTrue(info.getActionList().stream().anyMatch(action ->
+            action.getId()==AccessibilityNodeInfo.ACTION_DISMISS && "Cancelar interação".contentEquals(action.getLabel())));
 
         state("processing");
         assertEquals(View.GONE,status.getVisibility());
@@ -178,6 +197,69 @@ public class NodeVoiceScreenRuntimeTest {
         assertEquals(View.VISIBLE,status.getVisibility());
         assertEquals("Não consegui concluir. Tente novamente.",status.getText().toString());
         assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO,visual.getImportantForAccessibility());
+    }
+
+    @Test public void outsideTouchCancelsTheBoundInteractionOnceAndRestoresWindowCallback() throws Exception {
+        Window.Callback original=window.getCallback();
+        state("capturing");
+        call(session,"installOutsideDismissal",window);
+        Window.Callback installed=window.getCallback();
+        assertNotSame(original,installed);
+        assertTrue(watchesOutside());
+        dispatch(installed,MotionEvent.ACTION_DOWN);
+        dispatch(installed,MotionEvent.ACTION_UP);
+        assertTrue("Ordinary inside touch must not cancel",cancellations.isEmpty());
+        assertTrue(dispatch(installed,MotionEvent.ACTION_OUTSIDE));
+        assertEquals(List.of("screen-policy-session"),cancellations);
+        assertFalse(keepScreenOn());
+        assertSame(original,window.getCallback());
+        assertFalse(watchesOutside());
+        assertTrue(dispatch(installed,MotionEvent.ACTION_OUTSIDE));
+        assertEquals("Duplicate stale event cannot cancel again",1,cancellations.size());
+    }
+
+    @Test public void obsoleteOutsideCallbackCannotCancelOrHideReboundPresentation() throws Exception {
+        call(session,"installOutsideDismissal",window);
+        Window.Callback stale=window.getCallback();
+        call(getField(session,"presentation"),"begin","next-session");
+        setField(session,"boundSession","next-session");
+        call(session,"installOutsideDismissal",window);
+        Window.Callback fresh=window.getCallback();
+        state("capturing");
+        assertTrue(dispatch(stale,MotionEvent.ACTION_OUTSIDE));
+        assertTrue(cancellations.isEmpty());
+        assertTrue(keepScreenOn());
+        assertSame(fresh,window.getCallback());
+        assertTrue(dispatch(fresh,MotionEvent.ACTION_OUTSIDE));
+        assertEquals(List.of("next-session"),cancellations);
+    }
+
+    @Test public void hidingDetachesWatcherWithoutCancellingAndPreservesPreexistingWatchFlag() throws Exception {
+        Window.Callback original=window.getCallback();
+        window.addFlags(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH);
+        call(session,"installOutsideDismissal",window);
+        Window.Callback stale=window.getCallback();
+        call(session,"onHide");
+        assertSame(original,window.getCallback());
+        assertTrue(watchesOutside());
+        assertTrue(dispatch(stale,MotionEvent.ACTION_OUTSIDE));
+        assertTrue(cancellations.isEmpty());
+    }
+
+    @Test public void accessibleDismissUsesScopedCancellationWithoutAVisibleButton() throws Exception {
+        call(session,"onCreateContentView");
+        state("capturing");
+        View visual=(View)getField(session,"visualizer");
+        assertTrue(visual.performAccessibilityAction(AccessibilityNodeInfo.ACTION_DISMISS,null));
+        assertEquals(List.of("screen-policy-session"),cancellations);
+        assertFalse(keepScreenOn());
+    }
+
+    @Test public void focusedBackUsesTheSameScopedCancellation() throws Exception {
+        state("processing");
+        call(session,"onBackPressed");
+        assertEquals(List.of("screen-policy-session"),cancellations);
+        assertFalse(keepScreenOn());
     }
 
     @Test public void explicitCancellationReleasesDisplayImmediately() throws Exception {

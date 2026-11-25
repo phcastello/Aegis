@@ -33,7 +33,11 @@ limpeza de silêncio, troca de estado, sessão antiga, esconder/reabrir e
 do serviço é simulada; o fixture não abre microfone, Node runtime ou TTS.
 
 O ensaio de conteúdo da Session também mede a geometria do painel e verifica
-o cancelamento acessível, status ocultos, erro e transcrição. Como este projeto
+o título, ausência do X, cancelamento acessível, status ocultos, erro e
+transcrição. A regressão de cancelamento injeta MotionEvent no callback real
+da Window, verifica a chamada no token correspondente e a restauração do
+callback/flag, sem simular o InputDispatcher físico de outro aplicativo.
+Como este projeto
 JVM não processa recursos do AAR com o plugin Android, o build gera IDs
 sintéticos de teste a partir dos nomes em `R.txt` da dependência AndroidX Core
 fixada. Servem às tags internas de ViewCompat no fixture e não entram no APK.

@@ -32,7 +32,7 @@ test('hiding presentation releases drawing callbacks and leaves runtime capture 
   assert.match(panel, /removeCallbacks\(frame\);framePending=false/);
   assert.match(panel, /removeCallbacks\(wakeFrame\);wakePosted\.set\(false\);removeCallbacks\(staleFrame\)/);
   assert.match(panel, /HandsFreePanelSignal\.setListener\(it,null\);HandsFreePanelSignal\.detach\(it\)/);
-  assert.match(panel, /setOnClickListener\{[^\n]*cancelSession\(it\)[^\n]*finishQuietly\(\)/);
+  assert.match(panel, /private fun stopVisuals\(\)\{presentation\.end\(\);removeOutsideDismissal\(\)/);
 });
 
 test('display measurement reuses captured PCM without another audio source, network, or WebView events', () => {
@@ -131,12 +131,35 @@ test('interruption availability uses accessibility rather than a separate visibl
   assert.match(panel, /label\?\.text=if\(error\)presentation\.state\.label else ""/);
   assert.match(panel, /label\?\.visibility=if\(error\)View\.VISIBLE else View\.GONE/);
   const layout = panel.slice(panel.indexOf('override fun onCreateContentView('), panel.indexOf('override fun onShow('));
-  assert.doesNotMatch(layout, /text="Aegis"|text=presentation\.state\.label/);
-  assert.match(layout, /setMargins\(dp\(52\),0,dp\(52\),0\)/);
-  assert.match(layout, /FrameLayout\.LayoutParams\(dp\(48\),dp\(48\),Gravity\.END or Gravity\.CENTER_VERTICAL\)/);
-  assert.match(layout, /contentDescription="Cancelar interação"/);
+  assert.match(layout, /text="Aegis"[^\n]*gravity=Gravity\.CENTER/);
+  assert.doesNotMatch(layout, /text=presentation\.state\.label|Button\(|text="×"|setMargins\(dp\(52\)/);
+  assert.match(layout, /panel\.addView\(view,LinearLayout\.LayoutParams\(LinearLayout\.LayoutParams\.MATCH_PARENT,dp\(72\)\)\)/);
+  assert.match(layout, /installAccessibleDismissal\(view\)/);
   assert.match(panel, /state in setOf\("speaking","processing"\)/);
   assert.match(android('NodeHandsFreePanel'), /HandsFreePanelState\.PROCESSING->if\(availability==HandsFreeBargeInPanelAvailability\.VOICE\)/);
+});
+
+test('outside touch, focused Back and accessible dismissal cancel only the still-bound interaction', () => {
+  const panel = android('NodeVoiceInteractionSession');
+  const show = panel.slice(panel.indexOf('override fun onShow('), panel.indexOf('internal fun installOutsideDismissal('));
+  assert.match(show, /FLAG_NOT_TOUCH_MODAL/);
+  assert.match(show, /installOutsideDismissal\(this\)/);
+  const outside = panel.slice(panel.indexOf('internal fun installOutsideDismissal('), panel.indexOf('private fun cancelPresented('));
+  assert.match(outside, /val snapshot=presentation\.snapshot\(\)\?:return/);
+  assert.match(outside, /object:Window\.Callback by previous/);
+  assert.match(outside, /event\.actionMasked==MotionEvent\.ACTION_OUTSIDE/);
+  assert.match(outside, /cancelPresented\(snapshot\)\s*\n\s*return true/);
+  assert.match(outside, /return previous\.dispatchTouchEvent\(event\)/);
+  assert.match(outside, /target\.addFlags\(WindowManager\.LayoutParams\.FLAG_WATCH_OUTSIDE_TOUCH\)/);
+  assert.match(outside, /installed\.window\.callback===installed\.wrapper\)installed\.window\.callback=installed\.previous/);
+  assert.match(outside, /if\(!installed\.alreadyWatching\)installed\.window\.clearFlags\(WindowManager\.LayoutParams\.FLAG_WATCH_OUTSIDE_TOUCH\)/);
+  const cancel = panel.slice(panel.indexOf('private fun cancelPresented('), panel.indexOf('override fun onComputeInsets('));
+  assert.match(cancel, /!visible \|\| current!==this \|\| !presentation\.isCurrent\(snapshot\) \|\| boundSession!=snapshot\.session/);
+  assert.match(cancel, /snapshot\.session\?\.let\(cancelInteraction\)\} finally \{finishQuietly\(\)\}/);
+  assert.match(panel, /constructor\(context:Context\):this\(context,\{token->NodeHandsFree\.runtime\(context\)\.cancelSession\(token\)\}\)/);
+  assert.match(cancel, /override fun onBackPressed\(\) \{\s*if\(!cancelPresented\(presentation\.snapshot\(\)\)\)super\.onBackPressed\(\)/);
+  assert.match(cancel, /AccessibilityAction\(AccessibilityNodeInfo\.ACTION_DISMISS,"Cancelar interação"\)/);
+  assert.match(cancel, /action==AccessibilityNodeInfo\.ACTION_DISMISS && \(host===visualizer \|\| host===label\)/);
 });
 
 test('processing interruption has exclusive microphone ownership before playback and cancels only the old turn', () => {

@@ -130,9 +130,11 @@ sem áudio registra o resultado, o fundo, o pico da detecção e o volume de
 mídia nas confirmações.
 
 Durante a resposta e a preparação do modelo, o painel expõe a disponibilidade
-de interrupção ao leitor de tela. A apresentação visível usa apenas a
-animação correspondente, o controle de cancelar e, quando houver, a
-transcrição ou o erro real. Quando a fala é confirmada, retorna ao
+de interrupção ao leitor de tela. A apresentação visível usa o título Aegis,
+a animação centralizada e, quando houver, a transcrição ou o erro real.
+Tocar fora do card, a ação acessível de dispensar ou Voltar com foco no painel
+cancelam a interação atual; ocultações de lifecycle por si só não cancelam.
+Quando a fala é confirmada, retorna ao
 visualizador de escuta. A pessoa pode concluir o pedido em andamento na
 mesma conversa, sem beep ou nova invocação.
 

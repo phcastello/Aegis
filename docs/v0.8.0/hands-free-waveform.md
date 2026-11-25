@@ -241,12 +241,25 @@ O filtro exponencial de apresentação segue o princípio de suavização tempor
 
 Na revisão seguinte, o envelope visual da saída Android teve suas constantes reduzidas para **65 ms de ataque e 130 ms de liberação**. Foram preservados as 16 bandas resultantes da análise real, o alcance de amplitudes, o protocolo de cursor e a rampa de silêncio de 120 ms. Os testes conferem o coeficiente de subida e descida pelo tempo transcorrido.
 
-O painel Android também fica compacto e sem cabeçalho ou texto de status
-durante escuta, processamento e fala. A área do visualizador é centralizada
-horizontalmente com margens iguais, reservando o botão de cancelar de 48 dp
-à direita sem sobrepor a animação. Mensagens de erro e transcrições reais
-continuam visíveis; o estado e a disponibilidade de interrupção são
-comunicados pelo TalkBack. A saída mantém as barras ancoradas à base inferior.
+O painel Android fica com o título **Aegis** centralizado no topo, sem
+texto de status durante escuta, processamento e fala. A área do visualizador
+ocupa toda a largura interna do card, centralizada com margens simétricas.
+O botão X foi removido; tocar fora do card cancela a interação vinculada,
+assim como a ação acessível de dispensar e o botão Voltar quando o painel
+tem foco. Mensagens de erro e transcrições reais continuam visíveis; o estado
+e a disponibilidade de interrupção são comunicados pelo TalkBack. A saída
+mantém as barras ancoradas à base inferior.
+
+Segundo as APIs públicas do Android, [FLAG_WATCH_OUTSIDE_TOUCH](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#FLAG_WATCH_OUTSIDE_TOUCH)
+com uma janela não modal entrega um `ACTION_OUTSIDE` inicial, que deve ser
+tratado pelo [Window.Callback](https://developer.android.com/reference/android/view/MotionEvent#ACTION_OUTSIDE)
+ou pela View raiz. A Aegis mantém a janela inferior e a região tocável do
+card, sem um overlay sobre toda a tela. O callback observa somente a ação
+externa, sem usar ou armazenar coordenadas; pode cancelar o turno corrente
+enquanto o toque externo normalmente também chega ao aplicativo de trás.
+Callbacks antigos são vinculados à apresentação e sessão originais. Ocultar
+ou destruir a janela restaura o callback/flag anterior sem, por si só,
+cancelar a interação.
 
 Na entrada Android, as **32 posições são fixas** e continuam representando o
 histórico temporal da amplitude medida (1,92 s), não faixas de frequência.
@@ -263,15 +276,22 @@ Com movimento reduzido, a posição medida da linha do tempo é apresentada
 diretamente quando chega áudio, sem o ciclo visual de interpolação.
 Não há mudança no detector, VAD, ganho ou captura.
 
-Passaram **33 testes JVM** do sinal/painel/espectro e **15 testes do runtime
-de View Android em Robolectric**. O teste de conteúdo e layout conferiu a
-ausência do texto ativo, centro geométrico, botão de cancelar não sobreposto
-com alvo de 48 dp, erros, transcrição e descrição de acessibilidade. Em 187 ms
+Passaram **33 testes JVM** do sinal/painel/espectro, **20 testes do runtime
+de View Android em Robolectric** e **98 contratos de release**. O teste de
+conteúdo/layout conferiu o título centralizado, ausência do botão X, largura
+completa da animação, erros, transcrição e acessibilidade. Eventos
+`MotionEvent.ACTION_OUTSIDE` foram enviados ao callback real da Window:
+cancelamento correto e único do token vinculado, recepção normal de ações
+internas, rejeição de callbacks antigos e restauração de callback/flag.
+A ação acessível e Voltar também acionaram o mesmo cancelamento.
+Em 187 ms
 entre blocos de áudio, o View apresentou 11 quadros intermediários distintos
 com animações habilitadas; a preferência explícita de movimento reduzido
 mantém o feedback acústico sem loop de frames. Esse ensaio usa classes de
-produção compiladas contra SDK 37, com as fronteiras de serviço e identidade
-simuladas no host e runtime Android instrumentado API 35, não o telefone.
+produção compiladas contra SDK 37, com as fronteiras de serviço, identidade
+e a chamada de cancelamento simuladas no host e runtime Android instrumentado
+API 35. Não simula o InputDispatcher entre aplicativos, nem substitui
+homologação física no telefone.
 
 Comparação no fixture PCM sintético (mesma sequência de 781 quadros, 78 durante a fala; referência de 32 bandas agrupada em pares para comparar as mesmas faixas): a variação absoluta média entre quadros de fala caiu de 0,02548 para 0,01384 de amplitude normalizada (−45,7%). O pico de altura previsto na área Android de 72 dp caiu de 53,78 para 32,53 dp. Esses valores são do núcleo Kotlin e da geometria, não de medição em aparelho físico.
 

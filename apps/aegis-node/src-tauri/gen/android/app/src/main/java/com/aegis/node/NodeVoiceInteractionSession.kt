@@ -17,9 +17,11 @@ import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
-import android.widget.Button
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -36,7 +38,9 @@ internal fun handsFreePanelMotionAllowed(scale:Float,platformEnabled:Boolean)=
     if(scale.isFinite())scale>0f else platformEnabled
 
 /** Disposable official assistant panel. Runtime capture and playback own their lifecycle. */
-class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(context) {
+class NodeVoiceInteractionSession internal constructor(context:Context,
+    private val cancelInteraction:(String)->Unit):VoiceInteractionSession(context) {
+    constructor(context:Context):this(context,{token->NodeHandsFree.runtime(context).cancelSession(token)})
     private val main=Handler(Looper.getMainLooper())
     private var label:TextView?=null
     private var partial:TextView?=null
@@ -48,6 +52,9 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
     private var partialRequestId:String?=null
     private val presentation=HandsFreePanelPresentation()
     private val dismissError=Runnable{finishQuietly()}
+    private data class OutsideDismissal(val window:Window,val previous:Window.Callback,
+                                       val wrapper:Window.Callback,val alreadyWatching:Boolean)
+    private var outsideDismissal:OutsideDismissal?=null
     private fun dp(value:Int)=(value*context.resources.displayMetrics.density+0.5f).toInt()
     override fun onCreateContentView():View {
         val root=FrameLayout(context).apply{setPadding(dp(12),dp(8),dp(12),dp(12))}
@@ -57,29 +64,24 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
             background=GradientDrawable().apply{setColor(0xff172132.toInt());cornerRadius=dp(28).toFloat();setStroke(dp(1),0xff35435b.toInt())}
         }
         card=panel
-        val visualRow=FrameLayout(context)
-        // Reserve equal margins around the visual. The cancel affordance has
-        // a 48dp target and never covers a bar; the blank opposite margin
-        // keeps the animation exactly at the panel's horizontal center.
+        panel.addView(TextView(context).apply {
+            text="Aegis";textSize=15f;setTextColor(0xffbdcbf6.toInt());gravity=Gravity.CENTER
+            typeface=android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL)
+            if(Build.VERSION.SDK_INT>=28)isAccessibilityHeading=true
+        },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(32)))
+        // Without side controls, the measured visual can occupy the full
+        // content width. Individual bar dimensions and the drawing stay intact.
         visualizer=HandsFreePanelView(context).also{view->
-            visualRow.addView(view,FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,dp(72),Gravity.CENTER).apply {
-                setMargins(dp(52),0,dp(52),0)
-            })
+            panel.addView(view,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(72)))
+            installAccessibleDismissal(view)
         }
-        visualRow.addView(Button(context).apply{
-            text="×";contentDescription="Cancelar interação";textSize=27f;setTextColor(0xffbdcbf6.toInt())
-            minWidth=0;minimumWidth=0;minHeight=0;minimumHeight=0;setPadding(0,0,0,0)
-            background=android.graphics.drawable.StateListDrawable().apply{
-                addState(intArrayOf(android.R.attr.state_pressed),GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(0xff35435b.toInt())})
-                addState(intArrayOf(),GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(0xff253248.toInt())})
-            }
-            setOnClickListener{boundSession?.let{NodeHandsFree.runtime(context).cancelSession(it)};finishQuietly()}
-        },FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END or Gravity.CENTER_VERTICAL))
-        panel.addView(visualRow,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(72)))
         label=TextView(context).apply{
             visibility=View.GONE;setTextColor(0xffdbe3f4.toInt());textSize=14f;gravity=Gravity.CENTER
             setPadding(0,dp(4),0,0);accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }.also{panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))}
+        }.also{
+            panel.addView(it,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))
+            installAccessibleDismissal(it)
+        }
         partial=TextView(context).apply{
             textSize=14f;setTextColor(0xffaab5ca.toInt());gravity=Gravity.CENTER;maxLines=2;ellipsize=TextUtils.TruncateAt.END
             visibility=View.GONE;setPadding(0,dp(8),0,0)
@@ -112,6 +114,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         // timeout policy is applied after status refresh below.
         window?.window?.apply {
             addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+            installOutsideDismissal(this)
             clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_DIM_BEHIND or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
             // Preserve the existing one-shot wake separately from timeout prevention.
             if(decision.wakeScreen)addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
@@ -123,6 +126,58 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         visualizer?.show(this,boundSession)
         val state=runtime.state();refresh(state.optString("status"),state.optString("message"))
         updateScreenPolicy()
+    }
+    /** ACTION_OUTSIDE is delivered to the Window callback, not its child Views.
+     * Keep the non-modal, card-only region; do not intercept an entire app. */
+    internal fun installOutsideDismissal(target:Window) {
+        removeOutsideDismissal()
+        val snapshot=presentation.snapshot()?:return
+        val previous=target.callback?:return
+        val wrapper=object:Window.Callback by previous {
+            override fun dispatchTouchEvent(event:MotionEvent):Boolean {
+                if(event.actionMasked==MotionEvent.ACTION_OUTSIDE) {
+                    // Even an obsolete wrapper must not forward its old outside
+                    // event into a freshly rebound dialog.
+                    cancelPresented(snapshot)
+                    return true
+                }
+                return previous.dispatchTouchEvent(event)
+            }
+        }
+        val watching=(target.attributes.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)!=0
+        outsideDismissal=OutsideDismissal(target,previous,wrapper,watching)
+        target.callback=wrapper
+        target.addFlags(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
+    }
+    private fun removeOutsideDismissal() {
+        val installed=outsideDismissal?:return
+        outsideDismissal=null
+        if(installed.window.callback===installed.wrapper)installed.window.callback=installed.previous
+        if(!installed.alreadyWatching)installed.window.clearFlags(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
+    }
+    private fun cancelPresented(snapshot:HandsFreePanelPresentation.Snapshot?):Boolean {
+        // A queued callback from a dismissed or rebound panel cannot cancel
+        // the new session. This is the same explicit cancellation as the old X.
+        if(snapshot==null || !visible || current!==this || !presentation.isCurrent(snapshot) || boundSession!=snapshot.session)return false
+        visible=false
+        try {snapshot.session?.let(cancelInteraction)} finally {finishQuietly()}
+        return true
+    }
+    override fun onBackPressed() {
+        if(!cancelPresented(presentation.snapshot()))super.onBackPressed()
+    }
+    private fun installAccessibleDismissal(view:View) {
+        view.accessibilityDelegate=object:View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host:View,info:AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host,info)
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_DISMISS,"Cancelar interação"))
+            }
+            override fun performAccessibilityAction(host:View,action:Int,args:Bundle?):Boolean {
+                if(action==AccessibilityNodeInfo.ACTION_DISMISS && (host===visualizer || host===label) &&
+                    cancelPresented(presentation.snapshot()))return true
+                return super.performAccessibilityAction(host,action,args)
+            }
+        }
     }
     override fun onComputeInsets(outInsets:Insets) {
         super.onComputeInsets(outInsets)
@@ -195,7 +250,7 @@ class NodeVoiceInteractionSession(context:Context):VoiceInteractionSession(conte
         return Runnable{if(current===this && presentation.isCurrent(snapshot))finishQuietly()}
     }
     internal fun finishQuietly(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;finish()}
-    private fun stopVisuals(){presentation.end();updatePlaybackAccessibility(null);main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
+    private fun stopVisuals(){presentation.end();removeOutsideDismissal();updatePlaybackAccessibility(null);main.removeCallbacks(dismissError);HandsFreePanelSignal.detach(this);visualizer?.hide()}
     override fun onHide(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onHide()}
     override fun onDestroy(){visible=false;stopVisuals();releaseWindowFlags();partial?.text="";if(current===this)current=null;super.onDestroy()}
     companion object {@Volatile internal var current:NodeVoiceInteractionSession?=null}
