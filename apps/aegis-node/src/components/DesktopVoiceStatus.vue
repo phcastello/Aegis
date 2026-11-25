@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { handsFree } from '../services/handsFree';
 import { PlaybackSpectrumDisplay } from '../services/playbackSpectrum';
-import { recentVoiceHistory, VOICE_HISTORY_STEP_MS } from '@aegis/client/services/voiceWaveform';
+import { recentVoiceHistory, voiceHistoryBarHeight, VOICE_HISTORY_STEP_MS } from '@aegis/client/services/voiceWaveform';
 import './thinking-motion.css';
 
 const labels = new Map([
@@ -60,7 +60,7 @@ let stopWave: UnlistenFn | undefined;
 let stopConversation: UnlistenFn | undefined;
 
 function barHeight(level: number) {
-  if (inputPhase.value) return 3 + Math.sqrt(level) * 29;
+  if (inputPhase.value) return voiceHistoryBarHeight(level);
   return level > 0.002 ? 2 + level * 50 : 0;
 }
 const barWidth = 3;

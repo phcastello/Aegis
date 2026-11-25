@@ -91,9 +91,9 @@ class NodeHandsFreePanelTest {
         assertEquals(2.25f,handsFreeInputBarWidth(3f,1f),0f)
         assertEquals(0f,handsFreeInputBarWidth(0f,1f),0f)
         assertEquals(3f,handsFreeInputBarHeight(0f,1f,72f),0f)
-        assertEquals(17.5f,handsFreeInputBarHeight(.25f,1f,72f),0f)
-        assertEquals(32f,handsFreeInputBarHeight(1f,1f,72f),0f)
-        assertEquals(64f,handsFreeInputBarHeight(1f,2f,144f),0f)
+        assertEquals(27.5f,handsFreeInputBarHeight(.25f,1f,72f),0f)
+        assertEquals(52f,handsFreeInputBarHeight(1f,1f,72f),0f)
+        assertEquals(104f,handsFreeInputBarHeight(1f,2f,144f),0f)
         assertEquals(20f,handsFreeInputBarHeight(2f,1f,20f),0f)
         assertEquals(3f,handsFreeInputBarHeight(Float.NaN,1f,72f),0f)
     }

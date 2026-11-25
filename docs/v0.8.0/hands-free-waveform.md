@@ -268,7 +268,7 @@ No renderer, a linha do tempo é reamostrada em snapshots de 60 ms; cada
 posição interpola linearmente somente sua própria altura visual entre
 snapshots próximos, sem deslocar barras ou gerar novos valores acústicos.
 O desenho segue a referência da gravação manual: barras fixas de até 3 dp
-de largura, altura total de `3 + sqrt(nível) × 29` dp (3 a 32 dp), simétricas
+de largura, altura total de `3 + sqrt(nível) × 49` dp (3 a 52 dp), simétricas
 em torno do centro vertical. Na área estreita, a largura diminui para
 preservar o espaço entre posições, sem alongar barras ou alterar a escala
 da amplitude capturada. O silêncio é representado pelos pontos de 3 dp.
@@ -342,3 +342,13 @@ o celular conserva as 16 bandas, a amplitude e a disposição anteriores.
 O envelope 65/130 ms torna a resposta aproximadamente 13% mais rápida que
 75/150 ms em ambos, preservando a breve finalização de silêncio. Telas estreitas
 agrupam apenas valores de frequências adjacentes e não esticam a espessura das barras.
+
+Na prévia **.44**, a pedido do proprietário, a altura visual da fala do
+usuário ficou mais expressiva nos três caminhos: gravação manual e
+hands-free no desktop, e escuta hands-free no Android. O coeficiente de
+altura `3 + sqrt(nível) × 29` passou a **`3 + sqrt(nível) × 49`**,
+ampliando o máximo de 32 para 52 px no desktop e de 32 para 52 dp no
+Android. A altura mínima de 3 px/dp, a espessura das barras, a posição dos slots,
+a cadência de 60 ms e a interpolação permanecem. É apenas escala visual:
+não altera os dados medidos, ganho do microfone, wakeword, VAD, STT ou o
+espectro da fala da Aegis.

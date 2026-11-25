@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { recentVoiceHistory, VOICE_HISTORY_STEP_MS } from '../services/voiceWaveform';
+import { recentVoiceHistory, voiceHistoryBarHeight, VOICE_HISTORY_STEP_MS } from '../services/voiceWaveform';
 import type { TranscriptionState } from '../composables/useAegisTranscription';
 
 const props = defineProps<{ state: TranscriptionState; levels: number[] }>();
@@ -37,7 +37,7 @@ onMounted(focusCancel);
 watch(() => props.state, focusCancel);
 
 function barHeight(level: number): string {
-  return `${3 + Math.sqrt(Math.max(0, Math.min(1, level))) * 29}px`;
+  return `${voiceHistoryBarHeight(level)}px`;
 }
 </script>
 

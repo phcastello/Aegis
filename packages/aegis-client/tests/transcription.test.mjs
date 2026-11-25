@@ -305,3 +305,14 @@ test('wide input waveform keeps all measured samples; narrow windows keep newest
   assert.deepEqual(Array.from(narrow), history.slice(-32));
   assert.ok(narrow.every(x => x >= 0 && x <= 1));
 });
+
+test('voice history is more expressive without changing silent dots, cadence or measured levels', () => {
+  const height = waveformExport.voiceHistoryBarHeight;
+  assert.equal(height(0), 3);
+  assert.equal(height(1), 52);
+  assert.equal(height(.25), 27.5);
+  assert.equal(height(.04), 12.8);
+  assert.equal(height(2), 52);
+  assert.equal(height(-1), 3);
+  assert.equal(waveformExport.VOICE_HISTORY_STEP_MS, 60);
+});

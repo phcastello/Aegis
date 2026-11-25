@@ -76,7 +76,7 @@ test('waveform uses measured temporal amplitudes and a single vsync callback wit
   assert.match(signal, /val blend=if\(smooth\)fraction else 0f/);
   assert.match(signal, /val visual=from\+\(sqrt\(right\)-from\)\*blend/);
   assert.match(signal, /minOf\(3f\*density,slot\*\.75f\)/);
-  assert.match(signal, /\(3f\+sqrt\(normalized\)\*29f\)\*density/);
+  assert.match(signal, /\(3f\+sqrt\(normalized\)\*49f\)\*density/);
   assert.doesNotMatch(draw, /index-4|val weight=|for\(index in 0\.\.8\)|FloatArray\(|RectF\(/);
   assert.match(panel, /if\(canRender\(\) && !framePending\)/);
   assert.match(panel, /postOnAnimation\(frame\)/);
