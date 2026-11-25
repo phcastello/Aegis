@@ -304,6 +304,20 @@ A seleção permanece em [select-node-ci.mjs](../.github/scripts/select-node-ci.
 
 UI comum seleciona builds/testes dos hosts e navegador; backend seleciona .NET, PostgreSQL descartável, migrations, Compose apenas por `config` e contratos reais de transporte. Kotlin seleciona Android; Rust compartilhado também seleciona Android e Windows. Alterações de identidade conservam browser/WebView2/WebView Android; contratos de notificações/transportes conservam nativos. Lockfiles podem selecionar compilação ampla de integração sem habilitar consumo prolongado. Mudanças desconhecidas e na infraestrutura de CI continuam conservadoras.
 
+O Android usa o [WebView do sistema](https://v2.tauri.app/reference/webview-versions/),
+não um Chromium empacotado. O [alvo padrão de Vite 7](https://v7.vite.dev/guide/migration.html#default-browser-target-change)
+é Chromium 107. O diagnóstico da v0.8.0 na
+[imagem Google APIs API 26](https://github.com/phcastello/Aegis/actions/runs/45601522164)
+confirmou provedor Chromium 69: o IPC nativo e as flags iniciais funcionam,
+mas o módulo Vue não inicializa. O mesmo APK agora apresenta uma orientação
+de atualização local e visível nesse provedor. O gate exige a chamada real
+ao IPC antes de verificar a tela e exige o aviso (provedor anterior a 107)
+ou toda a interface de configuração (provedor compatível). Timeout ou tela
+vazia nunca contam como aprovação. As verificações de notificações, recepção
+geográfica, reinício e transporte nativos continuam nas APIs 26/35. O teste
+de WebView/IPC moderno na API 35 e o smoke do bundle sob CSP não demonstram
+suporte a versões antigas de WebView nem substituirão testes físicos.
+
 O workflow de identidade é reutilizado pelo CI principal, sem outro disparo automático duplicado. O agregador verifica todos os jobs selecionados, inclusive o resultado desse workflow. Falha, cancelamento, ausência ou skip inesperado de job selecionado impedem aprovação; não há `continue-on-error` nos gates. O SHA de origem e o SHA de evidência (merge de teste do PR ou merge queue) são registrados; todos os jobs usam o SHA resolvido. O gate consulta novamente o PR e recusa head/base diferentes, PR fechado ou retorno a draft. Concorrência por branch/PR cancela execuções substituídas.
 
 `Aegis Node CI result` é o contexto estável de integração. Release usa **Aegis Release Acceptance result**; preview e modos focados não substituem integração. Filtros manuais antigos continuam disponíveis para diagnóstico, com gate final recusando aceite parcial. `base_ref` só limita a homologação de release; integração manual permanece conservadora, impedindo escolher um diff vazio para obter aceite.
