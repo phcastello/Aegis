@@ -623,9 +623,10 @@ class NodeHandsFreeBackend internal constructor(
     private val ttsDeadlines = ScheduledThreadPoolExecutor(1) { task ->
       Thread(task, "AegisTtsDeadline").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }
-    // Shared, bounded idle connection pool; no logging interceptor or response cache.
+    // Shared, bounded idle connection pool. Reuse TLS sessions between nearby calls
+    // without introducing idle network probes, a logging interceptor or response cache.
     internal val transport = OkHttpClient.Builder()
-      .connectionPool(ConnectionPool(1,30,TimeUnit.SECONDS))
+      .connectionPool(ConnectionPool(1,5,TimeUnit.MINUTES))
       .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
 
     private fun validateWav(wav: ByteArray) {

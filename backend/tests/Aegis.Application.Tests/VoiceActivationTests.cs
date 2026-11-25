@@ -11,19 +11,23 @@ public sealed class VoiceActivationTests
     private sealed class Clock : TimeProvider
     {
         private long timestamp;
+        public TimeSpan? ScheduledDelay { get; private set; }
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => timestamp;
         public void Advance(TimeSpan amount) => timestamp += amount.Ticks;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-            => new Timer(callback, state, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        {
+            ScheduledDelay = dueTime;
+            return new Timer(callback, state, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
     }
 
     private static readonly Guid Phone = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private static readonly Guid Desktop = Guid.Parse("00000000-0000-0000-0000-000000000002");
 
     private static Task<VoiceActivationDecision> Claim(VoiceActivationArbiter arbiter, Guid node, Guid? activation = null,
-        double? snr = null, double? confidence = null, int priority = 0, CancellationToken ct = default) =>
-        arbiter.ClaimAsync(node, new(activation ?? Guid.NewGuid(), snr, confidence), priority, ct);
+        double? snr = null, double? confidence = null, int priority = 0, CancellationToken ct = default, int? detectionAgeMs = null) =>
+        arbiter.ClaimAsync(node, new(activation ?? Guid.NewGuid(), snr, confidence), priority, ct, detectionAgeMs: detectionAgeMs);
 
     private static void Settle(Clock clock, VoiceActivationArbiter arbiter)
     {
@@ -114,13 +118,86 @@ public sealed class VoiceActivationTests
         var desktop = Claim(arbiter, Desktop, snr: 6);
         var measuredSkew = TimeSpan.FromMilliseconds(440);
         clock.Advance(measuredSkew);
-        var phone = Claim(arbiter, Phone, snr: 20);
+        var phone = Claim(arbiter, Phone, snr: 20, detectionAgeMs: 450);
         Assert.False(phone.IsCompleted);
         clock.Advance(VoiceActivationArbiter.ElectionWindow - measuredSkew);
         var late = await Claim(arbiter, Guid.NewGuid(), snr: 40);
         Assert.Equal("suppressed", late.Decision);
         Assert.Equal("suppressed", (await desktop).Decision);
         Assert.Equal("granted", (await phone).Decision);
+    }
+
+    [Theory]
+    [InlineData(null, 650)]
+    [InlineData(0, 650)]
+    [InlineData(100, 550)]
+    [InlineData(299, 351)]
+    [InlineData(300, 350)]
+    [InlineData(2000, 350)]
+    public async Task FirstConfirmedClaimSetsBoundedWindowAndTimer(int? detectionAgeMs, int expectedWindowMs)
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var first = Claim(arbiter, Phone, snr: 1, detectionAgeMs: detectionAgeMs);
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedWindowMs), clock.ScheduledDelay);
+        clock.Advance(TimeSpan.FromMilliseconds(expectedWindowMs - 1));
+        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid()); // Force deadline processing.
+        Assert.False(first.IsCompleted);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal("suppressed", (await Claim(arbiter, Desktop, snr: 100).WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal("granted", (await first.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+    }
+
+    [Fact]
+    public async Task StrongerLaterCandidateWithinReducedWindowStillWinsAndLateCandidateCannotTakeOver()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var phone = Claim(arbiter, Phone, snr: 5, detectionAgeMs: 310);
+        clock.Advance(TimeSpan.FromMilliseconds(349));
+        var desktop = Claim(arbiter, Desktop, snr: 25);
+        Assert.False(phone.IsCompleted);
+        Assert.False(desktop.IsCompleted);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal("suppressed", (await Claim(arbiter, Guid.NewGuid(), snr: 90).WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal("suppressed", (await phone.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal("granted", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+    }
+
+    [Fact]
+    public async Task LaterAgeAndExactRetryCannotShortenOrExtendFirstCandidatesWindow()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var id = Guid.NewGuid();
+        var first = Claim(arbiter, Phone, id, snr: 20, detectionAgeMs: 100);
+        var retry = Claim(arbiter, Phone, id, snr: 20, detectionAgeMs: 2000);
+        var desktop = Claim(arbiter, Desktop, snr: 25, detectionAgeMs: 0);
+        Assert.Equal(TimeSpan.FromMilliseconds(550), clock.ScheduledDelay);
+        clock.Advance(TimeSpan.FromMilliseconds(549));
+        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid());
+        Assert.False(first.IsCompleted);
+        Assert.False(retry.IsCompleted);
+        Assert.False(desktop.IsCompleted);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        arbiter.Abandon(Guid.NewGuid(), Guid.NewGuid());
+        Assert.Equal("suppressed", (await first.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+        Assert.Equal(await first, await retry.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal("granted", (await desktop.WaitAsync(TimeSpan.FromSeconds(1))).Decision);
+    }
+
+    [Fact]
+    public async Task InvalidDetectionAgesCannotOpenRoundOrConsumeReceipt()
+    {
+        var clock = new Clock();
+        var arbiter = new VoiceActivationArbiter(clock);
+        var id = Guid.NewGuid();
+        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: -1));
+        await Assert.ThrowsAsync<NodeException>(() => Claim(arbiter, Phone, id, detectionAgeMs: 2001));
+        Assert.Null(clock.ScheduledDelay);
+        var valid = arbiter.ClaimAsync(Phone, new(id), 0, default, [Phone], 2000);
+        Assert.True(valid.IsCompletedSuccessfully);
+        Assert.Equal("granted", (await valid).Decision);
     }
 
     [Fact]

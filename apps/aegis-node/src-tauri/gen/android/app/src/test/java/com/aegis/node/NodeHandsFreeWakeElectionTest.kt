@@ -21,11 +21,12 @@ class NodeHandsFreeWakeElectionTest {
         assertNull(HandsFreeWakeElection.signalToNoiseDb(HandsFreeVerificationWindow(samples, 23999)))
     }
 
-    private class Coordinator(val respond: (JSONObject) -> String) : AutoCloseable {
+    private class Coordinator(val timingHeaders: List<String> = emptyList(), val respond: (JSONObject) -> String) : AutoCloseable {
         private val socket = ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))
         private val worker = Executors.newSingleThreadExecutor()
         val session = NodeNativeSession.Session("http://127.0.0.1:${socket.localPort}", "node", "fixture")
         val payload = AtomicReference<JSONObject>()
+        val requestHeaders = AtomicReference<Map<String, String>>()
         private val job = worker.submit {
             socket.accept().use { client ->
                 client.soTimeout = 4000
@@ -35,6 +36,7 @@ class NodeHandsFreeWakeElectionTest {
                     it.substringBefore(':').lowercase() to it.substringAfter(':').trim()
                 }
                 assertEquals("AegisNode fixture", headers["authorization"])
+                requestHeaders.set(headers)
                 val chars = CharArray(headers.getValue("content-length").toInt())
                 var read = 0
                 while (read < chars.size) {
@@ -45,7 +47,8 @@ class NodeHandsFreeWakeElectionTest {
                 val request = JSONObject(String(chars))
                 payload.set(request)
                 val text = respond(request)
-                client.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                val timing = timingHeaders.joinToString("") { "X-Aegis-Election-Wait-Ms: $it\r\n" }
+                client.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + timing +
                     "Connection: close\r\nContent-Length: ${text.toByteArray().size}\r\n\r\n$text").toByteArray())
             }
         }
@@ -68,12 +71,48 @@ class NodeHandsFreeWakeElectionTest {
                 assertEquals(.75, sent.getDouble("confidence"), .00001)
                 assertEquals(20.0, sent.getDouble("snrDb"), .00001)
                 assertEquals(election.activationId, sent.getString("activationId"))
+                assertEquals("0", server.requestHeaders.get()["x-aegis-detection-age-ms"])
+                assertNull(election.coordinatorTiming) // Older servers omit the timing header.
                 assertTrue(election.canActivate())
                 session.set(server.session.copy(credential = "replacement"))
                 assertFalse(election.canActivate())
                 session.set(server.session)
                 now.set(3000)
                 assertFalse(election.canActivate())
+            }
+        }
+    }
+
+    @Test fun verifiedClaimCreditsOnlyElapsedMonotonicAgeAndSeparatesReportedServerTime() {
+        val now = AtomicLong(1000)
+        Coordinator(listOf("350")) { q ->
+            now.set(1750)
+            result(q, "granted")
+        }.use { server ->
+            HandsFreeWakeElection({server.session}, now::get, 2750, {true}, true).use { election ->
+                assertEquals(HandsFreeWakeElection.Decision.GRANTED, election.claim(window, .75f))
+                assertEquals("250", server.requestHeaders.get()["x-aegis-detection-age-ms"])
+                assertEquals(setOf("activationId", "confidence", "snrDb"), server.payload.get().keys().asSequence().toSet())
+                assertEquals(HandsFreeWakeElection.CoordinatorTiming(350, 400), election.coordinatorTiming)
+                assertTrue(election.canActivate())
+            }
+        }
+    }
+
+    @Test fun missingInvalidOrImplausibleTimingDoesNotInventMetricsOrDelayValidGrant() {
+        val cases = listOf(emptyList(), listOf("-1"), listOf("1.5"), listOf("x"), listOf("2001"),
+            listOf("999999999999999999999"), listOf("751"), listOf("100", "101"))
+        for (timing in cases) {
+            val now = AtomicLong(1000)
+            Coordinator(timing) { q ->
+                now.set(1750)
+                result(q, "granted")
+            }.use { server ->
+                HandsFreeWakeElection({server.session}, now::get, 2750, {true}, false).use { election ->
+                    assertEquals(HandsFreeWakeElection.Decision.GRANTED, election.claim(window, .75f))
+                    assertTrue(election.canActivate())
+                    assertNull("invalid timing $timing", election.coordinatorTiming)
+                }
             }
         }
     }
@@ -85,11 +124,13 @@ class NodeHandsFreeWakeElectionTest {
             { _: JSONObject -> "invalid" } to HandsFreeWakeElection.Decision.UNAVAILABLE
         )
         for ((response, expected) in cases) {
-            Coordinator(response).use { server ->
-                HandsFreeWakeElection({server.session}, {1000}, 3000, {true}, false).use { election ->
+            val now = AtomicLong(1000)
+            Coordinator(listOf("25")) { q -> now.set(1100); response(q) }.use { server ->
+                HandsFreeWakeElection({server.session}, now::get, 3000, {true}, false).use { election ->
                     assertEquals(expected, election.claim(window, 1f))
                     assertFalse(server.payload.get().has("confidence"))
                     assertFalse(election.canActivate())
+                    assertNull(election.coordinatorTiming)
                 }
             }
         }

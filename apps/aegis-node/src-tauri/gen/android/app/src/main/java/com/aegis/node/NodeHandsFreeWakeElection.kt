@@ -23,12 +23,15 @@ internal class HandsFreeWakeElection(
     private val includeConfidence: Boolean
 ) : AutoCloseable {
     enum class Decision { GRANTED, SUPPRESSED, UNAVAILABLE }
+    data class CoordinatorTiming(val serverWaitMs: Long, val transportOverheadMs: Long)
 
     val activationId = UUID.randomUUID().toString()
     @Volatile private var authority: NodeNativeSession.Session? = null
     private var inFlight: Call? = null
     @Volatile private var closed = false
     @Volatile private var granted = false
+    @Volatile var coordinatorTiming: CoordinatorTiming? = null
+        private set
 
     fun claim(window: HandsFreeVerificationWindow, score: Float): Decision {
         val session = readSession() ?: return Decision.UNAVAILABLE
@@ -37,7 +40,11 @@ internal class HandsFreeWakeElection(
         val payload = JSONObject().put("activationId", activationId)
         signalToNoiseDb(window)?.let { payload.put("snrDb", it) }
         if (includeConfidence) payload.put("confidence", score.toDouble())
-        val request = request(session, "/claim").post(payload.toString().toRequestBody(JSON)).build()
+        // Credit only the time already spent after the primary decision. The deadline
+        // remains unchanged; older servers ignore the optional header.
+        val request = request(session, "/claim")
+            .header("X-Aegis-Detection-Age-Ms", (MAX_AGE_MS - remaining).toString())
+            .post(payload.toString().toRequestBody(JSON)).build()
         val call = NodeHandsFreeBackend.transport.newCall(request)
         call.timeout().timeout(remaining, TimeUnit.MILLISECONDS)
         synchronized(this) {
@@ -46,6 +53,7 @@ internal class HandsFreeWakeElection(
             inFlight = call
         }
         return try {
+            val callStartedAt = clock()
             call.execute().use { response ->
                 if (!response.isSuccessful || !currentAuthority()) return Decision.UNAVAILABLE
                 val bytes = response.body?.byteStream()?.readBytesBounded(2048) ?: return Decision.UNAVAILABLE
@@ -53,6 +61,8 @@ internal class HandsFreeWakeElection(
                 if (outcome.optString("activationId") != activationId || !currentAuthority()) return Decision.UNAVAILABLE
                 when (outcome.optString("decision")) {
                     "granted" -> {
+                        coordinatorTiming = parseCoordinatorTiming(response.headers.values("X-Aegis-Election-Wait-Ms"),
+                            clock() - callStartedAt)
                         granted = true
                         Decision.GRANTED
                     }
@@ -103,6 +113,16 @@ internal class HandsFreeWakeElection(
     companion object {
         const val MAX_AGE_MS = 2000L
         private val JSON = "application/json".toMediaType()
+
+        /** Optional server instrumentation cannot change an otherwise valid decision.
+         * Ignore ambiguous, malformed and implausible values rather than inventing a split. */
+        private fun parseCoordinatorTiming(headers: List<String>, roundTripMs: Long): CoordinatorTiming? {
+            val value = headers.singleOrNull() ?: return null
+            if (value.isEmpty() || value.any { it !in '0'..'9' }) return null
+            val serverWait = value.toLongOrNull()?.takeIf { it in 0..MAX_AGE_MS && it <= roundTripMs }
+                ?: return null
+            return CoordinatorTiming(serverWait, roundTripMs - serverWait)
+        }
 
         /** Shared with Windows: 500 ms ending at the wake sample vs the preceding 1000 ms.
          * Omit the estimate during recorder warmup. No PCM is sent to the coordinator. */

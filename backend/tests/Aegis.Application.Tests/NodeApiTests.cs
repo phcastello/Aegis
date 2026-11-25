@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -91,12 +92,59 @@ public sealed class NodeApiTests
         Assert.All(replies, response => {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+            Assert.True(response.Headers.TryGetValues(NodeVoiceActivationController.ElectionWaitHeader, out var values));
+            Assert.True(long.TryParse(Assert.Single(values), NumberStyles.None, CultureInfo.InvariantCulture, out _));
         });
         Assert.Equal(new(pcClaim.ActivationId, "suppressed"), await replies[0].Content.ReadFromJsonAsync<VoiceActivationDecision>());
         Assert.Equal(new(phoneClaim.ActivationId, "granted"), await replies[1].Content.ReadFromJsonAsync<VoiceActivationDecision>());
         await registry.SetEnabledAsync(null, phone.Node.Id, false);
         Assert.Equal(HttpStatusCode.Forbidden, (await phoneHttp.PostAsJsonAsync(path, phoneClaim)).StatusCode);
         Assert.Equal(new[] { desktop.Node.Id }, await registry.ListVoiceActivationParticipantsAsync());
+    }
+
+    [Fact]
+    public async Task VoiceActivationDetectionAgeUsesStrictOptionalHeaderWithoutChangingTheJsonContract()
+    {
+        var (app, client, registry) = await Host();
+        await using var dispose = app;
+        const string path = "/api/nodes/me/voice-activations/claim";
+        var phone = await Pair(registry);
+        _ = await Pair(registry); // A possible second listener makes the timer necessary.
+        var claim = new VoiceActivationClaim(Guid.NewGuid(), 22, 0.83);
+        using (var unauthenticated = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(claim) })
+        {
+            Assert.True(unauthenticated.Headers.TryAddWithoutValidation(NodeVoiceActivationController.DetectionAgeHeader, "300"));
+            using var denied = await client.SendAsync(unauthenticated);
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+            Assert.False(denied.Headers.Contains(NodeVoiceActivationController.ElectionWaitHeader));
+        }
+        client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + phone.Secret);
+        // HttpClient/TestServer omits an empty header entirely, so it is equivalent
+        // to absent (legacy full window). Exercise malformed values sent on the wire.
+        foreach (var invalidValues in new[] { new[] { "-1" }, new[] { "2001" }, new[] { "1.5" }, new[] { "+1" }, new[] { "NaN" }, new[] { "1", "2" } })
+        {
+            using var invalid = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(claim) };
+            Assert.True(invalid.Headers.TryAddWithoutValidation(NodeVoiceActivationController.DetectionAgeHeader, invalidValues));
+            using var reply = await client.SendAsync(invalid);
+            Assert.True(reply.StatusCode == HttpStatusCode.BadRequest, $"Header [{string.Join(", ", invalidValues.Select(v => $"\"{v}\""))}] returned {reply.StatusCode}");
+            Assert.Contains("invalid_voice_activation", await reply.Content.ReadAsStringAsync());
+            Assert.False(reply.Headers.Contains(NodeVoiceActivationController.ElectionWaitHeader));
+        }
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, new { claim.ActivationId, detectionAgeMs = 300 })).StatusCode);
+        await Task.Delay(VoiceActivationArbiter.CatchUpWindow);
+        using var valid = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(claim) };
+        Assert.True(valid.Headers.TryAddWithoutValidation(NodeVoiceActivationController.DetectionAgeHeader, "300"));
+        using var granted = await client.SendAsync(valid);
+        Assert.Equal(HttpStatusCode.OK, granted.StatusCode);
+        Assert.True(granted.Headers.TryGetValues(NodeVoiceActivationController.ElectionWaitHeader, out var values));
+        Assert.True(long.TryParse(Assert.Single(values), NumberStyles.None, CultureInfo.InvariantCulture, out var waitedMs));
+        // This real HTTP test tolerates scheduler delays; deterministic tests check
+        // the exact 350 ms deadline. A header that always reports zero must fail.
+        Assert.True(waitedMs >= 300, $"Expected timer wait, reported {waitedMs} ms");
+        using var body = JsonDocument.Parse(await granted.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "activationId", "decision" }, body.RootElement.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal(claim.ActivationId, body.RootElement.GetProperty("activationId").GetGuid());
+        Assert.Equal("granted", body.RootElement.GetProperty("decision").GetString());
     }
 
     [Fact] public async Task AnonymousPairingIsRateLimitedAndDoesNotTrustForwardedHeader()

@@ -1625,6 +1625,10 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     outcome.finishedAtMs?.let{finishedAt->
                                         metrics.timing("wake_coordinator_wait",finishedAt-verifiedAt,identity)
                                         metrics.timing("wake_grant_observation_wait",grantObservedAt-finishedAt,identity)
+                                        verifiedPending?.election?.coordinatorTiming?.let { timing ->
+                                            metrics.timing("wake_server_election_wait",timing.serverWaitMs,identity)
+                                            metrics.timing("wake_coordinator_transport_overhead",timing.transportOverheadMs,identity)
+                                        }
                                     }
                                 }
                                 metrics.timing("wake_grant_observed_to_cue_request",cueRequestedAt-grantObservedAt,identity)

@@ -33,3 +33,26 @@ test('Android cue remains gated by authenticated winner, command readiness and m
   const worker = source('NodeHandsFreeCue');
   assert.ok(worker.indexOf('ready.complete()') < worker.indexOf('onStarted(it)'), 'telemetry cannot delay cue-completion gate');
 });
+
+test('Android credits elapsed verified-candidate age without changing claim JSON or introducing idle requests', () => {
+  const election = source('NodeHandsFreeWakeElection');
+  const claim = election.slice(election.indexOf('fun claim('), election.indexOf('fun grantedIdentity('));
+  assert.match(claim, /remaining = deadlineMs - clock\(\)/);
+  assert.match(claim, /header\("X-Aegis-Detection-Age-Ms", \(MAX_AGE_MS - remaining\)\.toString\(\)\)/);
+  assert.doesNotMatch(claim, /payload\.put\(".*[Aa]ge/);
+  assert.match(claim, /call\.timeout\(\)\.timeout\(remaining, TimeUnit\.MILLISECONDS\)/);
+  assert.equal(claim.match(/call\.execute\(\)/g)?.length, 1);
+  const pending = source('NodeHandsFreePendingWakeVerification');
+  assert.match(pending, /if\(score>=threshold && !stopped\.get\(\)\)election\?\.claim/);
+  const capture = source('NodeHandsFree').split('private fun capture(')[1];
+  const cue = capture.indexOf('cueCompletion=beep()');
+  const metrics = capture.indexOf('metrics.timing("wake_server_election_wait"', cue);
+  const stt = capture.indexOf('activeBackend.beginCapture(', cue);
+  assert.ok(cue < metrics && metrics < stt);
+  assert.match(capture.slice(cue, stt), /coordinatorTiming\?\.let/);
+  assert.match(capture.slice(cue, stt), /metrics\.timing\("wake_coordinator_transport_overhead",timing\.transportOverheadMs/);
+  const backend = source('NodeHandsFreeBackend');
+  assert.match(backend, /connectionPool\(ConnectionPool\(1,5,TimeUnit.MINUTES\)\)/);
+  assert.doesNotMatch(backend, /\.pingInterval\(/);
+  assert.match(backend, /followRedirects\(false\)\.followSslRedirects\(false\)\.retryOnConnectionFailure\(false\)/);
+});

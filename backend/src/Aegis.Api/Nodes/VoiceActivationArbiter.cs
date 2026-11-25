@@ -14,9 +14,17 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
     // Recorded shared calls showed up to ~440ms of detector skew before
     // inference and transport overhead on the mobile node.
     public static readonly TimeSpan ElectionWindow = TimeSpan.FromMilliseconds(650);
+    public const int MaximumDetectionAgeMs = 2000;
+    private const int MaximumAgeCreditMs = 300;
     public static readonly TimeSpan CatchUpWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromMinutes(2);
     private const int ReceiptCapacity = 4096;
+
+    // The preparation measured by the first confirmed claimant can overlap part
+    // of the comparison budget. Never eliminate the window or use a later claim
+    // to move an already opened deadline. Missing age retains the legacy policy.
+    private static TimeSpan WindowFor(int? detectionAgeMs) =>
+        ElectionWindow - TimeSpan.FromMilliseconds(Math.Min(MaximumAgeCreditMs, detectionAgeMs ?? 0));
 
     private sealed class Candidate(Guid nodeId, VoiceActivationClaim claim, int priority, long received)
     {
@@ -28,9 +36,10 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
         public TaskCompletionSource<bool> Decision { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class Round(long opened)
+    private sealed class Round(long opened, TimeSpan window)
     {
         public long Opened => opened;
+        public TimeSpan Window => window;
         public Dictionary<Guid, Candidate> Candidates { get; } = new();
         // A complete, conservative inventory permits a fast decision only after
         // every possible participant answered. Never infer presence from a socket.
@@ -82,11 +91,12 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
     }
 
     public async Task<VoiceActivationDecision> ClaimAsync(Guid node, VoiceActivationClaim claim, int priority, CancellationToken ct,
-        IReadOnlyList<Guid>? participants = null)
+        IReadOnlyList<Guid>? participants = null, int? detectionAgeMs = null)
     {
         ct.ThrowIfCancellationRequested();
         if (claim.ActivationId == Guid.Empty || claim.SnrDb is { } snr && (!double.IsFinite(snr) || snr is < -60 or > 100)
-            || claim.Confidence is { } confidence && (!double.IsFinite(confidence) || confidence is < 0 or > 1))
+            || claim.Confidence is { } confidence && (!double.IsFinite(confidence) || confidence is < 0 or > 1)
+            || detectionAgeMs is < 0 or > MaximumDetectionAgeMs)
             throw new NodeException("invalid_voice_activation", "Os dados da ativação de voz são inválidos.");
 
         Candidate candidate;
@@ -109,7 +119,7 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
                 else
                 {
                     var opened = current is null;
-                    var round = current ??= new Round(now);
+                    var round = current ??= new Round(now, WindowFor(detectionAgeMs));
                     round.ObserveInventory(node, participants);
                     round.Candidates.Add(node, candidate);
                     if (round.AllParticipantsClaimed)
@@ -173,7 +183,7 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
 
     private void Advance(long now)
     {
-        if (current is { } round && clock.GetElapsedTime(round.Opened, now) >= ElectionWindow)
+        if (current is { } round && clock.GetElapsedTime(round.Opened, now) >= round.Window)
             Close(round, now);
         if (suppressSince is { } start && clock.GetElapsedTime(start, now) >= CatchUpWindow)
             suppressSince = null;
@@ -184,7 +194,7 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
 
     private async Task CloseAfterWindowAsync(Round round)
     {
-        await Task.Delay(ElectionWindow, clock, CancellationToken.None);
+        await Task.Delay(round.Window, clock, CancellationToken.None);
         lock (gate)
             if (ReferenceEquals(round, current)) Close(round, clock.GetTimestamp());
     }
