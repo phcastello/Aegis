@@ -103,7 +103,10 @@ impl Shared {
             "aegis-windows-voice-state",
             json!({"status":status,"message":message(status)}),
         );
-        crate::windows_voice_panel::update(&self.app, status);
+        crate::native_notifications::set_voice_tooltip(
+            &self.app,
+            (status != "disabled").then(|| message(status)),
+        );
     }
     fn view(&self) -> Value {
         let installed = windows_wakeword::installed(&self.dir);

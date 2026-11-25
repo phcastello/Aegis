@@ -127,3 +127,18 @@ test('generic cancellation of a terminal error cannot dismiss a newly activated 
   assert.match(panel, /Runnable\{if\(current===this && presentation\.isCurrent\(snapshot\)\)finishQuietly\(\)\}/);
   assert.match(panel, /private fun stopVisuals\(\)\{presentation\.end\(\)/);
 });
+
+test('Windows voice transitions update the current app and its tray icon without activating a window', () => {
+  const rust = name => readFileSync(new URL(`../src-tauri/src/${name}.rs`, import.meta.url), 'utf8');
+  const worker = rust('windows_hands_free');
+  const publish = worker.slice(worker.indexOf('fn publish('), worker.indexOf('fn view('));
+  const shell = rust('native_notifications');
+  const tooltip = shell.slice(shell.indexOf('pub fn set_voice_tooltip('), shell.indexOf('pub fn tray('));
+  assert.match(publish, /emit\(\s*"aegis-windows-voice-state"/);
+  assert.match(publish, /native_notifications::set_voice_tooltip\(/);
+  assert.match(shell, /TrayIconBuilder::with_id\(TRAY_ID\)/);
+  assert.match(tooltip, /tray_by_id\(TRAY_ID\)/);
+  assert.match(tooltip, /tray\.set_tooltip\(/);
+  assert.doesNotMatch(publish + tooltip,
+    /windows_voice_panel|CreateWindowEx|ShowWindow|WS_EX_TOPMOST|WebviewWindowBuilder|\.set_focus\(|\.unminimize\(|\.show\(|::open\(/);
+});

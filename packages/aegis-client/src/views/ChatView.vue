@@ -1457,7 +1457,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="conversationId || healthState === 'offline'" class="chat-voice-controls">
+        <div v-if="$slots['voice-status'] || conversationId || healthState === 'offline'" class="chat-voice-controls">
+          <slot name="voice-status" />
           <span v-if="healthState === 'offline'" class="server-indicator" role="status" title="Servidor indisponível">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M9.5 4.4A16.4 16.4 0 0 1 22 8M2 8a16.6 16.6 0 0 1 3.3-2.1M13.5 9.2A11.3 11.3 0 0 1 18.5 12M5.5 12a11.2 11.2 0 0 1 3-1.9M9 16a4.7 4.7 0 0 1 6 0M12 20h.01" /></svg>
             <span class="sr-only">Servidor indisponível</span>

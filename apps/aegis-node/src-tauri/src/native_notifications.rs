@@ -354,6 +354,22 @@ pub fn open(app: &AppHandle) {
     }
 }
 #[cfg(windows)]
+const TRAY_ID: &str = "aegis";
+
+#[cfg(windows)]
+pub fn set_voice_tooltip(app: &AppHandle, message: Option<&'static str>) {
+    // Keep the audio worker independent of the desktop event loop.
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            let tooltip =
+                message.map_or_else(|| "Aegis".to_owned(), |text| format!("Aegis · {text}"));
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    });
+}
+
+#[cfg(windows)]
 pub fn tray(app: &AppHandle) -> tauri::Result<()> {
     use tauri::{
         menu::{Menu, MenuItem},
@@ -362,7 +378,7 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Abrir Aegis", true, None::<&str>)?;
     let exit = MenuItem::with_id(app, "exit", "Sair", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &exit])?;
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("Aegis")
         .on_menu_event(|app, event| match event.id.as_ref() {

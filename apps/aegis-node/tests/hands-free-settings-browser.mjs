@@ -22,7 +22,21 @@ try {
     const windows = new URLSearchParams(location.search).has('windows');
     if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; }
     window.hfFixture = { fail: windows ? null : 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
-    window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+    const callbacks = new Map();
+    const events = new Map();
+    let nextId = 1;
+    window.hfFixture.voiceEvent = status => {
+      for (const [id, name] of events) {
+        if (name === 'aegis-windows-voice-state') callbacks.get(id)({ id, event: name, payload: { status } });
+      }
+    };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_name, id) => { events.delete(id); callbacks.delete(id); } };
+    window.__TAURI_INTERNALS__ = { transformCallback: callback => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
+    }, invoke: async (command, args) => {
+      if (command === 'plugin:event|listen') { events.set(args.handler, args.event); return args.handler; }
       if (command === 'node_hands_free') {
         if (args.operation === 'conversationChanges') return { generation: '00000000-0000-4000-8000-000000000001', changes: [] };
         const f = window.hfFixture; f.calls.push({ ...args }); f.peak = Math.max(f.peak, ++f.active);
@@ -302,6 +316,41 @@ try {
   console.log('Hands-free UI: initial failure, accessible retry, setup without prerequisites/backend, stale state, recovery, serialized events and unmount PASS (mock IPC; no native ACL claim)');
   const desktop = await context.newPage();
   await desktop.goto(origin + '?windows');
+  const indicator = desktop.locator('.chat-header .desktop-voice-indicator');
+  await desktop.waitForFunction(() => window.hfFixture.calls.some(c => c.operation === 'state'));
+  assert.equal(await indicator.count(), 0, 'idle desktop has no visual indicator');
+  const historyTrigger = desktop.getByRole('button', { name: 'Abrir histórico', exact: true });
+  await historyTrigger.focus();
+  for (const [phase, label] of Object.entries({
+    capturing: 'Escutando', processing: 'Preparando resposta', speaking: 'Falando', continuation: 'Aguardando você'
+  })) {
+    await desktop.evaluate(status => window.hfFixture.voiceEvent(status), phase);
+    await indicator.and(desktop.getByText(label, { exact: true })).waitFor();
+    assert.equal(await historyTrigger.evaluate(button => document.activeElement === button), true, 'voice updates preserve keyboard focus');
+    assert.equal(await indicator.locator('svg[aria-hidden="true"]').count(), 1);
+  }
+  await desktop.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  await desktop.evaluate(() => window.hfFixture.voiceEvent('capturing'));
+  await indicator.and(desktop.getByText('Escutando', { exact: true })).waitFor();
+  assert.equal(await indicator.evaluate(el => getComputedStyle(el).color !== getComputedStyle(el).backgroundColor), true);
+  assert.equal(await indicator.evaluate(el => el.getAnimations({ subtree: true }).length), 0);
+  await desktop.emulateMedia({ forcedColors: 'none', reducedMotion: 'no-preference' });
+  await desktop.setViewportSize({ width: 1180, height: 800 });
+  if (evidence) await desktop.screenshot({ path: `${evidence}/windows-hands-free-capturing.png` });
+  await desktop.setViewportSize({ width: 390, height: 844 });
+  await desktop.evaluate(() => { window.hfFixture.hold = true; document.dispatchEvent(new Event('visibilitychange')); });
+  await desktop.waitForFunction(() => typeof window.hfFixture.resolve === 'function');
+  await desktop.evaluate(() => {
+    window.hfFixture.voiceEvent('speaking');
+    window.hfFixture.resolve({ ...window.hfFixture.initial, status: 'capturing' });
+  });
+  await indicator.and(desktop.getByText('Falando', { exact: true })).waitFor();
+  for (const status of ['listening', 'diagnostic', 'unexpected']) {
+    await desktop.evaluate(state => window.hfFixture.voiceEvent(state), status);
+    await indicator.waitFor({ state: 'detached' });
+  }
+  assert.equal(await page.locator('.desktop-voice-status').count(), 0, 'Android keeps its native presentation');
+  console.log('Windows voice indicator: four states, idle and unknown hidden, focus, forced colors, recovery race PASS');
   await desktop.getByRole('button', { name: 'Abrir histórico', exact: true }).click();
   await desktop.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();
   await desktop.getByRole('button', { name: 'Áudio e voz', exact: true }).click();

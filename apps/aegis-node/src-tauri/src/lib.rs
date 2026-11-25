@@ -35,8 +35,6 @@ mod windows_voice_backend;
 mod windows_hands_free;
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_wakeword;
-#[cfg(all(feature = "native-runtime", windows))]
-mod windows_voice_panel;
 #[cfg(any(test, all(feature = "native-runtime", windows)))]
 mod windows_voice_signal;
 
@@ -226,7 +224,10 @@ pub fn run() {
             use tauri::Manager;
             app.manage(node_commands::NodeRuntime::initialize(app.handle().clone()));
             #[cfg(windows)]
-            app.manage(windows_hands_free::WindowsHandsFree::start(app.handle())?);
+            {
+                native_notifications::tray(app.handle())?;
+                app.manage(windows_hands_free::WindowsHandsFree::start(app.handle())?);
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 handle
@@ -261,7 +262,6 @@ pub fn run() {
                 .build()?;
             #[cfg(windows)]
             {
-                native_notifications::tray(app.handle())?;
                 let opened_window = windows_notifications::initialize(app.handle());
                 if node_window_activation::hide_after_activation(
                     &std::env::args().collect::<Vec<_>>(),
