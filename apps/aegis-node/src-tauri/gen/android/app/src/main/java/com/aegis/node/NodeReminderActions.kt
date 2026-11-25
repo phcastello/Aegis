@@ -24,6 +24,12 @@ object NodeReminderActions {
   // Declare Closeable here so Kotlin use() is valid on API24+ and after R8.
   class Store(private val context: Context) : SQLiteOpenHelper(context, "aegis-native-reminders-v1.db", null, 1), java.io.Closeable {
     private val existingDatabase=context.getDatabasePath("aegis-native-reminders-v1.db").exists()
+    // SQLiteOpenHelper protects only its own instance. Two independent helpers
+    // can both observe version 0 before either schema transaction starts.
+    // Serialize the complete open (version check, create and additive migration)
+    // on the same reentrant gate used by notification/outbox operations.
+    override fun getReadableDatabase(): SQLiteDatabase = synchronized(NodeNotificationGate.lock) { super.getReadableDatabase() }
+    override fun getWritableDatabase(): SQLiteDatabase = synchronized(NodeNotificationGate.lock) { super.getWritableDatabase() }
     override fun onCreate(db: SQLiteDatabase) {
       db.execSQL("CREATE TABLE presentations (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, revision INTEGER NOT NULL, token TEXT, expires INTEGER NOT NULL, commandId TEXT NOT NULL,ruleId TEXT,ruleRevision INTEGER)")
       db.execSQL("CREATE TABLE withdrawals (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,expires INTEGER NOT NULL)")
