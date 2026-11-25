@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { metadata } from '../../apps/aegis-node/scripts/release-metadata.mjs';
 import { advanceLegacyStable } from '../../apps/aegis-node/scripts/publish-release.mjs';
 import { DistributionState, repository } from './distribution-state.mjs';
+import { reservedRunAttempt } from './native-preview.mjs';
 
 export const releaseFiles = ['Aegis-Windows-x86_64-Setup.exe', 'Aegis-Windows-x86_64-Setup.exe.sig',
   'Aegis-Android-arm64.apk', 'latest.json', 'SHA256SUMS'];
@@ -138,6 +139,22 @@ export async function verifyPromotion(runId, { state = new DistributionState() }
   const plan = snapshot.ledger.reservations.find(item => item.runId === String(runId));
   assert.ok(plan, 'Only a durably reserved v2 run can be promoted.');
   assert.equal(plan.controlSha, run.head_sha); assert.equal(plan.platform, 'both');
+  const attempt = reservedRunAttempt(plan);
+  assert.equal(run.run_attempt, attempt, 'Promotion must use the exact reserved workflow attempt.');
+  if (plan.runAttempt !== undefined) {
+    const jobs = [];
+    for (let page = 1; ; page++) {
+      const response = await state.api(`actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100&page=${page}`);
+      assert.ok(Array.isArray(response.jobs));
+      jobs.push(...response.jobs);
+      if (response.jobs.length < 100) break;
+    }
+    const signers = jobs.filter(job => job.name === 'sign');
+    assert.equal(signers.length, 1, 'Exact reserved attempt must contain the trusted signing job.');
+    assert.equal(signers[0].head_sha, plan.controlSha);
+    assert.equal(signers[0].status, 'completed');
+    assert.equal(signers[0].conclusion, 'success', 'Reserved attempt did not complete trusted signing.');
+  }
   return plan;
 }
 

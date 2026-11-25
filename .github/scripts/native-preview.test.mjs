@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { parameters, assertTrustedDispatch, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview, output } from './native-preview.mjs';
+import { parameters, assertTrustedDispatch, assertPlanAttempt, verifyReservedAttempt, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview, output } from './native-preview.mjs';
 import { githubFixture } from './distribution-state.fixture.mjs';
 import { recommendedFeed } from './distribution-state.mjs';
 import { metadata } from '../../apps/aegis-node/scripts/release-metadata.mjs';
@@ -34,6 +34,26 @@ test('signing control must be manually dispatched from the registered main workf
     { workflowRef: 'phcastello/Aegis/.github/workflows/aegis-native-preview.yml@refs/heads/fix/test' }, { attempt: '2' }]) {
     assert.throws(() => assertTrustedDispatch({ ...context, ...fields }));
   }
+  assert.equal(assertTrustedDispatch({ ...context, attempt: '2' }, {stable:true}),2);
+  assert.throws(()=>assertTrustedDispatch({...context,attempt:'0'},{stable:true}));
+  assert.throws(()=>assertTrustedDispatch({...context,attempt:'2',ref:'refs/heads/fix/test'},{stable:true}));
+});
+test('build and signing reject every attempt different from the exact reservation, including legacy reservations', async () => {
+  const stable={...plan,version:'0.7.2',runAttempt:2};
+  const retryContext={...context,attempt:'2'};
+  const state={read:async()=>({ledger:{reservations:[stable]}})};
+  assertPlanAttempt(stable,retryContext,stable.runId,stable.controlSha);
+  await verifyReservedAttempt(stable,{state,context:retryContext,runId:stable.runId,controlSha:stable.controlSha});
+  for(const attempt of ['1','3']) {
+    assert.throws(()=>assertPlanAttempt(stable,{...context,attempt},stable.runId,stable.controlSha),/different attempt/);
+    await assert.rejects(verifyReservedAttempt(stable,{state,context:{...context,attempt},runId:stable.runId,controlSha:stable.controlSha}),/different attempt/);
+  }
+  await assert.rejects(verifyReservedAttempt({...stable,sourceCommit:'f'.repeat(40)},{state,context:retryContext,runId:stable.runId,controlSha:stable.controlSha}),/exact current durable reservation/);
+  assert.throws(()=>assertPlanAttempt(stable,retryContext,'456',stable.controlSha),/differs from reservation/);
+  assert.throws(()=>assertPlanAttempt(stable,retryContext,stable.runId,'f'.repeat(40)),/differs from reservation/);
+  assertPlanAttempt(plan,context,plan.runId,plan.controlSha);
+  assert.throws(()=>assertPlanAttempt(plan,retryContext,plan.runId,plan.controlSha));
+  assert.throws(()=>assertPlanAttempt({...plan,runAttempt:2},retryContext,plan.runId,plan.controlSha));
 });
 test('signing accepts noninteractive authorization while unbounded environment policies fail closed', () => {
   assertEnvironment(environment, policies);
@@ -121,6 +141,7 @@ test('artifact provenance rejects modified bytes, unexpected files and other sou
     writeFileSync(join(work, 'Aegis-Windows-x86_64-Setup.exe'), 'installer bytes');
     manifest(work, plan, 'Windows-x86_64');
     verifyInput(work, plan, 'Windows-x86_64');
+    assert.throws(() => verifyInput(work, { ...plan, runAttempt: 2 }, 'Windows-x86_64'), /reservation\/provenance mismatch/);
     assert.throws(() => verifyInput(work, { ...plan, sha: 'c'.repeat(40) }, 'Windows-x86_64'));
     assert.throws(() => verifyInput(work, { ...plan, version: '0.7.2-unstable.22' }, 'Windows-x86_64'));
     writeFileSync(join(work, 'injected-script.js'), 'forbidden');
@@ -140,6 +161,9 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
   let fail = false, ancestry = 'ahead', hiddenPermissivePolicy = false, sourceVersion = '0.7.2', permission = 'admin';
   const prepared = { sourceCommit: sha, backend: 'c'.repeat(40), pwa: 'd'.repeat(40), compatibility: {api:1,nodeData:1} };
   let feedCompatibility = prepared.compatibility;
+  let retryPriorJobs=[{name:'plan',conclusion:'skipped',steps:[]},{name:'build',conclusion:'skipped',steps:[]},{name:'sign',conclusion:'skipped',steps:[]}];
+  let retryGate={name:'acceptance / Aegis Release Acceptance result',head_sha:plan.controlSha,status:'completed',conclusion:'success'};
+  let retryControlSha=plan.controlSha, retryTrigger='phcastello', retryPermission='write';
   const fake = async (url, options) => {
     const parsed = new URL(url); calls.push(parsed.pathname + parsed.search);
     assert.match(parsed.pathname, /^\/repos\/phcastello\/Aegis\//);
@@ -149,7 +173,7 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     if (parsed.pathname.endsWith('deployment-branch-policies')) body = !hiddenPermissivePolicy ? policies : { branch_policies:
       parsed.searchParams.get('page') === '1' ? Array.from({ length: 100 }, () => ({ name: 'main', type: 'branch' })) : [{ name: '*', type: 'branch' }] };
     else if (parsed.pathname.endsWith('aegis-native-signing')) body = environment;
-    else if (parsed.pathname.includes('/collaborators/')) body = { permission };
+    else if (parsed.pathname.includes('/collaborators/')) body = { permission: parsed.pathname.includes('/collaborators/reviewer/') ? retryPermission : permission };
     else if (parsed.pathname.includes('/commits/')) body = { sha: parsed.pathname.split('/').at(-1) };
     else if (parsed.pathname.endsWith('/contents/latest.json')) body = { content: Buffer.from(JSON.stringify({compatibility:feedCompatibility})).toString('base64') };
     else if (parsed.pathname.includes('/compare/')) body = { status: ancestry, base_commit: { sha } };
@@ -161,6 +185,9 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
       { id: 3, head_branch: 'main', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 0.7.2-unstable.999 · android · ${sha}`, conclusion: 'failure' },
       { id: 4, head_branch: 'fix/untrusted', event: 'workflow_dispatch', display_title: `Aegis Native Preview · 20.99.999-unstable.998 · android · ${sha}`, conclusion: 'success' }, ...v2Runs
     ] };
+    else if (/\/actions\/runs\/504$/.test(parsed.pathname)) body={id:504,run_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),event:'workflow_dispatch',head_branch:'main',head_sha:retryControlSha,path:'.github/workflows/aegis-native-preview.yml',head_repository:{full_name:context.repository},actor:{login:'phcastello'},triggering_actor:{login:retryTrigger}};
+    else if (/\/actions\/runs\/504\/attempts\/1\/jobs$/.test(parsed.pathname)) body={jobs:retryPriorJobs};
+    else if (/\/actions\/runs\/504\/attempts\/2\/jobs$/.test(parsed.pathname)) body={jobs:[retryGate]};
     else if (parsed.pathname.endsWith('/jobs')) body = { jobs: [{ name: 'plan', status: 'completed',
       conclusion: parsed.pathname.includes('/runs/1/') ? 'success' : 'failure' }] };
     else throw Error(`Unexpected endpoint ${url}`);
@@ -246,11 +273,43 @@ test('resolver follows pagination, same-repository ancestry and fails closed on 
     await assert.rejects(resolvePreview(),/exact source accepted by the full release gate/);
     assert.equal(git.calls.filter(call=>call.method!=='GET').length,stableWritesBefore);
     process.env.ACCEPTED_STABLE_SHA=sha;
+    // Failed acceptance can retry its immutable run, before any reservation.
+    Object.assign(process.env,{GITHUB_RUN_ATTEMPT:'2',GITHUB_TRIGGERING_ACTOR:'phcastello'});
+    process.env.PREVIEW_VERSION='0.7.2-unstable.504';
+    await assert.rejects(resolvePreview(),/reruns cannot replace a signed version/);
+    Object.assign(process.env,{PREVIEW_VERSION:'0.7.2-unstable.504.rollback.1',DISTRIBUTION_KIND:'rollback'});
+    await assert.rejects(resolvePreview(),/reruns cannot replace a signed version/);
+    Object.assign(process.env,{PREVIEW_VERSION:'0.7.2',DISTRIBUTION_KIND:'normal'});
+    const eligibleRetry=await resolvePreview({reserve:false});
+    assert.equal(eligibleRetry.runAttempt,2);
+    assert.deepEqual(await git.state.read(),stableBefore);
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,stableWritesBefore);
+    retryControlSha='f'.repeat(40);
+    await assert.rejects(resolvePreview(),/Expected values to be strictly equal/);
+    retryControlSha=plan.controlSha;
+    retryTrigger='other'; await assert.rejects(resolvePreview(),/Expected values to be strictly equal/);retryTrigger='phcastello';
+    retryTrigger='reviewer';process.env.GITHUB_TRIGGERING_ACTOR='reviewer';retryPermission='read';
+    await assert.rejects(resolvePreview(),/write permission/);
+    retryPermission='write';retryTrigger='phcastello';process.env.GITHUB_TRIGGERING_ACTOR='phcastello';
+    retryPriorJobs[0].conclusion='success'; await assert.rejects(resolvePreview(),/earlier attempt already reserved/);retryPriorJobs[0].conclusion='skipped';
+    retryPriorJobs[1].steps=[{name:'Set up job'}]; await assert.rejects(resolvePreview(),/earlier attempt reached build\/signing/);retryPriorJobs[1].steps=[];
+    retryPriorJobs[2].steps=[{name:'Set up job'}]; await assert.rejects(resolvePreview(),/earlier attempt reached build\/signing/);retryPriorJobs[2].steps=[];
+    retryGate.conclusion='failure'; await assert.rejects(resolvePreview(),/Retry release acceptance did not pass/);retryGate.conclusion='success';
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,stableWritesBefore);
     const stable=await resolvePreview();
     assert.equal(stable.versionCode,7002999);
+    assert.equal(stable.runAttempt,2);
     assert.deepEqual((await git.state.read()).ledger.reservations.at(-1),stable);
     assert.deepEqual(JSON.parse(readFileSync(join(work,'preview-plan/preview.json'))),stable);
-    process.env.GITHUB_RUN_ID='505';
+    const reservedWrites=git.calls.filter(call=>call.method!=='GET').length;
+    process.env.GITHUB_RUN_ATTEMPT='3';
+    await assert.rejects(resolvePreview({reserve:false}),/already reserved this run or version/);
+    await assert.rejects(resolvePreview(),/already reserved this run or version/);
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,reservedWrites);
+    process.env.GITHUB_RUN_ID='505';process.env.GITHUB_RUN_ATTEMPT='2';
+    await assert.rejects(resolvePreview(),/already reserved this run or version/);
+    assert.equal(git.calls.filter(call=>call.method!=='GET').length,reservedWrites);
+    process.env.GITHUB_RUN_ATTEMPT='1';
     await assert.rejects(resolvePreview({reserve:false}),/must follow reserved/);
   } finally {
     process.chdir(cwd); globalThis.fetch = previousFetch;
@@ -280,8 +339,10 @@ test('build workflow requires manual dispatch, durable reservation and isolated 
   assert.match(reservation,/!cancelled\(\) && \(contains\(inputs.version, '-'\) \|\| \(needs\.stable-source\.result == 'success' && needs\.acceptance\.result == 'success'\)\)/);
   assert.match(reservation,/ACCEPTED_STABLE_SHA: \$\{\{ needs\.acceptance\.result == 'success' && needs\.stable-source\.outputs\.sha \|\| '' \}\}/);
   assert.match(build,/needs\.plan\.outputs\.stable != 'true' \|\| needs\.acceptance\.result == 'success'/);
+  assert.match(build,/RESERVED_ATTEMPT: \$\{\{ needs\.plan\.outputs\.runAttempt \}\}[\s\S]+test "\$GITHUB_RUN_ATTEMPT" = "\$RESERVED_ATTEMPT"[\s\S]+verify-attempt preview-plan\/preview\.json[\s\S]+native-preview\.mjs prepare/);
   assert.doesNotMatch(build, /secrets\./);
   assert.match(signer, /environment: aegis-native-signing/);
+  assert.match(signer,/RESERVED_ATTEMPT: \$\{\{ needs\.plan\.outputs\.runAttempt \}\}[\s\S]+test "\$GITHUB_RUN_ATTEMPT" = "\$RESERVED_ATTEMPT"[\s\S]+verify-reservation-attempt preview-plan\/preview\.json[\s\S]+secrets\.ANDROID_KEYSTORE_BASE64/);
   assert.match(signer,/if: \$\{\{ !cancelled\(\) && needs.plan.result == 'success' && needs.build.result == 'success' \}\}/);
   assert.doesNotMatch(signer, /windows-release-upgrade|npm run build|\.\/candidate\/|ref: \$\{\{ needs\.plan\.outputs\.sha/);
   assert.match(signer, /tauri signer sign --app-version/);

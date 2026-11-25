@@ -7,6 +7,12 @@ inputs:
   cache-variant:
     description: Separate dependency cache for emulator architecture
     default: ''
+  gradle-cache-variant:
+    description: Separate Gradle dependencies by Android build workload
+    default: ''
+  gradle-cache-seed-variant:
+    description: Optional compatible, reviewed dependency-only seed workload on a cache miss
+    default: ''
 runs:
   using: composite
   steps:
@@ -29,13 +35,67 @@ runs:
       with:
         distribution: temurin
         java-version: '17'
-        # Reuse dependencies and wrapper distributions between ephemeral CI jobs.
-        cache: gradle
-        cache-dependency-path: |
-          apps/aegis-node/src-tauri/gen/android/**/*.gradle
-          apps/aegis-node/src-tauri/gen/android/**/*.gradle.kts
-          apps/aegis-node/src-tauri/gen/android/**/gradle.properties
-          apps/aegis-node/src-tauri/gen/android/**/gradle-wrapper.properties
+    - if: inputs.android == 'true'
+      name: Identify Gradle dependency and legacy seed caches
+      id: gradle-cache
+      shell: bash
+      env:
+        VARIANT: ${{ inputs.gradle-cache-variant || inputs.cache-variant || 'arm64-full' }}
+        SEED_VARIANT: ${{ inputs.gradle-cache-seed-variant }}
+        WRAPPER_HASH: ${{ hashFiles('apps/aegis-node/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties') }}
+        LEGACY_HASH: ${{ hashFiles('apps/aegis-node/src-tauri/gen/android/**/*.gradle', 'apps/aegis-node/src-tauri/gen/android/**/*.gradle.kts', 'apps/aegis-node/src-tauri/gen/android/**/gradle.properties', 'apps/aegis-node/src-tauri/gen/android/**/gradle-wrapper.properties') }}
+        DEPENDENCIES_HASH: ${{ hashFiles('apps/aegis-node/src-tauri/gen/android/**/*.gradle', 'apps/aegis-node/src-tauri/gen/android/**/*.gradle.kts', 'apps/aegis-node/src-tauri/gen/android/**/gradle.properties', 'apps/aegis-node/src-tauri/gen/android/**/gradle-wrapper.properties', 'apps/aegis-node/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar', 'apps/aegis-node/src-tauri/gen/android/**/buildSrc/src/**', 'apps/aegis-node/src-tauri/gen/android/**/*.versions.toml', 'apps/aegis-node/src-tauri/gen/android/**/versions.properties', 'apps/aegis-node/src-tauri/gen/android/**/gradle.lockfile', 'apps/aegis-node/src-tauri/gen/android/**/dependency-locks/**', 'apps/aegis-node/src-tauri/gen/android/**/verification-metadata.xml', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/src-tauri/Cargo.toml', 'apps/aegis-node/package-lock.json', 'packages/aegis-client/package-lock.json', '.github/workflows/aegis-node-ci.yml', '.github/workflows/aegis-release-identity-ci.yml', '.github/workflows/aegis-native-preview.yml', '.github/actions/setup-aegis-node/action.yml') }}
+      run: |
+        [[ "$VARIANT" =~ ^[a-zA-Z0-9_-]+$ ]]
+        [[ "$SEED_VARIANT" =~ ^[a-zA-Z0-9_-]*$ ]]
+        for hash in "$WRAPPER_HASH" "$LEGACY_HASH" "$DEPENDENCIES_HASH"; do [[ "$hash" =~ ^[a-f0-9]{64}$ ]]; done
+        gradle_home="$(node -p 'require("node:os").homedir()')/.gradle"
+        arch="$(node -p 'process.arch')"
+        prefix="aegis-gradle-modules-v1-${RUNNER_OS}-${arch}-java17-${VARIANT}-${WRAPPER_HASH}-"
+        echo "home=$gradle_home" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${DEPENDENCIES_HASH}" >> "$GITHUB_OUTPUT"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        if [[ -n "$SEED_VARIANT" ]]; then
+          echo "seed-prefix=aegis-gradle-modules-v1-${RUNNER_OS}-${arch}-java17-${SEED_VARIANT}-${WRAPPER_HASH}-" >> "$GITHUB_OUTPUT"
+        fi
+        echo "legacy=setup-java-${RUNNER_OS}-${arch}-gradle-${LEGACY_HASH}" >> "$GITHUB_OUTPUT"
+        echo "wrapper=setup-java-${RUNNER_OS}-${arch}-gradle-wrapper-${WRAPPER_HASH}" >> "$GITHUB_OUTPUT"
+    - if: inputs.android == 'true'
+      name: Cache Gradle wrapper distribution
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ${{ steps.gradle-cache.outputs.home }}/wrapper
+        key: ${{ steps.gradle-cache.outputs.wrapper }}
+    - if: inputs.android == 'true'
+      name: Cache resolved Gradle dependencies for this workload
+      id: gradle-dependencies
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        # Do not archive project outputs, user properties, signing credentials,
+        # or modules-2.lock/gc.properties in the parent of these directories.
+        path: |
+          ${{ steps.gradle-cache.outputs.home }}/caches/modules-2/files-*
+          ${{ steps.gradle-cache.outputs.home }}/caches/modules-2/metadata-*
+          ${{ steps.gradle-cache.outputs.home }}/caches/modules-2/resources-*
+        key: ${{ steps.gradle-cache.outputs.key }}
+        restore-keys: |
+          ${{ steps.gradle-cache.outputs.prefix }}
+          ${{ steps.gradle-cache.outputs.seed-prefix }}
+    - if: inputs.android == 'true' && steps.gradle-dependencies.outputs.cache-hit == ''
+      name: Seed empty Gradle dependency cache from previous setup-java cache
+      id: legacy-gradle-seed
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        # Same absolute path and key format as the previous setup-java v5.
+        # Read-only seed: never overwrite or refresh the old common cache.
+        path: ${{ steps.gradle-cache.outputs.home }}/caches
+        key: ${{ steps.gradle-cache.outputs.legacy }}
+    - if: inputs.android == 'true' && steps.legacy-gradle-seed.outputs.cache-hit == 'true'
+      name: Discard copied Gradle module lock and cleanup state before building
+      shell: bash
+      env:
+        GRADLE_CACHE_HOME: ${{ steps.gradle-cache.outputs.home }}
+      run: rm -f -- "$GRADLE_CACHE_HOME/caches/modules-2/modules-2.lock" "$GRADLE_CACHE_HOME/caches/modules-2/gc.properties"
     - if: inputs.android == 'true'
       uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       with:

@@ -234,6 +234,8 @@ jobs:
       - uses: ./.github/actions/setup-aegis-node
         with:
           android: ${{ matrix.android }}
+          gradle-cache-variant: ${{ needs.selection.outputs.full != 'true' && inputs.android_distribution_only && 'arm64-distribution-only' || 'arm64-full' }}
+          gradle-cache-seed-variant: ${{ needs.selection.outputs.full != 'true' && inputs.android_distribution_only && 'arm64-full' || '' }}
       - if: matrix.android == 'true'
         name: Install Firebase Android client configuration when provisioned
         env:
@@ -405,6 +407,8 @@ jobs:
         with:
           android: 'true'
           cache-variant: notification-framework-x86_64
+          gradle-cache-variant: ${{ format('framework-x86_64-api{0}-{1}', matrix.api, matrix.api == 35 && needs.selection.outputs.idle == 'true' && 'idle-acceptance' || 'contracts') }}
+          gradle-cache-seed-variant: ${{ matrix.api == 35 && (needs.selection.outputs.idle == 'true' && 'framework-x86_64-api35-contracts' || 'framework-x86_64-api26-contracts') || 'framework-x86_64-api35-contracts' }}
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '8.0.x'
