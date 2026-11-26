@@ -49,6 +49,20 @@ try {
   await writeFile(overrideFixture, withoutModels + '\nAEGIS_CHAT_MODEL=gpt-6-luna\nAEGIS_CHAT_REASONING_EFFORT=medium\nAEGIS_TITLE_MODEL=gpt-5-nano\nAEGIS_TITLE_REASONING_EFFORT=minimal\n');
   const overrides = config(true, overrideFixture).services['aegis-api'].environment;
   assert.deepEqual(modelKeys.slice(0, 4).map(key => overrides[key]), ['gpt-6-luna', 'medium', 'gpt-5-nano', 'minimal']);
+  const searchKeys = ['AEGIS_WEB_SEARCH_ENABLED', 'AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS'];
+  const withoutSearch = example.split('\n').filter(line =>
+    !searchKeys.some(key => line.startsWith(key + '='))).join('\n');
+  const searchDefaultsFixture = join(temporary, 'search-defaults.env');
+  await writeFile(searchDefaultsFixture, withoutSearch);
+  for (const configuration of [development, privateMode, config(false, searchDefaultsFixture), config(true, searchDefaultsFixture)]) {
+    assert.deepEqual(searchKeys.map(key => configuration.services['aegis-api'].environment[key]), ['true', '20']);
+  }
+  const legacySearchFixture = join(temporary, 'search-legacy.env');
+  await writeFile(legacySearchFixture, withoutSearch + '\nAEGIS_WEB_SEARCH_MAX_CALLS=8\nAEGIS_WEB_SEARCH_ENABLED=false\n');
+  assert.deepEqual(searchKeys.map(key => config(false, legacySearchFixture).services['aegis-api'].environment[key]), ['false', '8']);
+  const searchOverrideFixture = join(temporary, 'search-override.env');
+  await writeFile(searchOverrideFixture, withoutSearch + '\nAEGIS_WEB_SEARCH_MAX_CALLS=8\nAEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS=12\n');
+  assert.equal(config(true, searchOverrideFixture).services['aegis-api'].environment.AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS, '12');
   const privateFixture = join(temporary, 'private-ip.env');
   await writeFile(privateFixture, example.replace('AEGIS_HTTP_BIND_ADDRESS=127.0.0.1', 'AEGIS_HTTP_BIND_ADDRESS=192.0.2.25'));
   const privateAddress = config(true, privateFixture);

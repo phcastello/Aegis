@@ -133,8 +133,8 @@ public sealed class FinalSpeechSegmentTests
         Assert.Equal("Resposta natural.", answer);
         Assert.Equal(8, Assert.Single(evidence.Citations).EndIndex);
         Assert.Equal(segmented ? 2 : 1, fixture.Model.Requests.Count);
-        if (segmented) Assert.Equal(0, fixture.Model.Requests[0].NativeWebSearchCallLimit);
-        Assert.True(fixture.Model.Requests[^1].NativeWebSearchCallLimit > 0);
+        if (segmented) Assert.Null(fixture.Model.Requests[0].NativeSearchActionBudget);
+        Assert.True(fixture.Model.Requests[^1].NativeSearchActionBudget > 0);
 
         var conversation = Assert.IsType<ConversationResponse>(await chat.GetConversationAsync(conversationId));
         var message = Assert.Single(conversation.Messages.Where(item => item.Role == "assistant"));
@@ -373,7 +373,7 @@ public sealed class FinalSpeechSegmentTests
             Requests.Add(request);
             if (ResearchOutputs.Count > 0)
             {
-                if (request.NativeWebSearchCallLimit == 0)
+                if (request.NativeSearchActionBudget is null)
                 {
                     Assert.Contains(request.Tools, tool => tool.Name == "request_web_search");
                     var gateOutput = JsonSerializer.SerializeToElement(new {

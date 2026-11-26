@@ -40,14 +40,14 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems, request.NativeWebSearchCallLimit);
+            request.InputItems, request.NativeSearchActionBudget);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: false, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeSearchActionBudget), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
@@ -125,14 +125,14 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems, request.NativeWebSearchCallLimit);
+            request.InputItems, request.NativeSearchActionBudget);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: true, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeSearchActionBudget), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
@@ -150,7 +150,7 @@ public sealed class OpenAIResponsesClient(
         string? terminalItemId = null;
         var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
         var webSearchStates = new Dictionary<string, string>(StringComparer.Ordinal);
-        var trackWebSearch = request.NativeWebSearchCallLimit > 0 &&
+        var trackWebSearch = request.NativeSearchActionBudget.HasValue &&
             !request.Tools.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName);
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -503,7 +503,7 @@ public sealed class OpenAIResponsesClient(
         string? previousResponseId = null,
         IReadOnlyList<ModelToolOutput>? toolOutputs = null,
         IReadOnlyList<JsonElement>? inputItems = null,
-        int nativeWebSearchCallLimit = 0)
+        int? nativeSearchActionBudget = null)
     {
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -534,7 +534,7 @@ public sealed class OpenAIResponsesClient(
             : request.Input;
 
         // Hosted tools must not run before an undecided hands-free turn is accepted.
-        var webSearchEnabled = nativeWebSearchCallLimit > 0 &&
+        var webSearchEnabled = nativeSearchActionBudget.HasValue &&
             !(tools?.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName) ?? false);
         var providerTools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => (object)new
         {
@@ -566,7 +566,6 @@ public sealed class OpenAIResponsesClient(
             metadata,
             tools = providerTools,
             include = webSearchEnabled ? new[] { "web_search_call.action.sources" } : null,
-            max_tool_calls = webSearchEnabled ? nativeWebSearchCallLimit : (int?)null,
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = providerTools is { Count: > 0 } ? "auto" : null
         };

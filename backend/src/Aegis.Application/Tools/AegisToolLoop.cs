@@ -57,7 +57,8 @@ public sealed class AegisToolLoop(
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
         var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
-        var webSearchBudget = webSearchOptions?.Enabled == true ? webSearchOptions.MaxCallsPerTurn : 0;
+        var initialSearchActionBudget = webSearchOptions?.Enabled == true ? webSearchOptions.MaxSearchActionsPerTurn : (int?)null;
+        var webSearchBudget = initialSearchActionBudget;
         var webSearchRequested = false;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
@@ -67,7 +68,7 @@ public sealed class AegisToolLoop(
                 HandsFreeReply.Definition, decisionPending, webSearchRequested, webSearchBudget, argumentFailures);
             var response = await TurnLatencyProfile.MeasureAsync("model.round",
                 () => modelClient.RespondWithToolsAsync(round, cancellationToken));
-            ConsumeWebSearchBudget(response.OutputItems, round.NativeWebSearchCallLimit, ref webSearchBudget);
+            ConsumeWebSearchBudget(response.OutputItems, round.NativeSearchActionBudget, ref webSearchBudget, context.ConversationId);
             responses.Add(response);
             TurnLatencyProfile.Mark("model.round_completed", iteration);
             TurnLatencyProfile.Mark("model.tool_calls", response.ToolCalls.Count);
@@ -94,7 +95,7 @@ public sealed class AegisToolLoop(
                     VoiceContinuation = continuation,
                     MetadataJson = WebResearchMetadata.Merge(response.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         speech, false),
-                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds)
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget)
                 };
             }
 
@@ -117,7 +118,7 @@ public sealed class AegisToolLoop(
                     Content = finalContent,
                     MetadataJson = WebResearchMetadata.Merge(response.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         finalContent, hasAnswer),
-                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds),
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
                     VoiceContinuation = handsFree ? HandsFreeReply.Close : null
                 };
             }
@@ -187,7 +188,8 @@ public sealed class AegisToolLoop(
         var stopwatch = Stopwatch.StartNew();
         var argumentFailures = 0;
         var decisionPending = handsFree && context.AcceptVoiceTurn is not null;
-        var webSearchBudget = webSearchOptions?.Enabled == true ? webSearchOptions.MaxCallsPerTurn : 0;
+        var initialSearchActionBudget = webSearchOptions?.Enabled == true ? webSearchOptions.MaxSearchActionsPerTurn : (int?)null;
+        var webSearchBudget = initialSearchActionBudget;
         var webSearchRequested = false;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
@@ -205,7 +207,7 @@ public sealed class AegisToolLoop(
                     completed = chunk;
                     break;
                 }
-                if (chunk.ToolStatus is { } providerStatus && !decisionPending && round.NativeWebSearchCallLimit > 0)
+                if (chunk.ToolStatus is { } providerStatus && !decisionPending && round.NativeSearchActionBudget.HasValue)
                     yield return new ModelStreamChunk(null, false, ToolStatus: providerStatus);
                 if (chunk.FinalSpeechSegment is { } finalSegment)
                 {
@@ -236,7 +238,7 @@ public sealed class AegisToolLoop(
             {
                 throw new InvalidOperationException("Tool streaming ended without a complete response.");
             }
-            ConsumeWebSearchBudget(completed.OutputItems, round.NativeWebSearchCallLimit, ref webSearchBudget);
+            ConsumeWebSearchBudget(completed.OutputItems, round.NativeSearchActionBudget, ref webSearchBudget, context.ConversationId);
             responses.Add(completed);
             TurnLatencyProfile.Mark("model.round_completed", iteration);
             TurnLatencyProfile.Mark("model.tool_calls", completed.ToolCalls.Count);
@@ -263,7 +265,7 @@ public sealed class AegisToolLoop(
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model, completed.Purpose,
                     WebResearchMetadata.Merge(completed.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         string.Join(" ", validated), false),
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds), VoiceContinuation: segmentDecision);
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget), VoiceContinuation: segmentDecision);
                 yield break;
             }
             if (finalSegments.Count > 0) throw new InvalidOperationException("Incomplete terminal speech response.");
@@ -277,7 +279,7 @@ public sealed class AegisToolLoop(
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, WebResearchMetadata.Merge(completed.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         speech, false),
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
                     VoiceContinuation: continuation);
                 yield break;
             }
@@ -311,7 +313,7 @@ public sealed class AegisToolLoop(
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, WebResearchMetadata.Merge(completed.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         emittedText.ToString().Trim(), true),
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
                     VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
@@ -326,7 +328,7 @@ public sealed class AegisToolLoop(
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model,
                     completed.Purpose, WebResearchMetadata.Merge(completed.MetadataJson, responses.SelectMany(item => item.OutputItems),
                         limitReply, false),
-                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds),
+                    CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
                     VoiceContinuation: handsFree ? HandsFreeReply.Close : null);
                 yield break;
             }
@@ -369,21 +371,21 @@ public sealed class AegisToolLoop(
         ModelRequest request, IReadOnlyList<ModelToolDefinition> tools,
         IReadOnlyList<JsonElement>? inputItems, IReadOnlyList<JsonElement>? auditInputItems,
         int iteration, bool handsFree, ModelToolDefinition terminal, bool decisionPending,
-        bool webSearchRequested, int webSearchBudget, int argumentFailures)
+        bool webSearchRequested, int? webSearchBudget, int argumentFailures)
     {
         var ordinaryRound = iteration <= DefaultMaxIterations && argumentFailures <= 1;
-        var nativeBudget = ordinaryRound && !decisionPending && (!handsFree || webSearchRequested) ? webSearchBudget : 0;
+        var nativeBudget = ordinaryRound && !decisionPending && (!handsFree || webSearchRequested) ? webSearchBudget : null;
         var roundTools = ordinaryRound
             ? tools.Where(tool => !webSearchRequested || tool.Name != terminal.Name).ToList()
             : handsFree && !webSearchRequested ? new List<ModelToolDefinition> { terminal } : new List<ModelToolDefinition>();
-        if (handsFree && !webSearchRequested && webSearchBudget > 0 && iteration < DefaultMaxIterations && ordinaryRound)
+        if (handsFree && !webSearchRequested && webSearchBudget.HasValue && iteration < DefaultMaxIterations && ordinaryRound)
             roundTools.Add(WebSearchGate);
         if (decisionPending)
             roundTools.Add(HandsFreeDirection.IgnoreDefinition);
 
         var realInput = WithIdentityReminder(inputItems, request.Instructions, iteration > 1);
         var auditInput = WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1);
-        if (nativeBudget > 0 || roundTools.Any(tool => tool.Name == WebSearchGateName) || webSearchRequested)
+        if (nativeBudget.HasValue || roundTools.Any(tool => tool.Name == WebSearchGateName) || webSearchRequested)
         {
             var guidance = "Use a pesquisa para informações públicas atuais, verificações e fontes quando pertinente. " +
                 "Respeite pedidos para não pesquisar. Não pesquise por padrão fatos simples e estáveis. " +
@@ -393,15 +395,21 @@ public sealed class AegisToolLoop(
             if (webSearchRequested)
                 guidance += " Neste turno de voz, finalize por texto natural em português, sem função terminal de fala. " +
                     "Dê a resposta principal primeiro, seguida da explicação pertinente. Evite ler URLs em voz alta.";
-            if (webSearchRequested && nativeBudget == 0)
-                guidance += " O orçamento de pesquisa acabou. Conclua com as evidências já disponíveis.";
+            if (nativeBudget is int searchActions)
+                guidance += searchActions == 0
+                    ? " Saldo de ações search: 0. Não faça novas ações search neste turno. " +
+                      "Você pode usar open_page e find_in_page para consultar as fontes disponíveis."
+                    : $" Saldo de ações search neste turno: {searchActions}. Não ultrapasse esse saldo. " +
+                      "As ações open_page e find_in_page não consomem esse orçamento.";
+            if (webSearchRequested && nativeBudget is null)
+                guidance += " O turno atingiu o limite de rodadas. Conclua com as evidências já disponíveis.";
             var guidanceItem = ToJsonElement(new { role = "developer", content = guidance });
             realInput = [.. (realInput ?? request.InputItems ?? [CreateUserInputItem(request.Input)]), guidanceItem];
             auditInput = [.. (auditInput ?? request.AuditInputItems ?? request.InputItems ?? [CreateUserInputItem(request.Input)]), guidanceItem];
         }
 
         return new ModelToolRequest(request, roundTools, DefaultMaxIterations,
-            InputItems: realInput, AuditInputItems: auditInput, NativeWebSearchCallLimit: nativeBudget);
+            InputItems: realInput, AuditInputItems: auditInput, NativeSearchActionBudget: nativeBudget);
     }
 
     private static bool CanRequestWebSearch(ModelToolRequest round, IReadOnlyList<ModelToolCall> calls, ModelToolCall call) =>
@@ -417,15 +425,60 @@ public sealed class AegisToolLoop(
             throw new InvalidOperationException("Resposta terminal de voz inesperada durante pesquisa.");
     }
 
-    private static void ConsumeWebSearchBudget(IReadOnlyList<JsonElement> outputItems, int allowed, ref int remaining)
+    private void ConsumeWebSearchBudget(IReadOnlyList<JsonElement> outputItems, int? allowed, ref int? remaining, Guid conversationId)
     {
-        var count = outputItems.Count(item => item.ValueKind == JsonValueKind.Object &&
-            item.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String &&
-            type.GetString() == "web_search_call");
-        if (count > allowed)
-            throw new InvalidOperationException("A pesquisa excedeu o limite autorizado para esta rodada.");
-        remaining -= count;
+        var actions = CountWebSearchActions(outputItems);
+        if (!allowed.HasValue)
+        {
+            if (actions.Search + actions.OpenPage + actions.FindInPage + actions.Unknown > 0)
+                throw new InvalidOperationException("Pesquisa nativa recebida sem autorização para esta rodada.");
+            return;
+        }
+
+        // The provider exposes no hard limit for search actions alone. Keep the
+        // answer and the audit if the provider exceeds the requested budget.
+        if (actions.Search > allowed.Value)
+            logger.LogWarning("Web search action budget exceeded for conversation {ConversationId}: {SearchActions} search actions, {RemainingBudget} requested.",
+                conversationId, actions.Search, allowed.Value);
+        remaining = Math.Max(0, allowed.Value - actions.Search);
     }
+
+    private static WebSearchActionCounts CountWebSearchActions(IEnumerable<JsonElement> outputItems)
+    {
+        int search = 0, openPage = 0, findInPage = 0, unknown = 0;
+        foreach (var item in outputItems)
+        {
+            if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("type", out var type) ||
+                type.ValueKind != JsonValueKind.String || type.GetString() != "web_search_call") continue;
+            string? actionType = item.TryGetProperty("action", out var action) && action.ValueKind == JsonValueKind.Object &&
+                action.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.String ? kind.GetString() : null;
+            switch (actionType)
+            {
+                case "search": search++; break;
+                case "open_page": openPage++; break;
+                case "find_in_page": findInPage++; break;
+                default: unknown++; break;
+            }
+        }
+        return new WebSearchActionCounts(search, openPage, findInPage, unknown);
+    }
+
+    private static object? WebSearchAudit(IEnumerable<JsonElement> outputItems, int? searchActionBudget)
+    {
+        if (!searchActionBudget.HasValue) return null;
+        var actions = CountWebSearchActions(outputItems);
+        return new
+        {
+            searchActionBudget = searchActionBudget.Value,
+            actions.Search,
+            actions.OpenPage,
+            actions.FindInPage,
+            actions.Unknown,
+            searchActionsOverBudget = Math.Max(0, actions.Search - searchActionBudget.Value)
+        };
+    }
+
+    private sealed record WebSearchActionCounts(int Search, int OpenPage, int FindInPage, int Unknown);
 
     private static IReadOnlyList<string> SplitSpeech(string text)
     {
@@ -502,7 +555,7 @@ public sealed class AegisToolLoop(
         ModelToolStreamChunk finalResponse,
         IReadOnlyList<ModelToolStreamChunk> responses,
         IReadOnlyList<object> executions,
-        long durationMilliseconds)
+        long durationMilliseconds, int? searchActionBudget)
     {
         return finalResponse.AuditData! with
         {
@@ -514,7 +567,8 @@ public sealed class AegisToolLoop(
                 iterations = responses.Count,
                 toolCalls = executions.Count,
                 requests = responses.Select(response => response.AuditData?.RequestPayloadJson),
-                toolExecutions = executions
+                toolExecutions = executions,
+                nativeWebSearch = WebSearchAudit(responses.SelectMany(response => response.OutputItems), searchActionBudget)
             }, JsonOptions),
             ResponseBody = JsonSerializer.Serialize(new
             {
@@ -576,7 +630,7 @@ public sealed class AegisToolLoop(
         ModelToolResponse finalResponse,
         IReadOnlyList<ModelToolResponse> responses,
         IReadOnlyList<object> executions,
-        long durationMilliseconds)
+        long durationMilliseconds, int? searchActionBudget)
     {
         var requestPayloads = responses
             .Select((response, index) => new
@@ -601,7 +655,8 @@ public sealed class AegisToolLoop(
             {
                 type = "tool_loop",
                 requestPayloads,
-                toolExecutions = executions
+                toolExecutions = executions,
+                nativeWebSearch = WebSearchAudit(responses.SelectMany(response => response.OutputItems), searchActionBudget)
             }, JsonOptions),
             ResponseBody = JsonSerializer.Serialize(new
             {

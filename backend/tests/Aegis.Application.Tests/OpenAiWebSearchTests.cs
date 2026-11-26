@@ -27,7 +27,7 @@ public sealed class OpenAiWebSearchTests
         var localTool = new ModelToolDefinition("example", "Example",
             JsonSerializer.SerializeToElement(new { type = "object" }));
         var request = new ModelToolRequest(new ModelRequest("prompt", "Pesquise"), [localTool],
-            NativeWebSearchCallLimit: 3);
+            NativeSearchActionBudget: 3);
 
         IReadOnlyList<JsonElement> output;
         string? audit;
@@ -63,7 +63,7 @@ public sealed class OpenAiWebSearchTests
         Assert.Equal(new[] { "function", "web_search" }, tools.Select(tool => tool.GetProperty("type").GetString()));
         Assert.Equal("example", tools[0].GetProperty("name").GetString());
         Assert.Equal("auto", root.GetProperty("tool_choice").GetString());
-        Assert.Equal(3, root.GetProperty("max_tool_calls").GetInt32());
+        Assert.False(root.TryGetProperty("max_tool_calls", out _));
         Assert.Equal("web_search_call.action.sources", root.GetProperty("include")[0].GetString());
         Assert.Equal("https://example.org/source", output[0].GetProperty("action").GetProperty("sources")[0].GetProperty("url").GetString());
         Assert.Equal("url_citation", output[1].GetProperty("content")[0].GetProperty("annotations")[0].GetProperty("type").GetString());
@@ -84,7 +84,7 @@ public sealed class OpenAiWebSearchTests
             metrics, NullLogger<OpenAIResponsesClient>.Instance);
         IReadOnlyList<ModelToolDefinition> tools = pending ? [HandsFreeDirection.IgnoreDefinition] : [];
         var request = new ModelToolRequest(new ModelRequest("prompt", "pedido"), tools,
-            NativeWebSearchCallLimit: pending ? 3 : 0);
+            NativeSearchActionBudget: pending ? 3 : null);
 
         await client.RespondWithToolsAsync(request);
 
@@ -94,6 +94,25 @@ public sealed class OpenAiWebSearchTests
             tool => tool.GetProperty("type").GetString() == "web_search");
         Assert.False(root.TryGetProperty("max_tool_calls", out _));
         Assert.False(root.TryGetProperty("include", out _));
+    }
+
+    [Fact]
+    public async Task ExhaustedSearchActionBudgetKeepsHostedToolAvailableWithoutProviderCallCap()
+    {
+        using var handler = new SearchHandler(false, searched: false);
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var client = new OpenAIResponsesClient(http,
+            Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest("prompt", "Leia a fonte"), [],
+            NativeSearchActionBudget: 0));
+        using var payload = JsonDocument.Parse(handler.RequestBody!);
+        var root = payload.RootElement;
+        Assert.Contains(root.GetProperty("tools").EnumerateArray().ToArray(),
+            tool => tool.GetProperty("type").GetString() == "web_search");
+        Assert.False(root.TryGetProperty("max_tool_calls", out _));
+        Assert.Equal("web_search_call.action.sources", root.GetProperty("include")[0].GetString());
     }
 
     private sealed class SearchHandler(bool stream, bool searched = true) : HttpMessageHandler
