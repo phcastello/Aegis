@@ -24,6 +24,9 @@ fn fixture() -> (Backend, TcpListener) {
 }
 
 fn request(server: &TcpListener, path: &str) -> (TcpStream, Vec<u8>) {
+    request_with_method(server, "POST", path)
+}
+fn request_with_method(server: &TcpListener, method: &str, path: &str) -> (TcpStream, Vec<u8>) {
     loop {
         let (mut socket, _) = server.accept().unwrap();
         socket
@@ -61,7 +64,7 @@ fn request(server: &TcpListener, path: &str) -> (TcpStream, Vec<u8>) {
                 .unwrap();
             continue;
         }
-        assert_eq!(request_line, format!("POST {path} HTTP/1.1"));
+        assert_eq!(request_line, format!("{method} {path} HTTP/1.1"));
         return (socket, payload);
     }
 }
@@ -179,10 +182,114 @@ fn chunk(socket: &mut TcpStream, bytes: &[u8]) {
 }
 
 #[test]
+fn delegated_speech_polls_the_exact_job_and_reads_every_frame_without_a_new_chat_turn() {
+    let (backend, server) = fixture();
+    let job = Uuid::new_v4();
+    let conversation = Uuid::new_v4();
+    let session = Uuid::new_v4();
+    let worker = thread::spawn(move || {
+        let path = format!("/api/chat/research-jobs/{job}");
+        let (s, _) = request_with_method(&server, "GET", &path);
+        answer(
+            s,
+            json!({"id":job,"conversationId":conversation,"state":"running"}),
+        );
+        let (s, _) = request_with_method(&server, "GET", &path);
+        answer(
+            s,
+            json!({"id":job,"conversationId":conversation,"state":"completed"}),
+        );
+        let (mut s, bytes) = request(&server, &format!("{path}/speech"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"voiceSessionId":session})
+        );
+        let speech = Uuid::new_v4();
+        write!(s, "HTTP/1.1 200 OK\r\nConnection: close\r\nX-Aegis-Speech-Request-Id: {speech}\r\nX-Aegis-Audio-Format: pcm_s16le\r\nX-Aegis-Sample-Rate: 24000\r\nX-Aegis-Channels: 1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        let second = [1; 48_000];
+        for _ in 0..181 {
+            chunk(&mut s, &second);
+        }
+        chunk(&mut s, &[2, 0]);
+        s.write_all(b"0\r\n\r\n").unwrap();
+    });
+    assert!(matches!(
+        backend.research_speech_status(job, conversation),
+        Ok(ResearchSpeechStatus::Pending)
+    ));
+    assert!(matches!(
+        backend.research_speech_status(job, conversation),
+        Ok(ResearchSpeechStatus::Ready)
+    ));
+    let output = AudioFixture::default();
+    let heard = output.played.clone();
+    backend
+        .speak_research_result(job, session, || Ok(output))
+        .unwrap();
+    let heard = heard.lock().unwrap();
+    assert_eq!(heard.len(), 181 * 24_000 + 1);
+    assert_eq!(heard.last(), Some(&2));
+    worker.join().unwrap();
+}
+
+#[test]
+fn deferred_audio_cancellation_disposes_the_stream_and_drops_the_unsaid_tail() {
+    let (backend, server) = fixture();
+    let job = Uuid::new_v4();
+    let session = Uuid::new_v4();
+    let worker = thread::spawn(move || {
+        let (mut s, _) = request(&server, &format!("/api/chat/research-jobs/{job}/speech"));
+        let speech = Uuid::new_v4();
+        write!(s, "HTTP/1.1 200 OK\r\nConnection: close\r\nX-Aegis-Speech-Request-Id: {speech}\r\nX-Aegis-Audio-Format: pcm_s16le\r\nX-Aegis-Sample-Rate: 24000\r\nX-Aegis-Channels: 1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        chunk(&mut s, &[7, 0]);
+        let mut byte = [0];
+        assert_eq!(
+            s.read(&mut byte).unwrap(),
+            0,
+            "cancel must close the PCM connection"
+        );
+    });
+    let output = AudioFixture {
+        interrupt: true,
+        ..Default::default()
+    };
+    let heard = output.played.clone();
+    assert_eq!(
+        backend.speak_research_result(job, session, || Ok(output)),
+        Err("cancelled")
+    );
+    assert_eq!(*heard.lock().unwrap(), [7]);
+    worker.join().unwrap();
+}
+
+#[test]
+fn acknowledgement_after_research_stops_silently_and_substantive_follow_up_is_kept() {
+    assert!(closes_research_reply("  Ah, não, beleza! "));
+    assert!(closes_research_reply("Ok, obrigado."));
+    assert!(closes_research_reply("Pode parar."));
+    assert!(!closes_research_reply("Beleza, e no Rio?"));
+    let (mut backend, server) = fixture();
+    let worker = thread::spawn(move || transcript(&server, "Ah não, beleza."));
+    let report = backend.run_turn(
+        Uuid::new_v4(),
+        Some(Uuid::new_v4()),
+        &[0; 64],
+        Some(&Interruption::ResearchPlayback),
+        |_| panic!("acknowledgement must not start a chat"),
+        |_| {},
+        || -> Result<AudioFixture> { panic!("acknowledgement must not start audio") },
+    );
+    assert!(report.result.unwrap().ignored);
+    assert!(!report.chat_started);
+    worker.join().unwrap();
+}
+
+#[test]
 fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finishes() {
     let (mut backend, server) = fixture();
     let conversation = Uuid::new_v4();
     let message = Uuid::new_v4();
+    let research = Uuid::new_v4();
     let first = Uuid::new_v4();
     let second = Uuid::new_v4();
     let (sent, heard) = std::sync::mpsc::channel();
@@ -259,9 +366,11 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
         }
         chunk(&mut speech, &[18, 0]);
         speech.write_all(b"0\r\n\r\n").unwrap();
+        let mut completion = done_event(turn, conversation, message, false);
+        completion["researchJobId"] = json!(research);
         for event in [
             segment_event(turn, conversation, message, second, 1),
-            done_event(turn, conversation, message, false),
+            completion,
         ] {
             chunk(&mut chat, format!("{event}\n").as_bytes());
         }
@@ -289,6 +398,7 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
         || Ok(output),
     );
     assert!(report.result.is_ok());
+    assert_eq!(report.research_job, Some(research));
     assert_eq!(*audio.lock().unwrap(), [17, 17, 18, 99]);
     let events = observed.lock().unwrap();
     assert_eq!(

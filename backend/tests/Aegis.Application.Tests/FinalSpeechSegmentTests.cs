@@ -87,6 +87,7 @@ public sealed class FinalSpeechSegmentTests
         Assert.Equal("done", events.Current.Type);
         var messages = await fixture.Db.ChatMessages.ToListAsync();
         var user = Assert.Single(messages, message => message.Role == "user");
+        Assert.Equal(handsFree ? user.Id : (Guid?)null, events.Current.ResearchJobId);
         Assert.Equal(intent, Assert.Single(messages, message => message.Role == "assistant").Content);
         Assert.Equal(user.Id, (await fixture.Db.ResearchJobs.SingleAsync()).UserMessageId);
         Assert.Equal(brief, (await queue.ClaimAsync(default))?.Content);

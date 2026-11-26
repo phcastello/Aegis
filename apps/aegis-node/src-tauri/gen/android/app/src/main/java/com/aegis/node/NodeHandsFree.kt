@@ -24,6 +24,7 @@ import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /** Process singleton owns capture independently of Activity/WebView visibility. */
@@ -62,6 +63,15 @@ object NodeHandsFree {
 }
 
 internal class HandsFreeRuntime(private val context:Context) {
+    private class ResearchReply(
+        val jobId: String,
+        val voiceSessionId: String,
+        val conversationId: String,
+        val identity: String,
+        val expiresAt: Long,
+        var ready: Boolean = false
+    )
+
     private val prefs=context.getSharedPreferences("aegis-hands-free-v1",Context.MODE_PRIVATE)
     internal val metrics=HandsFreeMetrics(context)
     internal val collection=HandsFreeActivationCollection(context)
@@ -82,6 +92,14 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val batteryStudyGeneration=java.util.concurrent.atomic.AtomicInteger(0)
     private val main=Handler(Looper.getMainLooper())
     private val cleanup=Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeCancel").apply{isDaemon=true}}
+    private val researchReplies = LinkedHashMap<String, ResearchReply>()
+    private val acceptedResearchJobs = LinkedHashSet<String>()
+    private val researchWatcher = ScheduledThreadPoolExecutor(1) { task ->
+        Thread(task, "AegisHandsFreeResearch").apply { isDaemon = true }
+    }.apply {
+        setKeepAliveTime(30, TimeUnit.SECONDS)
+        allowCoreThreadTimeOut(true)
+    }
     private val lock=Any()
     @Volatile private var service:NodeVoiceInteractionService?=null
     @Volatile private var worker:Thread?=null
@@ -172,8 +190,63 @@ internal class HandsFreeRuntime(private val context:Context) {
                     "tts_first_audio"->setState("speaking","Aegis respondendo…")
                 }
             }
-        })
+        }, onResearchDelegated = ::watchResearchReply)
         return owner
+    }
+    private fun watchResearchReply(scope:NodeNativeSession.Session, jobId:String, voiceSessionId:String, destination:String) {
+        val reply = ResearchReply(jobId, voiceSessionId, destination, NodeNativeSession.fingerprint(scope),
+            SystemClock.elapsedRealtime() + 600_000)
+        synchronized(lock) {
+            if (!enabled || diagnostic || researchReplies.size >= 8 || !acceptedResearchJobs.add(jobId)) return
+            while (acceptedResearchJobs.size > 64) acceptedResearchJobs.remove(acceptedResearchJobs.first())
+            researchReplies[jobId] = reply
+            researchWatcher.execute { refreshResearchReply(reply) }
+        }
+    }
+    private fun refreshResearchReply(reply:ResearchReply) {
+        fun current() = synchronized(lock) {
+            enabled && !diagnostic && researchReplies[reply.jobId] === reply &&
+                SystemClock.elapsedRealtime() < reply.expiresAt
+        }
+        if (!current() || currentIdentity() != reply.identity) {
+            synchronized(lock) { researchReplies.remove(reply.jobId, reply) }
+            return
+        }
+        val source = NodeHandsFreeBackend(readSession = {
+            NodeNativeSession.read(context)?.takeIf { NodeNativeSession.fingerprint(it) == reply.identity && current() }
+        })
+        val state = try { source.researchJobState(reply.jobId) }
+        catch (error:NodeNativeSession.HttpFailure) {
+            if (error.status in setOf(400, 401, 403, 404)) "unavailable" else "queued"
+        } catch (_:Exception) { "queued" }
+        synchronized(lock) {
+            if (!current()) researchReplies.remove(reply.jobId, reply)
+            else when (state) {
+                "completed", "failed" -> reply.ready = true
+                "queued", "running" -> researchWatcher.schedule({ refreshResearchReply(reply) }, 3, TimeUnit.SECONDS)
+                else -> researchReplies.remove(reply.jobId, reply)
+            }
+        }
+    }
+    private fun beginResearchReply(generation:Int):ResearchReply? = synchronized(lock) {
+        if (researchReplies.isEmpty() || !current(generation) || !enabled || diagnostic ||
+            pendingActivation || sessionId != null || batteryBlocksNormal())
+            return null
+        val now = SystemClock.elapsedRealtime()
+        // The polling deadline bounds unreachable jobs. A completed result can
+        // still be waiting for other speech to finish on this device.
+        researchReplies.entries.removeAll { !it.value.ready && it.value.expiresAt <= now }
+        val reply = researchReplies.values.firstOrNull { it.ready } ?: return null
+        researchReplies.remove(reply.jobId)
+        if (currentIdentity() != reply.identity) return null
+        val token = UUID.randomUUID().toString()
+        continuityActivation = conversationContinuity.activate(reply.identity, now)
+        conversationId = reply.conversationId
+        sessionId = token
+        sessionCancelled = false
+        endReason = null
+        holdSessionPower(token)
+        reply
     }
     private fun cancelBackend(){val active=synchronized(lock){val value=backend;backend=null;value};if(active!=null){active.requestCancellation();cleanup.execute{active.cancel()}}}
     private fun ownsSession(generation:Int,session:String) =
@@ -204,6 +277,7 @@ internal class HandsFreeRuntime(private val context:Context) {
     private fun identityChanged()=synchronized(lock) {
         electionEpoch.incrementAndGet()
         val identity=currentIdentity()
+        researchReplies.entries.removeAll { it.value.identity != identity }
         val active=continuityActivation
         conversationContinuity.identityChanged(identity)
         if(active!=null && active.identity!=identity) {
@@ -355,6 +429,8 @@ internal class HandsFreeRuntime(private val context:Context) {
             batteryCaptureStartup=null
             epochCounter.incrementAndGet();captureConfirmed=false;pendingActivation=false;cancelledAt=HandsFreeTurnLatency.now();sessionCancelled=true;playback.cancel();activationCue.cancel()
             closeResponseCapture()
+            if (!enabled || diagnostic || value == "assistant_unavailable" || value == "permission_missing")
+                researchReplies.clear()
             endReason=value;if(!captureActive)finishEvent("interrupted",value)
             releaseSessionPower(sessionPowerToken)
             try{recorder?.stop()}catch(_:Exception){}
@@ -777,7 +853,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         context.assets.open(HandsFreeDoubleTalkDetector.ASSET).use { HandsFreeDoubleTalkDetector.Model.load(it) }
     }
 
-    private class ResponseBargeIn {
+    private class ResponseBargeIn(val readingResearch:Boolean = false) {
         val echo = HandsFreeBargeInEcho()
         var model: HandsFreeDoubleTalkDetector.Model? = null
         @Volatile var native: HandsFreeConversationAudio? = null
@@ -827,7 +903,8 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     // registered a real segment, its played boundary is exactly zero.
                                     response.interruption=owner.playbackInterruption(0)
                                     response.generationInterruption=if(response.interruption==null)owner.generationInterruption() else null
-                                    response.mergeUntranscribed=response.interruption==null && response.generationInterruption==null
+                                    response.mergeUntranscribed=!response.readingResearch &&
+                                        response.interruption==null && response.generationInterruption==null
                                     response.accepted=true
                                     conversationId=response.destination?:response.interruption?.conversationId?:conversationId
                                     backend=null
@@ -1056,6 +1133,7 @@ internal class HandsFreeRuntime(private val context:Context) {
 
     private fun run(generation:Int,startup:HandsFreeCaptureStartup?=null) {
         var nextCommand: BargeInCommand? = null
+        var closeResearchOnNextAcknowledgement = false
         var pendingInterruption: Pair<String, HandsFreePlaybackInterruption>? = null
         var pendingGenerationInterruption:Pair<String,HandsFreeGenerationInterruption>?=null
         var detector=0L
@@ -1117,18 +1195,26 @@ internal class HandsFreeRuntime(private val context:Context) {
             while(current(generation)) {
                 val interrupted = nextCommand
                 nextCommand = null
+                val closeResearchOnAcknowledgement = closeResearchOnNextAcknowledgement
+                closeResearchOnNextAcknowledgement = false
+                var researchReply: ResearchReply? = null
                 val command=if(batteryMode=="capture_only")captureOnly(generation,startup,::measureBlock){profileWorker()}
-                    else interrupted?.wav ?: capture(generation,detector,continuation,wakeVerifier,batteryMode=="detection",startup,::measureBlock){profileWorker()}
+                    else interrupted?.wav ?: capture(generation,detector,continuation,wakeVerifier,batteryMode=="detection",startup,::measureBlock,
+                        takeResearchReply = {
+                            researchReply = beginResearchReply(generation)
+                            researchReply != null
+                        }) {profileWorker()}
+                val research = researchReply
                 if(command==null)break
                 if(!current(generation)){command.fill(0);break}
-                if(command.isEmpty()){synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
+                if(command.isEmpty() && research==null){synchronized(lock){finishEvent(if(sessionCancelled)"cancelled" else "empty",endReason?:if(continuation)"continuation_timeout" else "no_speech")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 if(sessionCancelled){command.fill(0);synchronized(lock){finishEvent("cancelled",endReason?:"operation_cancelled")};continuation=false;endConversationSession(sessionId);if(!MicroWakeWordNative.reset(detector))error("detector_reset");continue}
                 val session=sessionId?:UUID.randomUUID().toString().also{sessionId=it}
                 if (pendingInterruption?.first != session) pendingInterruption = null
                 if(pendingGenerationInterruption?.first!=session)pendingGenerationInterruption=null
                 val turnIdentity=metrics.identityToken()
                 val trace=interrupted?.trace ?: capturedTurnLatency
-                val response = if (batteryMode==null && !diagnostic) ResponseBargeIn() else null
+                val response = if (batteryMode==null && !diagnostic) ResponseBargeIn(readingResearch = research != null) else null
                 var turnOutcome="failed"
                 var activeOwner:NodeHandsFreeBackend?=null
                 try {
@@ -1206,12 +1292,21 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     }
                                 }
                             }
-                        }
+                        },
+                        maximumFrames = if (research == null) 24000L * 180 else Int.MAX_VALUE.toLong()
                     )
-                    val turn=active.execute(command,session,conversationId,sink,trace,incremental=true,
+                    val startProcessing: () -> Unit = {
+                        if (response != null) startProcessingCapture(response,generation,session,active,sink)
+                    }
+                    val turn = if (research != null) {
+                        response?.destination = research.conversationId
+                        active.speakResearch(research.jobId,research.voiceSessionId,sink,onProcessing = startProcessing)
+                        HandsFreeTurn(research.conversationId,true,false)
+                    } else active.execute(command,session,conversationId,sink,trace,incremental=true,
                         interruptedPlayback = pendingInterruption?.second,
                         interruptedGeneration=pendingGenerationInterruption?.second,
-                        onProcessing={if(response!=null)startProcessingCapture(response,generation,session,active,sink)}) { destination ->
+                        onProcessing=startProcessing,
+                        closeResearchOnAcknowledgement=closeResearchOnAcknowledgement) { destination ->
                         response?.destination = destination
                     }
                     synchronized(lock) {
@@ -1264,6 +1359,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                             val ownsFollowUp = ownsSession(generation,session)
                             val handoff = when {
                                 ownsFollowUp && captured != null -> {
+                                    closeResearchOnNextAcknowledgement = research != null
                                     nextCommand=if(interruptedResponse.mergeUntranscribed) {
                                         try { BargeInCommand(handsFreeJoinUntranscribedCommands(command,captured.wav),captured.trace) }
                                         finally { captured.wav.fill(0) }
@@ -1274,6 +1370,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                                     !microphoneBlocked(interruptedResponse.native?.isOwnedMode() == true) -> {
                                     // The player is already stopped. Reopen normal speech capture once,
                                     // in the same conversation, if the interrupted recording ended empty.
+                                    closeResearchOnNextAcknowledgement = research != null
                                     continuation = true
                                     continuationDeadline = SystemClock.elapsedRealtime() + 4000
                                     "reopened"
@@ -1416,7 +1513,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         }
     }
 
-    private fun capture(generation:Int,detector:Long,continuation:Boolean,wakeVerifier:HandsFreeWakeVerifier?,batteryStudy:Boolean=false,startup:HandsFreeCaptureStartup?=null,measureBlock:(AudioRecord)->Boolean={true},onHeartbeat:()->Unit={}):ByteArray? {
+    private fun capture(generation:Int,detector:Long,continuation:Boolean,wakeVerifier:HandsFreeWakeVerifier?,batteryStudy:Boolean=false,startup:HandsFreeCaptureStartup?=null,
+                        measureBlock:(AudioRecord)->Boolean={true},takeResearchReply:()->Boolean={false},onHeartbeat:()->Unit={}):ByteArray? {
         capturedTurnLatency=null
         val audio=openRecorder();recorder=audio
         val buffer=ShortArray(3200) // One 200ms microphone read, shared by all local consumers.
@@ -1687,6 +1785,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                     command.fill(0,0,verifiedCommandLength)
                     continue
                 }
+                // Transfer ownership at an idle block boundary, after the wake detector has
+                // advanced. A pending wake candidate or continuation always keeps capture.
+                if (event < 0 && !captured && !continuation && !diagnostic && !pendingActivation &&
+                    wakeCandidate == null && pendingVerification == null && takeResearchReply()) {
+                    captureExit = "research_ready"
+                    return ByteArray(0)
+                }
                 if(event>=0 || pendingActivation) {
                     synchronized(lock) {
                         if(!current(generation))return null
@@ -1830,7 +1935,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                 collection.finishCapture(item.id)
                 collection.finish(item.id,"interrupted",endReason?:captureExit,"not_started")
             }
-            if(!capturedSuccessfully){
+            if(!capturedSuccessfully && captureExit != "research_ready"){
                 realtime?.close();backend?.abortCapture()
                 synchronized(lock){finishEvent(if(sessionCancelled)if(endReason=="explicit_cancel")"cancelled" else "interrupted" else if(captureExit=="no_speech" || captureExit=="continuation_timeout")"empty" else "failed",endReason?:captureExit)}
             }

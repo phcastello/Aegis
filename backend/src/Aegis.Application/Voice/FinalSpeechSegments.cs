@@ -49,6 +49,28 @@ public static class FinalSpeechSegments
         if (string.IsNullOrWhiteSpace(text) || text.Length > MaxSegmentCharacters || text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))
             throw new InvalidOperationException("Unidade de fala inválida.");
     }
+
+    public static IEnumerable<string> SplitText(string text)
+    {
+        var remaining = text.Trim();
+        while (remaining.Length > 0)
+        {
+            var length = Math.Min(remaining.Length, MaxSegmentCharacters);
+            if (length < remaining.Length)
+            {
+                var boundary = length;
+                while (boundary > 0 && !char.IsWhiteSpace(remaining[boundary])) boundary--;
+                if (boundary > 0) length = boundary;
+                // Avoid cutting a UTF-16 surrogate pair in an unusually long word.
+                if (char.IsHighSurrogate(remaining[length - 1]) && char.IsLowSurrogate(remaining[length]))
+                    length--;
+            }
+            var segment = remaining[..length].Trim();
+            Validate(segment);
+            yield return segment;
+            remaining = remaining[length..].TrimStart();
+        }
+    }
 }
 
 /// <summary>Reads only fully closed JSON strings in the root segments array, never partial values.</summary>

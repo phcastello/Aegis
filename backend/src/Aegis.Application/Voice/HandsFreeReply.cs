@@ -11,6 +11,10 @@ public static class HandsFreeReply
     public const string ToolName = "hands_free_reply";
     public const string Origin = "hands_free";
     public const string Close = "close";
+    public const string DeliveryGuidance =
+        "Comece direto pela conclusão ou resposta principal, com os fatos e números mais úteis e as ressalvas " +
+        "que mudam a interpretação. Em seguida, desenvolva os detalhes relevantes e vá até o fim da resposta em " +
+        "linguagem natural, sem resumir o conteúdo só porque será falado.";
 
     public static ModelToolDefinition Definition { get; } = new(
         ToolName,
@@ -57,6 +61,7 @@ public static class HandsFreeReply
         if (!request.IsHandsFree) return prompt;
         var context = $"Origem operacional: hands_free; sessão de voz: {request.VoiceSessionId:D}. " +
             "O pedido chegou por voz e a tela do dispositivo pode estar bloqueada. " +
+            DeliveryGuidance + " " +
             "Mantenha todas as confirmações e verificações normais de ferramentas. " +
             "Ao concluir o turno, use hands_free_reply como única chamada, com speech contendo a resposta final " +
             "e continuation=continue somente quando uma continuação for útil; caso contrário, close. " +

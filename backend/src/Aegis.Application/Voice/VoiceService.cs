@@ -208,7 +208,7 @@ public sealed class VoiceService(
         statusCache.GetAsync(cancellationToken);
 }
 
-internal static class NativeSpeechRequestId
+public static class NativeSpeechRequestId
 {
     private const string Crockford32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 

@@ -1,11 +1,15 @@
+using Aegis.Api.Controllers;
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,6 +21,99 @@ namespace Aegis.Application.Tests;
 
 public sealed class BackgroundResearchTests
 {
+    [Fact]
+    public async Task CompletedResearchStreamsTheEntireAnswerToItsOriginatingVoiceSession()
+    {
+        const string spoken = "São Paulo avançou mais. Recife ainda tem metas em aberto.";
+        var written = "São Paulo avançou mais (levantamento municipal). " +
+            "Recife ainda tem metas em aberto. [Referência](https://example.org/reference)\n\n## Análise detalhada\n" +
+            string.Concat(Enumerable.Repeat("Detalhes e citações da comparação escrita. ", 45)) +
+            "A última conclusão também deve ser falada.";
+        var model = new ResearchModel { Answer = written };
+        await using var services = Services(model, new ConversationChanges());
+        var options = services.GetRequiredService<WebSearchOptions>();
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        var store = scope.ServiceProvider.GetRequiredService<ResearchJobStore>();
+        var conversation = new Conversation(Conversation.DefaultTitle);
+        var origin = conversation.AddMessage(ChatRoles.User, "Compare as duas cidades.");
+        db.Conversations.Add(conversation);
+        db.ChatMessages.Add(origin);
+        await db.SaveChangesAsync();
+        var sessionId = Guid.NewGuid();
+        store.Stage(origin, "Compare São Paulo e Recife.", sessionId);
+        await db.SaveChangesAsync();
+
+        var tts = new ResearchSpeechClient();
+        async Task<(int Status, IHeaderDictionary Headers, byte[] Audio)> RequestSpeech(
+            Guid session, ResearchSpeechClient? client = null, CancellationToken ct = default)
+        {
+            await using var body = new MemoryStream();
+            var controller = new ResearchJobsController(store, options) { ControllerContext = new()
+            {
+                HttpContext = new DefaultHttpContext()
+            } };
+            controller.Response.Body = body;
+            await controller.Speak(origin.Id, new(session), client ?? tts, ct);
+            return (controller.Response.StatusCode, controller.Response.Headers, body.ToArray());
+        }
+
+        Assert.Equal(StatusCodes.Status404NotFound, (await RequestSpeech(Guid.NewGuid())).Status);
+        Assert.Equal(StatusCodes.Status409Conflict, (await RequestSpeech(sessionId)).Status);
+        Assert.Empty(tts.Requests);
+
+        model.Finish.SetResult();
+        Assert.True(await Worker(services).ProcessNextAsync(CancellationToken.None));
+        Assert.Contains("Comece direto pela conclusão", model.Instructions);
+        Assert.Equal(StatusCodes.Status404NotFound, (await RequestSpeech(Guid.NewGuid())).Status);
+        var audio = await RequestSpeech(sessionId);
+        Assert.Equal(StatusCodes.Status200OK, audio.Status);
+        Assert.Equal("pcm_s16le", audio.Headers["X-Aegis-Audio-Format"].ToString());
+        Assert.Equal("24000", audio.Headers["X-Aegis-Sample-Rate"].ToString());
+        Assert.Equal("1", audio.Headers["X-Aegis-Channels"].ToString());
+        Assert.True(tts.Requests.Count > 1);
+        Assert.Equal(Enumerable.Repeat(new byte[] { 1, 2, 3, 4 }, tts.Requests.Count).SelectMany(bytes => bytes), audio.Audio);
+        var spokenAnswer = string.Join(' ', tts.Requests.Select(request => request.Text));
+        Assert.StartsWith(spoken, spokenAnswer);
+        Assert.EndsWith("A última conclusão também deve ser falada.", spokenAnswer);
+        Assert.DoesNotContain("https://", spokenAnswer);
+        Assert.DoesNotContain("levantamento municipal", spokenAnswer);
+        Assert.All(tts.Requests, request =>
+        {
+            Assert.Equal(origin.ConversationId, request.ConversationId);
+            Assert.InRange(request.Text.Length, 1, FinalSpeechSegments.MaxSegmentCharacters);
+            Assert.Equal(26, request.NativeRequestId.Length);
+        });
+        Assert.Equal(tts.Requests.Count, tts.Requests.Select(request => request.NativeRequestId).Distinct().Count());
+        Assert.Empty(tts.Cancellations);
+        Assert.Equal(written, (await db.ChatMessages.SingleAsync(message => message.Role == ChatRoles.Assistant)).Content);
+
+        using var interrupt = new CancellationTokenSource();
+        var interrupted = new ResearchSpeechClient(pauseAtRequest: 2);
+        var speaking = RequestSpeech(sessionId, interrupted, interrupt.Token);
+        await interrupted.Paused.Task.WaitAsync(TimeSpan.FromSeconds(4));
+        await interrupt.CancelAsync();
+        await speaking.WaitAsync(TimeSpan.FromSeconds(4));
+        Assert.Equal(2, interrupted.Requests.Count);
+        Assert.Equal(interrupted.Requests[1].NativeRequestId, Assert.Single(interrupted.Cancellations));
+    }
+
+    [Fact]
+    public void ResearchSpeechKeepsTheDetailsAndTableValuesInTheirWrittenOrder()
+    {
+        const string written = """
+            São Paulo avançou mais [1].
+
+            ## Dados por cidade
+            | Cidade | Veículos |
+            | --- | --- |
+            | São Paulo | 500 |
+            - Recife sem confirmação (dado preliminar).
+            """;
+        Assert.Equal("São Paulo avançou mais.\nDados por cidade\nCidade, Veículos\nSão Paulo, 500\nRecife sem confirmação.",
+            ResearchSpeechText.FromAnswer(written));
+    }
+
     [Fact]
     public async Task DelegatedResearchCommitsWithTheAcknowledgementAndSurvivesRequestCancellation()
     {
@@ -176,6 +273,8 @@ public sealed class BackgroundResearchTests
         public TaskCompletionSource Finish { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Abandoned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public string? JobInput { get; private set; }
+        public string? Instructions { get; private set; }
+        public string Answer { get; init; } = "Resultado verificado.";
 
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -186,6 +285,7 @@ public sealed class BackgroundResearchTests
             Assert.Empty(request.Tools);
             Assert.NotNull(request.NativeSearchActionBudget);
             JobInput = request.Request.Input;
+            Instructions = request.Request.Instructions;
             yield return new(null, false, [], [], ToolStatus: new("web_search", "started", "Pesquisando…"));
             yield return new(null, false, [], [], WebResearchSources: [new("https://example.org/reference", 1)]);
             yield return new(null, false, [], [], WebResearchSources: [new("https://example.org/reference", 1)]);
@@ -193,7 +293,7 @@ public sealed class BackgroundResearchTests
             try { await Finish.Task.WaitAsync(ct); }
             finally { if (ct.IsCancellationRequested) Abandoned.TrySetResult(); }
 
-            yield return new("Resultado verificado.", false, [], []);
+            yield return new(Answer, false, [], []);
             using var document = JsonDocument.Parse("""
                 [{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search",
                     "sources":[{"type":"url","url":"https://example.org/reference"}]}}]
@@ -202,5 +302,32 @@ public sealed class BackgroundResearchTests
             yield return new(null, true, [], document.RootElement.EnumerateArray().Select(item => item.Clone()).ToArray(),
                 Provider: "fake", Model: "research", AuditData: audit);
         }
+    }
+
+    private sealed class ResearchSpeechClient(int pauseAtRequest = int.MaxValue) : IAegisSpeechClient
+    {
+        public List<SpeechRequest> Requests { get; } = [];
+        public List<string> Cancellations { get; } = [];
+        public TaskCompletionSource Paused { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<SpeechStreamResponse> StreamSpeechAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            if (Requests.Count == pauseAtRequest)
+            {
+                Paused.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            return new SpeechStreamResponse(new MemoryStream([1, 2, 3, 4]), new("pcm_s16le", 24000, 1, "fixture"));
+        }
+
+        public Task CancelAsync(string nativeSpeechRequestId, CancellationToken cancellationToken = default)
+        {
+            Cancellations.Add(nativeSpeechRequestId);
+            return Task.CompletedTask;
+        }
+
+        public Task<SpeechServiceStatus> GetStatusAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

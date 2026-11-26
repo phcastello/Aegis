@@ -2,6 +2,7 @@ using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
 using Aegis.Application.Tools;
+using Aegis.Application.Voice;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,11 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
         "Use a pesquisa nativa para verificar as informações públicas pertinentes. " +
         "Responda em português quando o pedido não indicar outro idioma. " +
         "Quando não puder verificar uma informação necessária, diga o que ficou sem confirmação.";
+
+    private const string VoiceIntroduction =
+        " O pedido veio por voz e a resposta completa será falada. " + HandsFreeReply.DeliveryGuidance +
+        " Inclua as citações nativas no texto e deixe que atribuam " +
+        "as informações às fontes. Evite aberturas genéricas, listas só de referências e instruções para abrir o aplicativo.";
 
     public async Task<bool> ProcessNextAsync(CancellationToken stoppingToken)
     {
@@ -39,7 +45,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
             var loop = new AegisToolLoop(services.GetRequiredService<IAegisModelClient>(),
                 new AegisToolRegistry([]), services.GetRequiredService<ILogger<AegisToolLoop>>(),
                 services.GetRequiredService<AegisMetrics>(), options);
-            var request = new ModelRequest(Instructions, job.Content);
+            var request = new ModelRequest(job.IsHandsFree ? Instructions + VoiceIntroduction : Instructions, job.Content);
             var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content);
             var content = new StringBuilder();
             var progress = new ResearchProgress();

@@ -274,7 +274,8 @@ public sealed class ChatService(
                 promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
-            StageResearch(userMessage, chunk.DelegatedResearchBrief);
+            var researchVoiceSession = request.IsHandsFree && request.VoiceSegments ? request.VoiceSessionId : null;
+            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -283,7 +284,8 @@ public sealed class ChatService(
                 streamCompleted = true;
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
                     conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation,
-                    WebResearchMetadata.Read(assistantMessage.MetadataJson, assistantMessage.Content));
+                    WebResearchMetadata.Read(assistantMessage.MetadataJson, assistantMessage.Content),
+                    researchVoiceSession.HasValue && chunk.DelegatedResearchBrief is not null ? userMessage.Id : null);
             }
             streamCompleted = true;
             yield break;
@@ -680,10 +682,11 @@ public sealed class ChatService(
             response.DelegatedResearchBrief);
     }
 
-    private void StageResearch(ChatMessage userMessage, string? brief)
+    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null)
     {
         if (brief is null) return;
-        (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível.")).Stage(userMessage, brief);
+        (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível."))
+            .Stage(userMessage, brief, voiceSessionId);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(

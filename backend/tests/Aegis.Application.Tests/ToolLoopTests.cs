@@ -331,6 +331,9 @@ public sealed class ToolLoopTests
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "hands_free_ignore");
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "request_web_search");
         Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name is "request_web_search" or "hands_free_ignore" or "hands_free_reply" or "hands_free_reply_segments");
+        var guidance = model.Requests[1].InputItems![^1].GetProperty("content").GetString()!;
+        Assert.Contains("Comece direto pela conclusão ou resposta principal", guidance);
+        Assert.Contains("vá até o fim da resposta", guidance);
     }
 
     [Theory]

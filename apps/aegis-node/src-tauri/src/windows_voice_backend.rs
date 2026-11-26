@@ -1,5 +1,5 @@
 use crate::{node_commands::NodeRuntime, windows_voice_audio::Output, windows_voice_signal::wav};
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -50,6 +50,7 @@ pub(crate) enum Interruption {
         turn_id: Uuid,
         previous_content: String,
     },
+    ResearchPlayback,
 }
 
 pub(crate) struct TurnReport {
@@ -60,6 +61,13 @@ pub(crate) struct TurnReport {
     pub transcript: Option<String>,
     pub chat_started: bool,
     pub playback: Option<PlaybackInterruption>,
+    pub research_job: Option<Uuid>,
+}
+
+pub(crate) enum ResearchSpeechStatus {
+    Pending,
+    Ready,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -267,6 +275,7 @@ struct ChatProgress {
     conversation: Option<Uuid>,
     accepted: bool,
     assistant: Option<Uuid>,
+    research_job: Option<Uuid>,
 }
 
 enum ChatEvent {
@@ -353,10 +362,18 @@ impl Backend {
         self.send_checked(request)
     }
     fn send_checked(&self, request: RequestBuilder) -> Result<Response> {
+        let response = self.send_response(request)?;
+        response
+            .status()
+            .is_success()
+            .then_some(response)
+            .ok_or("backend_unavailable")
+    }
+    fn send_response(&self, request: RequestBuilder) -> Result<Response> {
         tauri::async_runtime::block_on(async {
             tokio::select! {biased;
                 _=self.cancel.cancelled()=>Err("cancelled"),
-                response=request.send()=>match response { Ok(r) if r.status().is_success()=>Ok(r), _=>Err("backend_unavailable") }
+                response=request.send()=>response.map_err(|_|"backend_unavailable")
             }
         })
     }
@@ -380,6 +397,68 @@ impl Backend {
             buf.extend_from_slice(&chunk);
         }
         serde_json::from_slice(&buf).map_err(|_| "backend_response")
+    }
+
+    pub fn research_speech_status(
+        &self,
+        job: Uuid,
+        conversation: Uuid,
+    ) -> Result<ResearchSpeechStatus> {
+        self.current()?;
+        let response = self.send_response(
+            self.client
+                .get(format!("{}/api/chat/research-jobs/{job}", self.origin))
+                .header("Authorization", format!("AegisNode {}", self.credential))
+                .header("Cache-Control", "no-store")
+                .timeout(Duration::from_secs(6)),
+        )?;
+        match response.status() {
+            StatusCode::NOT_FOUND | StatusCode::GONE => {
+                return Ok(ResearchSpeechStatus::Unavailable)
+            }
+            StatusCode::OK => {}
+            _ => return Err("backend_unavailable"),
+        }
+        let snapshot = self.json_response(response)?;
+        if parse_uuid(&snapshot["id"])? != job
+            || parse_uuid(&snapshot["conversationId"])? != conversation
+        {
+            return Err("backend_response");
+        }
+        match snapshot["state"].as_str() {
+            Some("queued" | "running") => Ok(ResearchSpeechStatus::Pending),
+            Some("completed" | "failed") => Ok(ResearchSpeechStatus::Ready),
+            Some("cancelled") => Ok(ResearchSpeechStatus::Unavailable),
+            _ => Err("backend_response"),
+        }
+    }
+
+    pub fn speak_research_result<A: TurnAudio>(
+        &self,
+        job: Uuid,
+        session: Uuid,
+        open: impl FnOnce() -> Result<A>,
+    ) -> Result<()> {
+        let response = self.send(
+            self.client
+                .post(format!(
+                    "{}/api/chat/research-jobs/{job}/speech",
+                    self.origin
+                ))
+                .header("Authorization", format!("AegisNode {}", self.credential))
+                .header("Cache-Control", "no-store")
+                .json(&json!({ "voiceSessionId": session })),
+        )?;
+        let mut open = Some(open);
+        let mut output: Option<A> = None;
+        self.read_pcm(response, None, None, |frames| {
+            let device = match output.as_mut() {
+                Some(device) => device,
+                None => output.insert(open.take().ok_or("backend_response")?()?),
+            };
+            device.write(frames, &self.cancel)
+        })?;
+        output.ok_or("backend_response")?.finish(&self.cancel)
     }
     pub fn claim(
         &self,
@@ -479,6 +558,7 @@ impl Backend {
             transcript: None,
             chat_started: false,
             playback: None,
+            research_job: None,
         };
         let text = match self.transcribe(samples) {
             Ok(text) => text,
@@ -497,7 +577,10 @@ impl Backend {
                 return report;
             }
         };
-        if text.is_empty() {
+        if text.is_empty()
+            || matches!(interruption, Some(Interruption::ResearchPlayback))
+                && closes_research_reply(&text)
+        {
             report.transcript = Some(text);
             report.result = Ok(TurnReply {
                 ignored: true,
@@ -535,6 +618,7 @@ impl Backend {
             conversation: destination,
             accepted: false,
             assistant: None,
+            research_job: None,
         }));
         let mut output: Option<A> = None;
         let mut playback = PlaybackProgress::default();
@@ -617,6 +701,7 @@ impl Backend {
         report.conversation = confirmed.conversation;
         report.accepted = confirmed.accepted;
         report.playback = position;
+        report.research_job = confirmed.research_job;
         let terminal = match &report.result {
             Ok(reply) if reply.ignored => Some("ignored"),
             Ok(_) => None, // validated done was emitted at the stream's EOF
@@ -672,6 +757,7 @@ impl Backend {
         let mut any = false;
         let mut accepted = false;
         let mut terminal = None;
+        let mut research_job = None;
         while let Some(chunk) = self.next(&mut response)? {
             total = total.checked_add(chunk.len()).ok_or("backend_response")?;
             if total > MAX_CHAT_BYTES {
@@ -713,6 +799,7 @@ impl Backend {
                             conversation,
                             accepted: true,
                             assistant,
+                            research_job: None,
                         };
                         if reported != conversation {
                             on_conversation(next);
@@ -740,6 +827,7 @@ impl Backend {
                             if sequence == 0 {
                                 return Err("backend_response");
                             }
+                            research_job = parse_uuid(&event["researchJobId"]).ok();
                             ChatEvent::Done(event["voiceContinuation"] == "continue")
                         } else {
                             let id = parse_uuid(&event["segmentId"])?;
@@ -767,6 +855,7 @@ impl Backend {
                             conversation,
                             accepted: true,
                             assistant,
+                            research_job: None,
                         };
                         if reported != conversation {
                             on_conversation(next);
@@ -832,6 +921,7 @@ impl Backend {
         self.current()?;
         let terminal = terminal.ok_or("backend_response")?;
         if matches!(terminal, ChatEvent::Done(_)) {
+            progress.lock().unwrap().research_job = research_job;
             on_stream(VoiceChatStreamEvent::new(
                 "done",
                 turn,
@@ -1012,14 +1102,26 @@ impl Backend {
         &mut self,
         turn: Uuid,
         segment: &Segment,
-        mut deliver: impl FnMut(&[i16]) -> Result<()>,
+        deliver: impl FnMut(&[i16]) -> Result<()>,
     ) -> Result<u64> {
         let id = Uuid::new_v4();
         self.speech = Some(id);
-        let mut response = self.send(self.post("/api/voice/speech/segments", 300).json(&json!({
+        let response = self.send(self.post("/api/voice/speech/segments", 300).json(&json!({
             "turnId":turn,"speechRequestId":id,"assistantMessageId":segment.assistant,
             "conversationId":segment.conversation,"segmentId":segment.id,"sequence":segment.sequence,
         })))?;
+        let frames = self.read_pcm(response, Some(id), Some(MAX_PLAYBACK_FRAMES), deliver)?;
+        self.speech = None;
+        Ok(frames)
+    }
+
+    fn read_pcm(
+        &self,
+        mut response: Response,
+        expected_id: Option<Uuid>,
+        max_frames: Option<u64>,
+        mut deliver: impl FnMut(&[i16]) -> Result<()>,
+    ) -> Result<u64> {
         for (key, value) in [
             ("X-Aegis-Audio-Format", "pcm_s16le"),
             ("X-Aegis-Sample-Rate", "24000"),
@@ -1029,13 +1131,14 @@ impl Backend {
                 return Err("backend_response");
             }
         }
-        if response
+        let response_id = response
             .headers()
             .get("X-Aegis-Speech-Request-Id")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| Uuid::parse_str(v).ok())
-            != Some(id)
-        {
+            .filter(|id| !id.is_nil())
+            .ok_or("backend_response")?;
+        if expected_id.is_some_and(|id| id != response_id) {
             return Err("backend_response");
         }
         self.current()?;
@@ -1046,7 +1149,7 @@ impl Backend {
             total = total
                 .checked_add(chunk.len() as u64)
                 .ok_or("backend_response")?;
-            if total > MAX_PLAYBACK_FRAMES * 2 {
+            if max_frames.is_some_and(|frames| total > frames * 2) {
                 return Err("backend_response");
             }
             if let Some(byte) = odd.take() {
@@ -1074,7 +1177,6 @@ impl Backend {
             return Err("backend_response");
         }
         self.current()?;
-        self.speech = None;
         Ok(total / 2)
     }
 }
@@ -1107,6 +1209,40 @@ fn parse_uuid(value: &Value) -> Result<Uuid> {
         .ok()
         .filter(|v| !v.is_nil())
         .ok_or("backend_response")
+}
+
+fn closes_research_reply(text: &str) -> bool {
+    let spoken = text
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let acknowledgement = |text: &str| {
+        matches!(
+            text,
+            "ok" | "okay"
+                | "beleza"
+                | "valeu"
+                | "obrigado"
+                | "obrigada"
+                | "tá bom"
+                | "ta bom"
+                | "está bom"
+                | "esta bom"
+                | "ah não"
+                | "ah nao"
+                | "pode parar"
+                | "já deu"
+                | "ja deu"
+                | "é só isso"
+                | "e so isso"
+        )
+    };
+    acknowledgement(&spoken)
+        || ["ok ", "okay ", "beleza ", "ah não ", "ah nao "]
+            .iter()
+            .any(|prefix| spoken.strip_prefix(prefix).is_some_and(acknowledgement))
 }
 impl Drop for Backend {
     fn drop(&mut self) {

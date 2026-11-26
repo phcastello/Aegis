@@ -32,6 +32,14 @@ públicas relevantes do diálogo e usa apenas a busca web. A resposta e as fonte
 entram na conversa original. O status acompanha o pedido, com opção de cancelar.
 O resumo usa os metadados da mensagem, sem migration.
 
+No hands-free, o Node que recebeu o pedido acompanha a pesquisa enquanto a
+escuta estiver ativa. Quando a resposta fica pronta e o áudio está livre, ele
+começa pela conclusão e lê toda a resposta, incluindo os detalhes. A síntese
+reproduz o texto em partes consecutivas. Uma interrupção corta a reprodução
+e descarta o restante. Um encerramento breve, como “ok” ou “ah não, beleza”,
+devolve a escuta sem iniciar outro pedido. O texto com as fontes continua na
+conversa.
+
 Os apps mostram até três sites em círculos sobrepostos, em ordem de frequência nos
 resultados observados. Novos ícones entram na pilha conforme chegam fontes do
 provedor. Antes da primeira fonte aparece um indicador de busca. O backend da
@@ -51,6 +59,8 @@ acionar os detalhes pelo toque mostra uma prévia com a informação de fonte
 disponível. A página original pode ser aberta pela própria citação. A pilha de
 favicons no fim da barra de ações de cada resposta abre a lista completa de
 fontes validadas daquela resposta.
+Tabelas largas têm rolagem lateral própria e mantêm a largura dos parágrafos
+ao redor.
 
 ## Validação e etapas seguintes
 

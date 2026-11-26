@@ -3,7 +3,7 @@
 use crate::{
     windows_barge_in_signal::{BargeInSignal, RenderReference},
     windows_voice_audio::{self, Input, Output},
-    windows_voice_backend::{Backend, Interruption, Result, TurnReport},
+    windows_voice_backend::{Backend, Interruption, ResearchSpeechStatus, Result, TurnReport},
     windows_voice_signal::{Background, Capture, Endpoint, Waveform, RATE},
     windows_wakeword,
 };
@@ -64,8 +64,32 @@ struct State {
     lease: Option<Uuid>,
     importing: bool,
     recent: Option<RecentConversation>,
+    research: Vec<PendingResearch>,
     worker: Option<CancellationToken>,
     exiting: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ResearchDelivery {
+    job: Uuid,
+    session: Uuid,
+    conversation: Uuid,
+    scope: [u8; 32],
+    expires: Instant,
+}
+
+struct PendingResearch {
+    delivery: ResearchDelivery,
+    poll: CancellationToken,
+    ready: bool,
+}
+
+impl State {
+    fn clear_research(&mut self) {
+        for pending in self.research.drain(..) {
+            pending.poll.cancel();
+        }
+    }
 }
 struct Shared {
     app: AppHandle,
@@ -101,6 +125,108 @@ fn message(status: &str) -> &'static str {
 }
 
 impl Shared {
+    fn watch_research(
+        self: &Arc<Self>,
+        backend: &Backend,
+        session: Uuid,
+        conversation: Uuid,
+        job: Uuid,
+    ) {
+        let poll = CancellationToken::new();
+        let delivery = ResearchDelivery {
+            job,
+            session,
+            conversation,
+            scope: backend.scope_key(),
+            expires: Instant::now() + Duration::from_secs(600),
+        };
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.exiting
+                || !state.settings.enabled
+                || state.settings.diagnostic
+                || state.research.len() >= 8
+                || state
+                    .research
+                    .iter()
+                    .any(|pending| pending.delivery.job == job)
+            {
+                return;
+            }
+            state.research.push(PendingResearch {
+                delivery,
+                poll: poll.clone(),
+                ready: false,
+            });
+        }
+        let listener = Arc::downgrade(self);
+        let watcher = backend.fork(&poll);
+        let spawned = thread::Builder::new()
+            .name("AegisResearchWatch".into())
+            .spawn(move || {
+                let ready = loop {
+                    if poll.is_cancelled() || Instant::now() >= delivery.expires {
+                        break false;
+                    }
+                    match watcher.research_speech_status(job, conversation) {
+                        Ok(ResearchSpeechStatus::Ready) => break true,
+                        Ok(ResearchSpeechStatus::Unavailable)
+                        | Err("pairing_required" | "cancelled" | "backend_response") => {
+                            break false
+                        }
+                        _ => {}
+                    }
+                    tauri::async_runtime::block_on(async {
+                        tokio::select! {
+                            _ = poll.cancelled() => {},
+                            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+                        }
+                    });
+                };
+                if let Some(listener) = listener.upgrade() {
+                    let mut state = listener.state.lock().unwrap();
+                    if ready && !poll.is_cancelled() {
+                        if let Some(pending) = state
+                            .research
+                            .iter_mut()
+                            .find(|pending| pending.delivery.job == job)
+                        {
+                            pending.ready = true;
+                        }
+                    } else {
+                        state.research.retain(|pending| pending.delivery.job != job);
+                    }
+                }
+            });
+        if spawned.is_err() {
+            self.state
+                .lock()
+                .unwrap()
+                .research
+                .retain(|pending| pending.delivery.job != job);
+        }
+    }
+
+    fn next_research(&self) -> Option<ResearchDelivery> {
+        let mut state = self.state.lock().unwrap();
+        if state.exiting
+            || !state.settings.enabled
+            || state.settings.diagnostic
+            || state.lease.is_some()
+        {
+            return None;
+        }
+        state.research.retain(|pending| {
+            let live = pending.ready || Instant::now() < pending.delivery.expires;
+            if !live {
+                pending.poll.cancel();
+            }
+            live
+        });
+        let index = state.research.iter().position(|pending| pending.ready)?;
+        Some(state.research.remove(index).delivery)
+    }
+
     fn publish(&self, status: &'static str) -> u64 {
         let generation = {
             let mut state = self.state.lock().unwrap();
@@ -187,6 +313,7 @@ impl WindowsHandsFree {
                 lease: None,
                 importing: false,
                 recent: None,
+                research: Vec::new(),
                 worker: None,
                 exiting: false,
             }),
@@ -205,6 +332,7 @@ impl WindowsHandsFree {
     pub fn shutdown(&self) {
         let mut s = self.0.state.lock().unwrap();
         s.exiting = true;
+        s.clear_research();
         if let Some(token) = &s.worker {
             token.cancel();
         }
@@ -234,6 +362,7 @@ impl WindowsHandsFree {
                 }
                 persist(&core.dir, settings)?;
                 state.recent = None;
+                state.clear_research();
                 state.settings = settings;
                 if let Some(worker) = &state.worker {
                     worker.cancel();
@@ -253,7 +382,9 @@ impl WindowsHandsFree {
                 result?;
             }
             "cancel" => {
-                if let Some(worker) = &core.state.lock().unwrap().worker {
+                let mut state = core.state.lock().unwrap();
+                state.clear_research();
+                if let Some(worker) = &state.worker {
                     worker.cancel();
                 }
             }
@@ -323,6 +454,7 @@ fn worker_loop(shared: Arc<Shared>) {
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
+        .read_timeout(Duration::from_secs(120))
         .build();
     loop {
         let (token, diagnostic) = {
@@ -380,7 +512,7 @@ fn worker_loop(shared: Arc<Shared>) {
     }
 }
 fn cycle(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     http: &reqwest::Client,
     cancel: &CancellationToken,
     diagnostic: bool,
@@ -405,6 +537,27 @@ fn cycle(
         history.push(&samples);
         if let Some(score) = detector.accept(&samples)? {
             break score;
+        }
+        if let Some(result) = shared.next_research() {
+            let backend = Backend::open(&shared.app, http, cancel)?;
+            if backend.scope_key() == result.scope {
+                let noise = history.noise();
+                if let Some(command) =
+                    play_research(shared, &mut mic, &backend, cancel, result, noise)?
+                {
+                    return converse(
+                        shared,
+                        &mut mic,
+                        &backend,
+                        cancel,
+                        result.session,
+                        Some(result.conversation),
+                        noise,
+                        Some(command),
+                    );
+                }
+            }
+            return Ok(());
         }
     };
     let detected = Instant::now() - Duration::from_millis(20 * mic.pending() as u64);
@@ -454,7 +607,7 @@ fn cycle(
         return Err("cancelled");
     }
     let scope = backend.scope_key();
-    let mut destination = shared
+    let destination = shared
         .state
         .lock()
         .unwrap()
@@ -467,8 +620,7 @@ fn cycle(
         "aegis-windows-voice-conversation",
         json!({"conversationId": destination}),
     );
-    let announced = Mutex::new(destination);
-    let mut generation = shared.publish("capturing");
+    shared.publish("capturing");
     let cue_started = Instant::now();
     windows_voice_audio::cue(cancel)?;
     // Local diagnostics only: monotonic durations, no recording, words, device
@@ -480,10 +632,34 @@ fn cycle(
         cue_started.elapsed().as_millis(),
         detected.elapsed().as_millis()
     );
-    let noise = history.noise();
+    converse(
+        shared,
+        &mut mic,
+        &backend,
+        cancel,
+        session,
+        destination,
+        history.noise(),
+        None,
+    )
+}
+
+fn converse(
+    shared: &Arc<Shared>,
+    mic: &mut Input,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    session: Uuid,
+    mut destination: Option<Uuid>,
+    noise: f64,
+    first_audio: Option<Vec<i16>>,
+) -> Result<()> {
+    let announced = Mutex::new(destination);
+    let scope = backend.scope_key();
+    let mut generation = shared.publish("capturing");
     let mut first = true;
-    let mut next_audio: Option<Vec<i16>> = None;
-    let mut interruption: Option<Interruption> = None;
+    let mut interruption = first_audio.as_ref().map(|_| Interruption::ResearchPlayback);
+    let mut next_audio = first_audio;
     let mut tail: Option<(BargeInSignal, RenderReference)> = None;
     loop {
         let samples = if let Some(audio) = next_audio.take() {
@@ -515,8 +691,8 @@ fn cycle(
         shared.publish("processing");
         let monitored = monitor_turn(
             shared,
-            &mut mic,
-            &backend,
+            mic,
+            backend,
             cancel,
             session,
             destination,
@@ -527,6 +703,9 @@ fn cycle(
         )?;
         let report = monitored.report;
         destination = report.conversation.or(destination);
+        if let (Some(job), Some(conversation)) = (report.research_job, destination) {
+            shared.watch_research(backend, session, conversation, job);
+        }
         // The accepted marker can arrive just as a candidate is interrupted.
         // Recover its destination after the old worker is joined, exactly once.
         if report.accepted {
@@ -568,6 +747,77 @@ fn cycle(
         tail = Some((monitored.signal, monitored.reference));
         generation = shared.publish("continuation");
     }
+}
+
+fn play_research(
+    shared: &Shared,
+    mic: &mut Input,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    result: ResearchDelivery,
+    noise: f64,
+) -> Result<Option<Vec<i16>>> {
+    let playback = cancel.child_token();
+    let backend = backend.fork(&playback);
+    let reference = RenderReference::default();
+    let mut signal = BargeInSignal::new(noise);
+    let (spoken, command) = thread::scope(|scope| {
+        let work = scope.spawn(|| {
+            backend.speak_research_result(result.job, result.session, || {
+                let mut output = Output::open()?;
+                output.observe_reference(reference.clone());
+                if playback.is_cancelled() {
+                    return Err("cancelled");
+                }
+                shared.publish("speaking");
+                Ok(output)
+            })
+        });
+        let mut captured: Option<(Endpoint, Waveform, u64)> = None;
+        let command = loop {
+            if captured.is_none() && work.is_finished() {
+                break None;
+            }
+            let mut block = match mic.read(cancel) {
+                Ok(block) => block,
+                Err(error) => {
+                    playback.cancel();
+                    return Err(error);
+                }
+            };
+            if let Some((endpoint, waveform, generation)) = captured.as_mut() {
+                signal.clean_tail(&mut block, &reference, mic.pending());
+                shared.publish_waveform(waveform, &block, "capturing", *generation, mic.pending());
+                match endpoint.push(&block) {
+                    Capture::More => {}
+                    Capture::Empty => break None,
+                    Capture::Complete(audio) => break Some(audio),
+                }
+            } else if let Some(prefix) = signal.push(&block, &reference, mic.pending()) {
+                playback.cancel();
+                let generation = shared.publish("capturing");
+                captured = Some((
+                    Endpoint::interrupted(noise, prefix),
+                    Waveform::default(),
+                    generation,
+                ));
+            }
+        };
+        let outcome = work.join().map_err(|_| "backend_response")?;
+        if captured.is_some() {
+            Ok((false, command))
+        } else {
+            outcome.map(|()| (true, None))
+        }
+    })?;
+    if spoken {
+        shared.state.lock().unwrap().recent = Some(RecentConversation {
+            scope: result.scope,
+            conversation: result.conversation,
+            completed: Instant::now(),
+        });
+    }
+    Ok(command)
 }
 
 fn prepare_handoff(
@@ -813,6 +1063,7 @@ mod continuity_tests {
             transcript: None,
             chat_started: false,
             playback: None,
+            research_job: None,
         }
     }
 

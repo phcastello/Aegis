@@ -446,7 +446,7 @@ public sealed class AegisToolLoop(
                     "Tarefas breves e respostas que não precisam de pesquisa mantêm o fluxo normal.";
             if (handsFree && webSearchRequested)
                 guidance += " Neste turno de voz, finalize por texto natural em português, sem função terminal de fala. " +
-                    "Dê a resposta principal primeiro, seguida da explicação pertinente. Evite ler URLs em voz alta.";
+                    HandsFreeReply.DeliveryGuidance + " Evite ler URLs em voz alta.";
             if (nativeBudget == 0)
                 guidance += " Não faça novas ações search neste turno. " +
                     "Você pode usar open_page e find_in_page para consultar as fontes disponíveis.";
@@ -531,27 +531,9 @@ public sealed class AegisToolLoop(
 
     private static IReadOnlyList<string> SplitSpeech(string text)
     {
-        var segments = new List<string>();
-        var remaining = text.Trim();
-        while (remaining.Length > 0)
-        {
-            var length = Math.Min(remaining.Length, FinalSpeechSegments.MaxSegmentCharacters);
-            if (length < remaining.Length)
-            {
-                var boundary = length;
-                while (boundary > 0 && !char.IsWhiteSpace(remaining[boundary])) boundary--;
-                if (boundary > 0) length = boundary;
-                // Avoid cutting a UTF-16 surrogate pair in an unusually long word.
-                if (char.IsHighSurrogate(remaining[length - 1]) && char.IsLowSurrogate(remaining[length]))
-                    length--;
-            }
-            var segment = remaining[..length].Trim();
-            FinalSpeechSegments.Validate(segment);
-            segments.Add(segment);
-            if (segments.Count > FinalSpeechSegments.MaxSegments)
-                throw new InvalidOperationException("Quantidade de segmentos inválida.");
-            remaining = remaining[length..].TrimStart();
-        }
+        var segments = FinalSpeechSegments.SplitText(text).Take(FinalSpeechSegments.MaxSegments + 1).ToArray();
+        if (segments.Length > FinalSpeechSegments.MaxSegments)
+            throw new InvalidOperationException("Quantidade de segmentos inválida.");
         return segments;
     }
 

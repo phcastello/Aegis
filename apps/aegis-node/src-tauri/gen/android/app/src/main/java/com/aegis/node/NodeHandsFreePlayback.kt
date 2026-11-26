@@ -51,7 +51,8 @@ internal class HandsFreePlayback(
         onCommunicationFailed: () -> Unit = {},
         onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {},
         sessionFocus: (() -> Boolean)? = null,
-        spectrumSession: String? = null
+        spectrumSession: String? = null,
+        maximumFrames: Long = 24000L * 180
     ): HandsFreePcmSink {
         val token = generation.incrementAndGet()
         lateinit var stream: HandsFreeStreamingPcmSink
@@ -89,7 +90,8 @@ internal class HandsFreePlayback(
             echo = echo,
             onPlaybackReady = onPlaybackReady,
             boostSpeechVolume = echo != null,
-            spectrumSession = spectrumSession
+            spectrumSession = spectrumSession,
+            maximumFrames = maximumFrames
         )
         active.getAndSet(stream)?.abort()
         if (generation.get() != token) { stream.abort(); active.compareAndSet(stream, null) }

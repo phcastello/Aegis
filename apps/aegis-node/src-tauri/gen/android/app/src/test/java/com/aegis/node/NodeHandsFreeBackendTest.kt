@@ -44,18 +44,146 @@ class NodeHandsFreeBackendTest {
     return execute(wav,sessionId,conversationId,sink)
   }
 
-  private fun segmentedReply(request:Request,markers:Int=1,changeFirst:(JSONObject)->Unit={}):Reply {
+  private fun segmentedReply(request:Request,markers:Int=1,researchJobId:String?=null,changeFirst:(JSONObject)->Unit={}):Reply {
     val turn=JSONObject(request.text()).getString("turnId")
     val accepted=JSONObject().put("type","conversation").put("turnId",turn).put("conversationId",conversation).toString()+"\n"
     val first=JSONObject().put("type","final_segment").put("turnId",turn).put("conversationId",conversation)
       .put("assistantMessageId",message).put("segmentId",UUID.randomUUID().toString()).put("sequence",0).put("content","Oi.")
     changeFirst(first)
     val done=JSONObject().put("type","done").put("turnId",turn).put("conversationId",conversation)
-      .put("assistantMessageId",message).put("voiceContinuation","continue").toString()+"\n"
+      .put("assistantMessageId",message).put("voiceContinuation","continue").apply {
+        if (researchJobId != null) put("researchJobId",researchJobId).put("voiceContinuation","close")
+      }.toString()+"\n"
     return Reply(bytes=(accepted.repeat(markers)+first.toString()+"\n"+done).toByteArray())
   }
   private fun segmentPcmReply()=Reply(bytes=byteArrayOf(1,2,3,4),headers=mapOf(
     "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
+
+  @Test fun delegatedResearchAnnouncesThenUsesSeparateAudioForTheOriginatingSession() {
+    data class Delivery(val origin:NodeNativeSession.Session,val job:String,val voice:String,val conversation:String)
+    val jobId=UUID.randomUUID().toString()
+    val jobPath="/api/chat/research-jobs/$jobId"
+    val completions=CopyOnWriteArrayList<Delivery>()
+    val researchState=AtomicReference("running")
+    val answerPcm=ByteArray(24_000*2*61){ if (it%2==0) 5 else 6 }
+    Fixture(respond={request,normal->
+      when(request.path) {
+        "/api/chat/messages/stream" -> segmentedReply(request,researchJobId=jobId)
+        "/api/voice/speech/segments" -> segmentPcmReply()
+        jobPath -> {
+          assertEquals("GET",request.method)
+          assertEquals("AegisNode synthetic-credential",request.authorization)
+          Reply.json(JSONObject().put("id",jobId).put("state",researchState.get()))
+        }
+        "$jobPath/speech" -> {
+          assertEquals("POST",request.method)
+          assertEquals("AegisNode synthetic-credential",request.authorization)
+          val payload=JSONObject(request.text())
+          assertEquals(setOf("voiceSessionId"),payload.keys().asSequence().toSet())
+          assertEquals(session,payload.getString("voiceSessionId"))
+          segmentPcmReply().copy(bytes=answerPcm)
+        }
+        else -> normal
+      }
+    }).use { fixture ->
+      val announcement=RecordingSink()
+      val turn=fixture.backend(onResearchDelegated={origin,job,voice,destination->completions.add(Delivery(origin,job,voice,destination))})
+        .execute(wav(),session,conversation,announcement,null,incremental=true)
+      assertTrue(turn.playedAudio)
+      assertFalse(turn.continueListening)
+      assertTrue(announcement.finished)
+      assertArrayEquals(byteArrayOf(1,2,3,4),announcement.bytes.toByteArray())
+      assertEquals(listOf(Delivery(fixture.identity,jobId,session,conversation)),completions.toList())
+      assertTrue(fixture.requests.none{it.path.startsWith(jobPath)})
+
+      val worker=fixture.backend()
+      assertEquals("running",worker.researchJobState(jobId))
+      assertTrue(fixture.requests.none{it.path=="$jobPath/speech"})
+      researchState.set("completed")
+      assertEquals("completed",worker.researchJobState(jobId))
+      val answer=RecordingSink()
+      worker.speakResearch(jobId,session,answer)
+      assertTrue(answer.finished)
+      assertTrue(answer.closed)
+      assertArrayEquals(answerPcm,answer.bytes.toByteArray())
+      assertEquals(1,fixture.requests.count{it.path=="/api/voice/transcriptions"})
+      assertEquals(1,fixture.requests.count{it.path=="/api/chat/messages/stream"})
+      assertEquals(1,fixture.requests.count{it.path=="$jobPath/speech"})
+    }
+  }
+
+  @Test fun unavailableOrPendingResearchDoesNotWriteAnyAudio() {
+    val jobId=UUID.randomUUID().toString()
+    for (status in listOf(404,409)) Fixture(respond={request,normal->
+      if (request.path=="/api/chat/research-jobs/$jobId/speech") Reply(status) else normal
+    }).use { fixture ->
+      val answer=RecordingSink()
+      val failure=assertThrows(NodeNativeSession.HttpFailure::class.java) {
+        fixture.backend().speakResearch(jobId,session,answer)
+      }
+      assertEquals(status,failure.status)
+      assertFalse(answer.finished)
+      assertTrue(answer.aborted)
+      assertTrue(answer.closed)
+      assertEquals(0,answer.bytes.size())
+    }
+  }
+
+  @Test fun interruptingDeferredSpeechStopsTheCurrentPcmAndDoesNotRestartIt() {
+    val jobId=UUID.randomUUID().toString()
+    val speechPath="/api/chat/research-jobs/$jobId/speech"
+    val device=NodeHandsFreePcmStreamTest.Device(autoPlay=false)
+    val release=CountDownLatch(1)
+    Fixture(respond={request,normal->
+      if (request.path==speechPath) segmentPcmReply().copy(bytes=ByteArray(100),stream={output->
+        output.write(byteArrayOf(5,6,7,8));output.flush()
+        check(release.await(5,TimeUnit.SECONDS))
+        output.write(ByteArray(96));output.flush()
+      }) else normal
+    }).use { fixture ->
+      val backend=fixture.backend()
+      val executor=Executors.newSingleThreadExecutor()
+      try {
+        val answer=executor.submit<Unit>{backend.speakResearch(jobId,session,HandsFreeStreamingPcmSink({device}))}
+        assertTrue(device.firstWrite.await(5,TimeUnit.SECONDS))
+        backend.requestCancellation()
+        assertThrows(ExecutionException::class.java){answer.get(5,TimeUnit.SECONDS)}
+        assertEquals(0,device.queuedFrames)
+        assertTrue(device.closed)
+        assertArrayEquals(byteArrayOf(5,6,7,8),device.recorded.toByteArray())
+        assertEquals(listOf(speechPath),fixture.requests.map{it.path})
+      } finally {release.countDown();backend.cancel();executor.shutdownNow()}
+    }
+  }
+
+  @Test fun standaloneAcknowledgementsCloseDeferredSpeechButLongerCommandsProceed() {
+    data class FollowUp(val text:String,val afterResearch:Boolean,val closes:Boolean)
+    val cases=listOf(
+      FollowUp("OK!",true,true),
+      FollowUp("beleza.",true,true),
+      FollowUp("Tá bom!",true,true),
+      FollowUp("Ah não, beleza.",true,true),
+      FollowUp("OK, obrigado.",true,true),
+      FollowUp("Pode parar.",true,true),
+      FollowUp("beleza, continue",true,false),
+      FollowUp("beleza, e no Rio?",true,false),
+      FollowUp("obrigada, confira a fonte",true,false),
+      FollowUp("OK!",false,false)
+    )
+    for (followUp in cases) Fixture(transcript=followUp.text).use { fixture ->
+      val sink=RecordingSink()
+      val turn=fixture.backend().execute(wav(),session,conversation,sink,null,
+        closeResearchOnAcknowledgement=followUp.afterResearch)
+      assertEquals(followUp.text,!followUp.closes,turn.playedAudio)
+      assertEquals(followUp.text,!followUp.closes,sink.finished)
+      val paths=fixture.requests.map{it.path}
+      if (followUp.closes) assertEquals(listOf("/api/voice/transcriptions"),paths)
+      else {
+        assertEquals(listOf("/api/voice/transcriptions","/api/chat/messages","/api/voice/speech"),paths)
+        assertEquals(followUp.text,JSONObject(fixture.requests[1].text()).getString("content"))
+      }
+    }
+  }
 
   @Test fun silentIgnoreEndsTheTurnWithoutAudioOrChatChangesInEitherMode() {
     for (incremental in listOf(false, true)) for (destination in listOf(null, conversation)) {
@@ -1146,8 +1274,9 @@ class NodeHandsFreeBackendTest {
       }
     }
     fun backend(ttsDeadlineMilliseconds:Long=300000,onChanged:(NodeNativeSession.Session,String)->Unit=NodeConversationChanges::changed,onStage: (String, Long) -> Unit = { _, _ -> },
-                onVoiceSearchProgress:(NodeNativeSession.Session,JSONObject)->Unit={ _,_-> }) =
-      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds,onChanged,onVoiceSearchProgress)
+                onVoiceSearchProgress:(NodeNativeSession.Session,JSONObject)->Unit={ _,_-> },
+                onResearchDelegated:(NodeNativeSession.Session,String,String,String)->Unit={ _,_,_,_-> }) =
+      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds,onChanged,onVoiceSearchProgress,onResearchDelegated)
     private fun normal(request: Request): Reply {
       if (request.method == "DELETE") return Reply.json(JSONObject())
       return when (request.path) {

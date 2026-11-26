@@ -28,7 +28,8 @@ class NodeHandsFreeBackend internal constructor(
   private val onStage: (String, Long) -> Unit = { _, _ -> },
   private val ttsDeadlineMilliseconds: Long = 300000,
   private val onConversationChanged: (NodeNativeSession.Session, String) -> Unit = NodeConversationChanges::changed,
-  private val onVoiceSearchProgress: (NodeNativeSession.Session, JSONObject) -> Unit = NodeConversationChanges::voiceSearchProgress
+  private val onVoiceSearchProgress: (NodeNativeSession.Session, JSONObject) -> Unit = NodeConversationChanges::voiceSearchProgress,
+  private val onResearchDelegated: (NodeNativeSession.Session, String, String, String) -> Unit = { _, _, _, _ -> }
 ) {
   constructor(context: Context, onStage: (String, Long) -> Unit = { _, _ -> }) :
     this({ NodeNativeSession.read(context.applicationContext) }, onStage)
@@ -105,7 +106,7 @@ class NodeHandsFreeBackend internal constructor(
       throw NodeNativeSession.IdentityUnavailable()
   }
 
-  private fun request(path: String, body: ByteArray, contentType: String, limit: Int, timeoutSeconds: Int,
+  private fun request(path: String, body: ByteArray, contentType: String, limit: Int?, timeoutSeconds: Int,
                       pcm: HandsFreePcmSink? = null, onFirstPcm: () -> Unit = {}, method: String = "POST", cleanup: Boolean = false, onLine: ((JSONObject) -> Unit)? = null, pcmDeliveryMetrics:Boolean=true, onFirstByte:()->Unit={}, onPcmAvailable:()->Unit={}, onNoContent:(()->Unit)?=null): ByteArray {
     val pinned = scope ?: throw NodeNativeSession.IdentityUnavailable()
     require(path.startsWith("/api/") && !path.contains("..") && !path.contains("?"))
@@ -115,7 +116,7 @@ class NodeHandsFreeBackend internal constructor(
     val client = transport.newBuilder()
       .callTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
       .connectTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS)
-      .readTimeout((if (cleanup) 3 else minOf(timeoutSeconds,120)).toLong(), TimeUnit.SECONDS)
+      .readTimeout((if (cleanup) 3 else if (timeoutSeconds == 0) 120 else minOf(timeoutSeconds,120)).toLong(), TimeUnit.SECONDS)
       .writeTimeout(if (cleanup) 3 else 10, TimeUnit.SECONDS)
       .apply {
         if(trace!=null && requestStage!=null)eventListener(object:okhttp3.EventListener() {
@@ -130,7 +131,11 @@ class NodeHandsFreeBackend internal constructor(
       .header("Accept", if (pcm != null) "application/octet-stream" else "application/json")
       .header("Cache-Control", "no-store")
     correlationId?.let{builder.header("X-Aegis-Turn-Id",it)}
-    if (method == "DELETE") builder.delete() else builder.method(method,body.toRequestBody(contentType.toMediaType()))
+    when (method) {
+      "GET" -> builder.get()
+      "DELETE" -> builder.delete()
+      else -> builder.method(method,body.toRequestBody(contentType.toMediaType()))
+    }
     val call = client.newCall(builder.build())
     if (!cleanup) activeCalls.add(call)
     try {
@@ -145,7 +150,7 @@ class NodeHandsFreeBackend internal constructor(
         if (pcm != null) checkCurrent()
         val payload = response.body ?: error("empty_response_body")
         val advertised = payload.contentLength()
-        require(advertised <= limit)
+        require(limit == null || advertised <= limit)
         val output = if (pcm == null) ByteArrayOutputStream() else null
         val line = if(onLine != null) ByteArrayOutputStream() else null
         val pcmTrace=if(pcmDeliveryMetrics)trace else null
@@ -171,7 +176,7 @@ class NodeHandsFreeBackend internal constructor(
               if (!cleanup && pcm != null && System.nanoTime() - checkedIdentityAt >= 1_000_000_000L) {
                 checkCurrent(); checkedIdentityAt = System.nanoTime()
               }
-              require(total + count <= limit); total += count
+              require(limit == null || total + count <= limit); total += count
               if (onLine != null) {
                 for (index in 0 until count) {
                   if (block[index] == 10.toByte()) {
@@ -227,7 +232,7 @@ class NodeHandsFreeBackend internal constructor(
                        interruptedPlayback: HandsFreePlaybackInterruption? = null,
                        interruptedGeneration: HandsFreeGenerationInterruption? = null,
                        onProcessing:()->Unit={},
-                       onConversation:(String)->Unit={}):HandsFreeTurn {
+                       closeResearchOnAcknowledgement:Boolean=false, onConversation:(String)->Unit={}):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
     playbackProgress.reset()
     generationSnapshot=null
@@ -249,7 +254,8 @@ class NodeHandsFreeBackend internal constructor(
     try {
       require(interruptedPlayback==null || interruptedGeneration==null)
       onProcessing()
-      return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, interruptedGeneration, reportConversation)
+      return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, interruptedGeneration,
+        closeResearchOnAcknowledgement, reportConversation)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -263,6 +269,7 @@ class NodeHandsFreeBackend internal constructor(
 
   private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean,
                           interruptedPlayback: HandsFreePlaybackInterruption?, interruptedGeneration:HandsFreeGenerationInterruption?,
+                          closeResearchOnAcknowledgement:Boolean,
                           reportConversation:(String)->Unit): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
@@ -290,7 +297,7 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcription_final", 0)
       // Wake word alone and empty STT never create a conversation or reach the model.
       val command = stripWakeWord(transcript)
-      if (command.isBlank()) {
+      if (command.isBlank() || (closeResearchOnAcknowledgement && handsFreeClosesResearchReply(command))) {
         onStage("empty", 0)
         return HandsFreeTurn(conversationId, false, false)
       }
@@ -481,7 +488,15 @@ class NodeHandsFreeBackend internal constructor(
                 val message=event.getString("assistantMessageId");requireUuid(message)
                 require(persistedMessage==null || persistedMessage==message)
                 if(event.getString("type")=="final_segment") require(event.getInt("sequence")==persistedSequence++)
-                else require(persistedSequence>0)
+                else {
+                  require(persistedSequence>0)
+                  val jobId = event.opt("researchJobId") as? String
+                  if (jobId != null && isUuid(jobId)) {
+                    // The durable job is independent of this announcement's playback.
+                    // Scheduling is allowed to fail without breaking the spoken turn.
+                    runCatching { onResearchDelegated(checkNotNull(scope), jobId, sessionId, destination) }
+                  }
+                }
                 persistedDestination=destination;persistedMessage=message
                 accepted=true
                 conversationChanged(destination)
@@ -674,7 +689,49 @@ class NodeHandsFreeBackend internal constructor(
     finally {armed.set(false);deadline.cancel(false);body.fill(0);pcm.close();activePcm=null;executing.set(false);turnId=null;speechId=null}
   }
 
-  private fun requireUuid(value:String) {require(UUID.fromString(value).toString()==value)}
+  internal fun researchJobState(jobId: String): String {
+    requireUuid(jobId)
+    if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
+    val bytes = request("/api/chat/research-jobs/$jobId", ByteArray(0), "application/json", 262144, 12, method = "GET")
+    return try {
+      val record = JSONObject(String(bytes, Charsets.UTF_8))
+      require(record.opt("id") == jobId)
+      record.getString("state")
+    } finally { bytes.fill(0) }
+  }
+
+  internal fun speakResearch(jobId: String, voiceSessionId: String, pcm: HandsFreePcmSink,
+                             onFirstPcm: () -> Unit = {}, onProcessing: () -> Unit = {}) {
+    requireUuid(jobId); requireUuid(voiceSessionId)
+    check(executing.compareAndSet(false, true))
+    activePcm = pcm
+    val body = JSONObject().put("voiceSessionId", voiceSessionId).toString().toByteArray(Charsets.UTF_8)
+    try {
+      if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
+      onProcessing()
+      // The backend streams the whole answer in bounded synthesis chunks. Retain the
+      // ordinary idle network deadline and cancellation, without a whole-answer cutoff.
+      request("/api/chat/research-jobs/$jobId/speech", body, "application/json", null, 0, pcm = pcm,
+        onFirstPcm = { onStage("tts_first_audio", 0); onFirstPcm() })
+      checkCurrent()
+      pcm.finish()
+      checkCurrent()
+    } catch (error: Exception) {
+      pcm.abort()
+      throw error
+    } finally {
+      body.fill(0)
+      try { pcm.close() } finally {
+        activePcm = null
+        executing.set(false)
+      }
+    }
+  }
+
+  private fun isUuid(value: String): Boolean =
+    try { UUID.fromString(value).toString() == value } catch (_: IllegalArgumentException) { false }
+
+  private fun requireUuid(value:String) {require(isUuid(value))}
 
   /** Immediate, nonblocking invalidation even while an older remote cleanup is queued. */
   fun requestCancellation() {
@@ -730,5 +787,19 @@ class NodeHandsFreeBackend internal constructor(
     // Only a leading invocation is removed; quoted names elsewhere remain part of the request.
     internal fun stripWakeWord(text: String): String = text.replaceFirst(
       Regex("^\\s*(?:aegis|aégis|aéjis|égis)(?=$|[\\s,.:;!?–—-])[\\s,.:;!?–—-]*", RegexOption.IGNORE_CASE), "").trim()
+  }
+}
+
+private val researchAcknowledgements = setOf(
+  "ok", "okay", "beleza", "valeu", "obrigado", "obrigada", "tá bom", "ta bom", "está bom", "esta bom",
+  "ah não", "ah nao", "pode parar", "já deu", "ja deu", "é só isso", "e so isso"
+)
+private val acknowledgementDelimiter = Regex("[^\\p{L}\\p{N}]+")
+private val acknowledgementPrefixes = listOf("ok ", "okay ", "beleza ", "ah não ", "ah nao ")
+
+internal fun handsFreeClosesResearchReply(content: String): Boolean {
+  val normalized = content.lowercase().replace(acknowledgementDelimiter, " ").trim()
+  return normalized in researchAcknowledgements || acknowledgementPrefixes.any { prefix ->
+    normalized.startsWith(prefix) && normalized.removePrefix(prefix) in researchAcknowledgements
   }
 }

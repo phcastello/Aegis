@@ -11,7 +11,10 @@ public sealed record ResearchJobSnapshot(
     string? ErrorCode, IReadOnlyList<WebResearchSourceCount> Sources);
 
 internal sealed record ResearchJobInput(
-    Guid JobId, Guid ConversationId, Guid UserMessageId, string Content, DateTimeOffset DeadlineAt);
+    Guid JobId, Guid ConversationId, Guid UserMessageId, string Content, DateTimeOffset DeadlineAt,
+    bool IsHandsFree);
 
 internal sealed record ResearchJobResult(
     string Content, string Model, string? MetadataJson, LlmRequestAuditData Audit);
+
+public sealed record ResearchVoiceResult(Guid ConversationId, string? Text);

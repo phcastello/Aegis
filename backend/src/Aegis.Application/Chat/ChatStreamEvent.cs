@@ -20,7 +20,8 @@ public sealed record ChatStreamEvent(
     Guid? SegmentId = null,
     int? Sequence = null,
     WebResearchEvidence? WebResearch = null,
-    IReadOnlyList<WebResearchSourceCount>? Sources = null)
+    IReadOnlyList<WebResearchSourceCount>? Sources = null,
+    Guid? ResearchJobId = null)
 {
     public static ChatStreamEvent Ignored(Guid turnId) => new("ignored", turnId);
 
@@ -47,7 +48,8 @@ public sealed record ChatStreamEvent(
         string? titleSource,
         MemoryActivitySnapshot? memoryActivity = null,
         string? voiceContinuation = null,
-        WebResearchEvidence? webResearch = null) =>
+        WebResearchEvidence? webResearch = null,
+        Guid? researchJobId = null) =>
         new(
             "done",
             turnId,
@@ -58,5 +60,6 @@ public sealed record ChatStreamEvent(
             TitleSource: titleSource,
             MemoryActivity: memoryActivity,
             VoiceContinuation: voiceContinuation,
-            WebResearch: webResearch);
+            WebResearch: webResearch,
+            ResearchJobId: researchJobId);
 }

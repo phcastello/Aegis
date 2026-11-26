@@ -103,7 +103,8 @@ internal class HandsFreeStreamingPcmSink(
     private val echo: HandsFreeBargeInEcho? = null,
     private val onPlaybackReady: (HandsFreePlaybackClock) -> Unit = {},
     boostSpeechVolume: Boolean = false,
-    spectrumSession: String? = null
+    spectrumSession: String? = null,
+    private val maximumFrames: Long = 24000L * 180
 ) : HandsFreePcmSink {
     private val cancelled = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -188,7 +189,7 @@ internal class HandsFreeStreamingPcmSink(
     override fun finish() {
         check(finished.compareAndSet(false, true)); checkCurrent()
         val target = device ?: error("empty_audio_playback")
-        check(writtenFrames in 1..(24000L * 180))
+        check(writtenFrames in 1..maximumFrames)
         if (target.playedFrames() < writtenFrames) {
             target.endMarker(writtenFrames.toInt()) { completion.countDown() }
             // The playback head may pass the marker between the previous read and arming it.

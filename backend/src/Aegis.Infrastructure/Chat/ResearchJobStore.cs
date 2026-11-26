@@ -1,6 +1,7 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
+using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Persistence;
@@ -21,7 +22,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string DelegationKey = "researchDelegation";
 
-    public void Stage(ChatMessage userMessage, string brief)
+    public void Stage(ChatMessage userMessage, string brief, Guid? voiceSessionId = null)
     {
         if (userMessage.Role != ChatRoles.User || db.Entry(userMessage).State != EntityState.Unchanged ||
             string.IsNullOrWhiteSpace(brief) || brief.Length > IResearchDelegationQueue.MaximumBriefLength)
@@ -30,7 +31,9 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         var previous = userMessage.MetadataJson is { } json ? JsonNode.Parse(json) : null;
         var metadata = previous as JsonObject ?? new JsonObject();
         if (previous is not null && previous is not JsonObject) metadata["previousMetadata"] = previous;
-        metadata[DelegationKey] = new JsonObject { ["version"] = 1, ["brief"] = brief.Trim() };
+        var delegation = new JsonObject { ["version"] = 1, ["brief"] = brief.Trim() };
+        if (voiceSessionId is { } session && session != Guid.Empty) delegation["voiceSessionId"] = JsonValue.Create(session);
+        metadata[DelegationKey] = delegation;
         userMessage.AttachAuditData(userMessage.Model, userMessage.PromptSnapshot, userMessage.RuntimeContextSnapshot,
             metadata.ToJsonString(JsonOptions));
         db.ResearchJobs.Add(new ResearchJob(userMessage.Id, userMessage.ConversationId, userMessage.Id, clock.GetUtcNow()));
@@ -89,6 +92,29 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         return job is null ? null : Snapshot(job);
     }
 
+    public async Task<ResearchVoiceResult?> GetVoiceResultAsync(Guid id, Guid voiceSessionId, CancellationToken ct)
+    {
+        if (voiceSessionId == Guid.Empty) return null;
+        var result = await (
+            from job in VisibleJobs().AsNoTracking()
+            join message in db.ChatMessages.AsNoTracking() on job.UserMessageId equals message.Id
+            where job.Id == id && job.Id == job.UserMessageId && job.State != ResearchJob.Cancelled &&
+                message.ConversationId == job.ConversationId && message.Role == ChatRoles.User
+            select new { job.State, job.ConversationId, job.ResultMessageId, message.MetadataJson })
+            .SingleOrDefaultAsync(ct);
+        if (result is null || ReadDelegation(result.MetadataJson).VoiceSessionId != voiceSessionId) return null;
+        if (result.State == ResearchJob.Failed)
+            return new(result.ConversationId, "Tive um problema e não consegui concluir a pesquisa.");
+        if (result.State is ResearchJob.Queued or ResearchJob.Running)
+            return new(result.ConversationId, null);
+
+        var answer = await db.ChatMessages.AsNoTracking()
+            .Where(message => message.Id == result.ResultMessageId && message.ConversationId == result.ConversationId &&
+                message.Role == ChatRoles.Assistant)
+            .Select(message => message.Content).SingleOrDefaultAsync(ct);
+        return answer is null ? null : new(result.ConversationId, ResearchSpeechText.FromAnswer(answer));
+    }
+
     public async Task<IReadOnlyList<ResearchJobSnapshot>> ListAsync(Guid conversationId, CancellationToken ct)
     {
         var jobs = await VisibleJobs().AsNoTracking().Where(job => job.ConversationId == conversationId)
@@ -118,7 +144,8 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         if (job is null) return null;
         var message = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
             .Select(message => new { message.Content, message.MetadataJson }).SingleAsync(ct);
-        var content = job.Id == job.UserMessageId ? ReadBrief(message.MetadataJson) : message.Content;
+        var delegation = job.Id == job.UserMessageId ? ReadDelegation(message.MetadataJson) : default;
+        var content = job.Id == job.UserMessageId ? delegation.Brief : message.Content;
         if (content is null)
         {
             job.Fail("research_incomplete", clock.GetUtcNow());
@@ -127,13 +154,14 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         }
         job.Start(clock.GetUtcNow(), JobTimeout);
         return await SaveTransitionAsync(ct)
-            ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId, content, job.DeadlineAt!.Value)
+            ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId, content, job.DeadlineAt!.Value,
+                delegation.VoiceSessionId.HasValue)
             : null;
     }
 
-    private static string? ReadBrief(string? metadata)
+    private static (string? Brief, Guid? VoiceSessionId) ReadDelegation(string? metadata)
     {
-        if (metadata is null) return null;
+        if (metadata is null) return default;
         using var document = JsonDocument.Parse(metadata);
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object ||
@@ -141,10 +169,14 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
             !delegation.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) || versionNumber != 1 ||
             !delegation.TryGetProperty("brief", out var brief) || brief.ValueKind != JsonValueKind.String)
-            return null;
+            return default;
         var text = brief.GetString();
-        return text is { Length: <= IResearchDelegationQueue.MaximumBriefLength } && !string.IsNullOrWhiteSpace(text)
-            ? text : null;
+        if (text is not { Length: <= IResearchDelegationQueue.MaximumBriefLength } || string.IsNullOrWhiteSpace(text))
+            return default;
+        Guid? session = delegation.TryGetProperty("voiceSessionId", out var voiceSessionId) &&
+            voiceSessionId.ValueKind == JsonValueKind.String && voiceSessionId.TryGetGuid(out var parsed) && parsed != Guid.Empty
+                ? parsed : null;
+        return (text, session);
     }
 
     internal Task<bool> IsRunningAsync(Guid id, CancellationToken ct) =>
