@@ -22,6 +22,9 @@ public sealed class SendMessageRequest
 
     public VoiceGenerationInterruption? InterruptedGeneration { get; init; }
 
+    public Guid? InterruptionReceipt { get; init; }
+    public Guid? ResearchJobId { get; init; }
+
     public string Content { get; init; } = string.Empty;
 }
 

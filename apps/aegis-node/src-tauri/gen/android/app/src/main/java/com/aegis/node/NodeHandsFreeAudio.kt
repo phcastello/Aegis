@@ -42,6 +42,32 @@ internal class HandsFreeRing(private val capacity:Int=40000) {
         if(first<length)samples.copyInto(destination,destinationOffset+first,0,length-first)
         return length
     }
+
+    /** A speech threshold derived from sustained pre-keyword audio. The recent
+     * keyword and command are excluded so they cannot set their own gate. */
+    fun sustainedSpeechFloor(postSamples: Int): Double? {
+        val end = (count - postSamples - 16000).coerceAtLeast(0)
+        val frameSize = HandsFreeVad.FRAME_SAMPLES
+        val frameCount = end / frameSize
+        if (frameCount < 15) return null
+        val first = (head - count + capacity) % capacity
+        val levels = DoubleArray(frameCount) { frame ->
+            var sum = 0.0
+            var squares = 0.0
+            for (offset in 0 until frameSize) {
+                val sample = samples[(first + frame * frameSize + offset) % capacity].toDouble()
+                sum += sample
+                squares += sample * sample
+            }
+            val mean = sum / frameSize
+            sqrt((squares / frameSize - mean * mean).coerceAtLeast(0.0))
+        }
+        levels.sort()
+        val floor = levels[levels.size / 4]
+        val upper = levels[levels.size * 3 / 4]
+        val peaks = levels[levels.size * 9 / 10]
+        return if (floor >= 120 && upper <= floor * 6) maxOf(upper * 1.4, peaks * 1.25) else null
+    }
     fun clear(){head=0;count=0;samples.fill(0)}
 }
 
@@ -90,7 +116,8 @@ internal class HandsFreeVad(
     private val classifier:HandsFreeSpeechClassifier,
     private val silenceSamples:Int=12800,
     private val maxSamples:Int=320000,
-    private val noSpeechSamples:Int=NO_SPEECH_SAMPLES
+    private val noSpeechSamples:Int=NO_SPEECH_SAMPLES,
+    private val sustainedSpeechFloor: Double? = null
 ) {
     private val frame=ShortArray(FRAME_SAMPLES)
     private var pending=0
@@ -121,10 +148,14 @@ internal class HandsFreeVad(
             val rms=sqrt(maxOf(0.0,square/FRAME_SAMPLES-mean*mean))
             if(rms>=8.0)signalSamples+=FRAME_SAMPLES
             val classified=classifier.isSpeech(frame)
-            val active=classified && rms>=maxOf(8.0,noise*1.4)
+            val active=classified && rms>=maxOf(sustainedSpeechFloor ?: 8.0,noise*1.4)
             if(active) {
-                lastActiveEndSample=total
-                voicedRun+=FRAME_SAMPLES;quiet=0
+                voicedRun+=FRAME_SAMPLES
+                // An isolated loud syllable from the room cannot restart the hangover.
+                if(sustainedSpeechFloor==null || voicedRun>=2*FRAME_SAMPLES) {
+                    lastActiveEndSample=total
+                    quiet=0
+                } else quiet+=FRAME_SAMPLES
                 if(voicedRun>=ONSET_SAMPLES) {
                     latestConfirmedSpeechEndSample=total
                     if(!hasSpeech) {
@@ -163,11 +194,13 @@ internal class HandsFreeCommandCapture(
     private val command:ShortArray,
     initialPostCount:Int,
     classifier:HandsFreeSpeechClassifier,
-    initialSpeechConfirmed: Boolean = false,
+    private val initialSpeechConfirmed: Boolean = false,
     initialNoiseRms: Double = 8.0,
-    private val waitForActivationCue: Boolean = false
+    private val waitForActivationCue: Boolean = false,
+    val sustainedSpeechFloor: Double? = null
 ) {
-    private val vad=HandsFreeVad(classifier,maxSamples=320000,noSpeechSamples=initialPostCount+HandsFreeVad.NO_SPEECH_SAMPLES)
+    private val vad=HandsFreeVad(classifier,maxSamples=320000,noSpeechSamples=initialPostCount+HandsFreeVad.NO_SPEECH_SAMPLES,
+        sustainedSpeechFloor = sustainedSpeechFloor)
     private var afterActivation=0
     private var postCueSample:Int?=null
     private var postCueTimeMs=0L
@@ -179,11 +212,17 @@ internal class HandsFreeCommandCapture(
     // The initial suffix contains only PCM at/after the activation boundary. Preserve
     // uncertain short requests; the local diagnostic context never enters this buffer.
     val hasUsefulAudio:Boolean get()=vad.hasSpeech || uncertainInitialAudio
+    val transcriptionStart: Int get() =
+        if (sustainedSpeechFloor == null || initialSpeechConfirmed) 0
+        else ((vad.confirmedStartSample ?: 0) - TRANSCRIPTION_CONTEXT_SAMPLES).coerceAtLeast(0)
+    val transcriptionLength: Int get() =
+        if (sustainedSpeechFloor == null) length
+        else minOf(length, (vad.lastActiveEndSample ?: length) + TRANSCRIPTION_CONTEXT_SAMPLES) - transcriptionStart
     init {
         require(initialPostCount in 0..minOf(command.size,320000))
         vad.process(command,initialPostCount)
         if (initialSpeechConfirmed) vad.confirmSpeechAtCurrentFrame(initialNoiseRms)
-        uncertainInitialAudio=vad.signalSamples>=640 // At least40ms of variable initial post audio.
+        uncertainInitialAudio=sustainedSpeechFloor==null && vad.signalSamples>=640 // At least40ms of variable initial post audio.
     }
     fun append(samples:ShortArray,count:Int,activationCueCompleted:Boolean=false,readReturnedAtMs:Long=0L):Boolean {
         require(count in 0..samples.size)
@@ -229,6 +268,7 @@ internal class HandsFreeCommandCapture(
 
     companion object {
         private const val CUE_TAIL_SAMPLES = 1920 // 120ms for acoustic settling; PCM is still retained.
+        private const val TRANSCRIPTION_CONTEXT_SAMPLES = 1920
     }
 }
 
@@ -271,13 +311,13 @@ internal object HandsFreeCueSignal {
     }
 }
 
-internal fun handsFreeWav(samples:ShortArray,count:Int):ByteArray {
-    require(count in 0..minOf(samples.size,360000))
+internal fun handsFreeWav(samples:ShortArray,count:Int,start:Int=0):ByteArray {
+    require(start in 0..samples.size && count in 0..minOf(samples.size-start,360000))
     val buffer=ByteBuffer.allocate(44+count*2).order(ByteOrder.LITTLE_ENDIAN)
     buffer.put("RIFF".toByteArray());buffer.putInt(36+count*2);buffer.put("WAVEfmt ".toByteArray())
     buffer.putInt(16);buffer.putShort(1);buffer.putShort(1);buffer.putInt(16000);buffer.putInt(32000);buffer.putShort(2);buffer.putShort(16)
     buffer.put("data".toByteArray());buffer.putInt(count*2)
-    for(i in 0 until count)buffer.putShort(samples[i])
+    for(i in start until start+count)buffer.putShort(samples[i])
     return buffer.array()
 }
 

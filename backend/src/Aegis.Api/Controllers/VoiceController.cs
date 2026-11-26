@@ -1,8 +1,13 @@
 using Aegis.Application.Voice;
 using Aegis.Application.Observability;
 using Aegis.Application.Voice.Transcription;
+using Aegis.Application.Chat;
+using Aegis.Application.Llm;
+using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Voice.Transcription;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace Aegis.Api.Controllers;
@@ -15,6 +20,40 @@ public sealed class VoiceController(
     IOptions<SttOptions> sttOptions,
     ILogger<VoiceController>? logger = null) : ControllerBase
 {
+    [HttpPost("interruptions/classify")]
+    [Authorize(Policy = "NodeManagement")]
+    [EnableRateLimiting("node-voice-activation")]
+    [RequestSizeLimit(48_000)]
+    public async Task<ActionResult<VoiceInterruptionDecision>> ClassifyInterruption(
+        VoiceInterruptionRequest candidate, [FromServices] VoiceInterruptionDecisionService decisions,
+        [FromServices] ResearchJobStore research, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            var request = candidate.Normalize();
+            if (string.IsNullOrEmpty(request.Content)) return Ok(VoiceInterruptionDecision.Resume);
+            string? researchAnswer = null;
+            if (request.ResearchJobId is { } jobId)
+            {
+                var result = await research.GetVoiceResultAsync(jobId, request.VoiceSessionId, deadline.Token);
+                if (result is null || result.ConversationId != request.ConversationId || result.Text is null)
+                    return NotFound();
+                researchAnswer = result.Text;
+            }
+            return Ok(await decisions.ClassifyAsync(request, researchAnswer, deadline.Token));
+        }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+        catch (ConversationNotFoundException) { return NotFound(); }
+        catch (LlmRequestException) { return Ok(VoiceInterruptionDecision.Resume); }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            return Ok(VoiceInterruptionDecision.Resume);
+        }
+    }
+
     [HttpGet("status")]
     public async Task<ActionResult<SpeechServiceStatus>> GetStatus(CancellationToken cancellationToken)
     {

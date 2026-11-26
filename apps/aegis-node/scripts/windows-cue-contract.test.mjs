@@ -16,7 +16,8 @@ test('only a granted Windows activation pauses media and plays the cue', () => {
   assert.ok(lookup >= 0 && lookup < claim && claim < suppressed && suppressed < winner && winner < pause && pause < cue && cue < endpoint);
   assert.match(cycle.slice(suppressed, winner), /operation\.Cancel\(\)[\s\S]*?return if cancel\.is_cancelled\(\)/);
   assert.doesNotMatch(cycle.slice(0,winner), /GetCurrentSession|TryPauseAsync|PausedMedia::new|windows_voice_audio::cue/);
-  const pauseGuard = source.slice(source.indexOf('impl PausedMedia'), source.indexOf('#[cfg(test)]'));
+  const guardStart = source.indexOf('impl PausedMedia');
+  const pauseGuard = source.slice(guardStart, source.indexOf('#[cfg(test)]', guardStart));
   assert.match(pauseGuard, /Playback::Playing[\s\S]*?TryPauseAsync\(\)[\s\S]*?Ok\(Ok\(true\)\) => Some\(session\)/);
   assert.match(pauseGuard, /if let Some\(session\) = &self\.0[\s\S]*?Playback::Paused[\s\S]*?TryPlayAsync\(\)/);
 });

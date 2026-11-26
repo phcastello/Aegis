@@ -62,30 +62,44 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
 
     private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation);
 
+    public VoiceGenerationReceipt? ReadVoiceGeneration(Guid turnId, Guid sessionId, Guid? destination)
+    {
+        lock (gate)
+        {
+            ThrowIfStopping();
+            return ValidateVoiceGenerationUnsafe(turnId, sessionId, destination);
+        }
+    }
+
     public VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (turnId == Guid.Empty || sessionId == Guid.Empty)
-            throw new ArgumentException("A interrupção da geração por voz é inválida.");
         lock (gate)
         {
             ThrowIfStopping();
             CleanupUnsafe();
-            var receipt = voiceGenerations.GetValueOrDefault(turnId);
-            if (receipt is not null)
-            {
-                if (receipt.SessionId != sessionId || destination is { } requested && requested != receipt.ConversationId)
-                    throw new ArgumentException("A interrupção não pertence a esta sessão de voz.");
-            }
-            else if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
-                throw new ArgumentException("O turno interrompido não é uma geração desta sessão de voz.");
-
+            var receipt = ValidateVoiceGenerationUnsafe(turnId, sessionId, destination);
             // Validate ownership and reserve cancellation in one critical section.
             // If no prior registration exists, the tombstone prevents a late POST
             // from accepting while a successor is already being prepared.
             return new(receipt, CancelAndGetInfoUnsafe(turnId, "voice_generation_interrupted", activeSegmentsOnly: true));
         }
+    }
+
+    private VoiceGenerationReceipt? ValidateVoiceGenerationUnsafe(Guid turnId, Guid sessionId, Guid? destination)
+    {
+        if (turnId == Guid.Empty || sessionId == Guid.Empty)
+            throw new ArgumentException("A interrupção da geração por voz é inválida.");
+        var receipt = voiceGenerations.GetValueOrDefault(turnId);
+        if (receipt is not null)
+        {
+            if (receipt.SessionId != sessionId || destination is { } requested && requested != receipt.ConversationId)
+                throw new ArgumentException("A interrupção não pertence a esta sessão de voz.");
+        }
+        else if (turns.ContainsKey(turnId) || pendingTurns.ContainsKey(turnId))
+            throw new ArgumentException("O turno interrompido não é uma geração desta sessão de voz.");
+        return receipt;
     }
 
     private sealed class PendingRegistration(ActiveTurnRegistry registry, Guid turnId, PendingTurn pending) : IDisposable
@@ -338,8 +352,10 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             if (!turns.TryGetValue(turnId, out var turn)) return false;
             if (turn.Status == TurnStatus.Completed) return true;
+            var readingStopped = voiceGenerations.GetValueOrDefault(turnId)?.ReadingStopped == true;
             if (!IsActiveUnsafe(turn) || turn.Status != TurnStatus.TextCompleted || turn.SpeechRequestId is not null ||
-                (turn.SpeechSegments.Count > 0 && (turn.SegmentRequests.Count != turn.SpeechSegments.Count ||
+                (turn.SpeechSegments.Count > 0 &&
+                    ((!readingStopped && turn.SegmentRequests.Count != turn.SpeechSegments.Count) ||
                     turn.CompletedSegmentRequests.Count != turn.SegmentRequests.Count)))
             {
                 return false;

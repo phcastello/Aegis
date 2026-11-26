@@ -31,10 +31,13 @@ public sealed class ChatService(
     MemoryHybridRetriever? hybrid = null,
     IMemoryActivityStore? activity = null,
     ILogger<ChatService>? logger = null,
-    IResearchDelegationQueue? researchQueue = null) : IChatService
+    IResearchDelegationQueue? researchQueue = null,
+    VoiceInterruptionReceipts? interruptionReceipts = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
+    private const string PriorSpeechLabel = "Pedido anterior interrompido: ";
+    private const string CurrentSpeechLabel = "\nNova fala (complemento ou correção): ";
 
     public async Task<SendMessageResponse?> SendMessageAsync(
         SendMessageRequest request,
@@ -48,7 +51,8 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var defer = request.IsHandsFree && request.AllowSilentIgnore;
+        var acceptedInterruption = TakeInterruptionReceipt(request, userContent);
+        var defer = request.IsHandsFree && request.AllowSilentIgnore && !acceptedInterruption;
         if (defer && userContent.Length == 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -56,10 +60,10 @@ public sealed class ChatService(
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
-        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
+        if (defer || acceptedInterruption) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
-        userContent = userMessage.Content;
+        userContent = pending.ModelContent;
         var turnToken = pending.Token;
         if (!defer) await AcceptTurnAsync(pending, request, effectiveTurnId, turnToken);
 
@@ -151,7 +155,8 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var defer = request.IsHandsFree && request.AllowSilentIgnore;
+        var acceptedInterruption = TakeInterruptionReceipt(request, userContent);
+        var defer = request.IsHandsFree && request.AllowSilentIgnore && !acceptedInterruption;
         if (defer && userContent.Length == 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -160,10 +165,10 @@ public sealed class ChatService(
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
-        if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
+        if (defer || acceptedInterruption) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
-        userContent = userMessage.Content;
+        userContent = pending.ModelContent;
         var turnToken = pending.Token;
         var announced = false;
         if (!defer)
@@ -413,6 +418,19 @@ public sealed class ChatService(
         return true;
     }
 
+    private bool TakeInterruptionReceipt(SendMessageRequest request, string content)
+    {
+        if (request.InterruptionReceipt is null && request.ResearchJobId is null) return false;
+        if (request.InterruptionReceipt is not { } receipt || !request.IsHandsFree || !request.VoiceSegments ||
+            !request.AllowSilentIgnore || request.VoiceSessionId is not { } session || string.IsNullOrWhiteSpace(content))
+            throw new ArgumentException("A autorização da interrupção é inválida.");
+        var candidate = new VoiceInterruptionRequest(session, request.ConversationId, content,
+            request.InterruptedGeneration, request.InterruptedPlayback, request.ResearchJobId).Normalize();
+        if (interruptionReceipts?.Consume(receipt, candidate) != true)
+            throw new ArgumentException("A autorização da interrupção expirou ou pertence a outro pedido.");
+        return true;
+    }
+
     private async Task<PendingChatTurn> PrepareTurnAsync(SendMessageRequest request, string userContent,
         CancellationToken cancellationToken)
     {
@@ -420,6 +438,7 @@ public sealed class ChatService(
         var destination = request.ConversationId;
         Conversation? conversation = null;
         var playback = request.InterruptedPlayback;
+        string? interruptedContent = null;
         if (request.InterruptedGeneration is { } interruption)
         {
             // Cancellation is idempotent and tombstones a request that has not
@@ -440,18 +459,18 @@ public sealed class ChatService(
                     {
                         // An explicitly ignored background utterance must not
                         // reappear just because its terminal event was lost.
-                        if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                        if (!prior.Ignored) interruptedContent = RetainInterruptedContent(prior.Content);
                         playback = prior.Playback;
                     }
                 }
                 else
                 {
                     if (destination is { } known) throw new ConversationNotFoundException(known);
-                    if (!prior.Ignored) userContent = MergeInterruptedContent(prior.Content, userContent);
+                    if (!prior.Ignored) interruptedContent = RetainInterruptedContent(prior.Content);
                 }
             }
             else
-                userContent = MergeInterruptedContent(interruption.PreviousContent, userContent);
+                interruptedContent = RetainInterruptedContent(interruption.PreviousContent);
         }
         var isNewConversation = destination is null;
         conversation ??= await TurnLatencyProfile.MeasureAsync("chat.conversation_load", async () =>
@@ -461,20 +480,34 @@ public sealed class ChatService(
                 : new Conversation(Conversation.DefaultTitle));
         // Before the model decides, keep the provisional message detached even for
         // an existing conversation. A discarded utterance must not affect its history.
-        var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, userContent);
+        var content = interruptedContent is null ? userContent : $"{interruptedContent}\n{userContent}";
+        var modelContent = interruptedContent is null ? userContent :
+            $"{PriorSpeechLabel}{interruptedContent}{CurrentSpeechLabel}{userContent}";
+        var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, content);
         if (request.InterruptedGeneration is not null)
             VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
         else
             VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
-        return new PendingChatTurn(conversation, userMessage, isNewConversation, playback, cancellationToken);
+        return new PendingChatTurn(conversation, userMessage, modelContent, isNewConversation, playback, cancellationToken);
     }
 
-    private static string MergeInterruptedContent(string? previous, string current)
+    private static string? RetainInterruptedContent(string? previous)
     {
-        if (string.IsNullOrWhiteSpace(previous)) return current;
-        var retained = previous.Trim();
+        if (string.IsNullOrWhiteSpace(previous)) return null;
+        var retained = DisplayUserSpeech(previous.Trim());
         if (retained.Length > 16384) retained = retained[^16384..];
-        return $"Pedido anterior interrompido: {retained}\nNova fala (complemento ou correção): {current}";
+        return retained;
+    }
+
+    private static string DisplayUserSpeech(string content)
+    {
+        // Older versions persisted the two operational labels in the message body.
+        if (!content.StartsWith(PriorSpeechLabel, StringComparison.Ordinal) ||
+            !content.Contains(CurrentSpeechLabel, StringComparison.Ordinal))
+            return content;
+        while (content.StartsWith(PriorSpeechLabel, StringComparison.Ordinal))
+            content = content[PriorSpeechLabel.Length..];
+        return content.Replace(CurrentSpeechLabel, "\n", StringComparison.Ordinal);
     }
 
     private async Task AcceptTurnAsync(PendingChatTurn pending, SendMessageRequest request,
@@ -504,7 +537,7 @@ public sealed class ChatService(
         if (automaticMemory?.Enabled == true) metrics?.MemoryExtractionJobsCreated.Add(1);
     }
 
-    private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage,
+    private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage, string modelContent,
         bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
     {
         private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -513,6 +546,7 @@ public sealed class ChatService(
         private VoiceGenerationReceipt? generationReceipt;
         public Conversation Conversation { get; } = conversation;
         public ChatMessage UserMessage { get; } = userMessage;
+        public string ModelContent { get; } = modelContent;
         public bool IsNewConversation { get; } = isNewConversation;
         public ActiveTurn? Turn { get; private set; }
         public CancellationToken Token => cancellation.Token;
@@ -648,7 +682,7 @@ public sealed class ChatService(
             message.Id,
             message.ConversationId,
             message.Role,
-            message.Content,
+            message.Role == ChatRoles.User ? DisplayUserSpeech(message.Content) : message.Content,
             message.CreatedAt,
             message.Model,
             memoryActivity, message.IsProactive, message.ProactiveSequence,

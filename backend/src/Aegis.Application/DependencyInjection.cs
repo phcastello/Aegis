@@ -57,6 +57,8 @@ public static class DependencyInjection
         services.AddScoped<ISpeechTranscriptionService, SpeechTranscriptionService>();
         services.AddSingleton<VoiceStatusCache>();
         services.AddSingleton<IActiveTurnRegistry, ActiveTurnRegistry>();
+        services.AddSingleton<VoiceInterruptionReceipts>();
+        services.AddScoped<VoiceInterruptionDecisionService>();
         services.AddScoped<IConversationTitleService, ConversationTitleService>();
         services.AddScoped<IMessageFeedbackService, MessageFeedbackService>();
         services.AddScoped<CalendarToolContextService>();

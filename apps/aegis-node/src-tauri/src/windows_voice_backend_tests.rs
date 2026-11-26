@@ -182,6 +182,183 @@ fn chunk(socket: &mut TcpStream, bytes: &[u8]) {
 }
 
 #[test]
+fn provisional_interruption_sends_only_candidate_then_reuses_receipt_and_transcription() {
+    let (mut backend, server) = fixture();
+    let session = Uuid::new_v4();
+    let conversation = Uuid::new_v4();
+    let old_turn = Uuid::new_v4();
+    let new_assistant = Uuid::new_v4();
+    let segment = Uuid::new_v4();
+    let receipt = Uuid::new_v4();
+    let worker = thread::spawn(move || {
+        // Expect a classifier first. An empty transcript never makes a call.
+        let (s, body) = request(&server, "/api/voice/interruptions/classify");
+        let probe: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            probe,
+            json!({
+                "voiceSessionId":session,"conversationId":conversation,"content":"e no Rio?",
+                "interruptedGeneration":{"turnId":old_turn,"previousContent":"compare os números"}
+            })
+        );
+        answer(s, json!({"disposition":"replace","receipt":receipt}));
+        let (s, body) = request(&server, "/api/chat/messages/stream");
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        for field in [
+            "voiceSessionId",
+            "conversationId",
+            "content",
+            "interruptedGeneration",
+        ] {
+            assert_eq!(&payload[field], &probe[field]);
+        }
+        assert_eq!(payload["interruptionReceipt"], json!(receipt));
+        let turn = &payload["turnId"];
+        stream(
+            s,
+            &[
+                json!({"type":"conversation","turnId":turn,"conversationId":conversation}),
+                segment_event(turn, conversation, new_assistant, segment, 0),
+                done_event(turn, conversation, new_assistant, false),
+            ],
+        );
+        pcm(&server, turn, conversation, new_assistant, segment, &[3, 4]);
+        let (mut s, _) = request(
+            &server,
+            &format!("/api/chat/turns/{}/complete", turn.as_str().unwrap()),
+        );
+        s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let context = InterruptionContext {
+        conversation: Some(conversation),
+        predecessor: Some(Interruption::Generation {
+            turn_id: old_turn,
+            previous_content: "compare os números".into(),
+        }),
+        research_job: None,
+    };
+    assert!(matches!(
+        backend.classify_interruption(session, "".into(), context.clone()),
+        Ok(InterruptionDecision::Resume)
+    ));
+    let InterruptionDecision::Replace(replacement) = backend
+        .classify_interruption(session, "e no Rio?".into(), context)
+        .unwrap()
+    else {
+        panic!("the server accepted a genuine follow-up");
+    };
+    let output = AudioFixture::default();
+    let heard = output.played.clone();
+    let report = backend.run_controlled_turn(
+        VoiceTurnRequest {
+            session,
+            destination: Some(conversation),
+            samples: &[],
+            legacy_interruption: None,
+            replacement: Some(&replacement),
+            inspection: &TurnInspection::new(Some(conversation)),
+            playback: &PlaybackControl::default(),
+        },
+        |_| {},
+        |_| {},
+        || Ok(output),
+    );
+    assert!(report.result.is_ok());
+    assert_eq!(*heard.lock().unwrap(), [3, 4]);
+    worker.join().unwrap();
+}
+
+#[test]
+fn stop_only_drains_persisted_text_without_starting_synthesis_of_later_segments() {
+    let (mut backend, server) = fixture();
+    let session = Uuid::new_v4();
+    let conversation = Uuid::new_v4();
+    let message = Uuid::new_v4();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let (wrote, heard) = std::sync::mpsc::channel();
+    let (stopped, allow_tail) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        transcript(&server, "compare as fontes");
+        let (mut chat, payload) = request(&server, "/api/chat/messages/stream");
+        let payload: Value = serde_json::from_slice(&payload).unwrap();
+        let turn = &payload["turnId"];
+        chat.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        chunk(
+            &mut chat,
+            format!(
+                "{}\n",
+                json!({"type":"conversation","turnId":turn,"conversationId":conversation})
+            )
+            .as_bytes(),
+        );
+        chunk(
+            &mut chat,
+            format!("{}\n", segment_event(turn, conversation, message, first, 0)).as_bytes(),
+        );
+        pcm(&server, turn, conversation, message, first, &[5, 6]);
+        allow_tail.recv_timeout(Duration::from_secs(3)).unwrap();
+        chunk(
+            &mut chat,
+            format!(
+                "{}\n",
+                segment_event(turn, conversation, message, second, 1)
+            )
+            .as_bytes(),
+        );
+        chunk(
+            &mut chat,
+            format!("{}\n", done_event(turn, conversation, message, true)).as_bytes(),
+        );
+        chat.write_all(b"0\r\n\r\n").unwrap();
+        // No request for the second segment may precede completion.
+        let (mut s, _) = request(
+            &server,
+            &format!("/api/chat/turns/{}/complete", turn.as_str().unwrap()),
+        );
+        s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let output = AudioFixture {
+        first_write: Some(wrote),
+        ..Default::default()
+    };
+    let control = PlaybackControl::default();
+    let events = Mutex::new(Vec::new());
+    let report = thread::scope(|scope| {
+        let control = &control;
+        scope.spawn(move || {
+            heard.recv_timeout(Duration::from_secs(3)).unwrap();
+            control.stop();
+            stopped.send(()).unwrap();
+        });
+        backend.run_controlled_turn(
+            VoiceTurnRequest {
+                session,
+                destination: Some(conversation),
+                samples: &[0; 64],
+                legacy_interruption: None,
+                replacement: None,
+                inspection: &TurnInspection::new(Some(conversation)),
+                playback: control,
+            },
+            |_| {},
+            |event| events.lock().unwrap().push(event.kind),
+            || Ok(output),
+        )
+    });
+    let reply = report.result.unwrap();
+    assert!(!reply.ignored && !reply.continuation);
+    assert!(!backend.cancel.is_cancelled());
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["conversation", "final_segment", "final_segment", "done"]
+    );
+    worker.join().unwrap();
+}
+
+#[test]
 fn delegated_speech_polls_the_exact_job_and_reads_every_frame_without_a_new_chat_turn() {
     let (backend, server) = fixture();
     let job = Uuid::new_v4();

@@ -11,6 +11,7 @@ public sealed class VoiceGenerationReceipt(Guid sessionId, Guid conversationId, 
     private readonly TaskCompletionSource settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long settledUtcTicks;
     private int ignored;
+    private int readingStopped;
     private string retainedContent = content.Length <= 16384 ? content : content[^16384..];
     public Guid SessionId { get; } = sessionId;
     public Guid ConversationId { get; } = conversationId;
@@ -20,6 +21,8 @@ public sealed class VoiceGenerationReceipt(Guid sessionId, Guid conversationId, 
     public VoicePlaybackInterruption? Playback { get; } = playback;
     public Task Settled => settled.Task;
     public bool Ignored => Volatile.Read(ref ignored) != 0;
+    internal bool ReadingStopped => Volatile.Read(ref readingStopped) != 0;
+    internal void MarkReadingStopped() => Volatile.Write(ref readingStopped, 1);
     internal void MarkIgnored()
     {
         // Keep the minimal ownership/settlement receipt, not the discarded speech.

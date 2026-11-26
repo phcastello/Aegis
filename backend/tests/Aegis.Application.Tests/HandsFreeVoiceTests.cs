@@ -622,10 +622,113 @@ public sealed class HandsFreeVoiceTests
         { await foreach (var _ in chat.StreamMessageAsync(VoiceRequest(prior, session, "Pedido anterior."))) { } });
         Assert.Single(model.Requests);
         var user = await db.ChatMessages.SingleAsync(x => x.Role == Aegis.Domain.ChatRoles.User);
-        Assert.Contains("Pedido anterior.", user.Content);
-        Assert.Contains("Nova fala.", user.Content);
+        Assert.Equal("Pedido anterior.\nNova fala.", user.Content);
+        Assert.Equal("Pedido anterior interrompido: Pedido anterior.\nNova fala (complemento ou correção): Nova fala.",
+            Assert.Single(model.Requests).Request.Input);
         Assert.Single(await db.Conversations.ToListAsync());
     }
+
+    [Theory]
+    [InlineData("resume", "Professora, repete a explicação?")]
+    [InlineData("stop", "Beleza, era só isso.")]
+    public async Task TemporaryVoiceDecisionKeepsOriginalTurnAndHistory(string disposition, string currentSpeech)
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        using var pending = new CancellationTokenSource();
+        var predecessor = Guid.NewGuid(); var session = Guid.NewGuid(); var conversation = Guid.NewGuid();
+        var prior = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "Pedido original.", null);
+        using var reservation = registry.TrackPendingTurn(predecessor, conversation, pending, prior);
+        var original = registry.Register(predecessor, conversation);
+        var model = new Model([InterruptionDecision(disposition)]);
+        var decisions = new VoiceInterruptionDecisionService(model, registry, db, new(TimeProvider.System));
+        var candidate = new VoiceInterruptionRequest(session, null, currentSpeech, new(predecessor));
+
+        var quiet = await decisions.ClassifyAsync(candidate with { Content = " " }, null, default);
+        Assert.Equal("resume", quiet.Disposition);
+        Assert.Empty(model.Requests);
+        await Assert.ThrowsAsync<ArgumentException>(() => decisions.ClassifyAsync(
+            candidate with { VoiceSessionId = Guid.NewGuid() }, null, default));
+        Assert.Empty(model.Requests);
+
+        var result = await decisions.ClassifyAsync(candidate, null, default);
+        Assert.Equal(disposition, result.Disposition);
+        Assert.Null(result.Receipt);
+        Assert.False(original.Cancellation.IsCancellationRequested);
+        Assert.False(pending.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversation, predecessor));
+        Assert.Empty(await db.ChatMessages.ToListAsync());
+        var request = Assert.Single(model.Requests);
+        Assert.Equal(VoiceInterruptionDecisionService.ToolName, Assert.Single(request.Tools).Name);
+        using var speech = JsonDocument.Parse(request.Request.Input);
+        Assert.Equal(currentSpeech, speech.RootElement.GetProperty("falaAtual").GetString());
+        Assert.Equal("Pedido original.", speech.RootElement.GetProperty("pedidoAnterior").GetString());
+
+        var assistant = Guid.NewGuid();
+        var firstSegment = Guid.NewGuid();
+        var speechRequest = Guid.NewGuid();
+        Assert.True(registry.TryTransition(predecessor, TurnStatus.Created, TurnStatus.GeneratingText));
+        Assert.True(registry.TryAuthorizeSpeechSegment(predecessor, new(firstSegment, 0, assistant, "Primeira parte.")));
+        Assert.True(registry.TryAuthorizeSpeechSegment(predecessor, new(Guid.NewGuid(), 1, assistant, "Última parte.")));
+        Assert.True(registry.TryBeginSegmentSpeech(predecessor, firstSegment, speechRequest, "fixture"));
+        Assert.True(registry.TrySetTextCompleted(predecessor, assistant));
+        Assert.False(registry.TryCompleteWithoutSpeech(predecessor));
+        Assert.True(registry.CompleteSegmentSpeech(speechRequest));
+        Assert.Equal(disposition == "stop", registry.TryCompleteWithoutSpeech(predecessor));
+    }
+
+    [Theory]
+    [InlineData("Só os de amanhã.")]
+    [InlineData("Aegis é o nome que eu quero usar.")]
+    public async Task ApprovedInterruptionIsBoundToExactSpeechAndRemovesHistoryLabels(string spoken)
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        using var metrics = new AegisMetrics(); using var registry = new ActiveTurnRegistry(metrics);
+        var predecessor = Guid.NewGuid(); var session = Guid.NewGuid();
+        var receipts = new VoiceInterruptionReceipts(TimeProvider.System);
+        var model = new Model([InterruptionDecision("replace"), SegmentReply()]);
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics);
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, Titles(), registry, HandoffVoice(registry),
+            interruptionReceipts: receipts);
+        var previous = new VoiceGenerationInterruption(predecessor, "Quero saber os horários.");
+        var candidate = new VoiceInterruptionRequest(session, null, spoken, previous);
+        var decision = await new VoiceInterruptionDecisionService(model, registry, db, receipts)
+            .ClassifyAsync(candidate, null, default);
+        Assert.Equal("replace", decision.Disposition);
+        Assert.NotNull(decision.Receipt);
+        Assert.Empty(await db.ChatMessages.ToListAsync());
+
+        SendMessageRequest Request(string content) => new()
+        {
+            TurnId = Guid.NewGuid(), VoiceSessionId = session, Origin = "hands_free", AllowSilentIgnore = true,
+            VoiceSegments = true, Content = content, InterruptedGeneration = previous, InterruptionReceipt = decision.Receipt
+        };
+        async Task Consume(SendMessageRequest request)
+        {
+            await foreach (var _ in chat.StreamMessageAsync(request)) { }
+        }
+        await Assert.ThrowsAsync<ArgumentException>(() => Consume(Request("Outra coisa.")));
+        Assert.Single(model.Requests);
+        await Consume(Request(spoken));
+        await Assert.ThrowsAsync<ArgumentException>(() => Consume(Request(spoken)));
+        var user = await db.ChatMessages.SingleAsync(message => message.Role == Aegis.Domain.ChatRoles.User);
+        Assert.Equal($"Quero saber os horários.\n{spoken}", user.Content);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.Contains($"Nova fala (complemento ou correção): {spoken}", model.Requests[1].Request.Input);
+
+        var historical = new Aegis.Domain.Entities.ChatMessage(user.ConversationId, Aegis.Domain.ChatRoles.User,
+            "Pedido anterior interrompido: Mensagem antiga.\nNova fala (complemento ou correção): Correção antiga.");
+        db.ChatMessages.Add(historical);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var conversation = await chat.GetConversationAsync(user.ConversationId);
+        Assert.Equal("Mensagem antiga.\nCorreção antiga.",
+            Assert.Single(conversation!.Messages, message => message.Id == historical.Id).Content);
+    }
+
+    private static ModelToolResponse InterruptionDecision(string disposition) => Response(
+        [new("interruption", VoiceInterruptionDecisionService.ToolName, JsonSerializer.SerializeToElement(new { disposition }))]);
 
     [Fact]
     public void ThinkingHandoffRequiresTheSegmentedHandsFreeContractAndDifferentTurn()

@@ -1,4 +1,8 @@
-use crate::{node_commands::NodeRuntime, windows_voice_audio::Output, windows_voice_signal::wav};
+use crate::{
+    node_commands::NodeRuntime,
+    windows_voice_audio::{Output, PlaybackControl},
+    windows_voice_signal::wav,
+};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -51,6 +55,35 @@ pub(crate) enum Interruption {
         previous_content: String,
     },
     ResearchPlayback,
+}
+
+#[derive(Clone)]
+pub(crate) struct InterruptionContext {
+    pub conversation: Option<Uuid>,
+    pub predecessor: Option<Interruption>,
+    pub research_job: Option<Uuid>,
+}
+
+pub(crate) struct AcceptedInterruption {
+    pub context: InterruptionContext,
+    pub content: String,
+    pub receipt: Uuid,
+}
+
+pub(crate) enum InterruptionDecision {
+    Resume,
+    Stop,
+    Replace(AcceptedInterruption),
+}
+
+pub(crate) struct VoiceTurnRequest<'a> {
+    pub session: Uuid,
+    pub destination: Option<Uuid>,
+    pub samples: &'a [i16],
+    pub legacy_interruption: Option<&'a Interruption>,
+    pub replacement: Option<&'a AcceptedInterruption>,
+    pub inspection: &'a TurnInspection,
+    pub playback: &'a PlaybackControl,
 }
 
 pub(crate) struct TurnReport {
@@ -276,6 +309,70 @@ struct ChatProgress {
     accepted: bool,
     assistant: Option<Uuid>,
     research_job: Option<Uuid>,
+}
+
+pub(crate) struct TurnInspection {
+    id: Uuid,
+    progress: Mutex<ChatProgress>,
+    transcript: Mutex<Option<String>>,
+    playback: Mutex<PlaybackProgress>,
+}
+
+impl TurnInspection {
+    pub fn new(conversation: Option<Uuid>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            progress: Mutex::new(ChatProgress {
+                conversation,
+                ..Default::default()
+            }),
+            transcript: Mutex::new(None),
+            playback: Mutex::new(PlaybackProgress::default()),
+        }
+    }
+
+    pub fn interruption(&self, played_frames: Option<u64>) -> InterruptionContext {
+        let conversation = self.progress.lock().unwrap().conversation;
+        let position = played_frames
+            .and_then(|frames| self.playback.lock().unwrap().at(self.id, frames))
+            .filter(|position| Some(position.conversation) == conversation);
+        let predecessor = position.map(Interruption::Playback).or_else(|| {
+            self.transcript
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|previous_content| Interruption::Generation {
+                    turn_id: self.id,
+                    previous_content,
+                })
+        });
+        InterruptionContext {
+            conversation,
+            predecessor,
+            research_job: None,
+        }
+    }
+}
+
+fn write_interruption(payload: &mut Value, context: &InterruptionContext) {
+    match context.predecessor.as_ref() {
+        Some(Interruption::Playback(position))
+            if context.conversation == Some(position.conversation) =>
+        {
+            payload["interruptedPlayback"] = json!(position);
+        }
+        Some(Interruption::Generation {
+            turn_id,
+            previous_content,
+        }) => {
+            payload["interruptedGeneration"] =
+                json!({"turnId":turn_id,"previousContent":previous_content});
+        }
+        _ => {}
+    }
+    if let Some(job) = context.research_job {
+        payload["researchJobId"] = json!(job);
+    }
 }
 
 enum ChatEvent {
@@ -510,13 +607,19 @@ impl Backend {
         });
     }
     pub fn transcribe(&self, samples: &[i16]) -> Result<String> {
+        self.transcribe_with_timeout(samples, 90)
+    }
+    pub fn transcribe_candidate(&self, samples: &[i16]) -> Result<String> {
+        self.transcribe_with_timeout(samples, 12)
+    }
+    fn transcribe_with_timeout(&self, samples: &[i16], seconds: u64) -> Result<String> {
         let id = Uuid::new_v4();
         let boundary = format!("aegis-{}", Uuid::new_v4());
         let mut body=format!("--{boundary}\r\nContent-Disposition: form-data; name=\"transcriptionRequestId\"\r\n\r\n{id}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"clientDurationMilliseconds\"\r\n\r\n{}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"command.wav\"\r\nContent-Type: audio/wav\r\n\r\n",samples.len()/16).into_bytes();
         body.extend(wav(samples));
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         let result = self.json(
-            self.post("/api/voice/transcriptions", 90)
+            self.post("/api/voice/transcriptions", seconds)
                 .header(
                     "Content-Type",
                     format!("multipart/form-data; boundary={boundary}"),
@@ -537,6 +640,40 @@ impl Backend {
         }
         .to_owned())
     }
+
+    pub fn classify_interruption(
+        &self,
+        session: Uuid,
+        content: String,
+        context: InterruptionContext,
+    ) -> Result<InterruptionDecision> {
+        if content.trim().is_empty() {
+            return Ok(InterruptionDecision::Resume);
+        }
+        let mut payload = json!({
+            "voiceSessionId": session,
+            "conversationId": context.conversation,
+            "content": content,
+        });
+        write_interruption(&mut payload, &context);
+        let reply = self.json(
+            self.post("/api/voice/interruptions/classify", 15)
+                .json(&payload),
+        )?;
+        self.current()?;
+        match reply["disposition"].as_str() {
+            Some("resume") => Ok(InterruptionDecision::Resume),
+            Some("stop") => Ok(InterruptionDecision::Stop),
+            Some("replace") => Ok(InterruptionDecision::Replace(AcceptedInterruption {
+                context,
+                content,
+                receipt: parse_uuid(&reply["receipt"])?,
+            })),
+            _ => Err("backend_response"),
+        }
+    }
+
+    #[cfg(test)]
     /// One cancellable backend worker per automatic turn. The microphone owner
     /// keeps reading while this worker performs STT, generation and playback.
     pub fn run_turn<A: TurnAudio>(
@@ -549,7 +686,39 @@ impl Backend {
         on_stream: impl Fn(VoiceChatStreamEvent) + Sync,
         open: impl FnOnce() -> Result<A>,
     ) -> TurnReport {
-        let turn_id = Uuid::new_v4();
+        self.run_controlled_turn(
+            VoiceTurnRequest {
+                session,
+                destination,
+                samples,
+                legacy_interruption: interruption,
+                replacement: None,
+                inspection: &TurnInspection::new(destination),
+                playback: &PlaybackControl::default(),
+            },
+            on_conversation,
+            on_stream,
+            open,
+        )
+    }
+
+    pub fn run_controlled_turn<A: TurnAudio>(
+        &mut self,
+        request: VoiceTurnRequest<'_>,
+        on_conversation: impl Fn(Uuid) + Send,
+        on_stream: impl Fn(VoiceChatStreamEvent) + Sync,
+        open: impl FnOnce() -> Result<A>,
+    ) -> TurnReport {
+        let VoiceTurnRequest {
+            session,
+            destination,
+            samples,
+            legacy_interruption,
+            replacement,
+            inspection,
+            playback: audio,
+        } = request;
+        let turn_id = inspection.id;
         let mut report = TurnReport {
             result: Err("backend_response"),
             turn_id,
@@ -560,7 +729,10 @@ impl Backend {
             playback: None,
             research_job: None,
         };
-        let text = match self.transcribe(samples) {
+        let text = match replacement
+            .map(|candidate| Ok(candidate.content.clone()))
+            .unwrap_or_else(|| self.transcribe(samples))
+        {
             Ok(text) => text,
             Err(error) => {
                 report.result = Err(error);
@@ -578,7 +750,7 @@ impl Backend {
             }
         };
         if text.is_empty()
-            || matches!(interruption, Some(Interruption::ResearchPlayback))
+            || matches!(legacy_interruption, Some(Interruption::ResearchPlayback))
                 && closes_research_reply(&text)
         {
             report.transcript = Some(text);
@@ -590,6 +762,7 @@ impl Backend {
             return report;
         }
         report.transcript = Some(text.clone());
+        *inspection.transcript.lock().unwrap() = Some(text.clone());
         // Keep the turn handle even if cancellation wins before HTTP writes; the
         // server settles a missing/unfinished prior generation idempotently.
         self.turn = Some(turn_id);
@@ -599,32 +772,24 @@ impl Backend {
             "origin": "hands_free", "content": text, "voiceSegments": true, "allowSilentIgnore": true,
             "includeWebResearchSources": true,
         });
-        match interruption {
-            Some(Interruption::Playback(position))
-                if destination == Some(position.conversation) =>
-            {
-                payload["interruptedPlayback"] = json!(position);
-            }
-            Some(Interruption::Generation {
-                turn_id,
-                previous_content,
-            }) => {
-                payload["interruptedGeneration"] =
-                    json!({"turnId":turn_id,"previousContent":previous_content});
-            }
-            _ => {}
+        if let Some(candidate) = replacement {
+            write_interruption(&mut payload, &candidate.context);
+            payload["interruptionReceipt"] = json!(candidate.receipt);
+        } else {
+            write_interruption(
+                &mut payload,
+                &InterruptionContext {
+                    conversation: destination,
+                    predecessor: legacy_interruption.cloned(),
+                    research_job: None,
+                },
+            );
         }
-        let progress = Arc::new(Mutex::new(ChatProgress {
-            conversation: destination,
-            accepted: false,
-            assistant: None,
-            research_job: None,
-        }));
+        let progress = &inspection.progress;
         let mut output: Option<A> = None;
-        let mut playback = PlaybackProgress::default();
+        let playback = &inspection.playback;
         let mut position = None;
         let reader = self.fork(&self.cancel);
-        let reader_progress = progress.clone();
         let (send, receive) = tokio::sync::mpsc::channel(2);
         let (unit_send, mut units) = tokio::sync::mpsc::channel(2);
         let scheduler = self.fork(&self.cancel);
@@ -655,7 +820,7 @@ impl Backend {
                     turn_id,
                     destination,
                     payload,
-                    &reader_progress,
+                    progress,
                     send,
                     on_conversation,
                     on_stream,
@@ -666,8 +831,8 @@ impl Backend {
                 result
             });
             let schedule =
-                scope.spawn(move || scheduler.schedule_speech(turn_id, receive, unit_send));
-            let result = self.consume_segments(&mut units, &mut playback, &mut output, open);
+                scope.spawn(move || scheduler.schedule_speech(turn_id, receive, unit_send, audio));
+            let result = self.consume_segments(&mut units, playback, &mut output, open, audio);
             if result.is_err() {
                 self.cancel.cancel();
             }
@@ -677,7 +842,7 @@ impl Backend {
             position = output
                 .as_ref()
                 .and_then(|device| device.played_frames())
-                .and_then(|cursor| playback.at(turn_id, cursor));
+                .and_then(|cursor| playback.lock().unwrap().at(turn_id, cursor));
             drop(output.take());
             drop(units);
             let schedule = schedule.join().unwrap_or(Err("backend_response"));
@@ -940,6 +1105,7 @@ impl Backend {
         turn: Uuid,
         mut receive: tokio::sync::mpsc::Receiver<ChatEvent>,
         send: tokio::sync::mpsc::Sender<SpeechEvent>,
+        audio: &PlaybackControl,
     ) -> Result<()> {
         let slots = Arc::new(tokio::sync::Semaphore::new(2));
         let failure = Arc::new(Mutex::new(None));
@@ -960,20 +1126,31 @@ impl Backend {
                             );
                         }
                         ChatEvent::Segment(segment) => {
+                            if audio.stopped().is_cancelled() {
+                                continue;
+                            }
                             if let Some(ready) = previous_ready.take() {
-                                tauri::async_runtime::block_on(async {
+                                let started = tauri::async_runtime::block_on(async {
                                     tokio::select! { biased;
                                         _=self.cancel.cancelled()=>Err("cancelled"),
-                                        value=ready=>value.map_err(|_|"backend_response")
+                                        _=audio.stopped().cancelled()=>Ok(false),
+                                        value=ready=>value.map(|()|true).map_err(|_|"backend_response")
                                     }
                                 })?;
+                                if !started {
+                                    continue;
+                                }
                             }
                             let slot = tauri::async_runtime::block_on(async {
                                 tokio::select! { biased;
                                     _=self.cancel.cancelled()=>Err("cancelled"),
-                                    value=slots.clone().acquire_owned()=>value.map_err(|_|"backend_response")
+                                    _=audio.stopped().cancelled()=>Ok(None),
+                                    value=slots.clone().acquire_owned()=>value.map(Some).map_err(|_|"backend_response")
                                 }
                             })?;
+                            let Some(slot) = slot else {
+                                continue;
+                            };
                             let (pcm_send, pcm_receive) = tokio::sync::mpsc::channel(5);
                             let (started, ready) = tokio::sync::oneshot::channel();
                             previous_ready = Some(ready);
@@ -998,6 +1175,14 @@ impl Backend {
                                         send_event(&pcm_send, AudioChunk::Complete(frames), &cancel)
                                     });
                                 if let Err(error) = result {
+                                    if audio.stopped().is_cancelled() && !cancel.is_cancelled() {
+                                        // End the local mailbox without issuing the
+                                        // legacy speech DELETE (it also ends text).
+                                        downloader.speech = None;
+                                        let _ =
+                                            send_event(&pcm_send, AudioChunk::Complete(0), &cancel);
+                                        return;
+                                    }
                                     if error != "cancelled" {
                                         let mut failure = download_failure.lock().unwrap();
                                         if failure.is_none() {
@@ -1033,9 +1218,10 @@ impl Backend {
     fn consume_segments<A: TurnAudio>(
         &self,
         receive: &mut tokio::sync::mpsc::Receiver<SpeechEvent>,
-        playback: &mut PlaybackProgress,
+        playback: &Mutex<PlaybackProgress>,
         output: &mut Option<A>,
         open: impl FnOnce() -> Result<A>,
+        audio: &PlaybackControl,
     ) -> Result<TurnReply> {
         let cancel = self.cancel.clone();
         let mut open = Some(open);
@@ -1043,7 +1229,7 @@ impl Backend {
         let mut last_identity = Instant::now();
         loop {
             self.current()?;
-            match receive_event(receive, &cancel)? {
+            match receive_while_playing(receive, &cancel, audio, output)? {
                 SpeechEvent::Ignored => {
                     return Ok(TurnReply {
                         ignored: true,
@@ -1051,19 +1237,27 @@ impl Backend {
                     })
                 }
                 SpeechEvent::Done(continuation) => {
-                    output.as_mut().ok_or("backend_response")?.finish(&cancel)?;
+                    if !audio.stopped().is_cancelled() {
+                        match output.as_mut().ok_or("backend_response")?.finish(&cancel) {
+                            Ok(()) | Err("playback_stopped") => {}
+                            Err(error) => return Err(error),
+                        }
+                    }
                     self.current()?;
                     return Ok(TurnReply {
                         ignored: false,
-                        continuation,
+                        continuation: continuation && !audio.stopped().is_cancelled(),
                     });
                 }
                 SpeechEvent::Unit(mut unit) => {
-                    playback.begin(unit.segment, submitted);
+                    playback.lock().unwrap().begin(unit.segment, submitted);
                     let start = submitted;
                     loop {
-                        match receive_event(&mut unit.receive, &cancel)? {
+                        match receive_while_playing(&mut unit.receive, &cancel, audio, output)? {
                             AudioChunk::Pcm(pcm) => {
+                                if audio.stopped().is_cancelled() {
+                                    continue;
+                                }
                                 if last_identity.elapsed() >= Duration::from_secs(1) {
                                     self.current()?;
                                     last_identity = Instant::now();
@@ -1078,16 +1272,25 @@ impl Backend {
                                     if cancel.is_cancelled() {
                                         return Err("cancelled");
                                     }
-                                    *output = Some(open.take().ok_or("backend_response")?()?);
+                                    match open.take().ok_or("backend_response")?() {
+                                        Ok(device) => *output = Some(device),
+                                        Err("playback_stopped") => continue,
+                                        Err(error) => return Err(error),
+                                    }
                                 }
-                                output.as_mut().unwrap().write(&pcm, &cancel)?;
-                                submitted = next;
+                                match output.as_mut().unwrap().write(&pcm, &cancel) {
+                                    Ok(()) => submitted = next,
+                                    Err("playback_stopped") => {
+                                        output.take();
+                                    }
+                                    Err(error) => return Err(error),
+                                }
                             }
                             AudioChunk::Complete(frames) => {
-                                if frames != submitted - start {
+                                if !audio.stopped().is_cancelled() && frames != submitted - start {
                                     return Err("backend_response");
                                 }
-                                playback.length(frames);
+                                playback.lock().unwrap().length(frames);
                                 break;
                             }
                         }
@@ -1203,6 +1406,30 @@ fn receive_event<T>(
             value=receive.recv()=>value.ok_or("backend_response")
         }
     })
+}
+
+fn receive_while_playing<T, A>(
+    receive: &mut tokio::sync::mpsc::Receiver<T>,
+    cancel: &CancellationToken,
+    audio: &PlaybackControl,
+    output: &mut Option<A>,
+) -> Result<T> {
+    if output.is_some() {
+        let event = tauri::async_runtime::block_on(async {
+            tokio::select! { biased;
+                _=cancel.cancelled()=>Err("cancelled"),
+                _=audio.stopped().cancelled()=>Ok(None),
+                value=receive.recv()=>value.map(Some).ok_or("backend_response"),
+            }
+        })?;
+        if let Some(event) = event {
+            return Ok(event);
+        }
+        output.take();
+    }
+    // Keep draining already opened synthesis units, since cancelling a
+    // segment request on a legacy backend also cancels its generating turn.
+    receive_event(receive, cancel)
 }
 fn parse_uuid(value: &Value) -> Result<Uuid> {
     Uuid::parse_str(value.as_str().unwrap_or(""))

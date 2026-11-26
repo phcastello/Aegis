@@ -8,6 +8,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** write consumes the borrowed bytes before returning; it must not retain or queue them. */
 interface HandsFreePcmSink : AutoCloseable {
     fun write(bytes: ByteArray, offset: Int, count: Int)
+    /** Freeze queued device audio without discarding frames or releasing ownership. */
+    fun pausePlayback(): Boolean = false
+    fun resumePlayback() = Unit
     /** EOF is validated by the producer; this waits for actual playback, not merely queued writes. */
     fun finish()
     /** May run concurrently with write/finish; it must unblock them and discard pending samples. */
@@ -65,6 +68,7 @@ internal interface HandsFreePcmDevice : AutoCloseable {
     fun discontinuity(): Long = 0
     fun endMarker(frame: Int, reached: () -> Unit)
     fun play()
+    fun pause() = Unit
     fun stop()
 }
 
@@ -110,6 +114,10 @@ internal class HandsFreeStreamingPcmSink(
     private val closed = AtomicBoolean(false)
     private val finished = AtomicBoolean(false)
     private val creationLock = Any()
+    private val playbackLock = java.lang.Object()
+    private var paused = false
+    private var pauseCount = 0L
+    private var drained = false
     private val completion = CountDownLatch(1)
     private val spectrum = spectrumSession?.let { HandsFreePlaybackSpectrum.Stream(it) }
     private val boostedPcm = if (boostSpeechVolume) ByteArray(WRITE_CHUNK_BYTES) else null
@@ -134,9 +142,13 @@ internal class HandsFreeStreamingPcmSink(
                 )
                 spectrum?.start(clock)
                 onPlaybackReady(clock)
-                checkCurrent()
-                it.play()
-                onPlaybackEvent("player_play_called")
+                synchronized(playbackLock) {
+                    checkCurrent()
+                    if (!paused) {
+                        it.play()
+                        onPlaybackEvent("player_play_called")
+                    }
+                }
             } catch (error: Exception) {
                 device = null
                 spectrum?.close()
@@ -161,7 +173,7 @@ internal class HandsFreeStreamingPcmSink(
                 }
                 var chunkConsumed = 0
                 while (chunkConsumed < chunk) {
-                    checkCurrent()
+                    val beforeWrite = awaitPlayback()
                     val remaining = chunk - chunkConsumed
                     // A blocking write can become audible before it returns. The
                     // echo reference must receive exactly the PCM given to the
@@ -170,6 +182,7 @@ internal class HandsFreeStreamingPcmSink(
                     echo?.offer(outputBytes, start, remaining, writtenFrames)
                     spectrum?.offer(outputBytes, start, remaining, writtenFrames)
                     val written = target.write(outputBytes, start, remaining)
+                    if (written == 0 && synchronized(playbackLock) { pauseCount != beforeWrite }) continue
                     check(written > 0 && written % 2 == 0 && written <= remaining) { "audio_playback_failed" }
                     chunkConsumed += written
                     writtenFrames += written / 2
@@ -192,29 +205,76 @@ internal class HandsFreeStreamingPcmSink(
         check(writtenFrames in 1..maximumFrames)
         if (target.playedFrames() < writtenFrames) {
             target.endMarker(writtenFrames.toInt()) { completion.countDown() }
-            // The playback head may pass the marker between the previous read and arming it.
-            if (target.playedFrames() < writtenFrames) {
-                val remaining = (writtenFrames - target.playedFrames()).coerceAtLeast(0)
-                val timeout = (remaining * 1000 / 24000 + 5000).coerceAtMost(185000)
-                check(completion.await(timeout, TimeUnit.MILLISECONDS)) { "audio_playback_timeout" }
+            val remaining = (writtenFrames - target.playedFrames()).coerceAtLeast(0)
+            var budget = (remaining * 1000 / 24000 + 5000).coerceAtMost(185000)
+            while (target.playedFrames() < writtenFrames) {
+                val beforeWait = awaitPlayback()
+                val interval = minOf(100L, budget)
+                check(interval > 0) { "audio_playback_timeout" }
+                if (completion.await(interval, TimeUnit.MILLISECONDS)) break
+                if (synchronized(playbackLock) { pauseCount == beforeWait }) budget -= interval
             }
         }
-        checkCurrent()
-        check(target.playedFrames() >= writtenFrames) { "audio_playback_incomplete" }
+        synchronized(playbackLock) {
+            awaitPlayback()
+            check(target.playedFrames() >= writtenFrames) { "audio_playback_incomplete" }
+            drained = true
+        }
         spectrum?.close()
         onPlaybackEvent("player_drained")
+    }
+    private fun awaitPlayback(): Long = synchronized(playbackLock) {
+        while (paused) {
+            checkCurrent()
+            playbackLock.wait(100)
+        }
+        checkCurrent()
+        pauseCount
+    }
+    override fun pausePlayback(): Boolean = synchronized(playbackLock) {
+        if (closed.get() || cancelled.get() || drained || !stillCurrent()) return@synchronized false
+        if (!paused) {
+            device?.pause()
+            paused = true
+            pauseCount++
+        }
+        true
+    }
+    override fun resumePlayback() {
+        synchronized(playbackLock) {
+            if (!paused || closed.get() || cancelled.get() || !stillCurrent()) return
+            val target = device
+            if (target != null) {
+                target.play()
+                onPlaybackEvent("player_play_called")
+            }
+            paused = false
+            playbackLock.notifyAll()
+        }
     }
     override fun abort() {
         if (!cancelled.compareAndSet(false, true)) return
         spectrum?.close()
         completion.countDown()
-        try { device?.stop() } catch (_: Exception) { }
+        synchronized(playbackLock) {
+            playbackLock.notifyAll()
+            try { device?.stop() } catch (_: Exception) { }
+        }
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         spectrum?.close()
         completion.countDown()
-        synchronized(creationLock) { try { device?.close() } finally { device = null; onClosed() } }
+        synchronized(creationLock) {
+            try {
+                synchronized(playbackLock) {
+                    playbackLock.notifyAll()
+                    try { device?.close() } finally { device = null }
+                }
+            } finally {
+                onClosed()
+            }
+        }
     }
 
     companion object {

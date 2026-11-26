@@ -396,6 +396,7 @@ pub(crate) struct BargeInSignal {
     render: Vec<i16>,
     far_recent: usize,
     noise: f32,
+    sustained_speech_floor: Option<f32>,
     votes: u8,
     prefix: VecDeque<[i16; BLOCK]>,
     latched: bool,
@@ -438,6 +439,7 @@ impl BargeInSignal {
             render: vec![0; ECHO_HISTORY],
             far_recent: 0,
             noise: (noise_rms as f32).clamp(8.0, 600.0),
+            sustained_speech_floor: None,
             votes: 0,
             prefix: VecDeque::with_capacity(PREROLL + WINDOW),
             latched: false,
@@ -464,6 +466,17 @@ impl BargeInSignal {
         queued_blocks: usize,
     ) -> Option<Vec<i16>> {
         self.observe(mic, reference.frame(queued_blocks))
+    }
+
+    pub fn rearm(&mut self) {
+        self.latched = false;
+        self.votes = 0;
+        self.prefix.clear();
+    }
+
+    pub fn prefer_near_speech(mut self, floor: Option<f64>) -> Self {
+        self.sustained_speech_floor = floor.map(|level| level as f32);
+        self
     }
 
     fn observe(&mut self, mic: &[i16; BLOCK], reference: ReferenceFrame) -> Option<Vec<i16>> {
@@ -715,7 +728,10 @@ impl BargeInSignal {
         } else {
             4
         };
-        self.onset(independent, retained, required)
+        let near = self
+            .sustained_speech_floor
+            .is_none_or(|floor| rms(&retained) >= floor);
+        self.onset(independent && near, retained, required)
     }
 
     fn onset(
@@ -925,6 +941,14 @@ mod tests {
         assert_eq!(&prefix[..BLOCK], &[6; BLOCK]);
         assert_eq!(&prefix[prefix.len() - BLOCK..], &[24; BLOCK]);
         assert!(signal.onset(true, [25; BLOCK], 4).is_none());
+        signal.rearm();
+        for id in 40..=42 {
+            assert!(signal.onset(true, [id; BLOCK], 4).is_none());
+        }
+        assert_eq!(
+            signal.onset(true, [43; BLOCK], 4).unwrap()[..BLOCK],
+            [40; BLOCK]
+        );
     }
 
     /// Optional, offline real-speech bench. Supply already synthesized mono

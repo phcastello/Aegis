@@ -189,6 +189,36 @@ class NodeHandsFreePcmStreamTest {
         }finally{sink.abort();sink.close();executor.shutdownNow()}
     }
 
+    @Test fun rejectedInterruptionResumesTheSameTrackAfterShortAndZeroDeviceWrites() {
+        val device = Device(autoPlay=false,capacityFrames=2)
+        val sink = HandsFreeStreamingPcmSink({device})
+        val executor = Executors.newSingleThreadExecutor()
+        val pcm = encode(shortArrayOf(1,2,3,4,5,6))
+        try {
+            val completed = executor.submit { sink.write(pcm,0,pcm.size);sink.finish() }
+            assertTrue(device.backpressured.await(5,TimeUnit.SECONDS))
+            repeat(2) {
+                val point=device.playedFrames()
+                assertTrue(sink.pausePlayback())
+                device.advance(20)
+                assertEquals(point,device.playedFrames())
+                assertFalse(completed.isDone)
+                sink.resumePlayback()
+                device.advance(1)
+                assertEquals(point+1,device.playedFrames())
+            }
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3)
+            while (!completed.isDone && System.nanoTime()<deadline) {
+                device.advance(10)
+                Thread.sleep(5)
+            }
+            completed.get(5,TimeUnit.SECONDS)
+            assertEquals(6,device.playedFrames())
+            assertArrayEquals(pcm,device.recorded.toByteArray())
+            assertFalse(sink.pausePlayback())
+        } finally { sink.close();executor.shutdownNow() }
+    }
+
     @Test fun bargeInGetsPlaybackHeadBeforeAnyAudioAndLosesItOnAbort() {
         val backing = Device(autoPlay = true)
         val events = mutableListOf<String>()
@@ -291,16 +321,18 @@ class NodeHandsFreePcmStreamTest {
         @Volatile var maxWrite=0;private set
         @Volatile var closed=false;private set
         private var stopped=false
+        private var paused=false
         private var played=0L
         private var marker=Int.MAX_VALUE
         private var reached:(()->Unit)?=null
         override fun write(bytes:ByteArray,offset:Int,count:Int):Int=synchronized(lock) {
             val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
-            while(!stopped && queuedFrames>=capacityFrames) {
+            while(!stopped && !paused && queuedFrames>=capacityFrames) {
                 backpressured.countDown()
                 check(System.nanoTime()<deadline){"Test device timed out"}
                 lock.wait(1000)
             }
+            if(paused && !stopped)return@synchronized 0
             check(!stopped && !closed)
             val accepted=minOf(count,(capacityFrames-queuedFrames)*2)
             require(accepted>0 && accepted%2==0)
@@ -316,10 +348,12 @@ class NodeHandsFreePcmStreamTest {
             if(played>=marker)reached()
         }
         fun advance(frames:Int)=synchronized(lock) {
+            if(paused)return@synchronized
             val consumed=minOf(frames,queuedFrames);queuedFrames-=consumed;played+=consumed
             lock.notifyAll();if(played>=marker)reached?.invoke()
         }
-        override fun play(){}
+        override fun play()=synchronized(lock){paused=false;lock.notifyAll()}
+        override fun pause()=synchronized(lock){paused=true;lock.notifyAll()}
         override fun stop()=synchronized(lock){stopped=true;queuedFrames=0;lock.notifyAll()}
         override fun close(){stop();closed=true}
     }

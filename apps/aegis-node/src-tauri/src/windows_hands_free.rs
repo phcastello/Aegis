@@ -2,9 +2,12 @@
 //! detector, output, and private backend requests even when the chat is hidden.
 use crate::{
     windows_barge_in_signal::{BargeInSignal, RenderReference},
-    windows_voice_audio::{self, Input, Output},
-    windows_voice_backend::{Backend, Interruption, ResearchSpeechStatus, Result, TurnReport},
-    windows_voice_signal::{Background, Capture, Endpoint, Waveform, RATE},
+    windows_voice_audio::{self, Input, Output, PlaybackControl},
+    windows_voice_backend::{
+        AcceptedInterruption, Backend, InterruptionContext, InterruptionDecision,
+        ResearchSpeechStatus, Result, TurnInspection, TurnReport, VoiceTurnRequest,
+    },
+    windows_voice_signal::{Background, Capture, Endpoint, Waveform},
     windows_wakeword,
 };
 use serde::{Deserialize, Serialize};
@@ -13,7 +16,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicIsize, Ordering},
+        atomic::{AtomicIsize, AtomicU64, Ordering},
         Arc, Condvar, Mutex,
     },
     thread,
@@ -97,6 +100,7 @@ struct Shared {
     state: Mutex<State>,
     changed: Condvar,
     window_handle: Arc<AtomicIsize>,
+    speaking_generation: Arc<AtomicU64>,
 }
 pub(crate) struct WindowsHandsFree(Arc<Shared>);
 
@@ -235,6 +239,14 @@ impl Shared {
             }
             state.status = status;
             state.generation += 1;
+            self.speaking_generation.store(
+                if status == "speaking" {
+                    state.generation
+                } else {
+                    0
+                },
+                Ordering::Release,
+            );
             state.generation
         };
         let _ = self.app.emit(
@@ -319,6 +331,7 @@ impl WindowsHandsFree {
             }),
             changed: Condvar::new(),
             window_handle: Arc::new(AtomicIsize::new(0)),
+            speaking_generation: Arc::new(AtomicU64::new(0)),
         });
         let worker = shared.clone();
         thread::Builder::new()
@@ -541,9 +554,9 @@ fn cycle(
         if let Some(result) = shared.next_research() {
             let backend = Backend::open(&shared.app, http, cancel)?;
             if backend.scope_key() == result.scope {
-                let noise = history.noise();
-                if let Some(command) =
-                    play_research(shared, &mut mic, &backend, cancel, result, noise)?
+                let levels = CaptureLevels::from(&history);
+                if let Some(replacement) =
+                    play_research(shared, &mut mic, &backend, cancel, result, levels)?
                 {
                     return converse(
                         shared,
@@ -552,8 +565,8 @@ fn cycle(
                         cancel,
                         result.session,
                         Some(result.conversation),
-                        noise,
-                        Some(command),
+                        levels,
+                        Some(replacement),
                     );
                 }
             }
@@ -639,9 +652,23 @@ fn cycle(
         cancel,
         session,
         destination,
-        history.noise(),
+        CaptureLevels::from(&history),
         None,
     )
+}
+
+#[derive(Clone, Copy)]
+struct CaptureLevels {
+    noise: f64,
+    sustained_speech_floor: Option<f64>,
+}
+impl From<&Background> for CaptureLevels {
+    fn from(background: &Background) -> Self {
+        Self {
+            noise: background.noise(),
+            sustained_speech_floor: background.sustained_speech_floor(),
+        }
+    }
 }
 
 fn converse(
@@ -651,21 +678,21 @@ fn converse(
     cancel: &CancellationToken,
     session: Uuid,
     mut destination: Option<Uuid>,
-    noise: f64,
-    first_audio: Option<Vec<i16>>,
+    levels: CaptureLevels,
+    first_replacement: Option<AcceptedInterruption>,
 ) -> Result<()> {
     let announced = Mutex::new(destination);
     let scope = backend.scope_key();
     let mut generation = shared.publish("capturing");
     let mut first = true;
-    let mut interruption = first_audio.as_ref().map(|_| Interruption::ResearchPlayback);
-    let mut next_audio = first_audio;
+    let mut replacement = first_replacement;
     let mut tail: Option<(BargeInSignal, RenderReference)> = None;
     loop {
-        let samples = if let Some(audio) = next_audio.take() {
-            audio
+        let samples = if replacement.is_some() {
+            Vec::new()
         } else {
-            let mut endpoint = Endpoint::new(noise, if first { 6 } else { 2 });
+            let mut endpoint = Endpoint::new(levels.noise, if first { 6 } else { 2 })
+                .prefer_near_speech(levels.sustained_speech_floor);
             // Preserve the inline command buffered during election and allow a
             // full wait after the initial cue. No cue or wakeword on continuation.
             if first {
@@ -697,8 +724,8 @@ fn converse(
             session,
             destination,
             &samples,
-            interruption.as_ref(),
-            noise,
+            replacement.as_ref(),
+            levels,
             &announced,
         )?;
         let report = monitored.report;
@@ -713,15 +740,12 @@ fn converse(
                 announce_conversation(shared, &announced, conversation);
             }
         }
-        if let Some(captured) = monitored.captured {
-            // The preceding worker and output have completely ended. Continue
-            // on this exact session and identity without another wake election.
-            // The backend resolves an interrupted generation even if its
-            // accepted conversation event raced with cancellation.
-            let (captured, context) =
-                prepare_handoff(report, samples, captured, interruption.take())?;
-            interruption = context;
-            next_audio = Some(captured);
+        if let Some(candidate) = monitored.replacement {
+            // Send exactly what the backend adjudicated. Preserve the
+            // provisional destination even if the predecessor just committed
+            // a conversation; the receipt resolves that race server side.
+            destination = candidate.context.conversation;
+            replacement = Some(candidate);
             continue;
         }
         let reply = report.result?;
@@ -740,7 +764,7 @@ fn converse(
                 completed: Instant::now(),
             });
         }
-        interruption = None;
+        replacement = None;
         if !reply.continuation {
             return Ok(());
         }
@@ -755,57 +779,56 @@ fn play_research(
     backend: &Backend,
     cancel: &CancellationToken,
     result: ResearchDelivery,
-    noise: f64,
-) -> Result<Option<Vec<i16>>> {
+    levels: CaptureLevels,
+) -> Result<Option<AcceptedInterruption>> {
     let playback = cancel.child_token();
-    let backend = backend.fork(&playback);
     let reference = RenderReference::default();
-    let mut signal = BargeInSignal::new(noise);
-    let (spoken, command) = thread::scope(|scope| {
-        let work = scope.spawn(|| {
-            backend.speak_research_result(result.job, result.session, || {
-                let mut output = Output::open()?;
-                output.observe_reference(reference.clone());
-                if playback.is_cancelled() {
+    let mut signal =
+        BargeInSignal::new(levels.noise).prefer_near_speech(levels.sustained_speech_floor);
+    let audio = PlaybackControl::default();
+    let (spoken, replacement) = thread::scope(|scope| {
+        let worker = backend.fork(&playback);
+        let worker_audio = &audio;
+        let worker_reference = &reference;
+        let worker_playback = &playback;
+        let work = scope.spawn(move || {
+            worker.speak_research_result(result.job, result.session, || {
+                let mut output = Output::controlled(worker_audio.clone())?;
+                output.observe_reference(worker_reference.clone());
+                if worker_playback.is_cancelled() {
                     return Err("cancelled");
                 }
-                shared.publish("speaking");
+                if !worker_audio.is_paused() {
+                    shared.publish("speaking");
+                }
                 Ok(output)
             })
         });
-        let mut captured: Option<(Endpoint, Waveform, u64)> = None;
-        let command = loop {
-            if captured.is_none() && work.is_finished() {
-                break None;
-            }
-            let mut block = match mic.read(cancel) {
-                Ok(block) => block,
-                Err(error) => {
-                    playback.cancel();
-                    return Err(error);
-                }
-            };
-            if let Some((endpoint, waveform, generation)) = captured.as_mut() {
-                signal.clean_tail(&mut block, &reference, mic.pending());
-                shared.publish_waveform(waveform, &block, "capturing", *generation, mic.pending());
-                match endpoint.push(&block) {
-                    Capture::More => {}
-                    Capture::Empty => break None,
-                    Capture::Complete(audio) => break Some(audio),
-                }
-            } else if let Some(prefix) = signal.push(&block, &reference, mic.pending()) {
-                playback.cancel();
-                let generation = shared.publish("capturing");
-                captured = Some((
-                    Endpoint::interrupted(noise, prefix),
-                    Waveform::default(),
-                    generation,
-                ));
-            }
-        };
+        let replacement = listen_for_interruption(
+            shared,
+            mic,
+            backend,
+            cancel,
+            result.session,
+            levels,
+            &mut signal,
+            &reference,
+            &audio,
+            || work.is_finished(),
+            || InterruptionContext {
+                conversation: Some(result.conversation),
+                predecessor: None,
+                research_job: Some(result.job),
+            },
+            || playback.cancel(),
+        );
+        if !matches!(replacement, Ok(None)) {
+            playback.cancel();
+        }
         let outcome = work.join().map_err(|_| "backend_response")?;
-        if captured.is_some() {
-            Ok((false, command))
+        let replacement = replacement?;
+        if replacement.is_some() || audio.stopped().is_cancelled() {
+            Ok((false, replacement))
         } else {
             outcome.map(|()| (true, None))
         }
@@ -817,39 +840,12 @@ fn play_research(
             completed: Instant::now(),
         });
     }
-    Ok(command)
-}
-
-fn prepare_handoff(
-    report: TurnReport,
-    previous: Vec<i16>,
-    mut captured: Vec<i16>,
-    mut context: Option<Interruption>,
-) -> Result<(Vec<i16>, Option<Interruption>)> {
-    let ignored = report.result.as_ref().is_ok_and(|reply| reply.ignored);
-    if !ignored {
-        if let Some(position) = report.playback {
-            context = Some(Interruption::Playback(position));
-        } else if report.chat_started {
-            if let Some(content) = report.transcript.filter(|text| !text.is_empty()) {
-                context = Some(Interruption::Generation {
-                    turn_id: report.turn_id,
-                    previous_content: content,
-                });
-            }
-        } else if report.transcript.is_none() {
-            // STT was itself interrupted. Retain the old command PCM rather
-            // than silently lose a command not yet transcribed. Keep any
-            // earlier context until the next request really carries it.
-            captured = merge_interrupted_capture(previous, captured)?;
-        }
-    }
-    Ok((captured, context))
+    Ok(replacement)
 }
 
 struct MonitoredTurn {
     report: TurnReport,
-    captured: Option<Vec<i16>>,
+    replacement: Option<AcceptedInterruption>,
     signal: BargeInSignal,
     reference: RenderReference,
 }
@@ -865,25 +861,35 @@ fn monitor_turn(
     session: Uuid,
     destination: Option<Uuid>,
     samples: &[i16],
-    interruption: Option<&Interruption>,
-    noise: f64,
+    replacement: Option<&AcceptedInterruption>,
+    levels: CaptureLevels,
     announced: &Mutex<Option<Uuid>>,
 ) -> Result<MonitoredTurn> {
     let turn_cancel = cancel.child_token();
     let reference = RenderReference::default();
-    let mut signal = BargeInSignal::new(noise);
+    let mut signal =
+        BargeInSignal::new(levels.noise).prefer_near_speech(levels.sustained_speech_floor);
     let phase = Mutex::new(());
-    let (report, captured) = thread::scope(|scope| {
+    let audio = PlaybackControl::default();
+    let inspection = TurnInspection::new(destination);
+    let (report, replacement) = thread::scope(|scope| {
         let mut worker_backend = backend.fork(&turn_cancel);
         let worker_cancel = turn_cancel.clone();
         let worker_reference = reference.clone();
         let phase = &phase;
+        let worker_audio = &audio;
+        let inspection = &inspection;
         let work = scope.spawn(move || {
-            worker_backend.run_turn(
-                session,
-                destination,
-                samples,
-                interruption,
+            worker_backend.run_controlled_turn(
+                VoiceTurnRequest {
+                    session,
+                    destination,
+                    samples,
+                    legacy_interruption: None,
+                    replacement,
+                    inspection,
+                    playback: worker_audio,
+                },
                 |conversation| {
                     let _guard = phase.lock().unwrap();
                     if !worker_cancel.is_cancelled() {
@@ -905,74 +911,183 @@ fn monitor_turn(
                     }
                 },
                 || {
-                    let mut output = Output::open()?;
+                    let mut output = Output::controlled(worker_audio.clone())?;
                     output.observe_reference(worker_reference);
                     let _guard = phase.lock().unwrap();
                     if worker_cancel.is_cancelled() {
                         return Err("cancelled");
                     }
-                    let generation = shared.publish("speaking");
+                    if !worker_audio.is_paused() {
+                        shared.publish("speaking");
+                    }
                     let app = shared.app.clone();
                     let window = shared.window_handle.clone();
+                    let speaking = shared.speaking_generation.clone();
+                    let speaking_visible = speaking.clone();
                     output.observe_spectrum(
-                        move || waveform_visible(&window),
+                        move || speaking_visible.load(Ordering::Acquire) != 0 && waveform_visible(&window),
                         move |levels| {
-                            let _ = app.emit_to("main", "aegis-windows-voice-waveform",
-                            json!({"status":"speaking","generation":generation,"levels":levels}));
+                            let generation = speaking.load(Ordering::Acquire);
+                            if generation != 0 {
+                                let _ = app.emit_to("main", "aegis-windows-voice-waveform",
+                                json!({"status":"speaking","generation":generation,"levels":levels}));
+                            }
                         },
                     );
                     Ok(output)
                 },
             )
         });
-        let mut handoff: Option<(Endpoint, Waveform, u64)> = None;
-        let captured = loop {
-            if handoff.is_none() && work.is_finished() {
-                break Ok(None);
-            }
-            let mut block = match mic.read(cancel) {
-                Ok(block) => block,
-                Err(error) => {
-                    turn_cancel.cancel();
-                    break Err(error);
-                }
-            };
-            if let Some((endpoint, waveform, generation)) = handoff.as_mut() {
-                signal.clean_tail(&mut block, &reference, mic.pending());
-                shared.publish_waveform(waveform, &block, "capturing", *generation, mic.pending());
-                match endpoint.push(&block) {
-                    Capture::More => {}
-                    Capture::Complete(audio) => break Ok(Some(audio)),
-                    Capture::Empty => break Err("audio_error"), // a qualified prefix is never empty
-                }
-                continue;
-            }
-            if let Some(prefix) = signal.push(&block, &reference, mic.pending()) {
-                // The signal classifier has already qualified the speech; the
-                // retained cleaned prefix includes this exact triggering frame.
-                // Serialize cancellation and UI transition with the old worker's
-                // speaking/conversation callbacks to prevent late state events.
-                let _guard = phase.lock().unwrap();
-                turn_cancel.cancel();
-                let generation = shared.publish("capturing");
-                handoff = Some((
-                    Endpoint::interrupted(noise, prefix),
-                    Waveform::default(),
-                    generation,
-                ));
-            }
-        };
+        let replacement = listen_for_interruption(
+            shared,
+            mic,
+            backend,
+            cancel,
+            session,
+            levels,
+            &mut signal,
+            &reference,
+            &audio,
+            || work.is_finished(),
+            || inspection.interruption(audio.played_frames()),
+            || {},
+        );
+        if !matches!(replacement, Ok(None)) {
+            // A failed local device or an authorized replacement settles the
+            // predecessor. Resume and stop-only never cancel its text work.
+            let _guard = phase.lock().unwrap();
+            turn_cancel.cancel();
+        }
         let report = work.join().map_err(|_| "backend_response")?;
-        Ok::<_, &'static str>((report, captured?))
+        Ok::<_, &'static str>((report, replacement?))
     })?;
     if cancel.is_cancelled() {
         return Err("cancelled");
     }
     Ok(MonitoredTurn {
         report,
-        captured,
+        replacement,
         signal,
         reference,
+    })
+}
+
+fn listen_for_interruption(
+    shared: &Shared,
+    mic: &mut Input,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    session: Uuid,
+    levels: CaptureLevels,
+    signal: &mut BargeInSignal,
+    reference: &RenderReference,
+    audio: &PlaybackControl,
+    work_finished: impl Fn() -> bool,
+    context: impl Fn() -> InterruptionContext + Sync,
+    stop_playback: impl Fn(),
+) -> Result<Option<AcceptedInterruption>> {
+    let mut capture = None::<(Endpoint, Waveform, u64)>;
+    loop {
+        if capture.is_none() && work_finished() {
+            return Ok(None);
+        }
+        let mut block = mic.read(cancel)?;
+        if audio.stopped().is_cancelled() {
+            // Stop ended the spoken interaction. Let its authorized text
+            // reach history before another, independent wake.
+            continue;
+        }
+        if let Some((endpoint, waveform, generation)) = capture.as_mut() {
+            signal.clean_tail(&mut block, reference, mic.pending());
+            shared.publish_waveform(waveform, &block, "capturing", *generation, mic.pending());
+            let decision = match endpoint.push(&block) {
+                Capture::More => continue,
+                Capture::Empty => InterruptionDecision::Resume,
+                Capture::Complete(samples) => {
+                    shared.publish("processing");
+                    adjudicate_interruption(mic, backend, cancel, session, samples, &context)?
+                }
+            };
+            match decision {
+                InterruptionDecision::Resume => audio.resume()?,
+                InterruptionDecision::Stop => {
+                    audio.stop();
+                    stop_playback();
+                }
+                InterruptionDecision::Replace(candidate) => return Ok(Some(candidate)),
+            }
+            signal.rearm();
+            capture = None;
+            shared.publish(if audio.has_output() {
+                "speaking"
+            } else {
+                "processing"
+            });
+        } else if let Some(prefix) = signal.push(&block, reference, mic.pending()) {
+            audio.pause()?;
+            let generation = shared.publish("capturing");
+            capture = Some((
+                Endpoint::interrupted(levels.noise, prefix)
+                    .prefer_near_speech(levels.sustained_speech_floor),
+                Waveform::default(),
+                generation,
+            ));
+        }
+    }
+}
+
+fn adjudicate_interruption(
+    mic: &mut Input,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    session: Uuid,
+    samples: Vec<i16>,
+    context: &(impl Fn() -> InterruptionContext + Sync),
+) -> Result<InterruptionDecision> {
+    thread::scope(|scope| {
+        let candidate = cancel.child_token();
+        let probe = backend.fork(&candidate);
+        let probe_cancel = candidate.clone();
+        let work = scope.spawn(move || {
+            let content = probe.transcribe_candidate(&samples)?;
+            if content.is_empty() {
+                return Ok(InterruptionDecision::Resume);
+            }
+            let mut prior = context();
+            // The first request may still be in STT. Give its transcript a
+            // short chance to arrive while the new candidate is provisional.
+            if prior.predecessor.is_none() && prior.research_job.is_none() {
+                let start = Instant::now();
+                while prior.predecessor.is_none()
+                    && !probe_cancel.is_cancelled()
+                    && start.elapsed() < Duration::from_secs(12)
+                {
+                    thread::sleep(Duration::from_millis(25));
+                    prior = context();
+                }
+                if prior.predecessor.is_none() {
+                    // Keep the original audio under its original request.
+                    // Accepting without its transcript would lose the first
+                    // question if this was the first turn of a conversation.
+                    return Ok(InterruptionDecision::Resume);
+                }
+            }
+            probe.classify_interruption(session, content, prior)
+        });
+        while !work.is_finished() {
+            // Keep the microphone ring current while waiting for STT/model;
+            // these frames are discarded and cannot retrigger a stale cut.
+            if let Err(error) = mic.read(cancel) {
+                candidate.cancel();
+                return Err(error);
+            }
+        }
+        let result = work.join().map_err(|_| "backend_response")?;
+        if cancel.is_cancelled() {
+            return Err("cancelled");
+        }
+        // A failed or timed-out provisional decision must never interrupt a response.
+        Ok(result.unwrap_or(InterruptionDecision::Resume))
     })
 }
 
@@ -988,22 +1103,6 @@ fn announce_conversation(shared: &Shared, announced: &Mutex<Option<Uuid>>, conve
     }
 }
 
-fn merge_interrupted_capture(mut previous: Vec<i16>, next: Vec<i16>) -> Result<Vec<i16>> {
-    // Bound the exceptional pre-STT handoff to the existing 90-second service
-    // limit. Keep both utterances separated by 160 ms of silence; never trim a
-    // valid onset or silently truncate a previous command.
-    let gap = RATE * 160 / 1000;
-    let total = previous
-        .len()
-        .checked_add(gap)
-        .and_then(|n| n.checked_add(next.len()))
-        .filter(|n| *n <= RATE * 90)
-        .ok_or("backend_response")?;
-    previous.reserve(total - previous.len());
-    previous.resize(previous.len() + gap, 0);
-    previous.extend(next);
-    Ok(previous)
-}
 const MEDIA_OPERATION_BUDGET: Duration = Duration::from_millis(160);
 
 fn media_lookup_remaining(elapsed: Duration) -> Duration {
@@ -1052,96 +1151,6 @@ impl Drop for PausedMedia {
 #[cfg(test)]
 mod continuity_tests {
     use super::*;
-    use crate::windows_voice_backend::{PlaybackInterruption, TurnReply};
-
-    fn interrupted_report() -> TurnReport {
-        TurnReport {
-            result: Err("cancelled"),
-            turn_id: Uuid::new_v4(),
-            conversation: None,
-            accepted: false,
-            transcript: None,
-            chat_started: false,
-            playback: None,
-            research_job: None,
-        }
-    }
-
-    #[test]
-    fn handoff_prefers_played_position_then_generation_and_keeps_prior_context_before_stt() {
-        let conversation = Uuid::new_v4();
-        let position = PlaybackInterruption {
-            conversation,
-            turn_id: Uuid::new_v4(),
-            assistant_message_id: Uuid::new_v4(),
-            segment_id: Uuid::new_v4(),
-            sequence: 0,
-            played_frames_in_segment: 30,
-            segment_frames: Some(100),
-        };
-        let next = vec![2; 320];
-        let previous = vec![1; 320];
-        let report = TurnReport {
-            playback: Some(position.clone()),
-            transcript: Some("História".into()),
-            chat_started: true,
-            ..interrupted_report()
-        };
-        let (audio, context) =
-            prepare_handoff(report, previous.clone(), next.clone(), None).unwrap();
-        assert_eq!(audio, next);
-        assert_eq!(context, Some(Interruption::Playback(position.clone())));
-        let (audio, context) = prepare_handoff(
-            interrupted_report(),
-            previous.clone(),
-            next.clone(),
-            context,
-        )
-        .unwrap();
-        assert_eq!(audio.len(), previous.len() + RATE * 160 / 1000 + next.len());
-        assert_eq!(context, Some(Interruption::Playback(position.clone())));
-        let turn = Uuid::new_v4();
-        let report = TurnReport {
-            turn_id: turn,
-            transcript: Some("Pedido".into()),
-            chat_started: true,
-            ..interrupted_report()
-        };
-        let (audio, context) =
-            prepare_handoff(report, previous.clone(), next.clone(), context).unwrap();
-        assert_eq!(audio, next);
-        assert_eq!(
-            context,
-            Some(Interruption::Generation {
-                turn_id: turn,
-                previous_content: "Pedido".into()
-            })
-        );
-        let ignored = TurnReport {
-            result: Ok(TurnReply {
-                ignored: true,
-                continuation: false,
-            }),
-            transcript: Some("Fala alheia".into()),
-            chat_started: true,
-            ..interrupted_report()
-        };
-        let (audio, after_ignore) =
-            prepare_handoff(ignored, previous, next.clone(), context.clone()).unwrap();
-        assert_eq!(audio, next);
-        assert_eq!(after_ignore, context);
-    }
-    #[test]
-    fn interrupted_stt_retains_both_commands_and_enforces_audio_bound() {
-        let first = vec![10; RATE];
-        let second = vec![20; RATE];
-        let merged = merge_interrupted_capture(first.clone(), second.clone()).unwrap();
-        let gap = RATE * 160 / 1000;
-        assert_eq!(&merged[..RATE], first.as_slice());
-        assert!(merged[RATE..RATE + gap].iter().all(|sample| *sample == 0));
-        assert_eq!(&merged[RATE + gap..], second.as_slice());
-        assert!(merge_interrupted_capture(vec![0; RATE * 90], second).is_err());
-    }
     #[test]
     fn media_lookup_is_charged_to_the_election_not_the_cue() {
         assert_eq!(

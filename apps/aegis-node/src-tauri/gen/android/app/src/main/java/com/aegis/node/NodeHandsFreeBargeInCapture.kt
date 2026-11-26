@@ -17,7 +17,10 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-internal data class BargeInCommand(val wav:ByteArray,val trace:HandsFreeTurnLatency)
+internal data class BargeInCommand(
+    val wav: ByteArray, val trace: HandsFreeTurnLatency,
+    val preparedInterruption: PreparedVoiceInterruption? = null
+)
 
 internal interface HandsFreeBargeInInput:AutoCloseable {
     fun start()
@@ -215,7 +218,8 @@ internal class HandsFreeBargeInCapture internal constructor(
     private val onInputFailure: () -> Unit = {},
     // Before the response starts, there is no assistant PCM to align or cancel.
     // The ordinary VAD and calibrated level gate still have to qualify speech.
-    private val beforePlayback: Boolean = false
+    private val beforePlayback: Boolean = false,
+    private val sustainedSpeechFloor: Double? = null
 ):AutoCloseable {
     constructor(
         audio:AudioRecord,
@@ -231,7 +235,8 @@ internal class HandsFreeBargeInCapture internal constructor(
         inputUsable: () -> Boolean = { true },
         releaseAudio: () -> Unit = { audio.release() },
         onInputFailure: () -> Unit = {},
-        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> }
+        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> },
+        sustainedSpeechFloor: Double? = null
     ):this(AndroidInput(audio, inputUsable, releaseAudio, onMediaFilterClosed),processor::inspect,playedFrames,mediaVolume,processor::reset,stillCurrent,onSpeech,{
             val native=NativeHandsFreeSpeechClassifier()
             object:HandsFreeBargeInClassifier {
@@ -250,7 +255,7 @@ internal class HandsFreeBargeInCapture internal constructor(
         clearOnsetVotes = { processor.clearOnsetVotes },
         commandNoiseFloor = processor::commandNoiseFloor,
         afterInterruption = processor::afterInterruption, closeProcessor = processor::close,
-        onInputFailure = onInputFailure)
+        onInputFailure = onInputFailure, sustainedSpeechFloor = sustainedSpeechFloor)
 
     constructor(
         audio:AudioRecord,
@@ -261,7 +266,8 @@ internal class HandsFreeBargeInCapture internal constructor(
         onCommandFrame: (ShortArray) -> Unit = {},
         onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {},
         inputUsable: () -> Boolean = { true },
-        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> }
+        onMediaFilterClosed: (Long, Long) -> Unit = { _, _ -> },
+        sustainedSpeechFloor: Double? = null
     ):this(AndroidInput(audio,inputUsable,{audio.release()},onMediaFilterClosed),
         {_,_,_->HandsFreeBargeInEvidence.INDEPENDENT},{null},{0},{},
         stillCurrent,onSpeech,{
@@ -272,7 +278,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                 override fun close()=native.close()
             }
         },onProbeResult=onProbeResult,onAvailabilityChanged=onAvailabilityChanged,voicePathReady={true},onCommandFrame=onCommandFrame,
-        onCaptureSummary=onCaptureSummary,beforePlayback=true)
+        onCaptureSummary=onCaptureSummary,beforePlayback=true,sustainedSpeechFloor=sustainedSpeechFloor)
     private val lifecycle=AtomicInteger(0) // new, started, closing, released
     private val stopping=AtomicBoolean(false)
     private val accepted=AtomicBoolean(false)
@@ -542,7 +548,8 @@ internal class HandsFreeBargeInCapture internal constructor(
                         prefix.copyInto(pcm)
                         vad.reset()
                         state=HandsFreeCommandCapture(pcm,prefix.size,vad,initialSpeechConfirmed=true,
-                            initialNoiseRms=if(beforePlayback)levels.floorRms else commandNoiseFloor())
+                            initialNoiseRms=if(beforePlayback)levels.floorRms else commandNoiseFloor(),
+                            sustainedSpeechFloor=sustainedSpeechFloor)
                         trace=HandsFreeTurnLatency(clock=clock).also{it.markAt("barge_in_accepted",now)}
                         state.lastActiveEndSample?.let{lastActiveAt=now-(state.length-it)*1000L/16000}
                     } finally {
@@ -561,7 +568,7 @@ internal class HandsFreeBargeInCapture internal constructor(
                         val timing=checkNotNull(trace)
                         lastActiveAt?.let{timing.markAt("last_vad_active_frame_estimated",it)}
                         timing.markAt("endpoint_completed",now);timing.mark("wav_prepare_started")
-                        val wav=handsFreeWav(checkNotNull(command),capture.length);timing.mark("wav_ready")
+                        val wav=handsFreeWav(checkNotNull(command),capture.transcriptionLength);timing.mark("wav_ready")
                         candidate=BargeInCommand(wav,timing)
                     } else {
                         outcome = HandsFreeBargeInCaptureOutcome.EMPTY_COMMAND

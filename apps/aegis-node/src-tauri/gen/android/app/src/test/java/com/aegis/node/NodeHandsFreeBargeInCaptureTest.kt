@@ -61,14 +61,37 @@ class NodeHandsFreeBargeInCaptureTest {
         volume:()->Int={8},resetEvidence:()->Unit={},speech:()->Boolean={true},
         result: (String, Int, Int) -> Unit = { _, _, _ -> },
         onAvailabilityChanged: () -> Unit = {}, voicePathReady: () -> Boolean = { false },
-        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {}, beforePlayback:Boolean=false) =
+        onCaptureSummary: (HandsFreeBargeInCaptureSummary) -> Unit = {}, beforePlayback:Boolean=false,
+        sustainedSpeechFloor:Double?=null) =
         HandsFreeBargeInCapture(input,inspect,head,volume,resetEvidence,current,speech,{classifier},{input.clock.get()},
-            result, onAvailabilityChanged, voicePathReady, onCaptureSummary = onCaptureSummary,beforePlayback=beforePlayback)
+            result,onAvailabilityChanged,voicePathReady,onCaptureSummary=onCaptureSummary,beforePlayback=beforePlayback,
+            sustainedSpeechFloor=sustainedSpeechFloor)
     private fun pcm(wav:ByteArray):ShortArray {
         val b=ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);b.position(44)
         return ShortArray((wav.size-44)/2){b.short}
     }
     private fun await(latch:CountDownLatch){assertTrue(latch.await(2,TimeUnit.SECONDS))}
+
+    @Test(timeout=5000) fun classroomInterruptionEndsWithTheCloserSpeakerDespiteOngoingRoomSpeech() {
+        val room=frame(500)
+        val speaker=frame(2200)
+        val input=Input(flatten(List(35){room}+List(22){speaker}+List(60){room}),AtomicLong())
+        val spoken=CountDownLatch(1)
+        val capture=capture(input,Classifier{true},beforePlayback=true,sustainedSpeechFloor=1000.0,
+            speech={spoken.countDown();true})
+        try {
+            assertTrue(capture.start())
+            input.proceed.countDown()
+            await(spoken)
+            val command=checkNotNull(capture.awaitCommand())
+            val samples=pcm(command.wav)
+            assertEquals(22*320,samples.count{abs(it.toInt())==2200})
+            assertEquals(6*320,samples.takeLastWhile{abs(it.toInt())==500}.size)
+            assertEquals((35+22+40)*320,input.offset)
+        } finally {
+            capture.close()
+        }
+    }
 
     @Test fun onsetKeepsExact120msBeforeFirstSpeechAcrossRingWrap() {
         val classifier=Classifier();val onset=HandsFreeBargeInOnset(classifier)

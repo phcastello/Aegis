@@ -59,6 +59,136 @@ class NodeHandsFreeBackendTest {
   private fun segmentPcmReply()=Reply(bytes=byteArrayOf(1,2,3,4),headers=mapOf(
     "X-Aegis-Audio-Format" to "pcm_s16le","X-Aegis-Sample-Rate" to "24000","X-Aegis-Channels" to "1"))
 
+  @Test fun provisionalBackgroundAndEmptySpeechNeverCreateAnotherChat() {
+    val previous = HandsFreeGenerationInterruption(UUID.randomUUID().toString(),"Consulta anterior")
+    val context = VoiceInterruptionContext(session,conversation,previous,null,null)
+    for (candidate in listOf("Aegis.","O professor ainda está explicando.")) {
+      Fixture(transcript=candidate,respond={request,normal->
+        if(request.path!="/api/voice/interruptions/classify")normal
+        else {
+          val body=JSONObject(request.text())
+          assertEquals(session,body.getString("voiceSessionId"))
+          assertEquals(conversation,body.getString("conversationId"))
+          assertEquals(previous.turnId,body.getJSONObject("interruptedGeneration").getString("turnId"))
+          assertEquals(candidate,body.getString("content"))
+          Reply.json(JSONObject().put("disposition","resume"))
+        }
+      }).use { fixture ->
+        val decision=fixture.backend().classifyInterruption(wav()){context}
+        assertEquals(VoiceInterruptionDisposition.RESUME,decision.disposition)
+        assertNull(decision.replacement)
+        assertEquals(if(candidate=="Aegis.")1 else 2,fixture.requests.size)
+        assertFalse(fixture.requests.any{it.path.startsWith("/api/chat/messages")})
+      }
+    }
+  }
+
+  @Test fun replacementReceiptReusesCandidateTranscriptAndResearchSessionWithoutAnotherStt() {
+    val receipt=UUID.randomUUID().toString()
+    val researchJob=UUID.randomUUID().toString()
+    val researchVoiceSession=UUID.randomUUID().toString()
+    val context=VoiceInterruptionContext(researchVoiceSession,conversation,null,null,researchJob)
+    val requests=AtomicInteger()
+    Fixture(transcript="Aegis, Aegis é o nome que quero usar",respond={request,normal->
+      when(request.path) {
+        "/api/voice/interruptions/classify" -> {
+          val body=JSONObject(request.text())
+          assertEquals("Aegis é o nome que quero usar",body.getString("content"))
+          assertEquals(researchVoiceSession,body.getString("voiceSessionId"))
+          Reply.json(JSONObject().put("disposition","replace").put("receipt",receipt))
+        }
+        "/api/chat/messages/stream" -> {
+          requests.incrementAndGet()
+          val body=JSONObject(request.text())
+          assertEquals("Aegis é o nome que quero usar",body.getString("content"))
+          assertEquals(researchVoiceSession,body.getString("voiceSessionId"))
+          assertEquals(researchJob,body.getString("researchJobId"))
+          assertEquals(receipt,body.getString("interruptionReceipt"))
+          segmentedReply(request)
+        }
+        "/api/voice/speech/segments" -> segmentPcmReply()
+        else -> normal
+      }
+    }).use { fixture ->
+      val decision=fixture.backend().classifyInterruption(wav()){context}
+      assertEquals(VoiceInterruptionDisposition.REPLACE,decision.disposition)
+      val playback=RecordingSink()
+      val next=fixture.backend().execute(wav(),session,conversation,playback,null,incremental=true,
+        preparedInterruption=checkNotNull(decision.replacement))
+      assertTrue(next.playedAudio)
+      assertEquals(1,requests.get())
+      assertEquals(1,fixture.requests.count{it.path=="/api/voice/transcriptions"})
+    }
+  }
+
+  @Test fun stoppingSpeechWhileAnAnswerGeneratesDrainsConversationWithoutRequestingTts() {
+    val researchJob=UUID.randomUUID().toString()
+    val preserved=mutableListOf<String>()
+    Fixture(respond={request,normal->
+      if(request.path=="/api/chat/messages/stream")segmentedReply(request,researchJobId=researchJob)
+      else normal
+    }).use { fixture ->
+      val backend=fixture.backend(onResearchDelegated={_,job,_,_->preserved.add(job)})
+      val pcm=RecordingSink()
+      val turn=backend.execute(wav(),session,conversation,pcm,null,incremental=true,onConversation={backend.stopReading()})
+      assertTrue(turn.readingStopped)
+      assertFalse(turn.playedAudio)
+      assertFalse(turn.continueListening)
+      assertEquals(listOf(researchJob),preserved)
+      assertFalse(fixture.requests.any{it.path=="/api/voice/speech/segments" || it.method=="DELETE"})
+      assertEquals(0,pcm.bytes.size())
+    }
+  }
+
+  @Test fun stoppingSpeechDrainsAnAlreadyOpenSegmentWithoutCancellingTheAnswer() {
+    val stopped = CountDownLatch(1)
+    val segmentSent = CountDownLatch(1)
+    val writes = AtomicInteger()
+    val segment = ByteArray(4 * 1024 * 1024) { 42 }
+    Fixture(respond={request,normal->
+      when (request.path) {
+        "/api/chat/messages/stream" -> {
+          val chat = segmentedReply(request)
+          val terminalAt = chat.bytes.copyOf(chat.bytes.size-1).lastIndexOf('\n'.code.toByte())+1
+          check(terminalAt > 0)
+          chat.copy(stream={ output ->
+            output.write(chat.bytes,0,terminalAt)
+            output.flush()
+            check(segmentSent.await(5,TimeUnit.SECONDS))
+            output.write(chat.bytes,terminalAt,chat.bytes.size-terminalAt)
+          })
+        }
+        "/api/voice/speech/segments" -> segmentPcmReply().copy(bytes=segment,stream={ output ->
+          output.write(segment,0,8192)
+          output.flush()
+          check(stopped.await(5,TimeUnit.SECONDS))
+          output.write(segment,8192,segment.size-8192)
+          output.flush()
+          segmentSent.countDown()
+        })
+        else -> normal
+      }
+    }).use { fixture ->
+      val backend = fixture.backend()
+      val pcm = object : HandsFreePcmSink {
+        override fun write(bytes:ByteArray,offset:Int,count:Int) {
+          assertEquals(1,writes.incrementAndGet())
+          backend.stopReading()
+          stopped.countDown()
+        }
+        override fun finish() = error("Stopped PCM reached the playback finish")
+        override fun abort() = Unit
+        override fun close() = Unit
+      }
+      val turn = backend.execute(wav(),session,conversation,pcm,null,incremental=true)
+      assertTrue(turn.readingStopped)
+      assertFalse(turn.playedAudio)
+      assertEquals(conversation,turn.conversationId)
+      assertEquals(1,writes.get())
+      assertFalse(fixture.requests.any { it.method=="DELETE" })
+    }
+  }
+
   @Test fun delegatedResearchAnnouncesThenUsesSeparateAudioForTheOriginatingSession() {
     data class Delivery(val origin:NodeNativeSession.Session,val job:String,val voice:String,val conversation:String)
     val jobId=UUID.randomUUID().toString()

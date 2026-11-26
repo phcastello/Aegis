@@ -9,6 +9,41 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 class NodeHandsFreeAudioTest {
+    @Test fun classroomSpeechKeepsTheLouderCommandAndEndsWhileTheRoomKeepsTalking() {
+        // Synthetic mixed signals. The VAD sees speech in every frame,
+        // exercising the relative level gate independently of ASR.
+        val room = ShortArray(320) { index ->
+            ((if(index % 17 < 8) 730 else -670) + (if(index % 29 < 14) 290 else -270)).toShort()
+        }
+        val foreground = ShortArray(320) { index ->
+            (room[index] + if(index % 31 < 16) 3800 else -3600).toShort()
+        }
+        val ring = HandsFreeRing()
+        val quietRoom = ShortArray(320) { (room[it]/4).toShort() }
+        repeat(71) {
+            val frame = if (it%2==0) quietRoom else room
+            ring.append(frame,frame.size)
+        }
+        // The stronger recent keyword must not influence the background estimate.
+        repeat(50) { ring.append(foreground,foreground.size) }
+        val speechFloor = checkNotNull(ring.sustainedSpeechFloor(0))
+        assertTrue(speechFloor in 900.0..1300.0)
+        val command = ShortArray(320000)
+        val capture = HandsFreeCommandCapture(command,0,HandsFreeSpeechClassifier{true},
+            sustainedSpeechFloor=speechFloor)
+        repeat(10) { assertFalse(capture.append(room,room.size)) }
+        assertFalse(capture.hasUsefulAudio)
+        repeat(20) { assertFalse(capture.append(foreground,foreground.size)) }
+        assertTrue(capture.hasUsefulAudio)
+        repeat(20) { assertFalse(capture.append(room,room.size)) }
+        assertFalse(capture.append(foreground,foreground.size)) // a loud single background syllable
+        repeat(18) { assertFalse(capture.append(room,room.size)) }
+        assertTrue(capture.append(room,room.size))
+        assertEquals(30*320,capture.lastActiveEndSample)
+        assertEquals(4*320,capture.transcriptionStart)
+        assertEquals(32*320,capture.transcriptionLength)
+        assertArrayEquals(foreground,command.copyOfRange(10*320,11*320))
+    }
     private val neverSpeech=HandsFreeSpeechClassifier{false}
     private val voice=HandsFreeSpeechClassifier{frame->frame.any{it.toInt()>30 || it.toInt() < -30}}
     private fun speech(count:Int,level:Int=1500)=ShortArray(count){if(it%30<15)level.toShort() else (-level).toShort()}

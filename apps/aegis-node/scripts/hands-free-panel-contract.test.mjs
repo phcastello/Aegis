@@ -162,21 +162,24 @@ test('outside touch, focused Back and accessible dismissal cancel only the still
   assert.match(cancel, /action==AccessibilityNodeInfo\.ACTION_DISMISS && \(host===visualizer \|\| host===label\)/);
 });
 
-test('processing interruption has exclusive microphone ownership before playback and cancels only the old turn', () => {
+test('processing interruption keeps the microphone and predecessor until its provisional decision', () => {
   const runtime = android('NodeHandsFree');
+  const resolve = runtime.slice(runtime.indexOf('private fun resolveVoiceInterruption('), runtime.indexOf('private fun startProcessingCapture('));
   const processing = runtime.slice(runtime.indexOf('private fun startProcessingCapture('), runtime.indexOf('private fun retireProcessingCapture('));
   const retire = runtime.slice(runtime.indexOf('private fun retireProcessingCapture('), runtime.indexOf('private fun startResponseCapture('));
   assert.match(processing, /AegisProcessingMic/);
   assert.match(processing, /listener\.startAsync\(\)/);
-  assert.match(processing, /!response\.processing \|\| response\.playing \|\| responseCapture!==listener/);
-  assert.match(processing, /!ownsTurn\(generation,session,owner\)/);
-  assert.match(processing, /activation\.identity!=currentIdentity\(\)/);
-  assert.match(processing, /backend=null/);
-  assert.match(processing, /owner\.requestCancellation\(\)/);
-  assert.ok(processing.indexOf('backend=null') < processing.indexOf('owner.requestCancellation()'));
-  assert.match(processing, /owner\.playbackInterruption\(0\)/);
-  assert.match(processing, /owner\.generationInterruption\(\)/);
-  assert.doesNotMatch(processing, /cancelSession\(|\bbeep\(/);
+  assert.match(processing, /response\.processing && !response\.playing && responseCapture===listener/);
+  assert.match(processing, /ownsTurn\(generation,session,owner\)/);
+  assert.match(processing, /activation\.identity==currentIdentity\(\)/);
+  assert.match(processing, /resolveVoiceInterruption\(response,generation,session,owner,sink,listener,0,null\)/);
+  assert.ok(resolve.indexOf('sink.pausePlayback()') < resolve.indexOf('owner.classifyInterruption('));
+  assert.match(resolve, /owner\.generationInterruption\(\)/);
+  assert.match(resolve, /VoiceInterruptionDisposition\.REPLACE[\s\S]*?backend=null\s*owner\.requestCancellation\(\)/);
+  assert.match(resolve, /VoiceInterruptionDisposition\.STOP\s*->\s*\{\s*owner\.stopReading\(\)/);
+  assert.match(resolve, /VoiceInterruptionDisposition\.RESUME\s*->\s*\{\s*sink\.resumePlayback\(\)/);
+  assert.doesNotMatch(processing, /requestCancellation\(|cancelSession\(|\bbeep\(/);
+  assert.match(retire, /candidate\.await\(\)/);
   assert.match(retire, /response\.processing=false/);
   assert.match(retire, /listener\.close\(\)/);
   assert.ok(retire.indexOf('response.processing=false') < retire.indexOf('listener.close()'));
@@ -184,7 +187,7 @@ test('processing interruption has exclusive microphone ownership before playback
   const prepare = runtime.slice(runtime.indexOf('prepareCommunication = {'), runtime.indexOf('onCommunicationFailed = {'));
   assert.ok(prepare.includes('retireProcessingCapture('));
   assert.ok(prepare.indexOf('retireProcessingCapture(') < prepare.indexOf('HandsFreeConversationAudio.tryOpen('));
-  assert.match(runtime, /interruptedGeneration=pendingGenerationInterruption\?\.second/);
+  assert.match(runtime, /preparedInterruption=prepared/);
   assert.match(runtime, /val startProcessing:\s*\(\)\s*->\s*Unit\s*=\s*\{\s*if\s*\(response\s*!=\s*null\)\s*startProcessingCapture\(response,generation,session,active,sink\)/);
   assert.match(runtime, /active\.speakResearch\(research\.jobId,research\.voiceSessionId,sink,onProcessing\s*=\s*startProcessing\)/);
   assert.match(runtime, /else active\.execute\(command,session,conversationId,sink,trace,[\s\S]*?onProcessing\s*=\s*startProcessing,/);

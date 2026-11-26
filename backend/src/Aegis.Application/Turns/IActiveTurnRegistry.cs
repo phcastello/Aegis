@@ -3,6 +3,7 @@ namespace Aegis.Application.Turns;
 public interface IActiveTurnRegistry
 {
     IDisposable TrackPendingTurn(Guid turnId, Guid conversationId, CancellationTokenSource cancellation, VoiceGenerationReceipt? receipt = null);
+    VoiceGenerationReceipt? ReadVoiceGeneration(Guid turnId, Guid sessionId, Guid? destination);
     VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination, CancellationToken cancellationToken = default);
     ActiveTurn Register(Guid turnId, Guid conversationId);
     TurnRegistrationInfo RegisterAndGetSuperseded(Guid turnId, Guid conversationId);

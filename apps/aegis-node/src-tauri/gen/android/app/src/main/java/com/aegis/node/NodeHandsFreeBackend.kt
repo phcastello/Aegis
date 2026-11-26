@@ -20,7 +20,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** PCM uses the existing voice endpoint's format: signed little endian, mono, 24 kHz. */
 data class HandsFreeTurn(val conversationId: String?, val playedAudio: Boolean, val continueListening: Boolean,
-                         val ignored: Boolean = false)
+                         val ignored: Boolean = false, val readingStopped: Boolean = false)
+
+internal data class VoiceInterruptionContext(
+  val voiceSessionId: String,
+  val conversationId: String?,
+  val generation: HandsFreeGenerationInterruption?,
+  val playback: HandsFreePlaybackInterruption?,
+  val researchJobId: String?
+) {
+  fun applyTo(request: JSONObject): JSONObject = request.put("voiceSessionId", voiceSessionId)
+    .put("conversationId", conversationId ?: JSONObject.NULL).apply {
+      generation?.let { put("interruptedGeneration", it.toJson()) }
+      playback?.let { put("interruptedPlayback", it.toJson()) }
+      researchJobId?.let { put("researchJobId", it) }
+    }
+}
+
+internal enum class VoiceInterruptionDisposition { RESUME, STOP, REPLACE }
+
+internal data class PreparedVoiceInterruption(val context: VoiceInterruptionContext, val transcript: String, val receipt: String)
+
+internal data class VoiceInterruptionDecision(
+  val disposition: VoiceInterruptionDisposition, val replacement: PreparedVoiceInterruption? = null
+)
 
 /** One instance belongs to one native session; it never reads the WebView's draft or destination. */
 class NodeHandsFreeBackend internal constructor(
@@ -37,6 +60,9 @@ class NodeHandsFreeBackend internal constructor(
   private val cancelled = AtomicBoolean(false)
   private val executing = AtomicBoolean(false)
   private val activeCalls = java.util.concurrent.ConcurrentHashMap.newKeySet<Call>()
+  private val audioCalls = java.util.concurrent.ConcurrentHashMap.newKeySet<Call>()
+  private val readingStopped = AtomicBoolean(false)
+  @Volatile private var independentResearchPlayback = false
   @Volatile private var realtime: HandsFreeRealtimeTranscription? = null
   private val segmentDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<SegmentDownload>()
   @Volatile private var activePcm: HandsFreePcmSink? = null
@@ -49,10 +75,12 @@ class NodeHandsFreeBackend internal constructor(
   private var pinnedConversationId: String? = null
   private val playbackProgress = HandsFreePlaybackProgress()
   @Volatile private var generationSnapshot:HandsFreeGenerationInterruption?=null
+  @Volatile private var originalTranscription = java.util.concurrent.CountDownLatch(0)
 
   internal fun playbackInterruption(playedFrames: Long) = playbackProgress.at(playedFrames)
   /** Present only after the prior command was actually transcribed. */
   internal fun generationInterruption()=generationSnapshot
+  internal fun awaitOriginalTranscription(): Boolean = originalTranscription.await(12, TimeUnit.SECONDS)
   internal fun processingInProgress()=executing.get() && !cancelled.get()
 
   private fun conversationChanged(id: String) {
@@ -138,8 +166,10 @@ class NodeHandsFreeBackend internal constructor(
     }
     val call = client.newCall(builder.build())
     if (!cleanup) activeCalls.add(call)
+    if (pcm != null) audioCalls.add(call)
     try {
       if (!cleanup) checkCurrent()
+      if (pcm != null && readingStopped.get()) throw CancellationException()
       call.execute().use { response ->
         if (!response.isSuccessful) throw NodeNativeSession.HttpFailure(response.code)
         if (response.code == 204 && onNoContent != null) {
@@ -197,7 +227,7 @@ class NodeHandsFreeBackend internal constructor(
           return output?.toByteArray() ?: ByteArray(0)
         } finally { block.fill(0); framer?.clear() }
       }
-    } finally { activeCalls.remove(call); call.cancel() }
+    } finally { activeCalls.remove(call); audioCalls.remove(call); call.cancel() }
   }
 
   private fun chatJson(body: JSONObject): JSONObject? {
@@ -232,10 +262,14 @@ class NodeHandsFreeBackend internal constructor(
                        interruptedPlayback: HandsFreePlaybackInterruption? = null,
                        interruptedGeneration: HandsFreeGenerationInterruption? = null,
                        onProcessing:()->Unit={},
-                       closeResearchOnAcknowledgement:Boolean=false, onConversation:(String)->Unit={}):HandsFreeTurn {
+                       closeResearchOnAcknowledgement:Boolean=false,
+                       preparedInterruption: PreparedVoiceInterruption? = null,
+                       onConversation:(String)->Unit={}):HandsFreeTurn {
     check(executing.compareAndSet(false, true)) { "A voice turn is already running." }
+    readingStopped.set(false)
     playbackProgress.reset()
     generationSnapshot=null
+    originalTranscription=java.util.concurrent.CountDownLatch(1)
     latencyTrace=trace
     activePcm = pcm
     val conversationReportLock = Any()
@@ -255,7 +289,7 @@ class NodeHandsFreeBackend internal constructor(
       require(interruptedPlayback==null || interruptedGeneration==null)
       onProcessing()
       return executeTurn(wav, sessionId, conversationId, pcm, incremental, interruptedPlayback, interruptedGeneration,
-        closeResearchOnAcknowledgement, reportConversation)
+        closeResearchOnAcknowledgement, preparedInterruption, reportConversation)
     } catch (error: Exception) {
       pcm.abort()
       if (cancelled.get()) throw CancellationException()
@@ -263,6 +297,7 @@ class NodeHandsFreeBackend internal constructor(
     }
     finally {
       if (activePcm === pcm) activePcm = null
+      originalTranscription.countDown()
       try { pcm.close() } finally { abortCapture();latencyTrace=null;correlationId=null;executing.set(false) }
     }
   }
@@ -270,6 +305,7 @@ class NodeHandsFreeBackend internal constructor(
   private fun executeTurn(wav: ByteArray, sessionId: String, conversationId: String?, pcm: HandsFreePcmSink, incremental: Boolean,
                           interruptedPlayback: HandsFreePlaybackInterruption?, interruptedGeneration:HandsFreeGenerationInterruption?,
                           closeResearchOnAcknowledgement:Boolean,
+                          preparedInterruption:PreparedVoiceInterruption?,
                           reportConversation:(String)->Unit): HandsFreeTurn {
     require(UUID.fromString(sessionId).toString() == sessionId)
     conversationId?.let { require(UUID.fromString(it).toString() == it) }
@@ -290,13 +326,13 @@ class NodeHandsFreeBackend internal constructor(
       onStage("transcription_started", 0)
       val realtimeAttempt = realtime
       val streamed = try { realtimeAttempt?.awaitFinal() } finally { realtimeAttempt?.close();if(realtime===realtimeAttempt)realtime=null }
-      val transcript = streamed ?: run {
+      val transcript = preparedInterruption?.transcript ?: streamed ?: run {
         if (realtimeAttempt != null) trace?.mark("stt_batch_fallback")
         transcribeBatch(wav)
       }
       onStage("transcription_final", 0)
       // Wake word alone and empty STT never create a conversation or reach the model.
-      val command = stripWakeWord(transcript)
+      val command = if (preparedInterruption == null) stripWakeWord(transcript) else transcript
       if (command.isBlank() || (closeResearchOnAcknowledgement && handsFreeClosesResearchReply(command))) {
         onStage("empty", 0)
         return HandsFreeTurn(conversationId, false, false)
@@ -305,7 +341,9 @@ class NodeHandsFreeBackend internal constructor(
       checkCurrent()
       turnId = id
       generationSnapshot=HandsFreeGenerationInterruption(id,command)
-      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback, interruptedGeneration, reportConversation)
+      originalTranscription.countDown()
+      if (incremental) return executeSegmented(command, sessionId, conversationId, id, pcm, interruptedPlayback,
+        interruptedGeneration, preparedInterruption, reportConversation)
       val result = timed("chat") {
         trace?.mark("chat_request_started")
         chatJson(JSONObject().put("turnId", id).put("conversationId", conversationId ?: JSONObject.NULL)
@@ -380,7 +418,33 @@ class NodeHandsFreeBackend internal constructor(
     return HandsFreeTurn(conversationId, false, false, ignored = true)
   }
 
-  private fun transcribeBatch(wav:ByteArray):String {
+  internal fun classifyInterruption(wav: ByteArray, predecessor: () -> VoiceInterruptionContext?): VoiceInterruptionDecision {
+    validateWav(wav)
+    if (scope == null) scope = readSession() ?: throw NodeNativeSession.IdentityUnavailable()
+    val transcript = stripWakeWord(transcribeBatch(wav, timeoutSeconds = 12))
+    if (transcript.isBlank()) return VoiceInterruptionDecision(VoiceInterruptionDisposition.RESUME)
+    val context = predecessor() ?: return VoiceInterruptionDecision(VoiceInterruptionDisposition.RESUME)
+    requireUuid(context.voiceSessionId)
+    val body = context.applyTo(JSONObject().put("content", transcript)).toString().toByteArray(Charsets.UTF_8)
+    try {
+      val result = request("/api/voice/interruptions/classify", body, "application/json", 8192, 12)
+      return try {
+        val response = JSONObject(String(result, Charsets.UTF_8))
+        when (response.getString("disposition")) {
+          "resume" -> VoiceInterruptionDecision(VoiceInterruptionDisposition.RESUME)
+          "stop" -> VoiceInterruptionDecision(VoiceInterruptionDisposition.STOP)
+          "replace" -> {
+            val receipt = response.getString("receipt")
+            requireUuid(receipt)
+            VoiceInterruptionDecision(VoiceInterruptionDisposition.REPLACE, PreparedVoiceInterruption(context, transcript, receipt))
+          }
+          else -> error("invalid_voice_interruption_disposition")
+        }
+      } finally { result.fill(0) }
+    } finally { body.fill(0) }
+  }
+
+  private fun transcribeBatch(wav:ByteArray, timeoutSeconds: Int = 90):String {
     val trace=latencyTrace
     val transcriptionId = UUID.randomUUID().toString()
     trace?.transcription(transcriptionId);trace?.mark("stt_multipart_started")
@@ -393,7 +457,7 @@ class NodeHandsFreeBackend internal constructor(
     prefix.copyInto(multipart); wav.copyInto(multipart, prefix.size); suffix.copyInto(multipart, prefix.size + wav.size)
     try { return timed("stt") {
       trace?.mark("stt_request_started")
-      val response=request("/api/voice/transcriptions",multipart,"multipart/form-data; boundary=$boundary",65536,90)
+      val response=request("/api/voice/transcriptions",multipart,"multipart/form-data; boundary=$boundary",65536,timeoutSeconds)
       try {
         val result=JSONObject(String(response,Charsets.UTF_8))
         require(result.getString("transcriptionRequestId")==transcriptionId)
@@ -416,6 +480,7 @@ class NodeHandsFreeBackend internal constructor(
   /** Two synthesis slots, bounded PCM pipes and one writer keep playback continuous. */
   private fun executeSegmented(command:String, sessionId:String, conversationId:String?, id:String, pcm:HandsFreePcmSink,
                                interruptedPlayback: HandsFreePlaybackInterruption?, interruptedGeneration:HandsFreeGenerationInterruption?,
+                               preparedInterruption: PreparedVoiceInterruption?,
                                reportConversation:(String)->Unit):HandsFreeTurn {
     val trace=latencyTrace
     val events=java.util.concurrent.ArrayBlockingQueue<JSONObject>(2)
@@ -447,6 +512,7 @@ class NodeHandsFreeBackend internal constructor(
       .put("allowSilentIgnore",true).put("includeWebResearchSources",true)
       .apply { interruptedPlayback?.takeIf { it.conversationId == conversationId }?.let { put("interruptedPlayback", it.toJson()) } }
       .apply { interruptedGeneration?.let { put("interruptedGeneration",it.toJson()) } }
+      .apply { preparedInterruption?.let { it.context.applyTo(this); put("interruptionReceipt",it.receipt) } }
       .toString().toByteArray(Charsets.UTF_8)
     val reader=Thread({
       var persistedDestination=conversationId
@@ -494,7 +560,8 @@ class NodeHandsFreeBackend internal constructor(
                   if (jobId != null && isUuid(jobId)) {
                     // The durable job is independent of this announcement's playback.
                     // Scheduling is allowed to fail without breaking the spoken turn.
-                    runCatching { onResearchDelegated(checkNotNull(scope), jobId, sessionId, destination) }
+                    runCatching { onResearchDelegated(checkNotNull(scope), jobId,
+                      preparedInterruption?.context?.voiceSessionId ?: sessionId, destination) }
                   }
                 }
                 persistedDestination=destination;persistedMessage=message
@@ -573,12 +640,22 @@ class NodeHandsFreeBackend internal constructor(
               trace?.mark("first_final_segment_received")
               // Prior acceptance orders claims. Next synthesis begins while current PCM plays.
               previous?.let {prior->
-                while(!stopped.get() && !prior.firstByte.await(200,TimeUnit.MILLISECONDS)) {
+                while(!stopped.get() && !readingStopped.get() && !prior.firstByte.await(200,TimeUnit.MILLISECONDS)) {
                   checkNotCancelled();prior.failure.get()?.let{throw it}
                   check(prior.completed.count>0){"empty_previous_segment"}
                 }
               }
-              while(!stopped.get() && !permits.tryAcquire(200,TimeUnit.MILLISECONDS)){checkNotCancelled();readerFailure.get()?.let{throw it}}
+              if (readingStopped.get()) { sequence++; continue }
+              var acquired = false
+              while(!stopped.get() && !readingStopped.get()) {
+                if (permits.tryAcquire(200,TimeUnit.MILLISECONDS)) { acquired = true; break }
+                checkNotCancelled();readerFailure.get()?.let{throw it}
+              }
+              if (readingStopped.get()) {
+                if (acquired) permits.release()
+                sequence++
+                continue
+              }
               if(stopped.get())throw CancellationException()
               val unit=SegmentDownload(event);segmentDownloads.add(unit);previous=unit
               val speech=UUID.randomUUID().toString();trace?.speech(speech)
@@ -599,7 +676,7 @@ class NodeHandsFreeBackend internal constructor(
                     pcmDeliveryMetrics=false,onFirstByte={unit.firstByte.countDown();if(unitSequence==0)trace?.mark("tts_first_byte")},
                     onPcmAvailable={if(unitSequence==0)trace?.mark("tts_first_pcm_available")})
                   playbackProgress.synthesized(segmentId, synthesizedFrames)
-                }catch(error:Throwable){unit.failure.set(error);failPipeline(error)}
+                }catch(error:Throwable){unit.failure.set(error);if(!readingStopped.get())failPipeline(error)}
                 finally{body.fill(0);try{unit.output.close()}catch(_:Exception){};unit.completed.countDown()}
               },"AegisSegmentPcm-$sequence").apply{isDaemon=true;start()}
               while(!stopped.get() && !units.offer(unit,200,TimeUnit.MILLISECONDS))checkNotCancelled()
@@ -640,26 +717,39 @@ class NodeHandsFreeBackend internal constructor(
             return ignoredTurn(conversationId).also { ignored = true }
           }
           if(unit.event.getString("type")=="done") {
-            framer.verifyComplete();pcm.finish();trace?.mark("playback_finished");checkCurrent()
+            if(!readingStopped.get()) {
+              try { framer.verifyComplete();pcm.finish();trace?.mark("playback_finished") }
+              catch(error:Exception){if(!readingStopped.get())throw error}
+            }
+            checkCurrent()
             val destination=unit.event.getString("conversationId")
             // Best effort acknowledgement after the real playback head, without delaying onset.
             try{completionCleanup.execute{try{request("/api/chat/turns/$id/complete",ByteArray(0),"application/json",65536,3,cleanup=true)}catch(_:Exception){}}}
             catch(_:java.util.concurrent.RejectedExecutionException){}
             pinnedConversationId=destination;speechId=null;turnId=null
             finishSearchPresentation("done",unit.event.getString("assistantMessageId"))
-            return HandsFreeTurn(destination,true,unit.event.optString("voiceContinuation")=="continue")
+            val speechStopped = readingStopped.get()
+            return HandsFreeTurn(destination,!speechStopped,!speechStopped && unit.event.optString("voiceContinuation")=="continue",
+              readingStopped=speechStopped)
           }
-          playbackProgress.begin(unit.event.getString("conversationId"), id, unit.event.getString("assistantMessageId"),
-            unit.event.getString("segmentId"), unit.event.getInt("sequence"), framer.samples)
+          if (!readingStopped.get()) playbackProgress.begin(unit.event.getString("conversationId"), id,
+            unit.event.getString("assistantMessageId"),unit.event.getString("segmentId"),
+            unit.event.getInt("sequence"),framer.samples)
+          // Closing an already-open legacy segment request can cancel its parent
+          // server turn. Drain its bounded PCM pipe silently and fetch no successor.
           while(true) {
-            checkNotCancelled();schedulerFailure.get()?.let{throw it};unit.failure.get()?.let{throw it}
+            checkNotCancelled();schedulerFailure.get()?.let{throw it}
+            if(!readingStopped.get())unit.failure.get()?.let{throw it}
             if(System.nanoTime()-identityCheckedAt>=1000000000L){checkCurrent();identityCheckedAt=System.nanoTime()}
             val count=unit.input.read(block)
             if(count<0)break
-            framer.accept(block,count)
+            if (!readingStopped.get()) {
+              try { framer.accept(block,count) }
+              catch(error:Exception){if(!readingStopped.get() || cancelled.get())throw error}
+            }
           }
           check(unit.completed.await(3000,TimeUnit.MILLISECONDS)){"segment_download_did_not_finish"}
-          unit.failure.get()?.let{throw it}
+          if(!readingStopped.get())unit.failure.get()?.let{throw it}
         } finally {unit.close();segmentDownloads.remove(unit);if(unit.event.getString("type")=="final_segment")permits.release()}
       }
     } finally {
@@ -701,9 +791,11 @@ class NodeHandsFreeBackend internal constructor(
   }
 
   internal fun speakResearch(jobId: String, voiceSessionId: String, pcm: HandsFreePcmSink,
-                             onFirstPcm: () -> Unit = {}, onProcessing: () -> Unit = {}) {
+                             onFirstPcm: () -> Unit = {}, onProcessing: () -> Unit = {}): Boolean {
     requireUuid(jobId); requireUuid(voiceSessionId)
     check(executing.compareAndSet(false, true))
+    readingStopped.set(false)
+    independentResearchPlayback = true
     activePcm = pcm
     val body = JSONObject().put("voiceSessionId", voiceSessionId).toString().toByteArray(Charsets.UTF_8)
     try {
@@ -718,20 +810,29 @@ class NodeHandsFreeBackend internal constructor(
       checkCurrent()
     } catch (error: Exception) {
       pcm.abort()
-      throw error
+      if (!readingStopped.get() || cancelled.get()) throw error
     } finally {
       body.fill(0)
       try { pcm.close() } finally {
+        independentResearchPlayback = false
         activePcm = null
         executing.set(false)
       }
     }
+    return !readingStopped.get()
   }
 
   private fun isUuid(value: String): Boolean =
     try { UUID.fromString(value).toString() == value } catch (_: IllegalArgumentException) { false }
 
   private fun requireUuid(value:String) {require(isUuid(value))}
+
+  /** The reply can finish saving its transcript and facts without a PCM consumer. */
+  internal fun stopReading() {
+    readingStopped.set(true)
+    activePcm?.abort()
+    if (independentResearchPlayback) audioCalls.forEach { it.cancel() }
+  }
 
   /** Immediate, nonblocking invalidation even while an older remote cleanup is queued. */
   fun requestCancellation() {

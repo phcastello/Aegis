@@ -287,6 +287,21 @@ impl Background {
         frames.sort_by(f64::total_cmp);
         frames.get(frames.len() / 4).copied().unwrap_or(0.0).sqrt()
     }
+
+    /// A sustained backdrop differs from a quiet room with a short spike.
+    /// Use only the pre-keyword second so the user's own wake does not set
+    /// the foreground threshold. This is an endpoint cue, not voice ID.
+    pub fn sustained_speech_floor(&self) -> Option<f64> {
+        if self.0.len() < 75 {
+            return None;
+        }
+        let mut history: Vec<_> = self.0.iter().take(50).copied().collect();
+        history.sort_by(f64::total_cmp);
+        let low = history[12].sqrt();
+        let high = history[37].sqrt();
+        let peaks = history[44].sqrt();
+        (low >= 120.0 && high <= low * 4.0).then_some((high * 1.4).max(peaks * 1.25))
+    }
 }
 
 /// Keep 320 ms of leading context and use model-based speech evidence with a
@@ -298,6 +313,7 @@ const ENDPOINT_SILENCE_FRAMES: usize = 70; // 1.4 seconds after the last speech.
 pub(crate) struct Endpoint {
     vad: VoiceActivityDetectorWrapper,
     noise: f64,
+    sustained_speech_floor: Option<f64>,
     wait_frames: usize,
     frames: usize,
     earliest_end: usize,
@@ -317,6 +333,7 @@ impl Endpoint {
         Self {
             vad: VoiceActivityDetectorWrapper::new(sonora_simd::detect_backend(), RATE as i32),
             noise: noise_rms.clamp(8.0, 400.0),
+            sustained_speech_floor: None,
             wait_frames: wait_seconds * BLOCKS_PER_SECOND,
             frames: 0,
             earliest_end: 0,
@@ -330,6 +347,10 @@ impl Endpoint {
     pub fn after_cue(&mut self, buffered_frames: usize) {
         self.wait_frames += buffered_frames;
         self.earliest_end = buffered_frames + 75;
+    }
+    pub fn prefer_near_speech(mut self, floor: Option<f64>) -> Self {
+        self.sustained_speech_floor = floor;
+        self
     }
     // The barge-in classifier has already qualified this onset. Do not require
     // a second voiced run, nor discard the beginning of a very short command.
@@ -387,22 +408,28 @@ impl Endpoint {
                     .sum::<f64>();
                 correlation.abs() > 0.16 * rms * rms * (BLOCK - lag) as f64
             });
-        let voiced =
-            probability >= (if self.started { 0.45 } else { 0.65 }) && rms >= floor && structured;
+        let voiced = probability >= (if self.started { 0.45 } else { 0.65 })
+            && rms >= floor
+            && structured
+            && self.sustained_speech_floor.is_none_or(|near| rms >= near);
         // Noise can change after speech began. Learn only from non-speech,
         // never from a voiced word, and keep the floor from disqualifying a
         // quieter utterance solely because pre-wake noise was loud.
         if !voiced && (probability < 0.35 || !structured) {
             self.noise += (rms.clamp(8.0, 1200.0) - self.noise) * 0.04;
         }
+        self.voiced_run = if voiced { self.voiced_run + 1 } else { 0 };
         if !self.started {
-            self.voiced_run = if voiced { self.voiced_run + 1 } else { 0 };
             if self.lead.len() == BLOCK * ENDPOINT_LEAD_FRAMES {
                 self.lead.drain(..BLOCK);
             }
             self.lead.extend(samples);
             if self.voiced_run >= ENDPOINT_ONSET_FRAMES {
                 self.started = true;
+                if self.sustained_speech_floor.is_some() {
+                    let retain = BLOCK * (6 + ENDPOINT_ONSET_FRAMES);
+                    self.lead.drain(..self.lead.len().saturating_sub(retain));
+                }
                 self.audio.extend(self.lead.drain(..));
             } else if self.frames >= self.wait_frames
                 // A candidate starting within the wait may confirm after the
@@ -413,10 +440,24 @@ impl Endpoint {
             }
         } else {
             self.audio.extend_from_slice(samples);
-            self.trailing = if voiced { 0 } else { self.trailing + 1 };
-            if (self.trailing >= ENDPOINT_SILENCE_FRAMES && self.frames >= self.earliest_end)
-                || self.audio.len() >= RATE * 30
-            {
+            // A single loud background syllable must not reset the whole
+            // hangover in the measured sustained-speech case.
+            let near_voice =
+                voiced && (self.sustained_speech_floor.is_none() || self.voiced_run >= 2);
+            self.trailing = if near_voice { 0 } else { self.trailing + 1 };
+            let ended = self.trailing >= ENDPOINT_SILENCE_FRAMES
+                && self.frames >= self.earliest_end
+                && !voiced;
+            if ended || self.audio.len() >= RATE * 30 {
+                if ended && self.sustained_speech_floor.is_some() {
+                    // Keep 240 ms of post-roll for quieter consonants, without
+                    // transcribing the room for the rest of the hangover.
+                    self.audio.truncate(
+                        self.audio
+                            .len()
+                            .saturating_sub(BLOCK * self.trailing.saturating_sub(12)),
+                    );
+                }
                 return Capture::Complete(std::mem::take(&mut self.audio));
             }
         }
@@ -736,6 +777,124 @@ mod tests {
 
     fn alternate(level: i16) -> [i16; BLOCK] {
         std::array::from_fn(|i| if i % 2 == 0 { level } else { -level })
+    }
+
+    #[test]
+    fn classroom_endpoint_selects_louder_request_over_continuous_voices() {
+        let room = |frame: usize| -> [i16; BLOCK] {
+            std::array::from_fn(|index| {
+                let t = (frame * BLOCK + index) as f64 / RATE as f64;
+                let a = (t * 180. * std::f64::consts::TAU).sin() * (280. + 80. * (t * 7.).sin());
+                let b = (t * 235. * std::f64::consts::TAU).sin() * (240. + 90. * (t * 11.).sin());
+                (a + b) as i16
+            })
+        };
+        let mut ambient = Background::default();
+        for frame in 0..75 {
+            ambient.push(&room(frame));
+        }
+        let floor = ambient
+            .sustained_speech_floor()
+            .expect("persistent speech floor");
+        let mut endpoint = Endpoint::new(ambient.noise(), 6).prefer_near_speech(Some(floor));
+        // Exercise onset and endpoint with explicit speech confidence for
+        // both signals. Speech VAD alone would record the entire room.
+        for frame in 75..125 {
+            assert!(matches!(
+                endpoint.push_classified(&room(frame), 0.95),
+                Capture::More
+            ));
+        }
+        assert!(!endpoint.started);
+        let spoken: Vec<_> = (125..156)
+            .map(|frame| {
+                let mut block = room(frame);
+                for (sample, loud) in block.iter_mut().zip(alternate(1500)) {
+                    *sample += loud;
+                }
+                assert!(matches!(
+                    endpoint.push_classified(&block, 0.95),
+                    Capture::More
+                ));
+                block
+            })
+            .flatten()
+            .collect();
+        assert!(endpoint.started);
+        for frame in 156..156 + ENDPOINT_SILENCE_FRAMES - 1 {
+            assert!(matches!(
+                endpoint.push_classified(&room(frame), 0.95),
+                Capture::More
+            ));
+        }
+        let Capture::Complete(captured) = endpoint.push_classified(&room(225), 0.95) else {
+            panic!("the room kept the owner's request open");
+        };
+        assert!(captured
+            .windows(spoken.len())
+            .any(|window| window == spoken));
+        assert_eq!(captured.len(), spoken.len() + BLOCK * (6 + 12));
+    }
+
+    #[test]
+    #[ignore = "requires mixed classroom speech fixtures (AEGIS_CLASSROOM_PCM_DIR)"]
+    fn replay_classroom_voices_with_the_real_endpoint_vad() {
+        // 16 kHz mono PCM16LE, two background speakers and one separate
+        // close-mic command. The backgrounds stay active throughout the test.
+        let dir = std::path::PathBuf::from(std::env::var("AEGIS_CLASSROOM_PCM_DIR").unwrap());
+        let load = |name| {
+            std::fs::read(dir.join(name))
+                .unwrap()
+                .chunks_exact(2)
+                .map(|bytes| i16::from_le_bytes(bytes.try_into().unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let left = load("background-1.pcm");
+        let right = load("background-2.pcm");
+        let owner = load("command.pcm");
+        let owner_blocks: Vec<_> = owner.chunks_exact(BLOCK).collect();
+        let first = owner_blocks
+            .iter()
+            .position(|block| power(block).sqrt() > 250.)
+            .unwrap();
+        let last = owner_blocks
+            .iter()
+            .rposition(|block| power(block).sqrt() > 250.)
+            .unwrap();
+        let owner = &owner_blocks[first..=last];
+        let mix = |frame: usize| -> [i16; BLOCK] {
+            let samples = frame.checked_sub(125).and_then(|index| owner.get(index));
+            std::array::from_fn(|index| {
+                let t = frame * BLOCK + index;
+                let mixed = f64::from(left[t % left.len()]) * 0.16
+                    + f64::from(right[t % right.len()]) * 0.16
+                    + samples.map_or(0., |sample| f64::from(sample[index]));
+                mixed.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+            })
+        };
+        let mut ambient = Background::default();
+        for frame in 0..75 {
+            ambient.push(&mix(frame));
+        }
+        let floor = ambient
+            .sustained_speech_floor()
+            .expect("fixtures have persistent background");
+        let mut endpoint = Endpoint::new(ambient.noise(), 6).prefer_near_speech(Some(floor));
+        for frame in 75..125 + owner.len() {
+            assert!(
+                matches!(endpoint.push(&mix(frame)), Capture::More),
+                "frame {frame}"
+            );
+        }
+        assert!(endpoint.started);
+        let ending = 125 + owner.len();
+        for frame in ending..ending + ENDPOINT_SILENCE_FRAMES + 12 {
+            if let Capture::Complete(captured) = endpoint.push(&mix(frame)) {
+                assert!(captured.len() >= owner.len() * BLOCK);
+                return;
+            }
+        }
+        panic!("the background prevented the mixed command from ending");
     }
 
     #[test]
