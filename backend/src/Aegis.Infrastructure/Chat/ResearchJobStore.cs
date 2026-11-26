@@ -13,7 +13,7 @@ namespace Aegis.Infrastructure.Chat;
 public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock)
 {
     public const int MaximumRequestLength = 12_000;
-    internal const int MaximumSources = 25;
+    internal const int MaximumSources = 128;
     internal const int MaximumSourceUrlLength = 2_048;
     private const int MaximumRecentJobs = 20;
     private static readonly TimeSpan JobTimeout = TimeSpan.FromMinutes(3);

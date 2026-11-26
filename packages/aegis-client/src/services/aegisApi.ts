@@ -16,6 +16,7 @@ import type {
 } from '../types/chat';
 
 import { clientEnvironment } from './clientEnvironment';
+import { parseWebResearchSourceCounts } from './streamTextPresentation';
 
 function getApiBaseUrl(): string {
   return clientEnvironment().apiBaseUrl;
@@ -74,7 +75,7 @@ export async function sendMessageStream(
       Accept: 'application/x-ndjson',
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, includeWebResearchSources: true }),
     signal
   });
 
@@ -115,6 +116,7 @@ export async function sendMessageStream(
       titleSource?: string | null;
       memoryActivity?: MemoryActivitySnapshot | null;
       webResearch?: WebResearch | null;
+      sources?: unknown;
     };
 
     switch (event.type) {
@@ -139,6 +141,11 @@ export async function sendMessageStream(
           });
         }
         break;
+      case 'web_research_sources': {
+        const sources = parseWebResearchSourceCounts(event.sources);
+        if (event.turnId && sources.length) handlers.onWebResearchSources?.(event.turnId, sources);
+        break;
+      }
       case 'done':
         if (event.turnId && event.conversationId && (event.assistantMessageId || event.messageId)) {
           receivedDone = true;

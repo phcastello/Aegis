@@ -18,11 +18,31 @@ Os eventos SSE reais `response.web_search_call.in_progress/searching/completed` 
 
 O campo `MetadataJson` já existente das mensagens guarda uma projeção `webResearch` das fontes observadas e das citações válidas, sem migration. A interface oferece citações clicáveis ao lado de afirmações quando os intervalos coincidem com o texto e uma lista recolhível de fontes da pesquisa. Somente a evidência do provedor permite identificar uma página como explicitamente aberta. O prompt orienta o modelo a atribuir as informações às fontes com as citações nativas, sem repetir listas de referências nem escrever URLs só para atribuição. Links ou listas de fontes podem ser incluídos quando o usuário pedir. Os trechos entre parênteses são omitidos na fala. O texto original e as citações nativas continuam visíveis no chat. URLs inválidas ou com credenciais não se tornam links clicáveis.
 
+## Pesquisa em segundo plano
+
+Use **Pesquisar em segundo plano** com um pedido no compositor. A Aegis salva o
+pedido na conversa e o servidor executa a pesquisa em uma fila persistente.
+Outros turnos e conversas continuam disponíveis, e o resultado, com fontes, entra
+na conversa original. É possível cancelar pelo controle da pesquisa. A execução é
+gerenciada pela Aegis, preservando a configuração de retenção já adotada no
+provedor. [Modo em segundo plano do provedor](https://developers.openai.com/api/docs/guides/background)
+
+Os apps mostram até três sites em círculos sobrepostos, em ordem de frequência nos
+resultados observados. Novos ícones entram na pilha conforme chegam fontes do
+provedor. Antes da primeira fonte aparece um indicador de busca. O favicon é
+solicitado pela aplicação no site da fonte, sem enviar o endereço da conversa no
+Referer. Se o site não fornecer o ícone, a inicial ocupa seu lugar. A animação é
+reduzida de acordo com a preferência do dispositivo. [Animações de lista no Vue](https://vuejs.org/guide/built-ins/transition-group.html)
+
+Na resposta, as citações mostram o site. Passar o mouse, usar foco de teclado ou
+acionar os detalhes pelo toque mostra uma prévia com a informação de fonte
+disponível. A página original pode ser aberta pela própria citação.
+
 ## Validação e etapas seguintes
 
 - Validar com testes unitários, integração sintética e CI os orçamentos, as fontes, as citações, os estados, o descarte de fala alheia, a sincronização e a apresentação no histórico.
 - Fazer o ensaio real autorizado na API e nos Nodes Android/Windows. Cobrir consulta trivial, fato atual simples, comparação de fontes e disponibilidade de produtos. Medir primeira fala/informação útil, custo e conclusão. Erros de permissão devem ser analisados nas configurações do projeto e da chave de API.
-- Implementar pesquisa em segundo plano e anúncios falados de trabalhos demorados, com progresso verificável e cancelamento. Este primeiro incremento ainda usa o loop conversacional existente para a busca e não introduz um trabalhador de pesquisa assíncrono.
+- Fazer ensaio de cancelamento, continuidade após fechar o cliente e retomada do acompanhamento ao reabrir a conversa.
 
 ## Referências primárias
 

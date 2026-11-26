@@ -19,6 +19,7 @@ const data = new Map([a, b].map((id, index) => [id, { id, title: index ? 'Beta' 
   createdAt: date, updatedAt: date, messages: [message(uuid(10 + index), id, `Histórico ${index ? 'Beta' : 'Alfa'}.`)] }]));
 const summary = row => ({ ...row, messages: undefined, messageCount: row.messages.length, lastMessagePreview: row.messages.at(-1)?.content });
 const reads = [];
+const researchJobs = new Map();
 const typedText = `Fluxo digitado em caracteres. ${'Cada letra de um único lote deve aparecer progressivamente, incluindo a música 🎵 e a acentuação. '.repeat(8).trim()}`;
 let typedRequests = 0;
 const json = (res, value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -34,7 +35,8 @@ const vite = await createServer({
   server: { host: '127.0.0.1', port, strictPort: false },
   plugins: [{ name: 'desktop-voice-stream-fixture', configureServer(server) {
     server.middlewares.use((req, res, next) => {
-      const path = new URL(req.url, 'http://localhost').pathname;
+      const url = new URL(req.url, 'http://localhost');
+      const path = url.pathname;
       if (!path.startsWith('/api/')) return next();
       if (path === '/api/health') return json(res, { status: 'ok' });
       if (path === '/api/voice/status') return json(res, { enabled: false, available: false });
@@ -42,6 +44,30 @@ const vite = await createServer({
       if (path === '/api/email/status') return json(res, { isConnected: false });
       if (path === '/api/chat/proactive-activity') return json(res, []);
       if (path === '/api/chat/conversations') return json(res, { items: [...data.values()].map(summary), hasMore: false });
+      if (path === '/api/chat/research-jobs') {
+        if (req.method === 'POST') {
+          let raw = '';
+          req.on('data', chunk => { raw += chunk; });
+          req.on('end', () => {
+            const body = JSON.parse(raw), row = data.get(body.conversationId);
+            assert.ok(row, 'background job targets known conversation');
+            const now = new Date().toISOString(), userMessageId = body.jobId;
+            const job = { id: body.jobId, conversationId: row.id, userMessageId, state: 'running',
+              phase: 'searching', createdAt: now, updatedAt: now, sources: [] };
+            row.messages.push(message(userMessageId, row.id, body.content, 'user'));
+            researchJobs.set(job.id, job);
+            return json(res, job, 202);
+          });
+          return;
+        }
+        return json(res, [...researchJobs.values()].filter(job => job.conversationId === url.searchParams.get('conversationId')));
+      }
+      if (path.startsWith('/api/chat/research-jobs/') && req.method === 'DELETE') {
+        const job = researchJobs.get(path.split('/').at(-1));
+        if (!job) return json(res, {}, 404);
+        job.state = 'cancelled'; job.updatedAt = new Date().toISOString();
+        return json(res, job);
+      }
       if (path === '/api/chat/messages/stream') {
         let raw = '';
         req.on('data', chunk => { raw += chunk; });
@@ -116,6 +142,7 @@ try {
   const marker = value => assistant.filter({ hasText: value });
   const currentText = async prefix => (await marker(prefix).first().textContent())?.trim() ?? '';
   const exact = text => page.locator('.messages').getByText(text, { exact: true });
+  const researchActivity = label => page.locator('.web-research-activity').filter({ visible: true }).and(page.getByRole('status', { name: label, exact: true }));
   const event = (type, turnId, conversationId = null, assistantMessageId = null, extra = {}) => ({ type, turnId, conversationId, assistantMessageId, ...extra });
   const segment = (turn, conversation, id, sequence, content) => event('final_segment', turn, conversation, id, { sequence, segmentId: uuid(100 + sequence + Number(turn.slice(-3))), content });
   const accepted = (turn, conversation) => emit(stream, event('conversation', turn, conversation));
@@ -166,25 +193,55 @@ try {
   const researchMessage = 'Pesquisando fontes na web…';
   await researchStatus(researchTurn, a, 'started', 'STATUS ANTES DO ACEITE');
   await page.waitForTimeout(100);
-  assert.equal(await exact('STATUS ANTES DO ACEITE').count(), 0);
+  assert.equal(await researchActivity('STATUS ANTES DO ACEITE').count(), 0);
   const beforeResearch = await assistant.count();
   append(a, uuid(82), 'Pesquisar na web.', 'user');
   await accepted(researchTurn, a);
   await researchStatus(researchTurn, a, 'started', researchMessage);
-  await exact(researchMessage).waitFor();
+  await researchActivity(researchMessage).waitFor();
+  assert.equal(await exact(researchMessage).count(), 0, 'progress uses icons instead of visible narration');
+  await emit(stream, event('web_research_sources', researchTurn, a, null, { sources: [
+    { url: 'https://atlas.test/a', count: 2 }, { url: 'https://www.norte.test/a', count: 3 },
+    { url: 'https://norte.test/b', count: 1 }, { url: 'https://trilha.test/a', count: 1 },
+    { url: 'https://leste.test/a', count: 3 }
+  ] }));
+  const disks = researchActivity(researchMessage).locator('[data-site]');
+  await disks.nth(2).waitFor();
+  assert.deepEqual(await disks.evaluateAll(nodes => nodes.map(node => node.dataset.site)), ['norte.test', 'leste.test', 'atlas.test']);
   assert.equal(await assistant.count(), beforeResearch);
   await select('Beta'); await exact('Histórico Beta.').waitFor();
-  assert.equal(await exact(researchMessage).count(), 0);
-  await select('Alfa'); await exact(researchMessage).waitFor();
+  assert.equal(await researchActivity(researchMessage).count(), 0);
+  await select('Alfa'); await researchActivity(researchMessage).waitFor();
   append(a, researchId, researchText);
   data.get(a).messages.at(-1).webResearch = { sources: [{ url: 'https://example.test/', title: 'Fonte persistida', kind: 'consulted' }], citations: [] };
   await emit(stream, event('done', researchTurn, a, researchId)); await sync(a);
   await exact(researchText).waitFor();
   await page.locator('.web-research-list summary').filter({hasText:'Fontes da pesquisa'}).waitFor();
-  assert.equal(await exact(researchMessage).count(), 0);
+  await researchActivity(researchMessage).waitFor({ state: 'hidden' });
   await researchStatus(researchTurn, a, 'started', 'STATUS DEPOIS DO TÉRMINO');
   await page.waitForTimeout(100);
-  assert.equal(await exact('STATUS DEPOIS DO TÉRMINO').count(), 0);
+  assert.equal(await researchActivity('STATUS DEPOIS DO TÉRMINO').count(), 0);
+
+  const composer = page.getByRole('textbox', { name: 'Mensagem', exact: true });
+  await composer.fill('Compare as fontes em segundo plano.');
+  await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).click();
+  await exact('Compare as fontes em segundo plano.').waitFor();
+  await researchActivity('Pesquisa em segundo plano').waitFor();
+  assert.equal(await composer.isEnabled(), true, 'separate research leaves the composer available');
+  await select('Beta');
+  assert.equal(await researchActivity('Pesquisa em segundo plano').count(), 0);
+  const firstJob = [...researchJobs.values()][0];
+  append(a, uuid(91), 'Resultado independente da conversa aberta.');
+  firstJob.state = 'completed'; firstJob.resultMessageId = uuid(91); firstJob.updatedAt = new Date().toISOString();
+  await sync(a);
+  assert.equal(await title(), 'Beta', 'research cannot reclaim navigation');
+  await select('Alfa'); await exact('Resultado independente da conversa aberta.').waitFor();
+  await composer.fill('Cancele esta pesquisa.');
+  await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).click();
+  await researchActivity('Pesquisa em segundo plano').waitFor();
+  await page.locator('.research-job__cancel').click();
+  await exact('Pesquisa cancelada.').waitFor();
+  assert.equal([...researchJobs.values()].at(-1).state, 'cancelled');
 
   // Two committed segments arrive in a single IPC burst. Model completion is
   // independent of the speaking state, and must not snap the pending text.

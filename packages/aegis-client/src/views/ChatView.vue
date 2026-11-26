@@ -4,6 +4,10 @@ import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import RuriMascot from '../components/RuriMascot.vue';
 import ChatMessage from '../components/ChatMessage.vue';
+import BackgroundResearchStatus from '../components/BackgroundResearchStatus.vue';
+import WebResearchActivity from '../components/WebResearchActivity.vue';
+import { mergeResearchSites, topResearchSites } from '../services/researchSites';
+import { cancelResearchJob, isResearchPending, listResearchJobs, startResearchJob, type ResearchJob } from '../services/backgroundResearch';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import ConversationInfo from '../components/ConversationInfo.vue';
 import ConversationMenu from '../components/ConversationMenu.vue';
@@ -67,11 +71,14 @@ type ConversationContext = {
   scrollTop: number | null;
   toolMessage: string | null;
   toolState: 'started' | 'completed' | 'failed' | null;
+  researchActive: boolean;
+  researchSites: Map<string, number>;
   retry: { turnId: string; content: string; conversationId: string | null } | null;
 };
 function createConversationContext(id: string | null = null): ConversationContext {
   return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
-    loaded: false, remoteUpdatedAt: null, remoteMessageCount: null, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null });
+    loaded: false, remoteUpdatedAt: null, remoteMessageCount: null, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null,
+    researchActive: false, researchSites: new Map<string, number>() });
 }
 const contexts = new Map<string, ConversationContext>();
 const deletedConversations = new Set<string>();
@@ -90,6 +97,18 @@ const errorMessage = computed({ get: () => selected.value.error, set: value => {
 const toolStatusMessage = computed(() => selected.value.toolMessage);
 const toolStatusState = computed(() => selected.value.toolState);
 const toolStatusTimers = new Map<ConversationContext, number>();
+const selectedResearchSites = computed(() => selected.value.researchActive ? topResearchSites(selected.value.researchSites) : null);
+const startingResearch = shallowReactive(new Set<ConversationContext>());
+const cancellingResearch = shallowReactive(new Set<string>());
+const researchByConversation = shallowReactive(new Map<string, ResearchJob[]>());
+const researchAttempts = new WeakMap<ConversationContext, { jobId: string; conversationId: string | null; content: string }>();
+const pendingResearchReads = new Map<string, AbortController>();
+const selectedJobByMessage = computed(() => {
+  const jobs = conversationId.value ? researchByConversation.get(conversationId.value) ?? [] : [];
+  return new Map(jobs.filter(job => !job.resultMessageId || !messages.value.some(message =>
+    (message.serverId ?? message.id) === job.resultMessageId)).map(job => [job.userMessageId, job]));
+});
+let researchTimer: ReturnType<typeof setTimeout> | undefined;
 const emailConnectionState = ref<'idle' | 'pending' | 'connected' | 'failed'>('idle');
 const emailConnectionMessage = ref<string | null>(null);
 let emailConnectionAbortController: AbortController | null = null;
@@ -267,7 +286,7 @@ function proactiveForeground(): void { void syncProactiveMessages(); void markVi
 watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
 const deletingSelectedConversation = computed(() => isDeletingConversation.value && deleteTarget.value?.id === conversationId.value);
-const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
+const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending' && !startingResearch.has(selected.value));
 const showErrorMessage = computed(() => !!errorMessage.value && ![
   emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
   transcription.errorMessage.value,
@@ -279,6 +298,7 @@ const canStartRecording = computed(() =>
   !selectedHasActiveTurn.value &&
   !isRestoring.value &&
   !deletingSelectedConversation.value &&
+  !startingResearch.has(selected.value) &&
   transcription.available.value &&
   (transcription.state.value === 'idle' || transcription.state.value === 'error'));
 const conversationLabel = computed(() => {
@@ -299,14 +319,137 @@ function clearToolStatus(owner = selected.value): void {
   toolStatusTimers.delete(owner);
   owner.toolState = null;
   owner.toolMessage = null;
+  owner.researchActive = false;
+  owner.researchSites = new Map();
 }
 
-function showToolStatus(message: string, state: 'started' | 'completed' | 'failed', owner = selected.value): void {
+function showToolStatus(
+  message: string, state: 'started' | 'completed' | 'failed', owner = selected.value, isResearch = false
+): void {
+  const sites = owner.researchSites;
   clearToolStatus(owner);
   owner.toolState = state;
   owner.toolMessage = message;
+  owner.researchActive = isResearch;
+  owner.researchSites = sites;
   if (state !== 'started') {
-    toolStatusTimers.set(owner, window.setTimeout(() => clearToolStatus(owner), state === 'completed' ? 1400 : 2400));
+    toolStatusTimers.set(owner, window.setTimeout(() => {
+      const observed = owner.researchSites;
+      clearToolStatus(owner);
+      owner.researchSites = observed;
+    }, state === 'completed' ? 1500 : 2400));
+  }
+}
+
+function rememberResearchJobs(id: string, snapshots: readonly ResearchJob[]): void {
+  if (disposed || deletedConversations.has(id)) return;
+  const previous = researchByConversation.get(id) ?? [];
+  if (!previous.length && !snapshots.length) return;
+  const jobs = new Map(previous.map(job => [job.id, job]));
+  let completed = false;
+  for (const snapshot of snapshots) {
+    if (!snapshot || snapshot.conversationId !== id) continue;
+    const prior = jobs.get(snapshot.id);
+    if (prior && (Date.parse(prior.updatedAt) > Date.parse(snapshot.updatedAt) ||
+      !isResearchPending(prior) && isResearchPending(snapshot))) continue;
+    jobs.set(snapshot.id, snapshot);
+    const owner = contexts.get(id);
+    if (snapshot.state === 'completed' && prior?.state !== 'completed' && snapshot.resultMessageId &&
+      owner && !owner.messages.some(message => (message.serverId ?? message.id) === snapshot.resultMessageId)) completed = true;
+  }
+  const ordered = [...jobs.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  researchByConversation.set(id, ordered.slice(0, 20));
+  if (completed) conversationChanged(id, false);
+  scheduleResearchRefresh();
+}
+
+async function refreshResearchJobs(id: string): Promise<void> {
+  if (disposed || deletedConversations.has(id) || pendingResearchReads.has(id) ||
+    document.visibilityState !== 'visible' || !navigator.onLine) return;
+  const controller = new AbortController();
+  pendingResearchReads.set(id, controller);
+  try {
+    const jobs = await listResearchJobs(id, controller.signal);
+    if (!controller.signal.aborted && Array.isArray(jobs)) rememberResearchJobs(id, jobs);
+  } catch { /* Keep the most recent status on disconnect and retry while jobs are active. */ }
+  finally {
+    pendingResearchReads.delete(id);
+    scheduleResearchRefresh();
+  }
+}
+
+function scheduleResearchRefresh(): void {
+  clearTimeout(researchTimer);
+  if (disposed || document.visibilityState !== 'visible' || !navigator.onLine) return;
+  const running = [...researchByConversation].filter(([, jobs]) => jobs.some(isResearchPending));
+  if (!running.length) return;
+  researchTimer = setTimeout(async () => {
+    await Promise.allSettled(running.map(([id]) => refreshResearchJobs(id)));
+    scheduleResearchRefresh();
+  }, 2300);
+}
+
+function researchForeground(): void {
+  if (conversationId.value) void refreshResearchJobs(conversationId.value);
+  scheduleResearchRefresh();
+}
+
+watch(conversationId, researchForeground);
+
+async function beginBackgroundResearch(): Promise<void> {
+  if (!canSend.value) return;
+  const owner = selected.value;
+  const content = owner.draft.trim();
+  const previous = researchAttempts.get(owner);
+  const attempt = previous?.content === content ? previous : { jobId: crypto.randomUUID(), conversationId: owner.id, content };
+  researchAttempts.set(owner, attempt);
+  startingResearch.add(owner);
+  owner.error = null;
+  try {
+    const job = await startResearchJob(attempt.jobId, attempt.conversationId, content);
+    if (disposed || deletedConversations.has(job.conversationId)) return;
+    if (job.id !== attempt.jobId || owner.id && owner.id !== job.conversationId) throw new Error('Invalid research acknowledgement.');
+    researchAttempts.delete(owner);
+    owner.revision++;
+    const id = job.conversationId;
+    owner.id = id;
+    owner.createdAt ??= job.createdAt;
+    owner.loaded = true;
+    if (newConversation === owner) newConversation = createConversationContext();
+    contexts.set(id, owner);
+    if (owner.draft.trim() === content) owner.draft = '';
+    if (!owner.messages.some(message => (message.serverId ?? message.id) === job.userMessageId))
+      owner.messages.push({ id: job.userMessageId, serverId: job.userMessageId, role: 'user',
+        conversationId: id, content, createdAt: job.createdAt });
+    rememberResearchJobs(id, [job]);
+    conversationChanged(id, false);
+    if (selected.value === owner) {
+      localStorage.setItem(STORAGE_KEY, id);
+      resizeComposer();
+      scrollToLatest();
+    }
+  } catch (error) {
+    if (disposed) return;
+    if (error instanceof AegisApiError && error.status >= 400 && error.status < 500)
+      researchAttempts.delete(owner);
+    owner.error = error instanceof AegisApiError && error.status === 409
+      ? 'A pesquisa em segundo plano está ocupada. Tente novamente em instantes.'
+      : 'Não foi possível iniciar a pesquisa em segundo plano.';
+  } finally {
+    startingResearch.delete(owner);
+  }
+}
+
+async function stopBackgroundResearch(job: ResearchJob): Promise<void> {
+  if (cancellingResearch.has(job.id)) return;
+  cancellingResearch.add(job.id);
+  try {
+    rememberResearchJobs(job.conversationId, [await cancelResearchJob(job.id)]);
+  } catch {
+    const owner = contexts.get(job.conversationId);
+    if (owner) owner.error = 'Não foi possível cancelar a pesquisa. Tente novamente.';
+  } finally {
+    cancellingResearch.delete(job.id);
   }
 }
 
@@ -624,10 +767,12 @@ function flushPresentationOnHidden(): void {
 // prevents a full snapshot from jumping ahead of this message's presentation.
 type NativeVoiceTurn = {
   protocol: NativeVoiceSegments; owner: ConversationContext; presentation?: TextPresentation; generationDone: boolean;
+  researchSites: Map<string, number>;
 };
 const nativeVoiceTurns = new Map<string, NativeVoiceTurn>();
-const nativeResearch = ref<{ turnId: string; conversationId: string; status: NativeResearchStatus } | null>(null);
-const selectedNativeResearchStatus = computed(() => nativeResearch.value?.conversationId === selected.value.id ? nativeResearch.value?.status : null);
+const nativeResearch = ref<{ turnId: string; conversationId: string; status: NativeResearchStatus; sites: ReturnType<typeof topResearchSites> } | null>(null);
+const selectedNativeResearch = computed(() => nativeResearch.value?.conversationId === selected.value.id ? nativeResearch.value : null);
+let nativeResearchTimer: ReturnType<typeof setTimeout> | undefined;
 const closedNativeVoiceTurns = new Set<string>();
 function rememberClosedNativeTurn(id: string): void {
   closedNativeVoiceTurns.add(id);
@@ -635,7 +780,16 @@ function rememberClosedNativeTurn(id: string): void {
 }
 function finishNativeVoiceTurn(turnId: string, interrupted = false, reconcile = true): void {
   const turn = nativeVoiceTurns.get(turnId);
-  if (nativeResearch.value?.turnId === turnId) nativeResearch.value = null;
+  if (nativeResearch.value?.turnId === turnId) {
+    clearTimeout(nativeResearchTimer);
+    if (!interrupted && turn?.generationDone && nativeResearch.value.sites.length &&
+      nativeResearch.value.status.state !== 'failed') {
+      nativeResearch.value = { ...nativeResearch.value, status: { category: 'web_search', state: 'completed', message: 'Pesquisa concluída.' } };
+      nativeResearchTimer = setTimeout(() => {
+        if (nativeResearch.value?.turnId === turnId) nativeResearch.value = null;
+      }, 1500);
+    } else nativeResearch.value = null;
+  }
   if (!turn) { rememberClosedNativeTurn(turnId); return; }
   nativeVoiceTurns.delete(turnId); rememberClosedNativeTurn(turnId);
   if (turn.presentation) {
@@ -663,21 +817,27 @@ function acceptNativeVoiceStream(payload: unknown): void {
     for (const id of [...nativeVoiceTurns.keys()]) finishNativeVoiceTurn(id, true);
     const owner = contexts.get(conversation) ?? createConversationContext(conversation);
     if (!contexts.has(conversation)) contexts.set(conversation, owner);
-    turn = { owner, protocol: new NativeVoiceSegments(event.turnId, conversation), generationDone: false };
+    turn = { owner, protocol: new NativeVoiceSegments(event.turnId, conversation), generationDone: false, researchSites: new Map() };
     nativeVoiceTurns.set(event.turnId, turn);
     conversationChanged(conversation, false);
   }
   if (!turn) {
-    if (event.type === 'tool_status') return; // Status cannot establish a conversation or turn.
+    if (event.type === 'tool_status' || event.type === 'web_research_sources') return; // Progress cannot establish a turn.
     if (conversation) conversationChanged(conversation, false);
     if (event.type !== 'conversation' && event.type !== 'final_segment') rememberClosedNativeTurn(event.turnId);
     return;
   }
   if (!turn.protocol.matches(event)) return;
   if (event.type === 'conversation') return;
+  if (event.type === 'web_research_sources') {
+    turn.researchSites = mergeResearchSites(turn.researchSites, event.sources ?? []);
+    if (nativeResearch.value?.turnId === event.turnId)
+      nativeResearch.value = { ...nativeResearch.value, sites: topResearchSites(turn.researchSites) };
+    return;
+  }
   if (event.type === 'tool_status') {
     if (event.toolStatus && conversation) {
-      nativeResearch.value = { turnId: event.turnId, conversationId: conversation, status: event.toolStatus };
+      nativeResearch.value = { turnId: event.turnId, conversationId: conversation, status: event.toolStatus, sites: topResearchSites(turn.researchSites) };
       if (selected.value === turn.owner) scrollToLatestDuringStream();
     }
     return;
@@ -762,6 +922,8 @@ function mergeConversationSummary(summary: ConversationSummary): void {
 }
 
 function applyRemoteConversationDeletion(id: string): void {
+  researchByConversation.delete(id);
+  pendingResearchReads.get(id)?.abort();
   for (const [turnId, turn] of nativeVoiceTurns) if (turn.protocol.conversationId === id) finishNativeVoiceTurn(turnId, true, false);
   deletedConversations.add(id);
   summaryRevisions.set(id, ++summaryRevision);
@@ -827,6 +989,7 @@ function resetConversationChanges(): void {
 }
 function conversationChanged(id: string, awaitTitle = true): void {
   if (deletedConversations.has(id)) return;
+  if (conversationId.value === id || researchByConversation.has(id)) void refreshResearchJobs(id);
   conversationSync.invalidate(id);
   clearTimeout(conversationSyncTimer);
   conversationSyncTimer = setTimeout(flushConversationChanges, 120);
@@ -1180,7 +1343,12 @@ async function handleSubmit(): Promise<void> {
       onToolStatus: (eventTurnId, status) => {
         if (!owns() || eventTurnId !== turnId) return;
         turn.status = 'thinking';
-        showToolStatus(status.message, status.state, owner);
+        showToolStatus(status.message, status.state, owner, status.category === 'web_search');
+      },
+      onWebResearchSources: (eventTurnId, sources) => {
+        if (!owns() || eventTurnId !== turnId) return;
+        owner.researchSites = mergeResearchSites(owner.researchSites, sources);
+        if (!owner.toolMessage) showToolStatus('Pesquisando na web…', 'started', owner, true);
       },
       onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity, webResearch }) => {
         if (!owns() || completedTurnId !== turnId) return;
@@ -1193,7 +1361,9 @@ async function handleSubmit(): Promise<void> {
         completePresentation(presentation);
         activeTurns.delete(turnId);
         if (owner.toolState === 'completed' || owner.toolState === 'failed') {
-          showToolStatus(owner.toolMessage ?? '', owner.toolState, owner);
+          showToolStatus(owner.toolMessage ?? '', owner.toolState, owner, owner.researchActive);
+        } else if (owner.researchActive && owner.researchSites.size) {
+          showToolStatus('Pesquisa concluída.', 'completed', owner, true);
         } else clearToolStatus(owner);
         refreshHistoryAfterResponse(id);
         if (selected.value === owner) {
@@ -1400,6 +1570,8 @@ async function confirmDeleteConversation(): Promise<void> {
     if (turn) await stopActiveTurn('conversation_deleted', turn);
     await deleteConversation(targetId);
     deletedConversations.add(targetId);
+    researchByConversation.delete(targetId);
+    pendingResearchReads.get(targetId)?.abort();
     contexts.delete(targetId);
     conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
   if (conversationId.value === targetId) {
@@ -1499,6 +1671,10 @@ onMounted(() => {
   window.addEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.addEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
   window.addEventListener('aegis-app-visibility', proactiveForeground);
   document.addEventListener('visibilitychange', proactiveForeground); window.addEventListener('focus', proactiveForeground); window.addEventListener('online', proactiveForeground);
+  document.addEventListener('visibilitychange', researchForeground);
+  window.addEventListener('aegis-app-visibility', researchForeground);
+  window.addEventListener('online', researchForeground);
+  researchForeground();
   void syncProactiveMessages(); scheduleProactiveSync();
   stopObservingGoogle = observeGoogleConnection({
     started: () => {
@@ -1559,6 +1735,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('aegis-chat-visible', proactiveVisibilityChanged); window.removeEventListener('aegis-navigation-layer', proactiveVisibilityChanged);
   window.removeEventListener('aegis-app-visibility', proactiveForeground);
   document.removeEventListener('visibilitychange', proactiveForeground); window.removeEventListener('focus', proactiveForeground); window.removeEventListener('online', proactiveForeground);
+  document.removeEventListener('visibilitychange', researchForeground);
+  window.removeEventListener('aegis-app-visibility', researchForeground);
+  window.removeEventListener('online', researchForeground);
+  clearTimeout(researchTimer);
+  clearTimeout(nativeResearchTimer);
+  for (const controller of pendingResearchReads.values()) controller.abort();
   cancelMemoryActivityPolling();
   clearToolStatus();
   emailConnectionAbortController?.abort();
@@ -1665,20 +1847,21 @@ onBeforeUnmount(() => {
               ? (toolStatusMessage ?? (message.pending && selectedHasActiveTurn && isLoading && (turnStatus === 'thinking' || !message.content.trim()) ? 'Pensando…' : null))
               : null"
             :activity-state="toolStatusState === 'completed' ? 'completed' : toolStatusState === 'failed' ? 'failed' : 'working'"
+            :research-sites="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id ? selectedResearchSites : null"
             @feedback="openFeedback"
             @replay="replayMessage"
             @stop-playback="stopPlayback"
           />
+          <BackgroundResearchStatus :job="selectedJobByMessage.get(message.serverId ?? message.id)"
+            :cancelling="cancellingResearch" @cancel="stopBackgroundResearch" />
           </template>
         </template>
 
-        <div v-if="selectedNativeResearchStatus" class="message-row message-row--assistant">
+        <div v-if="selectedNativeResearch" class="message-row message-row--assistant">
           <div class="message-stack">
-            <div class="assistant-activity"
-              :class="`assistant-activity--${selectedNativeResearchStatus.state === 'started' ? 'working' : selectedNativeResearchStatus.state}`"
-              role="status" :aria-label="selectedNativeResearchStatus.message">
-              <span class="assistant-activity__text" :data-text="selectedNativeResearchStatus.message" aria-hidden="true">{{ selectedNativeResearchStatus.message }}</span>
-            </div>
+            <WebResearchActivity :sites="selectedNativeResearch.sites"
+              :state="selectedNativeResearch.status.state === 'started' ? 'working' : selectedNativeResearch.status.state"
+              :label="selectedNativeResearch.status.message" />
           </div>
         </div>
         <div class="messages-end"></div>
@@ -1726,7 +1909,14 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
-        <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        <div class="composer-guidance">
+          <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+          <button v-if="!transcription.isBusy.value && (draft.trim() || startingResearch.has(selected))" type="button"
+            class="composer-research" :disabled="!canSend" @click="beginBackgroundResearch">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m14.5 14.5 4 4M10.5 7.5v3l2 1"/></svg>
+            {{ startingResearch.has(selected) ? 'Iniciando pesquisa…' : 'Pesquisar em segundo plano' }}
+          </button>
+        </div>
         </template>
       </form>
       </section>

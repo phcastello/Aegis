@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify';
 import MarkdownIt from 'markdown-it';
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useId, watch } from 'vue';
 import { clientEnvironment, externalUrl, openClientLink } from '../services/clientEnvironment';
 import { isGoogleAuthorizationLink } from '../services/emailConnectionLinks';
-import { renderWebResearchMarkdown } from '../services/webResearchPresentation';
+import { renderWebResearchMarkdown, type ResearchLink } from '../services/webResearchPresentation';
 import type { WebResearch } from '../types/chat';
+import WebSourceIcon from './WebSourceIcon.vue';
 
 const props = defineProps<{
   content: string;
@@ -49,7 +50,142 @@ async function followLink(event: MouseEvent): Promise<void> {
 const linkError = ref<string | null>(null);
 
 const renderedResearch = computed(() => renderWebResearchMarkdown(markdown, props.content, props.webResearch));
-const renderedContent = computed(() => DOMPurify.sanitize(renderedResearch.value.html));
+const renderedContent = computed(() => DOMPurify.sanitize(renderedResearch.value.html, { ADD_ATTR: ['referrerpolicy', 'target'] }));
+
+type PreviewMode = 'hover' | 'focus' | 'pinned';
+const previewId = useId();
+const previewElement = ref<HTMLElement | null>(null);
+const citationPreview = shallowRef<{
+  group: HTMLElement; trigger: HTMLElement; source: ResearchLink; mode: PreviewMode;
+} | null>(null);
+const previewPosition = ref<{ left: string; top: string }>();
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+function keepCitationPreview(): void {
+  clearTimeout(closeTimer);
+}
+
+function closeCitationPreview(): void {
+  keepCitationPreview();
+  const preview = citationPreview.value;
+  preview?.trigger.removeAttribute('aria-describedby');
+  if (preview?.mode === 'pinned') preview.trigger.setAttribute('aria-expanded', 'false');
+  citationPreview.value = null;
+  previewPosition.value = undefined;
+}
+
+function showCitationPreview(group: HTMLElement, trigger: HTMLElement, mode: PreviewMode): void {
+  keepCitationPreview();
+  const current = citationPreview.value;
+  if (current?.group === group && (mode === 'hover' || mode === current.mode)) return;
+  const source = renderedResearch.value.inlineCitations[Number(group.dataset.citationIndex)];
+  if (!source) return;
+  closeCitationPreview();
+  trigger.setAttribute('aria-describedby', previewId);
+  if (mode === 'pinned') trigger.setAttribute('aria-expanded', 'true');
+  citationPreview.value = { group, trigger, source, mode };
+}
+
+function citationGroup(target: EventTarget | null): HTMLElement | null {
+  return target instanceof Element ? target.closest<HTMLElement>('.web-citation-group[data-citation-index]') : null;
+}
+
+function enterCitation(event: PointerEvent): void {
+  if (event.pointerType === 'touch') return;
+  const group = citationGroup(event.target);
+  const anchor = group?.querySelector<HTMLAnchorElement>('.web-citation');
+  if (group && anchor) showCitationPreview(group, anchor, 'hover');
+}
+
+function leaveCitation(event: PointerEvent): void {
+  const preview = citationPreview.value;
+  if (!preview || preview.mode !== 'hover' || event.pointerType === 'touch') return;
+  if (event.relatedTarget instanceof Node && (preview.group.contains(event.relatedTarget) ||
+    previewElement.value?.contains(event.relatedTarget))) return;
+  keepCitationPreview();
+  closeTimer = setTimeout(closeCitationPreview, 140);
+}
+
+function focusCitation(event: FocusEvent): void {
+  const group = citationGroup(event.target);
+  if (group && event.target instanceof HTMLAnchorElement && event.target.matches(':focus-visible'))
+    showCitationPreview(group, event.target, 'focus');
+}
+
+function blurCitation(event: FocusEvent): void {
+  const preview = citationPreview.value;
+  if (!preview || preview.mode === 'hover') return;
+  if (event.relatedTarget instanceof Node && preview.group.contains(event.relatedTarget)) return;
+  closeCitationPreview();
+}
+
+function clickMessage(event: MouseEvent): void {
+  const group = citationGroup(event.target);
+  const details = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.web-citation__details') : null;
+  if (group && details) {
+    if (citationPreview.value?.trigger === details) closeCitationPreview();
+    else showCitationPreview(group, details, 'pinned');
+    return;
+  }
+  if (group) closeCitationPreview();
+  void followLink(event);
+}
+
+function showCitationIcon(event: Event): void {
+  if (event.target instanceof HTMLImageElement && event.target.matches('.web-citation__favicon'))
+    event.target.parentElement?.classList.add('web-citation__icon--ready');
+}
+
+function positionCitationPreview(): void {
+  const preview = citationPreview.value;
+  const panel = previewElement.value;
+  if (!preview || !panel) return;
+  const anchor = preview.group.getBoundingClientRect();
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  const edge = 8;
+  const gap = 5;
+  if (anchor.bottom <= 0 || anchor.top >= window.innerHeight || !preview.group.isConnected) {
+    closeCitationPreview();
+    return;
+  }
+  const top = anchor.bottom + gap + height + edge <= window.innerHeight || anchor.top < height + gap + edge
+    ? anchor.bottom + gap : anchor.top - gap - height;
+  previewPosition.value = {
+    left: `${Math.max(edge, Math.min(anchor.left, window.innerWidth - width - edge))}px`,
+    top: `${Math.max(edge, Math.min(top, window.innerHeight - height - edge))}px`
+  };
+}
+
+function dismissCitationOutside(event: PointerEvent): void {
+  const preview = citationPreview.value;
+  if (preview && event.target instanceof Node && !preview.group.contains(event.target) &&
+    !previewElement.value?.contains(event.target)) closeCitationPreview();
+}
+
+function dismissCitationOnEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !citationPreview.value) return;
+  event.preventDefault();
+  closeCitationPreview();
+}
+
+watch(citationPreview, async (preview, _previous, onCleanup) => {
+  if (!preview) return;
+  document.addEventListener('pointerdown', dismissCitationOutside);
+  document.addEventListener('keydown', dismissCitationOnEscape);
+  window.addEventListener('resize', positionCitationPreview);
+  window.addEventListener('scroll', positionCitationPreview, true);
+  onCleanup(() => {
+    document.removeEventListener('pointerdown', dismissCitationOutside);
+    document.removeEventListener('keydown', dismissCitationOnEscape);
+    window.removeEventListener('resize', positionCitationPreview);
+    window.removeEventListener('scroll', positionCitationPreview, true);
+  });
+  await nextTick();
+  if (citationPreview.value === preview) positionCitationPreview();
+});
+watch(renderedResearch, closeCitationPreview);
+onBeforeUnmount(closeCitationPreview);
 
 const ANIMATION_DURATION_MS = 180;
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -196,7 +332,20 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
 </script>
 
 <template>
-  <div ref="messageElement" class="markdown-message" @click="followLink" @auxclick="followLink" v-html="renderedContent"></div>
+  <div ref="messageElement" class="markdown-message" @click="clickMessage" @auxclick="followLink"
+    @pointerover="enterCitation" @pointerout="leaveCitation" @focusin="focusCitation" @focusout="blurCitation"
+    @load.capture="showCitationIcon" v-html="renderedContent"></div>
+  <Teleport to="body">
+    <div v-if="citationPreview" :id="previewId" ref="previewElement" class="web-citation-preview" role="tooltip"
+      :style="previewPosition ?? { visibility: 'hidden' }" @pointerenter="keepCitationPreview" @pointerleave="leaveCitation">
+      <div class="web-citation-preview__source">
+        <WebSourceIcon :host="citationPreview.source.host" :label="citationPreview.source.siteName" />
+        <span>{{ citationPreview.source.siteName }}</span>
+      </div>
+      <strong>{{ citationPreview.source.title }}</strong>
+      <p v-if="citationPreview.source.snippet">{{ citationPreview.source.snippet }}</p>
+    </div>
+  </Teleport>
   <div v-if="renderedResearch.unplacedCitations.length" class="web-research-list"
     @click="followLink" @auxclick="followLink">
     <span>Fontes citadas</span>
@@ -221,14 +370,115 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
 </template>
 
 <style scoped>
-.markdown-message :deep(.web-citation) {
-  display: inline;
-  margin-inline: .18em;
+.markdown-message :deep(.web-citation-group) {
+  display: inline-flex;
+  align-items: stretch;
+  max-inline-size: min(13rem, calc(100% - .5em));
+  margin-inline: .28em .14em;
+  vertical-align: -.12em;
   white-space: nowrap;
-  font-size: .85em;
+  font-size: .79em;
   font-weight: 600;
+  line-height: 1.15;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inline);
+  background: var(--surface-soft);
+}
+.markdown-message :deep(.web-citation) {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 0;
+  gap: .36em;
+  padding: .25em .52em;
+  border-radius: inherit;
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+.markdown-message :deep(.web-citation-group:hover),
+.markdown-message :deep(.web-citation-group:focus-within) { background: var(--surface-raised); }
+.markdown-message :deep(.web-citation:focus-visible),
+.markdown-message :deep(.web-citation__details:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.markdown-message :deep(.web-citation__label) {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.markdown-message :deep(.web-citation__icon) {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 1.2em;
+  block-size: 1.2em;
+  border-radius: 4px;
+  background: var(--surface-raised);
   color: var(--accent-strong);
 }
+.markdown-message :deep(.web-citation__icon::before) { content: attr(data-monogram); font-size: .83em; }
+.markdown-message :deep(.web-citation__favicon) {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: contain;
+  visibility: hidden;
+}
+.markdown-message :deep(.web-citation__icon--ready::before) { visibility: hidden; }
+.markdown-message :deep(.web-citation__icon--ready .web-citation__favicon) { visibility: visible; }
+.markdown-message :deep(.web-citation__details) {
+  display: none;
+  place-items: center;
+  flex: 0 0 26px;
+  min-block-size: 26px;
+  padding: 0;
+  border-inline-start: 1px solid var(--line-strong);
+  border-radius: 0 var(--radius-inline) var(--radius-inline) 0;
+  color: var(--accent-strong);
+  background: transparent;
+  cursor: pointer;
+}
+.markdown-message :deep(.web-citation__details span) {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.15em;
+  block-size: 1.15em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: .88em;
+}
+.markdown-message :deep(.web-citation__details span::before) { content: 'i'; }
+@media (any-pointer: coarse), (hover: none) {
+  .markdown-message :deep(.web-citation__details) { display: inline-grid; }
+}
+.web-citation-preview {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  inline-size: min(18rem, calc(100vw - 16px));
+  max-block-size: calc(100dvh - 16px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: .7rem .82rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 12px 34px #0007;
+  color: var(--text);
+  font-size: .84rem;
+  line-height: 1.35;
+}
+.web-citation-preview__source {
+  display: flex;
+  align-items: center;
+  gap: .42rem;
+  margin-block-end: .38rem;
+  color: var(--accent-strong);
+  font-size: .88em;
+}
+.web-citation-preview p { margin: .4rem 0 0; color: var(--muted); }
 .web-research-list {
   margin-top: .7rem;
   width: 100%;

@@ -52,8 +52,8 @@ export interface NativeVoiceStreamEvent {
   sources?: WebResearchSourceCount[];
 }
 
-export function parseWebResearchSourceCounts(value: unknown): WebResearchSourceCount[] {
-  if (!Array.isArray(value) || value.length > 8) return [];
+export function parseWebResearchSourceCounts(value: unknown, maxItems = 8): WebResearchSourceCount[] {
+  if (!Array.isArray(value) || value.length > maxItems) return [];
   const sources = new Map<string, WebResearchSourceCount>();
   for (const source of value) {
     if (!source || typeof source !== 'object') continue;

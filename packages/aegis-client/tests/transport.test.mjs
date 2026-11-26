@@ -15,6 +15,7 @@ test('NDJSON delivers tokens before completion, including UTF-8 split across chu
   globalThis.fetch = async (url, options) => {
     assert.equal(url, 'https://api.example.test/api/chat/messages/stream');
     assert.equal(options.signal, abort.signal);
+    assert.equal(JSON.parse(options.body).includeWebResearchSources, true);
     return new Response(stream);
   };
   const tokens = [];
@@ -83,6 +84,8 @@ test('NDJSON web search status and sources are correlated with the completed tur
   const events = [
     { type: 'conversation', turnId: 't', conversationId: 'c' },
     { type: 'tool_status', turnId: 't', category: 'web_search', state: 'started', message: 'Pesquisando na web…' },
+    { type: 'web_research_sources', turnId: 't', conversationId: 'c', sources: [{ url: 'https://example.test/a', count: 2 },
+      { url: 'javascript:alert(1)', count: 1 }, { url: 'https://invalid.test/', count: 0 }] },
     { type: 'token', turnId: 't', content: 'Olá' },
     { type: 'tool_status', turnId: 't', category: 'web_search', state: 'completed', message: 'Pesquisa concluída.' },
     { type: 'done', turnId: 't', conversationId: 'c', messageId: 'm', webResearch: research }
@@ -92,10 +95,12 @@ test('NDJSON web search status and sources are correlated with the completed tur
   await api.sendMessageStream({}, {
     onConversation: (turn, id) => observed.push([turn, id]),
     onToolStatus: (turn, value) => observed.push([turn, value.category, value.state]),
+    onWebResearchSources: (turn, sources) => observed.push([turn, sources]),
     onToken: (turn, content) => observed.push([turn, content]),
     onDone: value => observed.push([value.turnId, value.messageId, value.webResearch]),
     onError: assert.fail
   });
-  assert.deepEqual(observed, [['t', 'c'], ['t', 'web_search', 'started'], ['t', 'Olá'],
+  assert.deepEqual(observed, [['t', 'c'], ['t', 'web_search', 'started'],
+    ['t', [{ url: 'https://example.test/a', count: 2 }]], ['t', 'Olá'],
     ['t', 'web_search', 'completed'], ['t', 'm', research]]);
 });

@@ -1,30 +1,44 @@
 import type MarkdownIt from 'markdown-it';
+import { researchFavicon, researchSite } from './researchSites';
 import type { WebResearch, WebResearchSource } from '../types/chat';
 
-interface ResearchLink {
+export interface ResearchLink {
   url: string;
   title: string;
   host: string;
+  siteName: string;
+  snippet?: string;
 }
 interface DisplaySource extends ResearchLink {
   kind: WebResearchSource['kind'];
 }
 interface DisplayCitation extends ResearchLink {
-  number: number;
   startIndex: number;
   endIndex: number;
 }
 
 function researchLink(value: unknown): ResearchLink | null {
   if (!value || typeof value !== 'object') return null;
-  const { url, title } = value as { url?: unknown; title?: unknown };
+  const { url, title, siteName, snippet } = value as {
+    url?: unknown; title?: unknown; siteName?: unknown; snippet?: unknown;
+  };
   if (typeof url !== 'string' || url.length > 8192 || !/^https?:\/\//i.test(url) || /[\s\\\u0000-\u001f\u007f]/.test(url)) return null;
   try {
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return null;
-    return { url: parsed.href, host: parsed.host, title: typeof title === 'string' && title.trim()
-      ? title.trim().slice(0, 300) : parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname) };
+    const site = researchSite(parsed.href) ?? { host: parsed.hostname, name: parsed.hostname };
+    return {
+      url: parsed.href,
+      host: site.host,
+      siteName: evidenceText(siteName, 80) || site.name,
+      title: evidenceText(title, 300) || (parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname)).slice(0, 300),
+      snippet: evidenceText(snippet, 400) || undefined
+    };
   } catch { return null; }
+}
+
+function evidenceText(value: unknown, limit: number): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, limit) : '';
 }
 
 function isTextBoundary(content: string, offset: number): boolean {
@@ -40,7 +54,6 @@ export function prepareWebResearch(content: string, research?: WebResearch | nul
     // Keep explicitly opened pages distinguishable from other sources.
     if (!sources.has(link.url) || source.kind === 'opened') sources.set(link.url, { ...link, kind: source.kind });
   }
-  const numbers = new Map<string, number>();
   const positions = new Set<string>();
   const citations: DisplayCitation[] = [];
   const cited = new Map<string, ResearchLink>();
@@ -57,15 +70,19 @@ export function prepareWebResearch(content: string, research?: WebResearch | nul
     if (!link || !Number.isInteger(citation.startIndex) || !Number.isInteger(citation.endIndex) ||
       citation.startIndex < 0 || citation.endIndex <= citation.startIndex || citation.endIndex > content.length ||
       !isTextBoundary(content, citation.startIndex) || !isTextBoundary(content, citation.endIndex)) continue;
-    if (!citation.title && sources.has(link.url)) link.title = sources.get(link.url)!.title;
+    const source = sources.get(link.url);
+    if (source) {
+      const evidence = citation as typeof citation & { siteName?: unknown };
+      if (!evidenceText(citation.title, 300)) link.title = source.title;
+      if (!evidenceText(evidence.siteName, 80)) link.siteName = source.siteName;
+      link.snippet ??= source.snippet;
+    }
     const key = JSON.stringify([link.url, citation.startIndex, citation.endIndex]);
     if (positions.has(key)) continue;
     positions.add(key);
-    const number = numbers.get(link.url) ?? numbers.size + 1;
-    numbers.set(link.url, number);
     cited.set(link.url, link);
     if (!sources.has(link.url)) sources.set(link.url, { ...link, kind: 'citation' });
-    citations.push({ ...link, number, startIndex: citation.startIndex, endIndex: citation.endIndex });
+    citations.push({ ...link, startIndex: citation.startIndex, endIndex: citation.endIndex });
   }
   return { sources: [...sources.values()], citations, cited: [...cited.values()] };
 }
@@ -80,8 +97,9 @@ type MarkdownToken = ReturnType<MarkdownIt['parse']>[number];
  * summary. The original answer is never changed. */
 export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string, research?: WebResearch | null) {
   const prepared = prepareWebResearch(content, research);
-  if (!prepared.citations.length) return { html: markdown.render(content), sources: prepared.sources,
-    unplacedCitations: prepared.cited };
+  const inlineCitations: ResearchLink[] = [];
+  if (!prepared.cited.length) return { html: markdown.render(content), sources: prepared.sources,
+    unplacedCitations: prepared.cited, inlineCitations };
   const env = {};
   const tokens = markdown.parse(content, env);
   const lineOffsets = [0];
@@ -115,16 +133,37 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
     assigned.set(block, existing);
   }
 
-  function badge(citation: DisplayCitation): MarkdownToken[] {
-    // Construct tokens with MarkdownIt's parser for a fixed literal; a validated
-    // URL/title is then assigned as an attribute, escaped by the renderer.
-    const link = markdown.parseInline('[source](https://example.invalid/)', {})[0].children!;
-    link[0].attrSet('href', citation.url);
-    link[0].attrSet('class', 'web-research-link web-citation');
-    link[0].attrSet('title', citation.title);
-    link[0].attrSet('aria-label', `Fonte ${citation.number}: ${citation.title}`);
-    link[1].content = `[${citation.number}]`;
-    return link;
+  function badge(citation: ResearchLink): MarkdownToken[] {
+    const ordinal = inlineCitations.push(citation) - 1;
+    const group = elementTokens('span', { class: 'web-citation-group', 'data-citation-index': String(ordinal) });
+    const link = elementTokens('a', { href: citation.url, class: 'web-research-link web-citation',
+      'aria-label': `Fonte: ${citation.siteName} · ${citation.title}` });
+    const label = elementTokens('span', { class: 'web-citation__label' });
+    const icon = elementTokens('span', { class: 'web-citation__icon', 'aria-hidden': 'true',
+      'data-monogram': Array.from(citation.siteName)[0]?.toLocaleUpperCase('pt-BR') || '?' });
+    const favicon = researchFavicon(citation.host);
+    const iconImage = favicon ? markdown.parseInline('![](https://example.invalid/favicon.ico)', {})[0].children![0] : null;
+    if (iconImage) {
+      iconImage.attrSet('class', 'web-citation__favicon');
+      iconImage.attrSet('src', favicon!);
+      iconImage.attrSet('referrerpolicy', 'no-referrer');
+      iconImage.attrSet('loading', 'lazy');
+    }
+    const details = elementTokens('button', { class: 'web-citation__details', type: 'button',
+      'aria-label': `Prévia da fonte ${citation.siteName}`, 'aria-expanded': 'false' });
+    const info = elementTokens('span', { 'aria-hidden': 'true' });
+    return [group[0], link[0], icon[0], ...(iconImage ? [iconImage] : []), icon[1],
+      label[0], textToken(citation.siteName), label[1], link[1], details[0], info[0], info[1], details[1], group[1]];
+  }
+
+  // Fixed, generated tags only. MarkdownIt escapes all assigned values.
+  function elementTokens(tag: 'a' | 'span' | 'button', attrs: Record<string, string>): [MarkdownToken, MarkdownToken] {
+    const [open, , close] = markdown.parseInline('[source](https://example.invalid/)', {})[0].children!;
+    open.tag = close.tag = tag;
+    open.type = tag === 'a' ? 'link_open' : `${tag}_open`;
+    close.type = tag === 'a' ? 'link_close' : `${tag}_close`;
+    open.attrs = Object.entries(attrs);
+    return [open, close];
   }
   function textToken(value: string): MarkdownToken {
     const token = markdown.parseInline('text', {})[0].children![0];
@@ -140,9 +179,43 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
     if (['em_open', 'em_close', 'strong_open', 'strong_close', 's_open', 's_close'].includes(token.type)) return token.markup;
     return null;
   }
+
+  const citedLinks = new Map(prepared.cited.map(source => [source.url, source]));
+  function replaceParenthesizedCitations(children: MarkdownToken[]): Set<string> {
+    const replaced = new Set<string>();
+    for (let index = 1; index < children.length - 2; index++) {
+      const link = children[index];
+      const before = children[index - 1];
+      if (link.type !== 'link_open' || before.type !== 'text') continue;
+      const opening = before.content.match(/\(\s*$/)?.[0];
+      if (!opening) continue;
+      const sourceUrl = researchLink({ url: link.attrGet('href') })?.url;
+      const citation = sourceUrl ? citedLinks.get(sourceUrl) : undefined;
+      if (!citation) continue;
+      const close = children.findIndex((token, position) => position > index && token.type === 'link_close');
+      const after = close >= 0 ? children[close + 1] : undefined;
+      const closing = after?.type === 'text' ? after.content.match(/^\s*\)/)?.[0] : undefined;
+      if (!after || !closing) continue;
+
+      before.content = before.content.slice(0, -opening.length);
+      after.content = after.content.slice(closing.length);
+      const marker = badge(citation);
+      children.splice(index, close - index + 1, ...marker);
+      index += marker.length - 1;
+      replaced.add(citation.url);
+    }
+    return replaced;
+  }
+
   const placed = new Set<string>();
-  for (const [block, citations] of assigned) {
+  for (const block of blocks) {
     const children = block.children!;
+    // Existing answers may spell out a source as an entire parenthesized link.
+    // Replace that rendering only when native evidence cites the exact URL.
+    const replaced = replaceParenthesizedCitations(children);
+    for (const url of replaced) placed.add(url);
+    const citations = (assigned.get(block) ?? []).filter(citation => !replaced.has(citation.url));
+    if (!citations.length) continue;
     const offset = sourceOffset(block);
     const rawParts = children.map(tokenSource);
     const exact = offset !== null && rawParts.every(part => part !== null) && rawParts.join('') === block.content &&
@@ -175,6 +248,6 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
       }
     }
   }
-  return { html: markdown.renderer.render(tokens, markdown.options, env), sources: prepared.sources,
+  return { html: markdown.renderer.render(tokens, markdown.options, env), sources: prepared.sources, inlineCitations,
     unplacedCitations: prepared.cited.filter(citation => !placed.has(citation.url)) };
 }

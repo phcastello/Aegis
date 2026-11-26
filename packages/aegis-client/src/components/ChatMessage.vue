@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import MarkdownMessage from './MarkdownMessage.vue';
+import WebResearchActivity from './WebResearchActivity.vue';
+import type { ResearchSite } from '../services/researchSites';
 import MemoryActivityDisclosure from './MemoryActivityDisclosure.vue';
 import type { FeedbackRating, LocalChatMessage } from '../types/chat';
 
@@ -9,6 +11,7 @@ const props = defineProps<{
   feedbackStatus?: string | null;
   isPlaying?: boolean;
   activityStatus?: string | null;
+  researchSites?: readonly ResearchSite[] | null;
   activityState?: 'working' | 'completed' | 'failed';
 }>();
 const emit = defineEmits<{
@@ -35,7 +38,9 @@ async function copy(): Promise<void> {
 <template>
   <article class="message-row" :class="[`message-row--${message.role}`, { 'message-row--active': !!activityStatus || !!message.interrupted }]">
     <div class="message-stack">
-      <div v-if="activityStatus" class="assistant-activity" :class="`assistant-activity--${activityState ?? 'working'}`" role="status" :aria-label="activityStatus">
+      <WebResearchActivity v-if="researchSites && activityStatus" :sites="researchSites"
+        :state="activityState ?? 'working'" :label="activityStatus" />
+      <div v-else-if="activityStatus" class="assistant-activity" :class="`assistant-activity--${activityState ?? 'working'}`" role="status" :aria-label="activityStatus">
         <span class="assistant-activity__text" :data-text="activityStatus" aria-hidden="true">{{ activityStatus }}</span>
       </div>
       <div v-else-if="message.interrupted" class="assistant-activity assistant-activity--interrupted" role="status">

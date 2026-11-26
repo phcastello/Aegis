@@ -101,6 +101,7 @@ export interface ChatStreamHandlers {
   onConversation: (turnId: string, conversationId: string) => void;
   onToken: (turnId: string, content: string) => void;
   onToolStatus?: (turnId: string, status: { category: string; state: 'started' | 'completed' | 'failed'; message: string }) => void;
+  onWebResearchSources?: (turnId: string, sources: WebResearchSourceCount[]) => void;
   onDone: (event: {
     turnId: string;
     conversationId: string;

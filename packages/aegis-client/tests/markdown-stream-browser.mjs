@@ -35,7 +35,7 @@ const vite = await createServer({ root: join(root, 'apps/aegis-node'), cacheDir:
     configureServer(server) {
       server.middlewares.use('/markdown-stream-fixture', (_req, res) => {
         res.setHeader('Content-Type', 'text/html');
-        res.end(`<div id="fixture" style="width:300px"></div><script type="module" src="${moduleId}"></script>`);
+        res.end(`<meta name="viewport" content="width=device-width, initial-scale=1"><div id="fixture" style="width:300px"></div><script type="module" src="${moduleId}"></script>`);
       });
     }
   }] });
@@ -46,30 +46,107 @@ try {
     headless: true, ignoreDefaultArgs: ['--hide-scrollbars'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const iconRequests = [];
+  await page.route('https://reuters.com/favicon.ico?fixture=1', route => {
+    iconRequests.push(route.request());
+    return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="purple"/></svg>' });
+  });
+  await page.route('https://bbc.com/favicon.ico', route => route.fulfill({ status: 404 }));
+  await page.context().route('https://reuters.com/first?article=1', route => route.fulfill({ status: 200, body: 'Source' }));
   await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
   await page.waitForFunction(() => typeof window.updateMarkdown === 'function');
   const sourcedText = 'A primeira informação. A segunda informação.';
-  await page.evaluate(({ content, research }) => window.updateMarkdown(content, research), {
+  const sourcedMessage = {
     content: sourcedText,
     research: {
-      sources: [{ url: 'https://example.test/first', kind: 'consulted', title: 'Primeira fonte' },
-        { url: 'https://example.test/second', kind: 'opened', title: 'Segunda fonte' },
+      sources: [{ url: 'https://reuters.com/first?article=1', kind: 'consulted', title: 'Primeira fonte', snippet: 'Trecho efetivamente fornecido.' },
+        { url: 'https://bbc.com/second', kind: 'opened', title: 'Segunda fonte' },
         { url: 'javascript:alert(1)', kind: 'opened' }],
-      citations: [{ url: 'https://example.test/first', startIndex: 0, endIndex: 'A primeira informação.'.length },
-        { url: 'https://example.test/second', startIndex: 'A primeira informação. '.length, endIndex: sourcedText.length }]
+      citations: [{ url: 'https://reuters.com/first?article=1', startIndex: 0, endIndex: 'A primeira informação.'.length },
+        { url: 'https://bbc.com/second', startIndex: 'A primeira informação. '.length, endIndex: sourcedText.length }]
     }
-  });
+  };
+  await page.evaluate(({ content, research }) => window.updateMarkdown(content, research), sourcedMessage);
   const citations = page.locator('.markdown-message a.web-citation');
   await citations.nth(1).waitFor();
-  assert.equal(await citations.nth(0).getAttribute('href'), 'https://example.test/first');
-  assert.equal(await citations.nth(1).getAttribute('href'), 'https://example.test/second');
-  assert.equal((await page.locator('.markdown-message').textContent()).trim(), 'A primeira informação.[1] A segunda informação.[2]');
+  assert.equal(await citations.nth(0).getAttribute('href'), 'https://reuters.com/first?article=1');
+  assert.equal(await citations.nth(1).getAttribute('href'), 'https://bbc.com/second');
+  assert.equal(await citations.nth(0).textContent(), 'Reuters');
+  assert.equal(await citations.nth(1).textContent(), 'BBC');
+  assert.equal(await page.locator('.markdown-message').evaluate(element => {
+    const copy = element.cloneNode(true);
+    copy.querySelectorAll('.web-citation-group').forEach(badge => badge.remove());
+    return copy.textContent.trim();
+  }), sourcedText);
+  const successfulIcon = citations.first().locator('img');
+  assert.equal(await successfulIcon.getAttribute('src'), 'https://reuters.com/favicon.ico');
+  assert.equal(await successfulIcon.getAttribute('referrerpolicy'), 'no-referrer');
+  // Chromium routes the exact /favicon.ico path outside the page interceptor.
+  await successfulIcon.evaluate(icon => { icon.src += '?fixture=1'; });
+  await citations.first().locator('.web-citation__icon--ready').waitFor();
+  assert.ok(iconRequests.length > 0 && iconRequests.every(request => !request.headers().referer));
+  assert.equal(await citations.nth(1).locator('[data-monogram="B"]').count(), 1);
+  assert.equal(await citations.nth(1).locator('.web-citation__icon--ready').count(), 0);
+
+  const preview = page.getByRole('tooltip');
+  await citations.first().hover();
+  await preview.waitFor();
+  assert.match(await preview.textContent(), /Reuters.*Primeira fonte.*Trecho efetivamente fornecido/);
+  await preview.hover();
+  await page.waitForTimeout(180);
+  assert.equal(await preview.isVisible(), true, 'The preview remains available while hovered');
+  await page.keyboard.press('Escape');
+  await preview.waitFor({ state: 'hidden' });
+  await page.mouse.move(1000, 600);
+  await page.keyboard.press('Tab');
+  await preview.waitFor();
+  assert.equal(await citations.first().getAttribute('aria-describedby'), await preview.getAttribute('id'));
+  await page.keyboard.press('Tab');
+  await preview.waitFor();
+  assert.match(await preview.textContent(), /BBC.*Segunda fonte/);
+  assert.equal(await preview.locator('p').count(), 0, 'A preview does not invent a snippet');
+  const sourceWindowPromise = page.waitForEvent('popup');
+  await citations.first().click();
+  const sourceWindow = await sourceWindowPromise;
+  await sourceWindow.waitForLoadState('domcontentloaded');
+  assert.equal(sourceWindow.url(), 'https://reuters.com/first?article=1');
+  await sourceWindow.close();
+
+  const touch = await browser.newPage({ viewport: { width: 360, height: 700 }, hasTouch: true, isMobile: true });
+  await touch.route('https://**/favicon.ico', route => route.abort());
+  await touch.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
+  await touch.waitForFunction(() => typeof window.updateMarkdown === 'function');
+  await touch.evaluate(({ content, research }) => window.updateMarkdown(content, research), sourcedMessage);
+  const touchDetails = touch.getByRole('button', { name: 'Prévia da fonte Reuters' });
+  await touchDetails.tap();
+  const touchPreview = touch.getByRole('tooltip');
+  await touchPreview.waitFor();
+  assert.equal(await touchDetails.getAttribute('aria-expanded'), 'true');
+  const mobilePlacement = await touchPreview.evaluate(element => ({ right: element.getBoundingClientRect().right, width: innerWidth }));
+  assert.ok(mobilePlacement.right <= mobilePlacement.width - 8, 'The preview fits within the viewport');
+  await touchDetails.tap();
+  await touchPreview.waitFor({ state: 'hidden' });
+  assert.equal(await touchDetails.getAttribute('aria-expanded'), 'false');
+  await touch.close();
+
   const sourceList = page.locator('details.web-research-list');
   const sourceSummary = sourceList.locator('summary');
   assert.equal(await sourceSummary.textContent(), 'Fontes da pesquisa (2 links)');
   assert.equal(await sourceList.getAttribute('open'), null);
   await sourceSummary.click();
   assert.equal(await sourceList.locator('a').count(), 2);
+
+  await page.evaluate(() => {
+    const sourceUrl = 'https://reuters.com/first?article=1';
+    return window.updateMarkdown(`A informação. ([Referência](${sourceUrl})) (parentético normal)`, {
+      sources: [{ url: sourceUrl, kind: 'citation' }],
+      citations: [{ url: sourceUrl, startIndex: 0, endIndex: 'A informação.'.length }]
+    });
+  });
+  assert.equal(await citations.count(), 1);
+  assert.match(await page.locator('.markdown-message').textContent(), /A informação\. Reuters \(parentético normal\)/);
+  assert.doesNotMatch(await page.locator('.markdown-message').textContent(), /Referência/);
+
   await page.evaluate(() => window.updateMarkdown('Uma fonte.', {
     sources: [{ url: 'https://example.test/only', kind: 'consulted' }], citations: []
   }));

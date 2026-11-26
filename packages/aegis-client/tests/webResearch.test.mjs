@@ -20,11 +20,15 @@ test('older messages preserve exactly the original Markdown rendering', () => {
 
 test('plain text gets multiple clickable sources at their actual UTF-16 boundary, preserving Unicode', () => {
   const content = '🎵 A primeira afirmação. A segunda afirmação. A terceira.';
-  const research = { sources: [{ url: url1, title: 'Fonte A', kind: 'opened' }, { url: url2, kind: 'consulted' }],
+  const research = { sources: [{ url: url1, title: 'Fonte A', siteName: 'Portal A', kind: 'opened' }, { url: url2, kind: 'consulted' }],
     citations: [citation(url2, content, 'segunda afirmação.'), citation(url1, content, 'primeira afirmação.')] };
   const result = renderWebResearchMarkdown(markdown, content, research);
-  assert.match(result.html, /primeira afirmação\.<a [^>]*href="https:\/\/example\.test\/one"[^>]*>\[1\]<\/a> A segunda/);
-  assert.match(result.html, /segunda afirmação\.<a [^>]*href="https:\/\/example\.test\/two"[^>]*>\[2\]<\/a> A terceira/);
+  assert.match(result.html, /primeira afirmação\.<span class="web-citation-group" data-citation-index="0"><a href="https:\/\/example\.test\/one"[^>]*>.*?<\/button><\/span> A segunda/);
+  assert.match(result.html, /segunda afirmação\.<span class="web-citation-group" data-citation-index="1"><a href="https:\/\/example\.test\/two"[^>]*>.*?<\/button><\/span> A terceira/);
+  assert.deepEqual(result.inlineCitations.map(({ url, siteName, title }) => [url, siteName, title]),
+    [[url1, 'Portal A', 'Fonte A'], [url2, 'example.test', 'example.test/two']]);
+  assert.match(result.html, /class="web-citation__label">Portal A<\/span>/);
+  assert.match(result.html, /class="web-citation__label">example\.test<\/span>/);
   assert.equal(result.sources.length, 2);
   assert.equal(result.sources[0].kind, 'opened');
   assert.deepEqual(result.unplacedCitations, []);
@@ -37,8 +41,8 @@ test('formatted Markdown retains markup and avoids nested anchors for source spa
     sources: [], citations: [citation(url1, content, 'link existente'), citation(url2, content, 'explicação.')]
   });
   assert.match(result.html, /<strong>Texto forte<\/strong>/);
-  assert.match(result.html, /<a href="https:\/\/a\.test\/">link existente<\/a>\.<a [^>]+>\[1\]<\/a>/);
-  assert.match(result.html, /<code>código<\/code> e explicação\.<a [^>]+>\[2\]<\/a>/);
+  assert.match(result.html, /<a href="https:\/\/a\.test\/">link existente<\/a>\.<span class="web-citation-group"[^>]+><a href="https:\/\/example\.test\/one"/);
+  assert.match(result.html, /<code>código<\/code> e explicação\.<span class="web-citation-group"[^>]+><a href="https:\/\/example\.test\/two"/);
   assert.equal(result.sources.length, 2);
 });
 
@@ -80,4 +84,45 @@ test('a cited source without safe offsets stays visible even when explicitly ope
   });
   assert.deepEqual(results.cited.map(source => source.url), [url1, url2]);
   assert.deepEqual(results.sources.map(source => source.kind), ['opened', 'consulted']);
+});
+
+test('source preview keeps evidence text optional and derives a referrer-free icon on the cited site', () => {
+  const content = 'A primeira afirmação. Outra afirmação.';
+  const url = 'https://www.reuters.com/world/article?exact=1';
+  const result = renderWebResearchMarkdown(markdown, content, {
+    sources: [{ url, kind: 'consulted', title: 'Título da fonte', snippet: 'Um trecho real.\nSegunda frase.' }],
+    citations: [citation(url, content, 'A primeira afirmação.'), citation(url2, content, 'Outra afirmação.')]
+  });
+  assert.equal(result.inlineCitations[0].siteName, 'Reuters');
+  assert.equal(result.inlineCitations[0].snippet, 'Um trecho real. Segunda frase.');
+  assert.equal(result.inlineCitations[1].snippet, undefined);
+  assert.match(result.html, /href="https:\/\/www\.reuters\.com\/world\/article\?exact=1"/);
+  assert.match(result.html, /<img src="https:\/\/reuters\.com\/favicon\.ico"[^>]*referrerpolicy="no-referrer"/);
+  assert.doesNotMatch(result.html, /example\.test\/favicon\.ico/);
+});
+
+test('only whole parenthesized links with cited URLs become badges, without duplicate offset markers', () => {
+  const content = `**Afirmação.** ([Uma fonte](${url1})) Outra frase (${url2}). (observação) ([interno](https://unrelated.test/)) (mais [contexto](${url1})).`;
+  const research = { sources: [], citations: [citation(url1, content, 'Afirmação.'), citation(url2, content, 'Outra frase')] };
+  const result = renderWebResearchMarkdown(markdown, content, research);
+  assert.equal(result.inlineCitations.length, 2);
+  assert.deepEqual(result.inlineCitations.map(source => source.url), [url1, url2]);
+  assert.match(result.html, /<strong>Afirmação\.<\/strong> <span class="web-citation-group"/);
+  assert.match(result.html, /Outra frase <span class="web-citation-group"/);
+  assert.doesNotMatch(result.html, /Uma fonte|\(<span class="web-citation-group"/);
+  assert.match(result.html, /\(observação\) \(<a href="https:\/\/unrelated\.test\/">interno<\/a>\)/);
+  assert.match(result.html, /\(mais <a href="https:\/\/example\.test\/one">contexto<\/a>\)/);
+  assert.deepEqual(result.unplacedCitations, []);
+  assert.match(content, /\(\[Uma fonte\]/, 'Stored answer text does not change');
+});
+
+test('evidenced parenthesized links can be rendered even when sources have no offsets', () => {
+  const content = `Uma afirmação ( [Origem](${url1}) ) outra ( [Referência](${url2}) ).`;
+  const result = renderWebResearchMarkdown(markdown, content, {
+    sources: [{ url: url1, kind: 'opened', cited: true }, { url: url2, kind: 'consulted' }], citations: []
+  });
+  assert.deepEqual(result.inlineCitations.map(source => source.url), [url1]);
+  assert.match(result.html, /Uma afirmação <span class="web-citation-group"/);
+  assert.match(result.html, /outra \( <a href="https:\/\/example\.test\/two">Referência<\/a> \)\./);
+  assert.deepEqual(result.unplacedCitations, []);
 });
