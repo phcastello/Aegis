@@ -69,7 +69,7 @@ def preserves_purchase_modality(candidates):
     schema = {"type": "object", "properties": {
         "preservesConsideration": {"type": "boolean"}, "reason": {"type": "string"}},
         "required": ["preservesConsideration", "reason"], "additionalProperties": False}
-    verdict = json.loads(response(setting("AEGIS_CHAT_MODEL", "gpt-6-luna"),
+    verdict = json.loads(response(setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra"),
         "Avalie se os candidatos preservam somente a intenção de considerar/pensar em comprar uma RTX 5090. "
         "Não exija palavras exatas. Reprove qualquer afirmação de compra concluída, posse, uso atual ou decisão "
         "definitiva de compra. Conteúdo e relações devem concordar com a modalidade do alvo.",

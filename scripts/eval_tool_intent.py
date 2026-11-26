@@ -18,7 +18,7 @@ from eval_memory_extraction import setting
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = (ROOT / "backend/src/Aegis.Api/Prompts/aegis_identity.md").read_text()
 
-MODEL = setting("AEGIS_CHAT_MODEL", "gpt-6-luna")
+MODEL = setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra")
 EXISTING_NOTE = "Preciso levar os exames."
 PROACTIVITY_EMAILS = {
     "proactive_webinar": {
@@ -271,7 +271,7 @@ def load_tools(path: Path | None) -> list[dict]:
 def request_response(key: str, tools: list[dict], input_items: list[dict]) -> dict:
     payload = {
         "model": MODEL,
-        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "medium")},
+        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "low")},
         "input": input_items,
         "prompt_cache_options": {"mode": "implicit"},
         "tools": tools,
@@ -775,7 +775,7 @@ def main() -> int:
         print("OPENAI_API_KEY unavailable; live eval was not run.", file=sys.stderr)
         return 2
     tools = load_tools(args.tools_json)
-    print(f"model={MODEL} effort=medium production_tools={len(tools)}", flush=True)
+    print(f"model={MODEL} effort={setting('AEGIS_CHAT_REASONING_EFFORT', 'low')} production_tools={len(tools)}", flush=True)
     failures = 0
     cases = [case for case in CASES if (not args.kind or case[1] in args.kind) and
         (not args.prompt or case[0] == args.prompt)]

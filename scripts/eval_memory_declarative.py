@@ -38,7 +38,7 @@ def response(model, prompt, statement, schema=None, history=()):
     payload = {"model": model, "input": [
         {"role": "developer", "content": prompt}, *history, {"role": "user", "content": statement}],
         "store": False, "max_output_tokens": 1600,
-        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "medium")}}
+        "reasoning": {"effort": setting("AEGIS_CHAT_REASONING_EFFORT", "low")}}
     if schema:
         payload["text"] = {"format": {"type": "json_schema", "name": "reply_quality",
                                       "strict": True, "schema": schema}}
@@ -64,7 +64,7 @@ def main():
     if not setting("OPENAI_API_KEY"):
         print("OPENAI_API_KEY unavailable", file=sys.stderr)
         return 2
-    model = setting("AEGIS_CHAT_MODEL", "gpt-6-luna")
+    model = setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra")
     judged = 0
     cases = [(statement, False, []) for statement in STATEMENTS]
     cases += [(RICH_STATEMENT, True, []), (RICH_STATEMENT, True, [

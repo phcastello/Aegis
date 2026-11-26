@@ -156,7 +156,7 @@ def response_check(number, turn, response):
         instruction = ("Verifique objetivamente se a resposta satisfaz a expectativa. "
             "Seja rigoroso com negação, tempo verbal e atribuição de fato conhecido. "
             "Retorne apenas o JSON estruturado.")
-        verdict = json.loads(model_response(setting("AEGIS_CHAT_MODEL", "gpt-6-luna"), instruction,
+        verdict = json.loads(model_response(setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra"), instruction,
             json.dumps({"expectation": nuanced, "assistant": response}, ensure_ascii=False), SEMANTIC_SCHEMA))
         require(verdict["satisfiesExpectation"], "response semantics failed: " + verdict["reason"])
 
@@ -172,7 +172,7 @@ def declarative_check(number, turn, message, reply):
         "factual do usuário sem acrescentar comentário pertinente e não óbvio. "
         "Sarcasmo ou observação natural com informação nova é aceitável. "
         "Marque tautologicalRestatement=true se a resposta só reformula o fato, mesmo com 'Entendi'.")
-    verdict = json.loads(model_response(setting("AEGIS_CHAT_MODEL", "gpt-6-luna"), instruction,
+    verdict = json.loads(model_response(setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra"), instruction,
         json.dumps({"user": message, "assistant": reply}, ensure_ascii=False), JUDGE_SCHEMA))
     require(not verdict["tautologicalRestatement"], "tautological restatement: " + verdict["reason"])
 

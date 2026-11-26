@@ -4,7 +4,7 @@ public sealed class OpenAIOptions
 {
     public const string SectionName = "Aegis";
     public const string DefaultBaseUrl = "https://api.openai.com";
-    public const string DefaultChatModel = "gpt-6-luna";
+    public const string DefaultChatModel = "gpt-6.1-terra";
 
     public string? ApiKey { get; set; }
 

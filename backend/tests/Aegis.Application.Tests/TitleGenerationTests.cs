@@ -31,7 +31,7 @@ public sealed class TitleGenerationTests
         Assert.Equal("Bearer fake", handler.Authorization);
         using var payload = JsonDocument.Parse(handler.Body!);
         Assert.Equal("custom-title-model", payload.RootElement.GetProperty("model").GetString());
-        Assert.Equal("minimal", payload.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.Equal("none", payload.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
         Assert.False(payload.RootElement.TryGetProperty("tools", out _));
         Assert.False(payload.RootElement.TryGetProperty("instructions", out _));
         Assert.Equal(2, payload.RootElement.GetProperty("input").GetArrayLength());
@@ -42,7 +42,8 @@ public sealed class TitleGenerationTests
         Assert.Contains("Lembrete para", policy);
         Assert.Contains("próprio sistema de lembretes", policy);
         Assert.DoesNotContain("runtime", handler.Body!, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("gpt-5-nano", new TitleOptions().Model);
+        Assert.Equal("gpt-6-luna", new TitleOptions().Model);
+        Assert.Equal("none", new TitleOptions().ReasoningEffort);
     }
 
     [Fact]
@@ -110,7 +111,10 @@ public sealed class TitleGenerationTests
     public async Task LiveModelNamesTheTaskRatherThanTheReminderRequest() {
         using var http = new HttpClient { BaseAddress = new Uri(Environment.GetEnvironmentVariable("AEGIS_OPENAI_BASE_URL") ?? "https://api.openai.com/"), Timeout = TimeSpan.FromSeconds(32) };
         var generator = new OpenAiTitleGenerator(http,
-            Options.Create(new TitleOptions { Model = Environment.GetEnvironmentVariable("AEGIS_TITLE_MODEL") ?? TitleOptions.DefaultModel }),
+            Options.Create(new TitleOptions {
+                Model = Environment.GetEnvironmentVariable("AEGIS_TITLE_MODEL") ?? TitleOptions.DefaultModel,
+                ReasoningEffort = Environment.GetEnvironmentVariable("AEGIS_TITLE_REASONING_EFFORT") ?? new TitleOptions().ReasoningEffort
+            }),
             Options.Create(new OpenAIOptions { ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") }), NullLogger<OpenAiTitleGenerator>.Instance);
         foreach (var request in new[] { "Me lembra de comprar leite ao sair da faculdade", "Me lembra de limpar a caixa da Kali", "Me lembra do protocolo ao chegar em casa", "Me lembra de levar o guarda-chuva quando sair do trabalho", "Quem é a Aegis?", "Como funciona o sistema de lembretes da Aegis?" }) {
             var operational = request.StartsWith("Me lembra", StringComparison.Ordinal);
