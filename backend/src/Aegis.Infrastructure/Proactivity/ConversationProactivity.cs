@@ -10,7 +10,7 @@ public sealed class ConversationProactivity(AegisDbContext db) : IConversationPr
     public async Task<IReadOnlyList<ChatMessageResponse>?> MessagesAsync(Guid conversationId, long after, CancellationToken ct) {
         if (!await db.Conversations.AnyAsync(c => c.Id == conversationId && c.DeletedAt == null, ct)) return null;
         return await db.ChatMessages.AsNoTracking().Where(m => m.ConversationId == conversationId && m.IsProactive && m.ProactiveSequence > after)
-            .OrderBy(m => m.ProactiveSequence).Take(100).Select(m => new ChatMessageResponse(m.Id, m.ConversationId, m.Role, m.Content, m.CreatedAt, m.Model, null, true, m.ProactiveSequence)).ToArrayAsync(ct);
+            .OrderBy(m => m.ProactiveSequence).Take(100).Select(m => new ChatMessageResponse(m.Id, m.ConversationId, m.Role, m.Content, m.CreatedAt, m.Model, null, true, m.ProactiveSequence, null)).ToArrayAsync(ct);
     }
     public async Task<bool> MarkReadAsync(Guid conversationId, long sequence, CancellationToken ct) {
         if (sequence < 0) throw new ArgumentException("Invalid sequence.");
