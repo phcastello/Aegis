@@ -125,6 +125,42 @@ test('evidenced parenthesized links can be rendered even when sources have no of
   assert.match(result.html, /outra \( <a href="https:\/\/example\.test\/two">Referência<\/a> \)\./);
 });
 
+test('tables render exact cited links and leave a bare domain pointing to its original address', () => {
+  const url = 'https://example.org/one';
+  const content = [
+    '| Referência | Outro endereço |',
+    '| --- | --- |',
+    '| Informação ([Origem](' + url + ')) | Endereço (example.org) |'
+  ].join('\r\n');
+  const result = renderWebResearchMarkdown(markdown, content, {
+    sources: [{ url, kind: 'opened', cited: true }], citations: []
+  });
+  assert.deepEqual(result.inlineCitations.map(source => source.url), [url]);
+  assert.match(result.html, /<td>Informação <span class="web-citation-group"/);
+  assert.match(result.html, /<td>Endereço \(<a href="http:\/\/example\.org">example\.org<\/a>\)<\/td>/);
+});
+
+test('table citation ranges use the matching cell, retaining overlapping ranges in the source disclosure', () => {
+  const content = [
+    'A | B',
+    '--- | ---',
+    'Mesmo trecho. | Mesmo trecho.',
+    'Texto \\| literal | Outra célula.'
+  ].join('\n');
+  const secondCell = content.lastIndexOf('Mesmo trecho.');
+  const result = renderWebResearchMarkdown(markdown, content, {
+    sources: [],
+    citations: [
+      citation(url2, content, 'Mesmo trecho. | Mesmo trecho.'),
+      { url: url1, startIndex: secondCell, endIndex: secondCell + 'Mesmo trecho.'.length },
+      citation('https://example.test/three', content, 'Texto \\| literal')
+    ]
+  });
+  assert.deepEqual(result.inlineCitations.map(source => source.url), [url1]);
+  assert.match(result.html, /<td>Mesmo trecho\.<\/td>\s*<td>Mesmo trecho\.<span class="web-citation-group"/);
+  assert.equal(result.sources.length, 3);
+});
+
 test('Agência Brasil badges delegate icon discovery to Aegis and retain the short site name', () => {
   const content = 'Uma informação consultada.';
   const url = 'https://www.agenciabrasil.ebc.com.br/noticia/uma-informacao';

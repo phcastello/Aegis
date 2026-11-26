@@ -200,6 +200,27 @@ try {
   assert.match(await page.locator('.markdown-message').textContent(), /A informação\. Reuters \(parentético normal\)/);
   assert.doesNotMatch(await page.locator('.markdown-message').textContent(), /Referência/);
 
+  await page.evaluate(() => {
+    const link = 'https://reuters.com/first?article=1';
+    const positioned = 'https://bbc.com/second';
+    const claim = 'Dados da segunda célula.';
+    const content = '| A | B |\n| --- | --- |\n| Dados ([origem](' + link + ')) | ' + claim + ' |';
+    const startIndex = content.indexOf(claim);
+    return window.updateMarkdown(content, {
+      sources: [{ url: link, kind: 'opened', cited: true, title: 'Fonte da tabela' }],
+      citations: [{ url: positioned, startIndex, endIndex: startIndex + claim.length }]
+    });
+  });
+  const cellCitations = page.locator('.markdown-message tbody td .web-citation');
+  await cellCitations.nth(1).waitFor();
+  assert.equal(await cellCitations.nth(0).getAttribute('href'), 'https://reuters.com/first?article=1');
+  assert.equal(await cellCitations.nth(1).getAttribute('href'), 'https://bbc.com/second');
+  await cellCitations.nth(0).hover();
+  await preview.waitFor();
+  assert.match(await preview.textContent(), /Reuters.*Fonte da tabela/);
+  await page.keyboard.press('Escape');
+  await preview.waitFor({ state: 'hidden' });
+
   await page.evaluate(() => window.updateMarkdown('Sem metadados.'));
   assert.equal(await page.getByText('Fontes citadas', { exact: true }).count(), 0);
   assert.equal(await citations.count(), 0);

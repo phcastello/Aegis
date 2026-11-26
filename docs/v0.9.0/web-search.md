@@ -60,7 +60,8 @@ disponível. A página original pode ser aberta pela própria citação. A pilha
 favicons no fim da barra de ações de cada resposta abre a lista completa de
 fontes validadas daquela resposta.
 Tabelas largas têm rolagem lateral própria e mantêm a largura dos parágrafos
-ao redor.
+ao redor. As células exibem o mesmo balão quando o endereço citado é
+explícito ou a posição da citação pode ser verificada dentro da célula.
 
 ## Validação e etapas seguintes
 

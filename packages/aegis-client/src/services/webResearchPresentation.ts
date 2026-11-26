@@ -104,9 +104,37 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
   const lineOffsets = [0];
   for (const match of content.matchAll(/\r\n|\r|\n/g)) lineOffsets.push(match.index! + match[0].length);
   lineOffsets.push(content.length);
-  const blocks = tokens.filter(token => token.type === 'inline' && token.map && token.children);
+  const blocks = tokens.filter(token => token.type === 'inline' && token.children);
+  // MarkdownIt maps the table row, while each inline cell has no map. Use
+  // positions only if every rendered cell matches the original row verbatim.
+  const tableOffsets = new Map<MarkdownToken, number>();
+  let row: { line: number; cells: MarkdownToken[] } | null = null;
+  for (const token of tokens) {
+    if (token.type === 'tr_open' && token.map) {
+      row = { line: token.map[0], cells: [] };
+    } else if (row && token.type === 'inline') {
+      row.cells.push(token);
+    } else if (row && token.type === 'tr_close') {
+      const start = lineOffsets[row.line];
+      const raw = content.slice(start, lineOffsets[row.line + 1]);
+      const trimmed = raw.trimStart();
+      const leadingPipe = trimmed.startsWith('|') ? 1 : 0;
+      const cells = trimmed.slice(leadingPipe).trimEnd().replace(/\|$/, '').split('|');
+      if (!raw.includes('\\|') && cells.length === row.cells.length &&
+        row.cells.every((cell, index) => cell.content === cells[index].trim())) {
+        let cursor = start + raw.length - trimmed.length + leadingPipe;
+        for (const [index, cell] of row.cells.entries()) {
+          const source = cells[index];
+          tableOffsets.set(cell, cursor + source.length - source.trimStart().length);
+          cursor += source.length + 1;
+        }
+      }
+      row = null;
+    }
+  }
   function sourceOffset(block: MarkdownToken): number | null {
-    const [first, last] = block.map!;
+    if (!block.map) return tableOffsets.get(block) ?? null;
+    const [first, last] = block.map;
     const offset = content.indexOf(block.content, lineOffsets[first]);
     if (offset < lineOffsets[first] || offset + block.content.length > lineOffsets[last]) return null;
     const another = content.indexOf(block.content, offset + 1);
@@ -115,11 +143,15 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
   const assigned = new Map<MarkdownToken, DisplayCitation[]>();
   for (const citation of prepared.citations) {
     const candidates = blocks.filter(token => {
-      const [first, last] = token.map!;
+      if (!token.map) {
+        const start = tableOffsets.get(token);
+        return start !== undefined && citation.startIndex >= start &&
+          citation.endIndex <= start + token.content.length;
+      }
+      const [first, last] = token.map;
       return citation.endIndex > lineOffsets[first] && citation.endIndex <= lineOffsets[last] &&
         citation.startIndex < lineOffsets[last];
     });
-    // Some Markdown constructs (e.g., rows of a table) share a line map.
     // Never guess which block the source referred to in an ambiguous match.
     const exactMatches = candidates.filter(block => {
       const offset = sourceOffset(block);
