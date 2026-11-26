@@ -9,4 +9,5 @@ public sealed record ModelToolRequest(
     string? PreviousResponseId = null,
     IReadOnlyList<ModelToolOutput>? ToolOutputs = null,
     IReadOnlyList<JsonElement>? InputItems = null,
-    IReadOnlyList<JsonElement>? AuditInputItems = null);
+    IReadOnlyList<JsonElement>? AuditInputItems = null,
+    int NativeWebSearchCallLimit = 0);

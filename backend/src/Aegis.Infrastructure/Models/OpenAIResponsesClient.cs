@@ -40,14 +40,14 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems);
+            request.InputItems, request.NativeWebSearchCallLimit);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: false, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
@@ -125,14 +125,14 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems);
+            request.InputItems, request.NativeWebSearchCallLimit);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: true, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
@@ -455,7 +455,8 @@ public sealed class OpenAIResponsesClient(
         IReadOnlyList<ModelToolDefinition>? tools,
         string? previousResponseId = null,
         IReadOnlyList<ModelToolOutput>? toolOutputs = null,
-        IReadOnlyList<JsonElement>? inputItems = null)
+        IReadOnlyList<JsonElement>? inputItems = null,
+        int nativeWebSearchCallLimit = 0)
     {
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -485,6 +486,23 @@ public sealed class OpenAIResponsesClient(
             ? request.InputItems
             : request.Input;
 
+        // Hosted tools must not run before an undecided hands-free turn is accepted.
+        var webSearchEnabled = nativeWebSearchCallLimit > 0 &&
+            !(tools?.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName) ?? false);
+        var providerTools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => (object)new
+        {
+            type = "function",
+            name = tool.Name,
+            description = tool.Description,
+            parameters = tool.ParametersSchema,
+            strict = tool.Name is FinalSpeechSegments.ToolName or HandsFreeDirection.IgnoreToolName
+        }).ToList();
+        if (webSearchEnabled)
+        {
+            providerTools ??= [];
+            providerTools.Add(new { type = "web_search" });
+        }
+
         return new
         {
             model,
@@ -499,16 +517,11 @@ public sealed class OpenAIResponsesClient(
                 ? null
                 : openAIOptions.ServiceTier,
             metadata,
-            tools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => new
-            {
-                type = "function",
-                name = tool.Name,
-                description = tool.Description,
-                parameters = tool.ParametersSchema,
-                strict = tool.Name is FinalSpeechSegments.ToolName or HandsFreeDirection.IgnoreToolName
-            }),
+            tools = providerTools,
+            include = webSearchEnabled ? new[] { "web_search_call.action.sources" } : null,
+            max_tool_calls = webSearchEnabled ? nativeWebSearchCallLimit : (int?)null,
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
-            tool_choice = tools is { Count: > 0 } ? "auto" : null
+            tool_choice = providerTools is { Count: > 0 } ? "auto" : null
         };
     }
 
