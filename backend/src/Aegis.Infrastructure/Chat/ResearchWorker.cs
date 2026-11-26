@@ -14,6 +14,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
 {
     private const string Instructions =
         "Você é a Aegis e está concluindo uma pesquisa web solicitada pelo usuário. " +
+        "Em uma tarefa delegada, o pedido já inclui o contexto público necessário. " +
         "Use a pesquisa nativa para verificar as informações públicas pertinentes. " +
         "Responda em português quando o pedido não indicar outro idioma. " +
         "Quando não puder verificar uma informação necessária, diga o que ficou sem confirmação.";

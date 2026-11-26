@@ -1,4 +1,5 @@
 using Aegis.Application.Models;
+using Aegis.Application.Chat;
 using Aegis.Application.Email;
 using Aegis.Application.Google;
 using Aegis.Application.Llm;
@@ -65,7 +66,8 @@ public sealed class AegisToolLoop(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var round = CreateRoundRequest(request, tools, inputItems, auditInputItems, iteration, handsFree,
-                HandsFreeReply.Definition, decisionPending, webSearchRequested, webSearchBudget, argumentFailures);
+                HandsFreeReply.Definition, decisionPending, context.AllowResearchDelegation,
+                webSearchRequested, webSearchBudget, argumentFailures);
             var response = await TurnLatencyProfile.MeasureAsync("model.round",
                 () => modelClient.RespondWithToolsAsync(round, cancellationToken));
             ConsumeWebSearchBudget(response.OutputItems, round.NativeSearchActionBudget, ref webSearchBudget, context.ConversationId);
@@ -82,6 +84,21 @@ public sealed class AegisToolLoop(
             }
 
             ValidateResearchCalls(round, response.ToolCalls, webSearchRequested);
+            if (ResearchDelegation.Read(round, response.ToolCalls) is { } delegation)
+            {
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                return response with
+                {
+                    Content = delegation.Intent,
+                    ToolCalls = [],
+                    MetadataJson = null,
+                    VoiceContinuation = handsFree ? HandsFreeReply.Close : null,
+                    DelegatedResearchBrief = delegation.Brief,
+                    AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget)
+                };
+            }
 
             if (handsFree && !webSearchRequested && HandsFreeReply.TryRead(response.ToolCalls, out var speech, out var continuation))
             {
@@ -199,7 +216,8 @@ public sealed class AegisToolLoop(
             var finalSegments = new List<string>();
             var bufferedVoice = handsFree ? new StringBuilder() : null;
             var round = CreateRoundRequest(request, tools, inputItems, auditInputItems, iteration, handsFree,
-                terminal, decisionPending, webSearchRequested, webSearchBudget, argumentFailures);
+                terminal, decisionPending, context.AllowResearchDelegation,
+                webSearchRequested, webSearchBudget, argumentFailures);
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(round, cancellationToken))
             {
                 if (chunk.IsDone)
@@ -253,6 +271,22 @@ public sealed class AegisToolLoop(
             }
 
             ValidateResearchCalls(round, completed.ToolCalls, webSearchRequested);
+            if (ResearchDelegation.Read(round, completed.ToolCalls) is { } delegation)
+            {
+                if (finalSegments.Count > 0)
+                    throw new InvalidOperationException("Delegação depois de uma resposta de voz já iniciada.");
+                if (decisionPending) await context.AcceptVoiceTurn!(cancellationToken);
+                if (segmented)
+                    yield return new ModelStreamChunk(null, false, FinalSpeechSegment: delegation.Intent);
+                else
+                    yield return new ModelStreamChunk(emittedText.Length > 0 ? "\n\n" + delegation.Intent : delegation.Intent, false);
+                stopwatch.Stop();
+                RecordTurn(context.ConversationId, responses.Count, executions.Count, stopwatch.ElapsedMilliseconds);
+                yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model, completed.Purpose,
+                    AuditData: CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
+                    VoiceContinuation: handsFree ? HandsFreeReply.Close : null, DelegatedResearchBrief: delegation.Brief);
+                yield break;
+            }
 
             if (segmented && !webSearchRequested && completed.ToolCalls.Any(c => c.Name == FinalSpeechSegments.ToolName))
             {
@@ -373,21 +407,26 @@ public sealed class AegisToolLoop(
         ModelRequest request, IReadOnlyList<ModelToolDefinition> tools,
         IReadOnlyList<JsonElement>? inputItems, IReadOnlyList<JsonElement>? auditInputItems,
         int iteration, bool handsFree, ModelToolDefinition terminal, bool decisionPending,
-        bool webSearchRequested, int? webSearchBudget, int argumentFailures)
+        bool allowResearchDelegation, bool webSearchRequested, int? webSearchBudget, int argumentFailures)
     {
         var ordinaryRound = iteration <= DefaultMaxIterations && argumentFailures <= 1;
-        var nativeBudget = ordinaryRound && !decisionPending && (!handsFree || webSearchRequested) ? webSearchBudget : null;
+        var requiresSearchDecision = handsFree || allowResearchDelegation;
+        var nativeBudget = ordinaryRound && !decisionPending && (!requiresSearchDecision || webSearchRequested) ? webSearchBudget : null;
         var roundTools = ordinaryRound
             ? tools.Where(tool => !webSearchRequested || tool.Name != terminal.Name).ToList()
             : handsFree && !webSearchRequested ? new List<ModelToolDefinition> { terminal } : new List<ModelToolDefinition>();
-        if (handsFree && !webSearchRequested && webSearchBudget.HasValue && iteration < DefaultMaxIterations && ordinaryRound)
-            roundTools.Add(WebSearchGate);
+        if (requiresSearchDecision && !webSearchRequested && webSearchBudget.HasValue && ordinaryRound)
+        {
+            if (iteration < DefaultMaxIterations) roundTools.Add(WebSearchGate);
+            if (allowResearchDelegation) roundTools.Add(ResearchDelegation.Definition);
+        }
         if (decisionPending)
             roundTools.Add(HandsFreeDirection.IgnoreDefinition);
 
         var realInput = WithIdentityReminder(inputItems, request.Instructions, iteration > 1);
         var auditInput = WithIdentityReminder(auditInputItems, request.Instructions, iteration > 1);
-        if (nativeBudget.HasValue || roundTools.Any(tool => tool.Name == WebSearchGateName) || webSearchRequested)
+        var canDelegate = roundTools.Contains(ResearchDelegation.Definition);
+        if (nativeBudget.HasValue || roundTools.Any(tool => tool.Name == WebSearchGateName) || canDelegate || webSearchRequested)
         {
             var guidance = "Use a pesquisa para informações públicas atuais, verificações e fontes quando pertinente. " +
                 "Respeite pedidos para não pesquisar. Não pesquise por padrão fatos simples e estáveis. " +
@@ -399,7 +438,13 @@ public sealed class AegisToolLoop(
                 "Use as citações nativas da pesquisa para atribuir as informações às fontes. " +
                 "Não repita as referências em uma lista separada nem escreva URLs só para indicar a fonte. " +
                 "Inclua links ou listas de fontes quando o usuário pedir.";
-            if (webSearchRequested)
+            if (canDelegate)
+                guidance += " Decida antes da primeira busca. Para uma verificação pontual, use request_web_search quando estiver disponível. " +
+                    "Quando prever várias etapas, comparação de fontes ou uma espera perceptível, " +
+                    "use delegate_web_research para dizer o que vai fazer e delegar a pesquisa. Nessa etapa o usuário deve " +
+                    "poder continuar conversando. Não inicie uma busca direta antes de delegar. " +
+                    "Tarefas breves e respostas que não precisam de pesquisa mantêm o fluxo normal.";
+            if (handsFree && webSearchRequested)
                 guidance += " Neste turno de voz, finalize por texto natural em português, sem função terminal de fala. " +
                     "Dê a resposta principal primeiro, seguida da explicação pertinente. Evite ler URLs em voz alta.";
             if (nativeBudget == 0)

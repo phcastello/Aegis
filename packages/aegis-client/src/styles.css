@@ -1323,20 +1323,6 @@ button:disabled {
   font-size: 0.62rem;
 }
 
-.composer-guidance { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
-.composer-research {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 7px;
-  color: var(--accent-strong);
-  background: transparent;
-  border-radius: var(--radius-inline);
-  cursor: pointer;
-  font-size: .72rem;
-}
-.composer-research:hover:not(:disabled) { background: var(--surface-raised); }
-.composer-research svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .feedback-overlay {
   position: fixed;
   inset: 0;

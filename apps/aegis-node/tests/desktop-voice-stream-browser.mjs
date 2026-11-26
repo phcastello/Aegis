@@ -20,8 +20,20 @@ const data = new Map([a, b].map((id, index) => [id, { id, title: index ? 'Beta' 
 const summary = row => ({ ...row, messages: undefined, messageCount: row.messages.length, lastMessagePreview: row.messages.at(-1)?.content });
 const reads = [];
 const researchJobs = new Map();
+const researchPrompt = 'Compare as fontes sobre as novas regras.';
+const researchIntent = 'Vou pesquisar as novas regras e reunir as fontes.';
+const followUpPrompt = 'Qual é o próximo item da lista?';
+const followUpReply = 'O próximo item é a revisão.';
 const typedText = `Fluxo digitado em caracteres. ${'Cada letra de um único lote deve aparecer progressivamente, incluindo a música 🎵 e a acentuação. '.repeat(8).trim()}`;
 let typedRequests = 0;
+let holdResearchRead;
+function enqueueResearch(id, conversationId, userMessageId) {
+  const now = new Date().toISOString();
+  const job = { id, conversationId, userMessageId, state: 'running',
+    phase: 'searching', createdAt: now, updatedAt: now, sources: [] };
+  researchJobs.set(id, job);
+  return job;
+}
 const json = (res, value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
 const port = await new Promise((resolve, reject) => {
   const probe = createPortProbe(); probe.once('error', reject);
@@ -45,22 +57,17 @@ const vite = await createServer({
       if (path === '/api/chat/proactive-activity') return json(res, []);
       if (path === '/api/chat/conversations') return json(res, { items: [...data.values()].map(summary), hasMore: false });
       if (path === '/api/chat/research-jobs') {
-        if (req.method === 'POST') {
-          let raw = '';
-          req.on('data', chunk => { raw += chunk; });
-          req.on('end', () => {
-            const body = JSON.parse(raw), row = data.get(body.conversationId);
-            assert.ok(row, 'background job targets known conversation');
-            const now = new Date().toISOString(), userMessageId = body.jobId;
-            const job = { id: body.jobId, conversationId: row.id, userMessageId, state: 'running',
-              phase: 'searching', createdAt: now, updatedAt: now, sources: [] };
-            row.messages.push(message(userMessageId, row.id, body.content, 'user'));
-            researchJobs.set(job.id, job);
-            return json(res, job, 202);
-          });
-          return;
+        if (req.method !== 'GET') return json(res, {}, 405);
+        const id = url.searchParams.get('conversationId');
+        const snapshots = structuredClone([...researchJobs.values()].filter(job => job.conversationId === id));
+        if (id === a && holdResearchRead) {
+          const hold = holdResearchRead;
+          holdResearchRead = undefined;
+          hold(() => json(res, snapshots));
+        } else {
+          json(res, snapshots);
         }
-        return json(res, [...researchJobs.values()].filter(job => job.conversationId === url.searchParams.get('conversationId')));
+        return;
       }
       if (path.startsWith('/api/chat/research-jobs/') && req.method === 'DELETE') {
         const job = researchJobs.get(path.split('/').at(-1));
@@ -75,12 +82,18 @@ const vite = await createServer({
           const body = JSON.parse(raw), target = data.get(body.conversationId);
           assert.ok(target, 'typed request targets known conversation');
           typedRequests++;
-          target.messages.push(message(uuid(71), target.id, body.content, 'user'), message(uuid(72), target.id, typedText));
+          const isResearch = body.content === researchPrompt;
+          const isFollowUp = body.content === followUpPrompt;
+          const userId = uuid(isResearch ? 89 : isFollowUp ? 93 : 71);
+          const assistantId = uuid(isResearch ? 90 : isFollowUp ? 94 : 72);
+          const reply = isResearch ? researchIntent : isFollowUp ? followUpReply : typedText;
+          target.messages.push(message(userId, target.id, body.content, 'user'), message(assistantId, target.id, reply));
           target.updatedAt = new Date().toISOString();
+          if (isResearch) enqueueResearch(body.turnId, target.id, userId);
           const line = (type, extra) => JSON.stringify({ type, turnId: body.turnId, ...extra }) + '\n';
           // One network write containing a token for *every* Unicode code
           // point, and completion in the exact same NDJSON chunk.
-          const burst = line('conversation', { conversationId: target.id }) + [...typedText].map(content => line('token', { content })).join('') + line('done', { conversationId: target.id, messageId: uuid(72), conversationTitle: target.title, titleSource: target.titleSource });
+          const burst = line('conversation', { conversationId: target.id }) + [...reply].map(content => line('token', { content })).join('') + line('done', { conversationId: target.id, messageId: assistantId, conversationTitle: target.title, titleSource: target.titleSource });
           res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' }); res.end(burst);
         });
         return;
@@ -252,11 +265,22 @@ try {
   assert.equal(await researchActivity('STATUS DEPOIS DO TÉRMINO').count(), 0);
 
   const composer = page.getByRole('textbox', { name: 'Mensagem', exact: true });
-  await composer.fill('Compare as fontes em segundo plano.');
-  await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).click();
-  await exact('Compare as fontes em segundo plano.').waitFor();
+  // Keep one empty GET from before the accepted turn in flight. Its result
+  // must not prevent the terminal callback from discovering the queued job.
+  const staleResearchRead = new Promise(resolve => { holdResearchRead = resolve; });
+  await sync(a);
+  const releaseStaleSnapshot = await staleResearchRead;
+  await composer.fill(researchPrompt);
+  assert.equal(await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).count(), 0);
+  await page.getByRole('button', { name: 'Enviar mensagem' }).click();
+  await exact(researchPrompt).waitFor();
+  await exact(researchIntent).waitFor();
+  releaseStaleSnapshot();
   await researchActivity('Pesquisa em segundo plano').waitFor();
-  assert.equal(await composer.isEnabled(), true, 'separate research leaves the composer available');
+  await composer.fill(followUpPrompt);
+  await page.getByRole('button', { name: 'Enviar mensagem' }).click();
+  await exact(followUpReply).waitFor();
+  await researchActivity('Pesquisa em segundo plano').waitFor();
   await select('Beta');
   assert.equal(await researchActivity('Pesquisa em segundo plano').count(), 0);
   const firstJob = [...researchJobs.values()][0];
@@ -271,8 +295,15 @@ try {
   assert.equal(await backgroundSource.getAttribute('aria-expanded'), 'true');
   assert.equal(await sourceAction.getAttribute('aria-expanded'), 'false');
   await backgroundSource.click();
-  await composer.fill('Cancele esta pesquisa.');
-  await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).click();
+  const delegatedVoiceTurn = uuid(95), delegatedVoiceUser = uuid(96), delegatedVoiceAssistant = uuid(97);
+  const delegatedVoiceIntent = 'Vou comparar os horários das fontes e salvar o resultado aqui.';
+  append(a, delegatedVoiceUser, 'Compare os horários das fontes que você encontrou.', 'user');
+  await accepted(delegatedVoiceTurn, a);
+  append(a, delegatedVoiceAssistant, delegatedVoiceIntent);
+  enqueueResearch(delegatedVoiceTurn, a, delegatedVoiceUser);
+  await emit(stream, segment(delegatedVoiceTurn, a, delegatedVoiceAssistant, 0, delegatedVoiceIntent));
+  await emit(stream, event('done', delegatedVoiceTurn, a, delegatedVoiceAssistant));
+  await exact(delegatedVoiceIntent).waitFor();
   await researchActivity('Pesquisa em segundo plano').waitFor();
   await page.locator('.research-job__cancel').click();
   await exact('Pesquisa cancelada.').waitFor();
@@ -355,12 +386,13 @@ try {
 
   // The same scheduler is required for ordinary typing. This catches Vue
   // coalescing all tiny tokens from one NDJSON read into a single render.
+  const beforeTypedRequests = typedRequests;
   await page.locator('.composer textarea').fill('Teste digitado em lote único');
   await page.locator('.composer textarea').press('Enter');
   await waitPartial('Fluxo digitado', typedText);
   assertProgress(await frameSamples('Fluxo digitado'), typedText, 'manual per-character NDJSON burst');
   await exact(typedText).waitFor({ timeout: 5000 });
-  assert.equal(typedRequests, 1, 'presentation must not resend the manual request');
+  assert.equal(typedRequests, beforeTypedRequests + 1, 'presentation must not resend the manual request');
   assert.equal(await marker('Fluxo digitado').count(), 1, 'typed snapshot does not duplicate assistant message');
 
   // Reduced-motion preference bypasses the artificial presentation queue.

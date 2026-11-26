@@ -336,6 +336,79 @@ public sealed class ToolLoopTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ForegroundPlannerRoutesAQuickLookupWithoutDelegation(bool streaming)
+    {
+        var model = new FakeModelClient([Call("request_web_search"), Reply("Resultado") with { OutputItems = [SearchItem("ws_1")] }]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "Confira a previsão de hoje.");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input, AllowResearchDelegation: true);
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.Equal("Resultado", string.Concat(chunks.Select(chunk => chunk.Content)));
+            Assert.Null(chunks[^1].DelegatedResearchBrief);
+        }
+        else
+        {
+            var result = await loop.RunAsync(request, context);
+            Assert.Equal("Resultado", result.Content);
+            Assert.Null(result.DelegatedResearchBrief);
+        }
+
+        Assert.Equal(new int?[] { null, 20 }, model.Requests.Select(round => round.NativeSearchActionBudget));
+        Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "delegate_web_research");
+        Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name is "delegate_web_research" or "request_web_search");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ForegroundDelegatesWithIntentWithoutCallingHostedSearch(bool streaming, bool handsFree)
+    {
+        const string intent = "Vou comparar como as duas cidades publicam os resultados.";
+        const string brief = "Compare a publicação dos resultados de São Paulo e Recife em fontes oficiais.";
+        var model = new FakeModelClient([Done([new("research", "delegate_web_research",
+            JsonSerializer.SerializeToElement(new { intent, brief }))])]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "Compare as duas cidades.");
+        var acceptances = 0;
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
+            Origin: handsFree ? "hands_free" : null, VoiceSegments: handsFree,
+            AcceptVoiceTurn: handsFree ? _ => { acceptances++; return Task.CompletedTask; } : null,
+            AllowResearchDelegation: true);
+
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.Equal(2, chunks.Count);
+            Assert.Equal(intent, handsFree ? chunks[0].FinalSpeechSegment : chunks[0].Content);
+            Assert.Null(chunks[0].DelegatedResearchBrief);
+            Assert.Equal(brief, chunks[1].DelegatedResearchBrief);
+            Assert.True(chunks[1].IsDone);
+        }
+        else
+        {
+            var result = await loop.RunAsync(request, context);
+            Assert.Equal(intent, result.Content);
+            Assert.Equal(brief, result.DelegatedResearchBrief);
+        }
+
+        var round = Assert.Single(model.Requests);
+        Assert.Null(round.NativeSearchActionBudget);
+        Assert.Equal(handsFree ? 1 : 0, acceptances);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task IgnoredHandsFreeTurnCannotUseNativeSearch(bool streaming)
     {
         var model = new FakeModelClient([Call("hands_free_ignore")]);
@@ -345,7 +418,8 @@ public sealed class ToolLoopTests
         var request = new ModelRequest("identity", "fala alheia");
         var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
             Origin: "hands_free", VoiceSessionId: Guid.NewGuid(),
-            AcceptVoiceTurn: _ => throw new InvalidOperationException("Não deveria aceitar."));
+            AcceptVoiceTurn: _ => throw new InvalidOperationException("Não deveria aceitar."),
+            AllowResearchDelegation: true);
         if (streaming)
         {
             var chunks = new List<ModelStreamChunk>();
@@ -367,11 +441,12 @@ public sealed class ToolLoopTests
             metrics, new WebSearchOptions { Enabled = false });
         var request = new ModelRequest("identity", "pedido");
         var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
-            Origin: handsFree ? "hands_free" : null);
+            Origin: handsFree ? "hands_free" : null, AllowResearchDelegation: true);
         await loop.RunAsync(request, context);
         var round = Assert.Single(model.Requests);
         Assert.Null(round.NativeSearchActionBudget);
         Assert.DoesNotContain(round.Tools, tool => tool.Name == "request_web_search");
+        Assert.DoesNotContain(round.Tools, tool => tool.Name == "delegate_web_research");
     }
 
     [Fact]

@@ -10,4 +10,5 @@ public sealed record ModelCompletionResponse(
     string? MetadataJson,
     LlmRequestAuditData AuditData,
     string? VoiceContinuation = null,
-    bool Ignored = false);
+    bool Ignored = false,
+    string? DelegatedResearchBrief = null);

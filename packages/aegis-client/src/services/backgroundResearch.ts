@@ -18,10 +18,6 @@ export function isResearchPending(job: ResearchJob): boolean {
   return job.state === 'queued' || job.state === 'running';
 }
 
-export function startResearchJob(jobId: string, conversationId: string | null, content: string): Promise<ResearchJob> {
-  return requestJson('/api/chat/research-jobs', { method: 'POST', body: JSON.stringify({ jobId, conversationId, content }) });
-}
-
 export function listResearchJobs(conversationId: string, signal?: AbortSignal): Promise<ResearchJob[]> {
   return requestJson('/api/chat/research-jobs?conversationId=' + encodeURIComponent(conversationId), { cache: 'no-store', signal });
 }

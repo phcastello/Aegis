@@ -15,6 +15,7 @@ using Aegis.Application.Runtime;
 using Aegis.Application.Tools;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
+using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -44,6 +45,54 @@ public sealed class FinalSpeechSegmentTests
     [InlineData("{\"segments\":[\" \"")]
     public void ParserRejectsInvalidCommittedValues(string json) =>
         Assert.ThrowsAny<Exception>(() => new FinalSpeechSegmentParser().Append(json));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnnouncesDelegatedResearchBeforeTheWorkerCanClaimIt(bool handsFree)
+    {
+        using var fixture = new Fixture();
+        var queue = new ResearchJobStore(fixture.Db, TimeProvider.System);
+        var chat = fixture.CreateChat(webSearch: new WebSearchOptions(), researchQueue: queue);
+        const string intent = "Vou comparar as fontes oficiais e trazer um resumo.";
+        const string brief = "Compare os relatórios públicos sobre mobilidade de São Paulo e Recife.";
+        fixture.Model.ResearchDelegation = new("research", "delegate_web_research",
+            JsonSerializer.SerializeToElement(new { intent, brief }));
+        var request = new SendMessageRequest
+        {
+            Content = "Compare os relatórios das duas cidades.",
+            TurnId = Guid.NewGuid(),
+            Origin = handsFree ? "hands_free" : null,
+            VoiceSessionId = handsFree ? Guid.NewGuid() : null,
+            VoiceSegments = handsFree,
+            AllowSilentIgnore = handsFree
+        };
+        await using var events = chat.StreamMessageAsync(request).GetAsyncEnumerator();
+        Assert.True(await events.MoveNextAsync());
+        Assert.Equal("conversation", events.Current.Type);
+        Assert.True(await events.MoveNextAsync());
+        var announcement = events.Current;
+        Assert.Equal(handsFree ? "final_segment" : "token", announcement.Type);
+        Assert.Equal(intent, announcement.Content);
+        Assert.Empty(await fixture.Db.ResearchJobs.ToListAsync());
+        if (handsFree)
+        {
+            await using var pcm = await fixture.Voice.StartSegmentSpeechAsync(new(announcement.TurnId!.Value,
+                Guid.NewGuid(), announcement.AssistantMessageId!.Value, announcement.SegmentId!.Value, 0));
+            Assert.Equal(intent, Assert.Single(fixture.Speech.Requests).Text);
+            fixture.Voice.CompleteSpeech(pcm.SpeechRequestId);
+        }
+
+        Assert.True(await events.MoveNextAsync());
+        Assert.Equal("done", events.Current.Type);
+        var messages = await fixture.Db.ChatMessages.ToListAsync();
+        var user = Assert.Single(messages, message => message.Role == "user");
+        Assert.Equal(intent, Assert.Single(messages, message => message.Role == "assistant").Content);
+        Assert.Equal(user.Id, (await fixture.Db.ResearchJobs.SingleAsync()).UserMessageId);
+        Assert.Equal(brief, (await queue.ClaimAsync(default))?.Content);
+        Assert.Null(Assert.Single(fixture.Model.Requests).NativeSearchActionBudget);
+        Assert.False(await events.MoveNextAsync());
+    }
 
     [Fact]
     public async Task FirstPersistedSegmentCanBeSynthesizedWhileModelIsStillGenerating()
@@ -394,9 +443,9 @@ public sealed class FinalSpeechSegmentTests
             Chat = CreateChat();
         }
         public ChatService CreateChat(MemoryHybridRetriever? hybrid = null, MemoryAutomaticOptions? automatic = null,
-            WebSearchOptions? webSearch = null) => new(Db, new PromptBuilder(new Runtime()),
+            WebSearchOptions? webSearch = null, IResearchDelegationQueue? researchQueue = null) => new(Db, new PromptBuilder(new Runtime()),
             new AegisToolLoop(Model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, Metrics, webSearch), titles, Registry, Voice,
-            hybrid: hybrid, automaticMemory: automatic);
+            hybrid: hybrid, automaticMemory: automatic, researchQueue: researchQueue);
         public SendMessageRequest Request(bool includeProgress = false) => new() { TurnId = Guid.NewGuid(), Content = "Como vai?", Origin = "hands_free", VoiceSessionId = Guid.NewGuid(), VoiceSegments = true, IncludeWebResearchSources = includeProgress };
         public void Dispose() { Db.Dispose(); Registry.Dispose(); Metrics.Dispose(); }
     }
@@ -428,12 +477,20 @@ public sealed class FinalSpeechSegmentTests
         public string Answer { get; set; } = "Resposta natural.";
         public List<ModelToolRequest> Requests { get; } = [];
         public IReadOnlyList<JsonElement> ResearchOutputs { get; set; } = [];
+        public ModelToolCall? ResearchDelegation { get; set; }
         private static readonly LlmRequestAuditData Audit = new("test", "test", true, 1, "{}", 200, "{}", null, null);
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
         { Requests.Add(request); return Task.FromResult(new ModelToolResponse(Answer, "test", "test", ModelPurpose.Chat, [], ResearchOutputs, null, null, Audit)); }
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (ResearchDelegation is { } delegated)
+            {
+                Assert.Contains(request.Tools, tool => tool.Name == delegated.Name);
+                yield return new(null, true, [delegated], [], Provider: "test", Model: "test",
+                    Purpose: ModelPurpose.Chat, AuditData: Audit);
+                yield break;
+            }
             if (ResearchOutputs.Count > 0)
             {
                 if (request.NativeSearchActionBudget is null)

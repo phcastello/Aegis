@@ -30,7 +30,8 @@ public sealed class ChatService(
     AegisMetrics? metrics = null,
     MemoryHybridRetriever? hybrid = null,
     IMemoryActivityStore? activity = null,
-    ILogger<ChatService>? logger = null) : IChatService
+    ILogger<ChatService>? logger = null,
+    IResearchDelegationQueue? researchQueue = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
@@ -101,6 +102,7 @@ public sealed class ChatService(
                 userMessage.Id,
                 assistantMessage.Id,
                 completion.AuditData));
+            StageResearch(userMessage, completion.DelegatedResearchBrief);
 
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
@@ -180,7 +182,8 @@ public sealed class ChatService(
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
                 request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments,
-                defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null), turnToken);
+                defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null,
+                AllowResearchDelegation: researchQueue is not null), turnToken);
 
         var content = new StringBuilder();
         ChatMessage? segmentedMessage = null;
@@ -271,6 +274,7 @@ public sealed class ChatService(
                 promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
+            StageResearch(userMessage, chunk.DelegatedResearchBrief);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -662,7 +666,7 @@ public sealed class ChatService(
             request,
             new ToolExecutionContext(conversationId, userMessageId, userContent,
                 clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments,
-                acceptVoiceTurn), cancellationToken);
+                acceptVoiceTurn, AllowResearchDelegation: researchQueue is not null), cancellationToken);
 
         return new ModelCompletionResponse(
             response.Content,
@@ -672,7 +676,14 @@ public sealed class ChatService(
             response.MetadataJson,
             response.AuditData,
             response.VoiceContinuation,
-            response.Ignored);
+            response.Ignored,
+            response.DelegatedResearchBrief);
+    }
+
+    private void StageResearch(ChatMessage userMessage, string? brief)
+    {
+        if (brief is null) return;
+        (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível.")).Stage(userMessage, brief);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(

@@ -2,15 +2,15 @@
 
 ## Integração compartilhada
 
-A Responses API do GPT-6.1 Terra oferece pesquisa nativa. A Aegis disponibiliza `web_search` entre as ferramentas do modelo conversacional, junto das funções locais existentes, com escolha automática. O trabalho usa a infraestrutura de pesquisa da OpenAI. O cliente solicita `web_search_call.action.sources`, conserva os itens da pesquisa no contexto da rodada e registra a resposta na auditoria existente. Uma busca hospedada não é uma chamada de função local a ser executada pelo registro de ferramentas.
+A Responses API do GPT-6.1 Terra oferece pesquisa nativa. A Aegis libera `web_search` depois da decisão de fazer uma consulta direta ou no processo que executa uma pesquisa delegada. O trabalho usa a infraestrutura de pesquisa da OpenAI. O cliente solicita `web_search_call.action.sources`, conserva os itens da pesquisa no contexto da rodada e registra a resposta na auditoria existente. Uma busca hospedada não é uma chamada de função local a ser executada pelo registro de ferramentas.
 
 A configuração `AEGIS_WEB_SEARCH_ENABLED=true` disponibiliza a pesquisa. `AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS=20` estabelece o orçamento desejado por turno (de 1 a 20), incluindo todas as rodadas de ferramentas. O nome anterior `AEGIS_WEB_SEARCH_MAX_CALLS` é aceito como alternativa. Somente itens `web_search_call` cuja ação é `search` reduzem esse saldo; uma ação pode apresentar várias consultas. `open_page` e `find_in_page` podem continuar mesmo quando o saldo é zero, sem quota própria na Aegis. O saldo numérico fica no backend. Em rodadas com pesquisa, o modelo é orientado a fazer somente as consultas necessárias, reaproveitar resultados e parar assim que tiver evidências suficientes. Ao esgotar o saldo, o modelo recebe a instrução de não fazer novas ações `search` e ainda pode consultar as fontes disponíveis. O limite `max_tool_calls` da Responses API alcança todas as ferramentas hospedadas, então não é enviado. A Aegis não tem um controle rígido específico de ações `search` durante uma resposta hospedada: excesso efetivamente observado é registrado, a resposta é preservada, e o saldo da próxima rodada fica em zero. Os limites existentes de rodadas conversacionais e tempo do provedor continuam válidos. A auditoria de cada turno registra o orçamento, totais observados por tipo e ações search excedentes. O contador de ações observadas não pressupõe cobrança de toda ação. A tarifa publicada de US$ 10 por mil chamadas faturáveis se soma aos tokens do conteúdo recuperado. A documentação identifica `search` como ação faturável, sem explicitar a cobrança independente das outras ações. [Preço da API](https://developers.openai.com/api/docs/pricing) · [Contrato do limite agregado](https://developers.openai.com/api/reference/resources/responses/methods/create). O modelo decide a pertinência da pesquisa. O prompt pede consultas reais para fatos atuais e verificação, respeito às preferências de busca e proteção de informações privadas, sem criar uma classificação adicional para perguntas triviais.
 
 ## Conversação e voz
 
-Chat digitado e entrada manual de voz usam a ferramenta diretamente. No hands-free, a ferramenta de decisão de direcionamento continua precedendo efeitos externos. O primeiro turno oferece uma intenção de pesquisa local; quando ela é escolhida, o backend aceita a fala e libera a busca nativa na rodada seguinte. Uma resposta trivial continua em uma única chamada. Enquanto a decisão de ignorar ainda está aberta, o cliente Responses também bloqueia o anúncio da ferramenta hospedada.
+Chat digitado, entrada manual de voz e hands-free seguem a decisão do modelo. Uma resposta trivial continua em uma única chamada. Para uma consulta rápida, `request_web_search` libera a busca nativa na rodada seguinte. No hands-free, o modelo decide se a fala foi dirigida à Aegis antes de qualquer pesquisa. Uma fala descartada não cria mensagem nem trabalho.
 
-Nos turnos hands-free que solicitam pesquisa, a resposta final vem como texto natural anotado pelo provedor, depois é adaptada aos segmentos de voz existentes. Isso evita atribuir a posições em argumentos de função as citações que pertencem a `output_text`. A apresentação do resultado usa as referências válidas para o texto realmente exibido. Se os índices não puderem ser associados com segurança, as fontes ficam acessíveis separadamente.
+Nas consultas diretas do hands-free, a resposta final vem como texto natural anotado pelo provedor, depois é adaptada aos segmentos de voz existentes. Isso evita atribuir a posições em argumentos de função as citações que pertencem a `output_text`. A apresentação do resultado usa as referências válidas para o texto realmente exibido. Se os índices não puderem ser associados com segurança, as fontes ficam acessíveis separadamente.
 
 ## Progresso, fontes e persistência
 
@@ -20,12 +20,17 @@ O campo `MetadataJson` já existente das mensagens guarda uma projeção `webRes
 
 ## Pesquisa em segundo plano
 
-Use **Pesquisar em segundo plano** com um pedido no compositor. A Aegis salva o
-pedido na conversa e o servidor executa a pesquisa em uma fila persistente.
-Outros turnos e conversas continuam disponíveis, e o resultado, com fontes, entra
-na conversa original. É possível cancelar pelo controle da pesquisa. A execução é
-gerenciada pela Aegis, preservando a configuração de retenção já adotada no
-provedor. [Modo em segundo plano do provedor](https://developers.openai.com/api/docs/guides/background)
+Quando prevê uma pesquisa com várias etapas ou uma espera perceptível, a Aegis
+usa `delegate_web_research` antes da primeira busca. Ela anuncia o que vai
+pesquisar na conversa e fala a intenção no hands-free. O turno termina assim que
+a fila persistente recebe o trabalho. A intenção e a pesquisa ficam vinculadas ao
+pedido original. O usuário pode seguir na mesma conversa ou sair do app enquanto
+o servidor trabalha.
+
+O agente de pesquisa recebe um resumo autossuficiente com as referências
+públicas relevantes do diálogo e usa apenas a busca web. A resposta e as fontes
+entram na conversa original. O status acompanha o pedido, com opção de cancelar.
+O resumo usa os metadados da mensagem, sem migration.
 
 Os apps mostram até três sites em círculos sobrepostos, em ordem de frequência nos
 resultados observados. Novos ícones entram na pilha conforme chegam fontes do

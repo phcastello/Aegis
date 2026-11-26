@@ -7,10 +7,11 @@ using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Aegis.Infrastructure.Chat;
 
-public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock)
+public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IResearchDelegationQueue
 {
     public const int MaximumRequestLength = 12_000;
     internal const int MaximumSources = 128;
@@ -18,6 +19,22 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock)
     private const int MaximumRecentJobs = 20;
     private static readonly TimeSpan JobTimeout = TimeSpan.FromMinutes(3);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string DelegationKey = "researchDelegation";
+
+    public void Stage(ChatMessage userMessage, string brief)
+    {
+        if (userMessage.Role != ChatRoles.User || db.Entry(userMessage).State != EntityState.Unchanged ||
+            string.IsNullOrWhiteSpace(brief) || brief.Length > IResearchDelegationQueue.MaximumBriefLength)
+            throw new ArgumentException("Informe uma mensagem aceita e uma tarefa de pesquisa válida.");
+
+        var previous = userMessage.MetadataJson is { } json ? JsonNode.Parse(json) : null;
+        var metadata = previous as JsonObject ?? new JsonObject();
+        if (previous is not null && previous is not JsonObject) metadata["previousMetadata"] = previous;
+        metadata[DelegationKey] = new JsonObject { ["version"] = 1, ["brief"] = brief.Trim() };
+        userMessage.AttachAuditData(userMessage.Model, userMessage.PromptSnapshot, userMessage.RuntimeContextSnapshot,
+            metadata.ToJsonString(JsonOptions));
+        db.ResearchJobs.Add(new ResearchJob(userMessage.Id, userMessage.ConversationId, userMessage.Id, clock.GetUtcNow()));
+    }
 
     public async Task<ResearchJobSnapshot> CreateAsync(CreateResearchJobRequest request, CancellationToken ct)
     {
@@ -99,12 +116,35 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock)
         var job = await VisibleJobs().Where(item => item.State == ResearchJob.Queued)
             .OrderBy(item => item.CreatedAt).ThenBy(item => item.Id).FirstOrDefaultAsync(ct);
         if (job is null) return null;
-        var content = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
-            .Select(message => message.Content).SingleAsync(ct);
+        var message = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
+            .Select(message => new { message.Content, message.MetadataJson }).SingleAsync(ct);
+        var content = job.Id == job.UserMessageId ? ReadBrief(message.MetadataJson) : message.Content;
+        if (content is null)
+        {
+            job.Fail("research_incomplete", clock.GetUtcNow());
+            await SaveTransitionAsync(ct);
+            return null;
+        }
         job.Start(clock.GetUtcNow(), JobTimeout);
         return await SaveTransitionAsync(ct)
             ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId, content, job.DeadlineAt!.Value)
             : null;
+    }
+
+    private static string? ReadBrief(string? metadata)
+    {
+        if (metadata is null) return null;
+        using var document = JsonDocument.Parse(metadata);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty(DelegationKey, out var delegation) || delegation.ValueKind != JsonValueKind.Object ||
+            !delegation.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.Number ||
+            !version.TryGetInt32(out var versionNumber) || versionNumber != 1 ||
+            !delegation.TryGetProperty("brief", out var brief) || brief.ValueKind != JsonValueKind.String)
+            return null;
+        var text = brief.GetString();
+        return text is { Length: <= IResearchDelegationQueue.MaximumBriefLength } && !string.IsNullOrWhiteSpace(text)
+            ? text : null;
     }
 
     internal Task<bool> IsRunningAsync(Guid id, CancellationToken ct) =>

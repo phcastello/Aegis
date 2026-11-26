@@ -55,6 +55,7 @@ public static class DependencyInjection
         services.AddSingleton(webSearch);
         services.AddSingleton<ResearchFaviconDiscovery>();
         services.AddScoped<ResearchJobStore>();
+        services.AddScoped<IResearchDelegationQueue>(provider => provider.GetRequiredService<ResearchJobStore>());
         services.AddHostedService<ResearchWorker>();
         services.AddSingleton<IWebSearchUsageRecorder, WebSearchUsageRecorder>();
 

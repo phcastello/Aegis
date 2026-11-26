@@ -7,7 +7,7 @@ import ChatMessage from '../components/ChatMessage.vue';
 import BackgroundResearchStatus from '../components/BackgroundResearchStatus.vue';
 import WebResearchActivity from '../components/WebResearchActivity.vue';
 import { mergeResearchSites, topResearchSites } from '../services/researchSites';
-import { cancelResearchJob, isResearchPending, listResearchJobs, startResearchJob, type ResearchJob } from '../services/backgroundResearch';
+import { cancelResearchJob, isResearchPending, listResearchJobs, type ResearchJob } from '../services/backgroundResearch';
 import ConversationSidebar from '../components/ConversationSidebar.vue';
 import ConversationInfo from '../components/ConversationInfo.vue';
 import ConversationMenu from '../components/ConversationMenu.vue';
@@ -98,11 +98,9 @@ const toolStatusMessage = computed(() => selected.value.toolMessage);
 const toolStatusState = computed(() => selected.value.toolState);
 const toolStatusTimers = new Map<ConversationContext, number>();
 const selectedResearchSites = computed(() => selected.value.researchActive ? topResearchSites(selected.value.researchSites) : null);
-const startingResearch = shallowReactive(new Set<ConversationContext>());
 const cancellingResearch = shallowReactive(new Set<string>());
 const researchByConversation = shallowReactive(new Map<string, ResearchJob[]>());
-const researchAttempts = new WeakMap<ConversationContext, { jobId: string; conversationId: string | null; content: string }>();
-const pendingResearchReads = new Map<string, AbortController>();
+const pendingResearchReads = new Map<string, { controller: AbortController; refreshRequested: boolean }>();
 const selectedJobByMessage = computed(() => {
   const jobs = conversationId.value ? researchByConversation.get(conversationId.value) ?? [] : [];
   return new Map(jobs.filter(job => !job.resultMessageId || !messages.value.some(message =>
@@ -286,7 +284,7 @@ function proactiveForeground(): void { void syncProactiveMessages(); void markVi
 watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
 const deletingSelectedConversation = computed(() => isDeletingConversation.value && deleteTarget.value?.id === conversationId.value);
-const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending' && !startingResearch.has(selected.value));
+const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
   emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
   transcription.errorMessage.value,
@@ -298,7 +296,6 @@ const canStartRecording = computed(() =>
   !selectedHasActiveTurn.value &&
   !isRestoring.value &&
   !deletingSelectedConversation.value &&
-  !startingResearch.has(selected.value) &&
   transcription.available.value &&
   (transcription.state.value === 'idle' || transcription.state.value === 'error'));
 const conversationLabel = computed(() => {
@@ -346,34 +343,45 @@ function rememberResearchJobs(id: string, snapshots: readonly ResearchJob[]): vo
   const previous = researchByConversation.get(id) ?? [];
   if (!previous.length && !snapshots.length) return;
   const jobs = new Map(previous.map(job => [job.id, job]));
-  let completed = false;
+  const owner = contexts.get(id);
+  const hasMessage = (messageId: string): boolean => owner?.messages.some(message =>
+    (message.serverId ?? message.id) === messageId) ?? false;
+  let reconcile = false;
   for (const snapshot of snapshots) {
     if (!snapshot || snapshot.conversationId !== id) continue;
     const prior = jobs.get(snapshot.id);
     if (prior && (Date.parse(prior.updatedAt) > Date.parse(snapshot.updatedAt) ||
       !isResearchPending(prior) && isResearchPending(snapshot))) continue;
     jobs.set(snapshot.id, snapshot);
-    const owner = contexts.get(id);
-    if (snapshot.state === 'completed' && prior?.state !== 'completed' && snapshot.resultMessageId &&
-      owner && !owner.messages.some(message => (message.serverId ?? message.id) === snapshot.resultMessageId)) completed = true;
+    // A locally accepted typed message gets its canonical user ID from the saved conversation.
+    if (owner && ((!prior && !hasMessage(snapshot.userMessageId)) ||
+      (snapshot.state === 'completed' && prior?.state !== 'completed' &&
+        snapshot.resultMessageId && !hasMessage(snapshot.resultMessageId)))) reconcile = true;
   }
   const ordered = [...jobs.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   researchByConversation.set(id, ordered.slice(0, 20));
-  if (completed) conversationChanged(id, false);
+  if (reconcile) conversationChanged(id, false);
   scheduleResearchRefresh();
 }
 
-async function refreshResearchJobs(id: string): Promise<void> {
-  if (disposed || deletedConversations.has(id) || pendingResearchReads.has(id) ||
-    document.visibilityState !== 'visible' || !navigator.onLine) return;
+async function refreshResearchJobs(id: string, ensureFresh = false): Promise<void> {
+  if (disposed || deletedConversations.has(id) || document.visibilityState !== 'visible' || !navigator.onLine) return;
+  const pending = pendingResearchReads.get(id);
+  if (pending) {
+    // A GET issued before the completed turn may not include its newly delegated job.
+    if (ensureFresh) pending.refreshRequested = true;
+    return;
+  }
   const controller = new AbortController();
-  pendingResearchReads.set(id, controller);
+  const read = { controller, refreshRequested: false };
+  pendingResearchReads.set(id, read);
   try {
     const jobs = await listResearchJobs(id, controller.signal);
     if (!controller.signal.aborted && Array.isArray(jobs)) rememberResearchJobs(id, jobs);
   } catch { /* Keep the most recent status on disconnect and retry while jobs are active. */ }
   finally {
     pendingResearchReads.delete(id);
+    if (read.refreshRequested && !controller.signal.aborted) void refreshResearchJobs(id);
     scheduleResearchRefresh();
   }
 }
@@ -395,50 +403,6 @@ function researchForeground(): void {
 }
 
 watch(conversationId, researchForeground);
-
-async function beginBackgroundResearch(): Promise<void> {
-  if (!canSend.value) return;
-  const owner = selected.value;
-  const content = owner.draft.trim();
-  const previous = researchAttempts.get(owner);
-  const attempt = previous?.content === content ? previous : { jobId: crypto.randomUUID(), conversationId: owner.id, content };
-  researchAttempts.set(owner, attempt);
-  startingResearch.add(owner);
-  owner.error = null;
-  try {
-    const job = await startResearchJob(attempt.jobId, attempt.conversationId, content);
-    if (disposed || deletedConversations.has(job.conversationId)) return;
-    if (job.id !== attempt.jobId || owner.id && owner.id !== job.conversationId) throw new Error('Invalid research acknowledgement.');
-    researchAttempts.delete(owner);
-    owner.revision++;
-    const id = job.conversationId;
-    owner.id = id;
-    owner.createdAt ??= job.createdAt;
-    owner.loaded = true;
-    if (newConversation === owner) newConversation = createConversationContext();
-    contexts.set(id, owner);
-    if (owner.draft.trim() === content) owner.draft = '';
-    if (!owner.messages.some(message => (message.serverId ?? message.id) === job.userMessageId))
-      owner.messages.push({ id: job.userMessageId, serverId: job.userMessageId, role: 'user',
-        conversationId: id, content, createdAt: job.createdAt });
-    rememberResearchJobs(id, [job]);
-    conversationChanged(id, false);
-    if (selected.value === owner) {
-      localStorage.setItem(STORAGE_KEY, id);
-      resizeComposer();
-      scrollToLatest();
-    }
-  } catch (error) {
-    if (disposed) return;
-    if (error instanceof AegisApiError && error.status >= 400 && error.status < 500)
-      researchAttempts.delete(owner);
-    owner.error = error instanceof AegisApiError && error.status === 409
-      ? 'A pesquisa em segundo plano está ocupada. Tente novamente em instantes.'
-      : 'Não foi possível iniciar a pesquisa em segundo plano.';
-  } finally {
-    startingResearch.delete(owner);
-  }
-}
 
 async function stopBackgroundResearch(job: ResearchJob): Promise<void> {
   if (cancellingResearch.has(job.id)) return;
@@ -799,7 +763,7 @@ function finishNativeVoiceTurn(turnId: string, interrupted = false, reconcile = 
       if (!turn.generationDone && interrupted) turn.presentation.message.interrupted = true;
     } else completePresentation(turn.presentation);
   }
-  if (reconcile) conversationChanged(turn.protocol.conversationId, false);
+  if (reconcile) conversationChanged(turn.protocol.conversationId, false, turn.generationDone);
 }
 function acceptNativeVoiceStream(payload: unknown): void {
   const event = parseNativeVoiceStreamEvent(payload);
@@ -923,7 +887,7 @@ function mergeConversationSummary(summary: ConversationSummary): void {
 
 function applyRemoteConversationDeletion(id: string): void {
   researchByConversation.delete(id);
-  pendingResearchReads.get(id)?.abort();
+  pendingResearchReads.get(id)?.controller.abort();
   for (const [turnId, turn] of nativeVoiceTurns) if (turn.protocol.conversationId === id) finishNativeVoiceTurn(turnId, true, false);
   deletedConversations.add(id);
   summaryRevisions.set(id, ++summaryRevision);
@@ -987,9 +951,9 @@ function resetConversationChanges(): void {
   for (const timer of conversationRetryTimers.values()) clearTimeout(timer);
   conversationRetryTimers.clear();
 }
-function conversationChanged(id: string, awaitTitle = true): void {
+function conversationChanged(id: string, awaitTitle = true, refreshAfterTurn = false): void {
   if (deletedConversations.has(id)) return;
-  if (conversationId.value === id || researchByConversation.has(id)) void refreshResearchJobs(id);
+  if (refreshAfterTurn || conversationId.value === id || researchByConversation.has(id)) void refreshResearchJobs(id, refreshAfterTurn);
   conversationSync.invalidate(id);
   clearTimeout(conversationSyncTimer);
   conversationSyncTimer = setTimeout(flushConversationChanges, 120);
@@ -1360,6 +1324,7 @@ async function handleSubmit(): Promise<void> {
         assistantMessage.pending = false;
         completePresentation(presentation);
         activeTurns.delete(turnId);
+        void refreshResearchJobs(id, true);
         if (owner.toolState === 'completed' || owner.toolState === 'failed') {
           showToolStatus(owner.toolMessage ?? '', owner.toolState, owner, owner.researchActive);
         } else if (owner.researchActive && owner.researchSites.size) {
@@ -1571,7 +1536,7 @@ async function confirmDeleteConversation(): Promise<void> {
     await deleteConversation(targetId);
     deletedConversations.add(targetId);
     researchByConversation.delete(targetId);
-    pendingResearchReads.get(targetId)?.abort();
+    pendingResearchReads.get(targetId)?.controller.abort();
     contexts.delete(targetId);
     conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
   if (conversationId.value === targetId) {
@@ -1740,7 +1705,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('online', researchForeground);
   clearTimeout(researchTimer);
   clearTimeout(nativeResearchTimer);
-  for (const controller of pendingResearchReads.values()) controller.abort();
+  for (const { controller } of pendingResearchReads.values()) controller.abort();
   cancelMemoryActivityPolling();
   clearToolStatus();
   emailConnectionAbortController?.abort();
@@ -1909,14 +1874,7 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
         <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
-        <div class="composer-guidance">
-          <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
-          <button v-if="!transcription.isBusy.value && (draft.trim() || startingResearch.has(selected))" type="button"
-            class="composer-research" :disabled="!canSend" @click="beginBackgroundResearch">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m14.5 14.5 4 4M10.5 7.5v3l2 1"/></svg>
-            {{ startingResearch.has(selected) ? 'Iniciando pesquisa…' : 'Pesquisar em segundo plano' }}
-          </button>
-        </div>
+        <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
         </template>
       </form>
       </section>
