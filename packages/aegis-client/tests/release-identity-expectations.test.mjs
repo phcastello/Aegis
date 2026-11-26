@@ -16,8 +16,14 @@ test('native smoke asserts the assigned v0.8 identity without a tagline', () => 
       versionLabel: `v${version}`, codename: 'I Miss the Peace and Quiet', tagline: null,
     });
 });
+test('native smoke asserts Thinking Outside for the v0.9 family', () => {
+  for (const version of ['0.9.0', '0.9.0-unstable.3', '0.9.2'])
+    assert.deepEqual(expectedReleaseIdentity(version), {
+      versionLabel: `v${version}`, codename: 'Thinking Outside', tagline: null,
+    });
+});
 test('new release lines assert explicit unavailable editorial identity, not the previous family', () => {
-  for (const version of ['0.9.0', '1.0.0', '0.80.0'])
+  for (const version of ['0.10.0', '1.0.0', '0.90.0'])
     assert.deepEqual(expectedReleaseIdentity(version), {
       versionLabel: `v${version}`, codename: 'Codinome indisponível', tagline: null,
     });

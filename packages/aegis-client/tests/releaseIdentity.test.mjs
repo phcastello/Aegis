@@ -23,13 +23,21 @@ test('the 0.8 family keeps its codename without a tagline for stable, preview an
   assert.equal(getReleaseIdentity(' v0.8.0 ').versionLabel, 'v0.8.0');
 });
 
+test('the 0.9 family uses Thinking Outside for stable, preview and patch builds', () => {
+  for (const version of ['0.9.0', '0.9.0-unstable.1', '0.9.1', '0.9.1+build.2']) {
+    assert.deepEqual(getReleaseIdentity(version), {
+      version, versionLabel: `v${version}`, codename: 'Thinking Outside', tagline: null,
+    });
+  }
+});
+
 test('missing or unrelated metadata never impersonates a known installed release', () => {
   for (const value of [undefined, null, '', 'unknown', 'vv0.7.1', '0.07.1', '0.7.1-01', '0.08.0', '0.8.0-01', '0.8.0-', '0.8', '0.8.0.1']) {
     assert.deepEqual(getReleaseIdentity(value), {
       version: null, versionLabel: 'Versão indisponível', codename: 'Codinome indisponível', tagline: null,
     });
   }
-  for (const version of ['0.6.9', '0.9.0', '1.7.1', '1.8.0', '0.80.0']) {
+  for (const version of ['0.6.9', '0.10.0', '1.7.1', '1.8.0', '0.80.0']) {
     assert.deepEqual(getReleaseIdentity(version), {
       version, versionLabel: `v${version}`, codename: 'Codinome indisponível', tagline: null,
     });

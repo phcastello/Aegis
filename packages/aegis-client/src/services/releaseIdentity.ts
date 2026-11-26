@@ -7,6 +7,7 @@ export function getReleaseIdentity(value?: string | null) {
   const identities: Record<string, { codename: string; tagline: string | null }> = {
     '0.7': { codename: "It's Not Stalking. It's a Feature.", tagline: "You're terrible at hiding." },
     '0.8': { codename: 'I Miss the Peace and Quiet', tagline: null },
+    '0.9': { codename: 'Thinking Outside', tagline: null },
   };
   const identity = family ? identities[family] : undefined;
   return {

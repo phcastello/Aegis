@@ -8,6 +8,10 @@ export const handsFreeReleaseIdentity = Object.freeze({
   codename: 'I Miss the Peace and Quiet',
   tagline: null,
 });
+export const researchReleaseIdentity = Object.freeze({
+  codename: 'Thinking Outside',
+  tagline: null,
+});
 export function expectedReleaseIdentity(version) {
   const normalized = version.replace(/^v/, '');
   const family = /^(\d+)\.(\d+)\./.exec(normalized);
@@ -16,6 +20,7 @@ export function expectedReleaseIdentity(version) {
     versionLabel: `v${normalized}`,
     ...(family[1] === '0' && family[2] === '7' ? legacyReleaseIdentity
       : family[1] === '0' && family[2] === '8' ? handsFreeReleaseIdentity
+      : family[1] === '0' && family[2] === '9' ? researchReleaseIdentity
       : { codename: 'Codinome indisponível', tagline: null }),
   };
 }
