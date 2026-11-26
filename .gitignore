@@ -10,6 +10,8 @@ Desktop.ini
 .vs/
 
 # Environment and local secrets
+# Local conversation exports.
+/conversas_*.zip
 # Owner voice dataset and acoustic wakeword references stay local.
 /aegis-wakeword-poc.zip
 /aegis-wakeword-poc/
