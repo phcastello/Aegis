@@ -185,7 +185,9 @@ test('processing interruption has exclusive microphone ownership before playback
   assert.ok(prepare.includes('retireProcessingCapture('));
   assert.ok(prepare.indexOf('retireProcessingCapture(') < prepare.indexOf('HandsFreeConversationAudio.tryOpen('));
   assert.match(runtime, /interruptedGeneration=pendingGenerationInterruption\?\.second/);
-  assert.match(runtime, /onProcessing=\{if\(response!=null\)startProcessingCapture\(/);
+  assert.match(runtime, /val startProcessing:\s*\(\)\s*->\s*Unit\s*=\s*\{\s*if\s*\(response\s*!=\s*null\)\s*startProcessingCapture\(response,generation,session,active,sink\)/);
+  assert.match(runtime, /active\.speakResearch\(research\.jobId,research\.voiceSessionId,sink,onProcessing\s*=\s*startProcessing\)/);
+  assert.match(runtime, /else active\.execute\(command,session,conversationId,sink,trace,[\s\S]*?onProcessing\s*=\s*startProcessing,/);
 });
 
 test('temporary transcription still rejects updates from a previous session or request', () => {
