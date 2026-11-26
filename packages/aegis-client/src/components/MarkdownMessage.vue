@@ -23,6 +23,12 @@ const markdown = new MarkdownIt({
   breaks: true
 });
 
+markdown.renderer.rules.table_open = (tokens, index, options, _environment, renderer) =>
+  '<div class="markdown-table-scroll" role="region" aria-label="Tabela" tabindex="0">' +
+  renderer.renderToken(tokens, index, options);
+markdown.renderer.rules.table_close = (tokens, index, options, _environment, renderer) =>
+  renderer.renderToken(tokens, index, options) + '</div>\n';
+
 const defaultLinkOpen =
   markdown.renderer.rules.link_open ??
   ((tokens, index, options, _environment, renderer) =>

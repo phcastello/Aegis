@@ -978,7 +978,6 @@ button:disabled {
 
 .markdown-message {
   max-width: 100%;
-  overflow-x: auto;
   overflow-wrap: anywhere;
   color: #e5eaf4;
   font-size: 0.92rem;
@@ -1030,15 +1029,30 @@ button:disabled {
   border-color: var(--line);
 }
 
-.markdown-message table {
+.markdown-message .markdown-table-scroll {
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
   margin-bottom: 0.85em;
+}
+
+.markdown-message .markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+}
+
+.markdown-message table {
+  inline-size: 100%;
   border-collapse: collapse;
 }
 
 .markdown-message th,
 .markdown-message td {
+  min-inline-size: 7rem;
+  max-inline-size: 20rem;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+  overflow-wrap: break-word;
   text-align: left;
 }
 

@@ -229,6 +229,49 @@ try {
     if (text.startsWith('https:')) assert.equal(initial.scrollWidth, initial.width, 'Long prose/links still wrap');
     if (text.startsWith('```')) assert.ok(await page.locator('pre').evaluate(el => el.scrollWidth > el.clientWidth), 'Long code remains horizontally scrollable');
   }
+
+  const comparison = [
+    'Texto antes da tabela.',
+    '',
+    '| Cidade | Início aproximado | Fim aproximado | Avanço observado |',
+    '| --- | --- | --- | --- |',
+    '| São Paulo | 1.009 elétricos em operação | 2.009 em operação | O cadastro ainda não confirma todos os veículos em circulação. |',
+    '| Rio de Janeiro | Levantamento anterior | Levantamento atualizado | O financiamento anunciado ainda não equivale a veículos circulando. |',
+    '| Belo Horizonte | Contagem inicial indisponível | Operação regular | A prefeitura formalizou a compra, com incorporação gradual. |',
+    '',
+    'O texto depois da tabela também fica no lugar.'
+  ].join('\n');
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.evaluate(text => window.updateMarkdown(text), comparison);
+  const table = page.getByRole('region', { name: 'Tabela' });
+  await table.waitFor();
+  const tableLayout = () => table.evaluate(element => {
+    const firstColumn = element.querySelector('th');
+    const message = element.closest('.markdown-message');
+    return {
+      width: element.clientWidth, scrollWidth: element.scrollWidth, scrollLeft: element.scrollLeft,
+      cityWidth: firstColumn.getBoundingClientRect().width,
+      messageWidth: message.clientWidth, messageScrollWidth: message.scrollWidth,
+      paragraphs: Array.from(message.querySelectorAll(':scope > p')).map(paragraph => paragraph.getBoundingClientRect().left)
+    };
+  });
+  const mobile = await tableLayout();
+  assert.equal(mobile.messageScrollWidth, mobile.messageWidth, 'The message itself fits a narrow conversation');
+  assert.ok(mobile.scrollWidth > mobile.width, 'The comparative table scrolls by itself');
+  assert.ok(mobile.cityWidth >= 100, 'The city column has room for whole words on mobile');
+  await table.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => document.querySelector('.markdown-table-scroll').scrollLeft > 0);
+  assert.deepEqual((await tableLayout()).paragraphs, mobile.paragraphs, 'Scrolling the table does not move surrounding paragraphs');
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('#fixture').evaluate(element => { element.style.width = '760px'; });
+  const desktop = await tableLayout();
+  assert.ok(desktop.cityWidth >= 100, 'A desktop table does not crush its first column');
+  assert.equal(desktop.messageScrollWidth, desktop.messageWidth, 'The desktop message itself has no lateral overflow');
+  assert.equal(desktop.scrollWidth, desktop.width, 'A table that fits does not need a scrollbar');
+  await page.locator('#fixture').evaluate(element => { element.style.width = '300px'; });
+
   // A single accumulated plain-text update is not wrapped per word. During
   // rapid character/group arrivals, wrappers remain confined to at most six
   // recent groups and disappear once their animation finishes.
