@@ -11,6 +11,25 @@ export interface MemoryActivitySnapshot {
   sections: MemoryActivitySection[];
 }
 
+export interface WebResearchSource {
+  url: string;
+  title?: string | null;
+  kind: 'consulted' | 'opened' | 'citation';
+  cited?: boolean;
+}
+
+export interface WebResearchCitation {
+  url: string;
+  title?: string | null;
+  startIndex: number;
+  endIndex: number;
+}
+
+export interface WebResearch {
+  sources: WebResearchSource[];
+  citations: WebResearchCitation[];
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -18,6 +37,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   model?: string | null;
+  webResearch?: WebResearch | null;
   memoryActivity?: MemoryActivitySnapshot | null;
   isProactive?: boolean;
   proactiveSequence?: number | null;
@@ -83,6 +103,7 @@ export interface ChatStreamHandlers {
     conversationTitle?: string | null;
     titleSource?: string | null;
     memoryActivity?: MemoryActivitySnapshot | null;
+    webResearch?: WebResearch | null;
   isProactive?: boolean;
   proactiveSequence?: number | null;
   }) => void;

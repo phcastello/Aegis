@@ -73,6 +73,18 @@ class MainActivity : TauriActivity() {
     val payload=event.toString()
     currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-conversation-changed',{detail:$payload}))",null) }
   }
+  @Volatile private var voiceSearchGeneration=0L
+  private val voiceSearchProgress: (String, org.json.JSONObject) -> Unit = progress@ { fingerprint,event ->
+    val payload=org.json.JSONObject.quote(event.toString())
+    val view=currentWebView ?: return@progress
+    val generation=voiceSearchGeneration
+    view.post {
+      // An observer queued before a pause or identity replacement must not appear in the next session.
+      if(readResumed && currentWebView===view && voiceSearchGeneration==generation &&
+        try { NodeNativeSession.read(this)?.let{NodeNativeSession.fingerprint(it)}==fingerprint }catch(_:Exception){false})
+        view.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-android-voice-chat-stream',{detail:JSON.parse($payload)}))",null)
+    }
+  }
   // Native Rust JNI only; replay is read-only so a failed WebView fetch never consumes an event.
   fun conversationChanges(payload:String):String = synchronized(NodeConversationChanges) {
     NodeConversationChanges.snapshot(NodeNativeSession.read(this))
@@ -81,6 +93,8 @@ class MainActivity : TauriActivity() {
     super.onResume()
     readResumed=true
     NodeConversationChanges.listener=conversationChanged
+    voiceSearchGeneration++
+    NodeConversationChanges.voiceSearchListener=voiceSearchProgress
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged={currentWebView?.post{currentWebView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('aegis-reminder-actions-changed'))",null)}}
     if(connectivityCallback==null) {
@@ -97,6 +111,8 @@ class MainActivity : TauriActivity() {
   override fun onPause() {
     readResumed=false
     if(NodeConversationChanges.listener===conversationChanged)NodeConversationChanges.listener=null
+    voiceSearchGeneration++
+    if(NodeConversationChanges.voiceSearchListener===voiceSearchProgress)NodeConversationChanges.voiceSearchListener=null
     notifyReadVisibility()
     NodeBackgroundWork.actionsChanged=null
     connectivityCallback?.let{try{getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it)}catch(_:Exception){}}

@@ -45,7 +45,8 @@ async function copy(): Promise<void> {
         :activity="message.memoryActivity" />
       <div v-if="message.role === 'user' || message.content.trim() || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
         <p v-if="message.role === 'user'">{{ message.content }}</p>
-        <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming" />
+        <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming"
+          :web-research="message.streaming ? null : message.webResearch" />
         <span v-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>
       </div>
       <div v-if="!message.pending && !message.streaming && !message.interrupted" class="message-actions">

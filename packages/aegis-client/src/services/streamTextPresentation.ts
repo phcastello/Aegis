@@ -32,7 +32,12 @@ export class StreamTextReveal {
 }
 
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-export type NativeVoiceStreamKind = 'conversation' | 'final_segment' | 'done' | 'interrupted' | 'error' | 'ignored';
+export type NativeVoiceStreamKind = 'conversation' | 'final_segment' | 'done' | 'interrupted' | 'error' | 'ignored' | 'tool_status';
+export interface NativeResearchStatus {
+  category: 'web_search';
+  state: 'started' | 'completed' | 'failed';
+  message: string;
+}
 export interface NativeVoiceStreamEvent {
   type: NativeVoiceStreamKind;
   turnId: string;
@@ -41,16 +46,25 @@ export interface NativeVoiceStreamEvent {
   segmentId?: string;
   sequence?: number;
   content?: string;
+  toolStatus?: NativeResearchStatus;
 }
 export function parseNativeVoiceStreamEvent(payload: unknown): NativeVoiceStreamEvent | null {
   if (!payload || typeof payload !== 'object') return null;
   const row = payload as Record<string, unknown>;
-  if (!uuid(row.turnId) || typeof row.type !== 'string' || !['conversation', 'final_segment', 'done', 'interrupted', 'error', 'ignored'].includes(row.type)) return null;
+  if (!uuid(row.turnId) || typeof row.type !== 'string' || !['conversation', 'final_segment', 'done', 'interrupted', 'error', 'ignored', 'tool_status'].includes(row.type)) return null;
   if (row.conversationId != null && !uuid(row.conversationId) || row.assistantMessageId != null && !uuid(row.assistantMessageId)) return null;
   const conversationId = uuid(row.conversationId) ? row.conversationId : null;
   const assistantMessageId = uuid(row.assistantMessageId) ? row.assistantMessageId : null;
   const type = row.type as NativeVoiceStreamKind;
   if (type === 'conversation' && !conversationId || type === 'done' && (!conversationId || !assistantMessageId)) return null;
+  if (type === 'tool_status') {
+    if (!conversationId || assistantMessageId !== null || !row.toolStatus || typeof row.toolStatus !== 'object') return null;
+    const status = row.toolStatus as Record<string, unknown>;
+    if (status.category !== 'web_search' || (status.state !== 'started' && status.state !== 'completed' && status.state !== 'failed') ||
+      typeof status.message !== 'string' || !status.message.trim() || status.message.length > 240) return null;
+    return { type, turnId: row.turnId, conversationId, assistantMessageId,
+      toolStatus: { category: 'web_search', state: status.state, message: status.message } };
+  }
   if (type === 'final_segment') {
     if (!conversationId || !assistantMessageId || !uuid(row.segmentId) || typeof row.sequence !== 'number' ||
       !Number.isInteger(row.sequence) || row.sequence < 0 || row.sequence >= 128 || typeof row.content !== 'string' ||

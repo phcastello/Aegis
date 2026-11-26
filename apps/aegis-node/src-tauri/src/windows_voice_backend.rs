@@ -62,7 +62,14 @@ pub(crate) struct TurnReport {
     pub playback: Option<PlaybackInterruption>,
 }
 
-/// Local projection of validated, already committed chat events. Speech
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct VoiceToolStatus {
+    pub category: &'static str,
+    pub state: String,
+    pub message: String,
+}
+
+/// Local projection of validated, already committed chat events and observable web search. Speech
 /// playback and server reconciliation remain independent of this observer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +85,8 @@ pub(crate) struct VoiceChatStreamEvent {
     pub sequence: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_status: Option<VoiceToolStatus>,
 }
 
 impl VoiceChatStreamEvent {
@@ -95,7 +104,35 @@ impl VoiceChatStreamEvent {
             segment_id: None,
             sequence: None,
             content: None,
+            tool_status: None,
         }
+    }
+    fn web_search(turn_id: Uuid, conversation_id: Uuid, event: &Value) -> Option<Self> {
+        if event["category"] != "web_search"
+            || !matches!(
+                event["state"].as_str(),
+                Some("started" | "completed" | "failed")
+            )
+            || (!event["conversationId"].is_null()
+                && parse_uuid(&event["conversationId"]).ok() != Some(conversation_id))
+        {
+            return None;
+        }
+        let message = event["message"].as_str()?;
+        if message.trim().is_empty()
+            || message.chars().count() > 256
+            || message.chars().any(char::is_control)
+        {
+            return None;
+        }
+        Some(Self {
+            tool_status: Some(VoiceToolStatus {
+                category: "web_search",
+                state: event["state"].as_str()?.to_owned(),
+                message: message.to_owned(),
+            }),
+            ..Self::new("tool_status", turn_id, Some(conversation_id), None)
+        })
     }
     fn segment(turn_id: Uuid, segment: &Segment, content: String) -> Self {
         Self {
@@ -711,7 +748,18 @@ impl Backend {
                             sequence += 1;
                         }
                     }
-                    "tool_status" | "memory_activity" | "token" => {}
+                    "tool_status" => {
+                        // A requested destination alone does not establish acceptance. Search
+                        // status is a transient observer, never a persistence or audio boundary.
+                        if accepted {
+                            if let Some(status) = conversation
+                                .and_then(|id| VoiceChatStreamEvent::web_search(turn, id, &event))
+                            {
+                                on_stream(status);
+                            }
+                        }
+                    }
+                    "memory_activity" | "token" => {}
                     _ => return Err("backend_response"),
                 }
             }

@@ -120,6 +120,8 @@ try {
   const segment = (turn, conversation, id, sequence, content) => event('final_segment', turn, conversation, id, { sequence, segmentId: uuid(100 + sequence + Number(turn.slice(-3))), content });
   const accepted = (turn, conversation) => emit(stream, event('conversation', turn, conversation));
   const sync = id => emit('aegis-conversation-sync', { kind: 'changed', conversationId: id });
+  const researchStatus = (turn, conversationId, state, message) => emit(stream,
+    event('tool_status', turn, conversationId, null, { toolStatus: { category: 'web_search', state, message } }));
   const speaking = () => emit('aegis-windows-voice-state', { status: 'speaking', generation: 12 });
   const idle = () => emit('aegis-windows-voice-state', { status: 'idle', generation: 13 });
   function append(conversation, id, content, role = 'assistant') {
@@ -157,6 +159,32 @@ try {
   await page.waitForFunction(name => window.fixtureNativeSubscribed?.(name), stream);
   await page.waitForFunction(() => window.fixtureNativeSubscribed?.('aegis-windows-voice-state') && window.fixtureNativeSubscribed?.('aegis-conversation-sync'));
   await select('Alfa'); await exact('Histórico Alfa.').waitFor();
+
+  // Research only appears after acceptance, stays scoped to the owning chat,
+  // and a terminal event removes the transient status without a fake message.
+  const researchTurn = uuid(80), researchId = uuid(81), researchText = 'Resultado da pesquisa confirmado.';
+  const researchMessage = 'Pesquisando fontes na web…';
+  await researchStatus(researchTurn, a, 'started', 'STATUS ANTES DO ACEITE');
+  await page.waitForTimeout(100);
+  assert.equal(await exact('STATUS ANTES DO ACEITE').count(), 0);
+  const beforeResearch = await assistant.count();
+  append(a, uuid(82), 'Pesquisar na web.', 'user');
+  await accepted(researchTurn, a);
+  await researchStatus(researchTurn, a, 'started', researchMessage);
+  await exact(researchMessage).waitFor();
+  assert.equal(await assistant.count(), beforeResearch);
+  await select('Beta'); await exact('Histórico Beta.').waitFor();
+  assert.equal(await exact(researchMessage).count(), 0);
+  await select('Alfa'); await exact(researchMessage).waitFor();
+  append(a, researchId, researchText);
+  data.get(a).messages.at(-1).webResearch = { sources: [{ url: 'https://example.test/', title: 'Fonte persistida', kind: 'consulted' }], citations: [] };
+  await emit(stream, event('done', researchTurn, a, researchId)); await sync(a);
+  await exact(researchText).waitFor();
+  await page.locator('.web-research-list summary').filter({hasText:'Fontes da pesquisa'}).waitFor();
+  assert.equal(await exact(researchMessage).count(), 0);
+  await researchStatus(researchTurn, a, 'started', 'STATUS DEPOIS DO TÉRMINO');
+  await page.waitForTimeout(100);
+  assert.equal(await exact('STATUS DEPOIS DO TÉRMINO').count(), 0);
 
   // Two committed segments arrive in a single IPC burst. Model completion is
   // independent of the speaking state, and must not snap the pending text.

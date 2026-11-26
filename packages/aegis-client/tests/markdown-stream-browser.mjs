@@ -18,8 +18,9 @@ import { createApp, h, ref, nextTick } from 'vue';
 import MarkdownMessage from '@aegis/client/components/MarkdownMessage.vue';
 import '@aegis/client/styles.css';
 const content = ref('');
-createApp({ render: () => h(MarkdownMessage, { content: content.value, animateChanges: true }) }).mount('#fixture');
-window.updateMarkdown = async text => { content.value = text; await nextTick(); };
+const research = ref(null);
+createApp({ render: () => h(MarkdownMessage, { content: content.value, animateChanges: true, webResearch: research.value }) }).mount('#fixture');
+window.updateMarkdown = async (text, metadata = null) => { content.value = text; research.value = metadata; await nextTick(); };
 `;
 const port = await new Promise((resolve, reject) => {
   const probe = createPortProbe(); probe.once('error', reject);
@@ -47,6 +48,29 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
   await page.waitForFunction(() => typeof window.updateMarkdown === 'function');
+  const sourcedText = 'A primeira informação. A segunda informação.';
+  await page.evaluate(({ content, research }) => window.updateMarkdown(content, research), {
+    content: sourcedText,
+    research: {
+      sources: [{ url: 'https://example.test/first', kind: 'consulted', title: 'Primeira fonte' },
+        { url: 'https://example.test/second', kind: 'opened', title: 'Segunda fonte' },
+        { url: 'javascript:alert(1)', kind: 'opened' }],
+      citations: [{ url: 'https://example.test/first', startIndex: 0, endIndex: 'A primeira informação.'.length },
+        { url: 'https://example.test/second', startIndex: 'A primeira informação. '.length, endIndex: sourcedText.length }]
+    }
+  });
+  const citations = page.locator('.markdown-message a.web-citation');
+  await citations.nth(1).waitFor();
+  assert.equal(await citations.nth(0).getAttribute('href'), 'https://example.test/first');
+  assert.equal(await citations.nth(1).getAttribute('href'), 'https://example.test/second');
+  assert.equal((await page.locator('.markdown-message').textContent()).trim(), 'A primeira informação.[1] A segunda informação.[2]');
+  const sourceList = page.locator('details.web-research-list');
+  assert.equal(await sourceList.getAttribute('open'), null);
+  await sourceList.locator('summary').click();
+  assert.equal(await sourceList.locator('a').count(), 2);
+  await page.evaluate(() => window.updateMarkdown('Sem metadados.'));
+  assert.equal(await sourceList.count(), 0);
+  assert.equal(await citations.count(), 0);
   const metrics = () => page.locator('.markdown-message').evaluate(el => ({ width: el.clientWidth, height: el.clientHeight,
     scrollHeight: el.scrollHeight, scrollWidth: el.scrollWidth,
     nestedVertical: [...el.querySelectorAll('*')].filter(child => ['auto', 'scroll'].includes(getComputedStyle(child).overflowY) && child.scrollHeight > child.clientHeight).length }));

@@ -26,7 +26,8 @@ class NodeHandsFreeBackend internal constructor(
   private val readSession: () -> NodeNativeSession.Session?,
   private val onStage: (String, Long) -> Unit = { _, _ -> },
   private val ttsDeadlineMilliseconds: Long = 300000,
-  private val onConversationChanged: (NodeNativeSession.Session, String) -> Unit = NodeConversationChanges::changed
+  private val onConversationChanged: (NodeNativeSession.Session, String) -> Unit = NodeConversationChanges::changed,
+  private val onVoiceSearchProgress: (NodeNativeSession.Session, JSONObject) -> Unit = NodeConversationChanges::voiceSearchProgress
 ) {
   constructor(context: Context, onStage: (String, Long) -> Unit = { _, _ -> }) :
     this({ NodeNativeSession.read(context.applicationContext) }, onStage)
@@ -60,6 +61,19 @@ class NodeHandsFreeBackend internal constructor(
       checkCurrent()
       onConversationChanged(checkNotNull(scope), id)
     }
+  }
+
+  /** Transient presentation can fail without changing the authoritative voice turn. */
+  private fun voiceSearchProgress(event:JSONObject, terminal:Boolean=false) {
+    try {
+      synchronized(NodeConversationChanges) {
+        val pinned=scope ?: return
+        val current=readSession() ?: return
+        if(current.nodeId!=pinned.nodeId || current.origin!=pinned.origin || current.credential!=pinned.credential ||
+          !terminal && cancelled.get()) return
+        onVoiceSearchProgress(pinned,event)
+      }
+    }catch(_:Exception){}
   }
 
   private fun checkNotCancelled() {if(cancelled.get())throw CancellationException()}
@@ -384,6 +398,14 @@ class NodeHandsFreeBackend internal constructor(
     val readerFailure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
     val schedulerFailure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
     val stopped=AtomicBoolean(false)
+    val searchDestination=java.util.concurrent.atomic.AtomicReference<String?>()
+    fun presentation(type:String,destination:String,messageId:String?=null)=JSONObject()
+      .put("type",type).put("turnId",id).put("conversationId",destination).put("assistantMessageId",messageId?:JSONObject.NULL)
+    fun finishSearchPresentation(type:String,messageId:String?=null) {
+      searchDestination.getAndSet(null)?.let { destination ->
+        voiceSearchProgress(presentation(type,destination,messageId),terminal=true)
+      }
+    }
     fun failPipeline(error:Throwable) {
       if(stopped.get())return
       schedulerFailure.compareAndSet(null,error)
@@ -400,12 +422,15 @@ class NodeHandsFreeBackend internal constructor(
       var persistedMessage:String?=null
       var persistedSequence=0
       var hasEvent=false
+      var accepted=false
+      var terminalSeen=false
       var ignored=false
       try {
         trace?.mark("chat_request_started")
         request("/api/chat/messages/stream",bytes,"application/json",1048576,180,onLine={ event ->
           checkCurrent();require(event.getString("turnId")==id)
           require(!ignored){"events_after_ignored"}
+          require(!terminalSeen){"events_after_done"}
           val firstEvent = !hasEvent
           hasEvent = true
           when(event.getString("type")) {
@@ -420,6 +445,7 @@ class NodeHandsFreeBackend internal constructor(
               val destination=event.getString("conversationId");requireUuid(destination)
               require(persistedDestination==null || persistedDestination==destination)
               persistedDestination=destination
+              accepted=true
               conversationChanged(destination)
               reportConversation(destination)
             }
@@ -433,12 +459,29 @@ class NodeHandsFreeBackend internal constructor(
                 if(event.getString("type")=="final_segment") require(event.getInt("sequence")==persistedSequence++)
                 else require(persistedSequence>0)
                 persistedDestination=destination;persistedMessage=message
+                accepted=true
                 conversationChanged(destination)
               }
+              terminalSeen=event.getString("type")!="final_segment"
               while(!stopped.get() && !events.offer(event,200,TimeUnit.MILLISECONDS)) checkNotCancelled()
               if(stopped.get())throw CancellationException()
             }
-            "tool_status","memory_activity","token" -> Unit
+            "tool_status" -> {
+              // A pinned destination is not acceptance; speculative or unrelated status stays private.
+              val destination=persistedDestination
+              val state=event.opt("state")
+              val statusMessage=event.opt("message")
+              if(accepted && !stopped.get() && destination!=null && event.opt("category")=="web_search" &&
+                (event.isNull("conversationId") || event.opt("conversationId")==destination) &&
+                state is String && state in listOf("started","completed","failed") && statusMessage is String &&
+                statusMessage.isNotBlank() && statusMessage.length<=256 && statusMessage.none{it.isISOControl()}) {
+                if(searchDestination.compareAndSet(null,destination))
+                  voiceSearchProgress(presentation("conversation",destination))
+                voiceSearchProgress(presentation("tool_status",destination).put("toolStatus",
+                  JSONObject().put("category","web_search").put("state",state).put("message",statusMessage)))
+              }
+            }
+            "memory_activity","token" -> Unit
             else -> error("invalid_chat_event")
           }
         })
@@ -558,6 +601,7 @@ class NodeHandsFreeBackend internal constructor(
             try{completionCleanup.execute{try{request("/api/chat/turns/$id/complete",ByteArray(0),"application/json",65536,3,cleanup=true)}catch(_:Exception){}}}
             catch(_:java.util.concurrent.RejectedExecutionException){}
             pinnedConversationId=destination;speechId=null;turnId=null
+            finishSearchPresentation("done",unit.event.getString("assistantMessageId"))
             return HandsFreeTurn(destination,true,unit.event.optString("voiceContinuation")=="continue")
           }
           playbackProgress.begin(unit.event.getString("conversationId"), id, unit.event.getString("assistantMessageId"),
@@ -581,6 +625,7 @@ class NodeHandsFreeBackend internal constructor(
       while(true){val abandoned=units.poll()?:break;abandoned.close()}
       val withinDeadline=deadlineArmed.getAndSet(false);deadline.cancel(false)
       if(!withinDeadline)requestCancellation()
+      finishSearchPresentation(if(cancelled.get())"interrupted" else "error")
       if(!ignored)onStage("tts_total",(System.nanoTime()-started)/1000000)
     }
   }

@@ -1,21 +1,28 @@
-# Pesquisa web nativa — v0.9.0
+# Pesquisa web nativa — v0.9.0 Thinking Outside
 
-## Primeiro incremento: transporte do provedor
+## Integração compartilhada
 
-O cliente Responses compartilhado aceita um orçamento explícito de chamadas de pesquisa nativa por requisição. Quando o orçamento é positivo, anuncia a ferramenta `web_search` ao lado das funções já existentes, usa `tool_choice=auto`, solicita `web_search_call.action.sources` e limita as chamadas hospedadas via `max_tool_calls`. O provedor devolve os itens da pesquisa e as anotações de texto; o cliente conserva esses itens e a auditoria existentes. Uma busca hospedada não é uma função local a ser executada pelo registro de tools.
+A Responses API do GPT-6.1 Terra oferece pesquisa nativa. A Aegis disponibiliza `web_search` entre as ferramentas do modelo conversacional, junto das funções locais existentes, com escolha automática. O trabalho usa a infraestrutura de pesquisa da OpenAI. O cliente solicita `web_search_call.action.sources`, conserva os itens da pesquisa no contexto da rodada e registra a resposta na auditoria existente. Uma busca hospedada não é uma chamada de função local a ser executada pelo registro de ferramentas.
 
-O GPT-6.1 Terra oferece pesquisa nativa, streaming e funções. As anotações de citação do provedor pertencem ao texto efetivamente retornado. Fontes consultadas, páginas efetivamente abertas e fontes citadas têm significados distintos.
+A configuração `AEGIS_WEB_SEARCH_ENABLED=true` disponibiliza a pesquisa e `AEGIS_WEB_SEARCH_MAX_CALLS=3` define o orçamento inicial por turno (de 1 a 10). Cada chamada hospedada observada consome o orçamento, inclusive quando uma mesma interação exige várias rodadas de ferramentas. O limite `max_tool_calls` informa o saldo ao provedor. O modelo decide a pertinência da pesquisa. O prompt pede consultas reais para fatos atuais e verificação, respeito às preferências de busca e proteção de informações privadas, sem criar uma classificação adicional para perguntas triviais.
 
-Enquanto houver a função de descarte `hands_free_ignore`, a pesquisa hospedada permanece indisponível mesmo com orçamento positivo. A decisão de atendimento deve preceder qualquer consulta externa. O backend aproveita o descarte silencioso já implantado na v0.8.0.
+## Conversação e voz
 
-Por padrão, o orçamento ainda é zero. Este incremento prepara e testa o transporte em memória, sem ativar a busca para usuários.
+Chat digitado e entrada manual de voz usam a ferramenta diretamente. No hands-free, a ferramenta de decisão de direcionamento continua precedendo efeitos externos. O primeiro turno oferece uma intenção de pesquisa local; quando ela é escolhida, o backend aceita a fala e libera a busca nativa na rodada seguinte. Uma resposta trivial continua em uma única chamada. Enquanto a decisão de ignorar ainda está aberta, o cliente Responses também bloqueia o anúncio da ferramenta hospedada.
 
-## Próximas integrações
+Nos turnos hands-free que solicitam pesquisa, a resposta final vem como texto natural anotado pelo provedor, depois é adaptada aos segmentos de voz existentes. Isso evita atribuir a posições em argumentos de função as citações que pertencem a `output_text`. A apresentação do resultado usa as referências válidas para o texto realmente exibido. Se os índices não puderem ser associados com segurança, as fontes ficam acessíveis separadamente.
 
-- Decidir o orçamento de pesquisa por turno no loop comum (texto, voz pelo botão e hands-free). Para a primeira rodada hands-free ainda pendente, oferecer uma intenção de pesquisa que só produz a consulta externa após aceitar a fala. Uma pergunta direta continua sem round de classificação independente.
-- Propagar os eventos observados de pesquisa do Responses para o contrato existente de progresso, sem emitir atividade antes de aceitar a fala. Agregar fontes de todas as rodadas.
-- Persistir os resultados e citações validadas junto à mensagem. Exibir as citações com links clicáveis no texto e uma lista de fontes consultadas no histórico. A locução deve permanecer natural. As funções de voz atuais não geram anotações de texto, portanto as posições de citações da resposta textual não podem ser reutilizadas na fala.
-- Validar a API real com a instalação autorizada, a pesquisa simples e a longa, a ausência de pesquisa em pedidos triviais, e as três modalidades no Android e Windows.
+## Progresso, fontes e persistência
+
+Os eventos SSE reais `response.web_search_call.in_progress/searching/completed` geram estados de progresso no transporte de chat. Eventos repetidos de um mesmo item são deduplicados. Os clientes Android e Windows encaminham o progresso transitório de um turno aceito; a sincronização das conversas recupera o resultado persistido.
+
+O campo `MetadataJson` já existente das mensagens guarda uma projeção `webResearch` das fontes observadas e das citações válidas, sem migration. A interface oferece citações clicáveis ao lado de afirmações quando os intervalos coincidem com o texto e uma lista recolhível de fontes da pesquisa. Somente a evidência do provedor permite identificar uma página como explicitamente aberta. O texto que alimenta o TTS é preservado. URLs inválidas ou com credenciais não se tornam links clicáveis.
+
+## Validação e etapas seguintes
+
+- Validar com testes unitários, integração sintética e CI os orçamentos, as fontes, as citações, os estados, o descarte de fala alheia, a sincronização e a apresentação no histórico.
+- Fazer o ensaio real autorizado na API e nos Nodes Android/Windows. Cobrir consulta trivial, fato atual simples, comparação de fontes e disponibilidade de produtos. Medir primeira fala/informação útil, custo e conclusão. Erros de permissão devem ser analisados nas configurações do projeto e da chave de API.
+- Implementar pesquisa em segundo plano e anúncios falados de trabalhos demorados, com progresso verificável e cancelamento. Este primeiro incremento ainda usa o loop conversacional existente para a busca e não introduz um trabalhador de pesquisa assíncrono.
 
 ## Referências primárias
 
@@ -23,3 +30,4 @@ Por padrão, o orçamento ainda é zero. Este incremento prepara e testa o trans
 - [Capacidades do GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
 - [Contrato de criação de Responses, incluindo max_tool_calls](https://developers.openai.com/api/reference/resources/responses/methods/create)
 - [Eventos de streaming](https://developers.openai.com/api/reference/resources/responses/streaming-events)
+- [Gerenciamento de projetos e permissões](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform)

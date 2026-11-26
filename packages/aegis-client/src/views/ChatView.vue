@@ -12,7 +12,7 @@ import RenameConversationDialog from '../components/RenameConversationDialog.vue
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
-import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS } from '../services/streamTextPresentation';
+import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeResearchStatus } from '../services/streamTextPresentation';
 import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../services/navigation';
 import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
@@ -615,6 +615,7 @@ function completePresentation(p: TextPresentation): void {
 }
 function flushPresentationOnHidden(): void {
   if (document.visibilityState === 'visible') return;
+  nativeResearch.value = null;
   for (const p of textPresentations.values()) { clearTimeout(p.timer); pumpPresentation(p); }
 }
 
@@ -625,6 +626,8 @@ type NativeVoiceTurn = {
   protocol: NativeVoiceSegments; owner: ConversationContext; presentation?: TextPresentation; generationDone: boolean;
 };
 const nativeVoiceTurns = new Map<string, NativeVoiceTurn>();
+const nativeResearch = ref<{ turnId: string; conversationId: string; status: NativeResearchStatus } | null>(null);
+const selectedNativeResearchStatus = computed(() => nativeResearch.value?.conversationId === selected.value.id ? nativeResearch.value?.status : null);
 const closedNativeVoiceTurns = new Set<string>();
 function rememberClosedNativeTurn(id: string): void {
   closedNativeVoiceTurns.add(id);
@@ -632,6 +635,7 @@ function rememberClosedNativeTurn(id: string): void {
 }
 function finishNativeVoiceTurn(turnId: string, interrupted = false, reconcile = true): void {
   const turn = nativeVoiceTurns.get(turnId);
+  if (nativeResearch.value?.turnId === turnId) nativeResearch.value = null;
   if (!turn) { rememberClosedNativeTurn(turnId); return; }
   nativeVoiceTurns.delete(turnId); rememberClosedNativeTurn(turnId);
   if (turn.presentation) {
@@ -664,12 +668,20 @@ function acceptNativeVoiceStream(payload: unknown): void {
     conversationChanged(conversation, false);
   }
   if (!turn) {
+    if (event.type === 'tool_status') return; // Status cannot establish a conversation or turn.
     if (conversation) conversationChanged(conversation, false);
     if (event.type !== 'conversation' && event.type !== 'final_segment') rememberClosedNativeTurn(event.turnId);
     return;
   }
   if (!turn.protocol.matches(event)) return;
   if (event.type === 'conversation') return;
+  if (event.type === 'tool_status') {
+    if (event.toolStatus && conversation) {
+      nativeResearch.value = { turnId: event.turnId, conversationId: conversation, status: event.toolStatus };
+      if (selected.value === turn.owner) scrollToLatestDuringStream();
+    }
+    return;
+  }
   if (event.type === 'final_segment') {
     const text = turn.protocol.append(event);
     if (text === null || !event.assistantMessageId) { finishNativeVoiceTurn(event.turnId, true); return; }
@@ -1170,12 +1182,13 @@ async function handleSubmit(): Promise<void> {
         turn.status = 'thinking';
         showToolStatus(status.message, status.state, owner);
       },
-      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity }) => {
+      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity, webResearch }) => {
         if (!owns() || completedTurnId !== turnId) return;
         owner.title = conversationTitle ?? owner.title ?? 'Nova conversa';
         associateTurnConversation(turn, id, titleSource);
         assistantMessage.serverId = messageId;
         assistantMessage.memoryActivity = memoryActivity;
+        assistantMessage.webResearch = webResearch;
         assistantMessage.pending = false;
         completePresentation(presentation);
         activeTurns.delete(turnId);
@@ -1659,6 +1672,15 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
+        <div v-if="selectedNativeResearchStatus" class="message-row message-row--assistant">
+          <div class="message-stack">
+            <div class="assistant-activity"
+              :class="`assistant-activity--${selectedNativeResearchStatus.state === 'started' ? 'working' : selectedNativeResearchStatus.state}`"
+              role="status" :aria-label="selectedNativeResearchStatus.message">
+              <span class="assistant-activity__text" :data-text="selectedNativeResearchStatus.message" aria-hidden="true">{{ selectedNativeResearchStatus.message }}</span>
+            </div>
+          </div>
+        </div>
         <div class="messages-end"></div>
         </div>
       </div>

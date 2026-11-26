@@ -35,6 +35,11 @@ internal class ConversationChangeJournal(private val capacity: Int = 128) {
 internal object NodeConversationChanges {
   private val journal = ConversationChangeJournal()
   @Volatile var listener: ((JSONObject) -> Unit)? = null
+  // Search status is process-local, transient presentation. It is never journaled or replayed.
+  @Volatile var voiceSearchListener: ((String, JSONObject) -> Unit)? = null
+  @Synchronized fun voiceSearchProgress(session: NodeNativeSession.Session, event: JSONObject) {
+    try { voiceSearchListener?.invoke(NodeNativeSession.fingerprint(session),event) } catch (_: Exception) { }
+  }
   @Synchronized fun changed(session: NodeNativeSession.Session, id: String) {
     val event = journal.changed(NodeNativeSession.fingerprint(session), id)
     // Presentation failure must never fail an already persisted voice turn.

@@ -73,3 +73,15 @@ test('a large replay never runs more than three HTTP reads, even with concurrent
   while(applied.length<12){const ready=gates.splice(0);for(const release of ready)release();await new Promise(resolve=>setImmediate(resolve));}
   await running;assert.equal(maximum,3);assert.equal(new Set(applied).size,12);
 });
+
+test('persisted web research follows its assistant message across conversation refresh', () => {
+  const assistant = { id: 'local', serverId: 'answer', conversationId: 'a', role: 'assistant', content: 'Parcial.', createdAt: '1' };
+  const webResearch = { sources: [{ url: 'https://example.test/', kind: 'opened' }],
+    citations: [{ url: 'https://example.test/', startIndex: 0, endIndex: 9 }] };
+  const history = [{ id: 'answer', conversationId: 'a', role: 'assistant', content: 'Completa.', createdAt: '1', webResearch }];
+  const rows = mergeConversationMessages([assistant], history);
+  assert.equal(rows[0], assistant);
+  assert.deepEqual(rows[0].webResearch, webResearch);
+  assert.equal(rows[0].content, 'Completa.');
+  assert.deepEqual(mergeConversationMessages([], history)[0].webResearch, webResearch);
+});

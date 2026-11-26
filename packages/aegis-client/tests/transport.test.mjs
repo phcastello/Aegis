@@ -74,3 +74,28 @@ test('PCM TTS keeps streamed chunks and validates exposed format headers', async
   globalThis.fetch = async () => new Response(new Uint8Array([1, 2]));
   await assert.rejects(api.streamSpeech({}, async () => {}), /Invalid audio format/);
 });
+
+test('NDJSON web search status and sources are correlated with the completed turn', async () => {
+  const research = {
+    sources: [{ url: 'https://example.test/a', title: 'Exemplo', kind: 'consulted' }],
+    citations: [{ url: 'https://example.test/a', title: 'Exemplo', startIndex: 0, endIndex: 3 }]
+  };
+  const events = [
+    { type: 'conversation', turnId: 't', conversationId: 'c' },
+    { type: 'tool_status', turnId: 't', category: 'web_search', state: 'started', message: 'Pesquisando na web…' },
+    { type: 'token', turnId: 't', content: 'Olá' },
+    { type: 'tool_status', turnId: 't', category: 'web_search', state: 'completed', message: 'Pesquisa concluída.' },
+    { type: 'done', turnId: 't', conversationId: 'c', messageId: 'm', webResearch: research }
+  ];
+  globalThis.fetch = async () => new Response(events.map(event => JSON.stringify(event)).join('\n'));
+  const observed = [];
+  await api.sendMessageStream({}, {
+    onConversation: (turn, id) => observed.push([turn, id]),
+    onToolStatus: (turn, value) => observed.push([turn, value.category, value.state]),
+    onToken: (turn, content) => observed.push([turn, content]),
+    onDone: value => observed.push([value.turnId, value.messageId, value.webResearch]),
+    onError: assert.fail
+  });
+  assert.deepEqual(observed, [['t', 'c'], ['t', 'web_search', 'started'], ['t', 'Olá'],
+    ['t', 'web_search', 'completed'], ['t', 'm', research]]);
+});

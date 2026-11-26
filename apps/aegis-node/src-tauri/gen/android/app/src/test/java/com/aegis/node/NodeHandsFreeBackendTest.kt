@@ -111,6 +111,61 @@ class NodeHandsFreeBackendTest {
     }
   }
 
+  @Test fun searchStatusPublishesOnlyAfterAcceptanceAndClearsAtTerminal() {
+    val projected=CopyOnWriteArrayList<JSONObject>()
+    Fixture(respond={request,normal->
+      when(request.path) {
+        "/api/chat/messages/stream" -> {
+          val turn=JSONObject(request.text()).getString("turnId")
+          fun status(state:String,category:String="web_search",destination:String?=null)=JSONObject()
+            .put("type","tool_status").put("turnId",turn).put("category",category)
+            .put("state",state).put("message","Pesquisando na web…").apply{destination?.let{put("conversationId",it)}}
+          val rows=String(segmentedReply(request).bytes,Charsets.UTF_8).trimEnd().split("\n")
+          Reply(bytes=((listOf(status("started").toString(),rows.first(),
+            status("started").toString(),status("arbitrary").toString(),status("started","memory").toString(),
+            status("started",destination=UUID.randomUUID().toString()).toString(),status("completed").toString())+
+            rows.drop(1)).joinToString("\n")+"\n").toByteArray())
+        }
+        "/api/voice/speech/segments" -> segmentPcmReply()
+        else -> normal
+      }
+    }).use{fixture->
+      val result=fixture.backend(onVoiceSearchProgress={_,event->projected.add(event)})
+        .execute(wav(),session,conversation,RecordingSink(),null,incremental=true)
+      assertTrue(result.playedAudio)
+      assertEquals(listOf("conversation","tool_status","tool_status","done"),projected.map{it.getString("type")})
+      assertEquals("started",projected[1].getJSONObject("toolStatus").getString("state"))
+      assertEquals("completed",projected[2].getJSONObject("toolStatus").getString("state"))
+      assertEquals(message,projected.last().getString("assistantMessageId"))
+      assertTrue(projected.all{it.getString("conversationId")==conversation})
+      assertEquals(1,projected.map{it.getString("turnId")}.distinct().size)
+    }
+  }
+
+  @Test fun searchProgressClosesAnAcceptedCancelledTurnWithoutFurtherStatus() {
+    val projected=CopyOnWriteArrayList<JSONObject>()
+    Fixture(respond={request,normal->
+      if(request.path!="/api/chat/messages/stream")normal else {
+        val turn=JSONObject(request.text()).getString("turnId")
+        val rows=String(segmentedReply(request).bytes,Charsets.UTF_8).trimEnd().split("\n")
+        val started=JSONObject().put("type","tool_status").put("turnId",turn).put("category","web_search")
+          .put("state","started").put("message","Pesquisando na web…")
+        val completed=JSONObject(started.toString()).put("state","completed")
+        Reply(bytes=((listOf(rows.first(),started.toString(),completed.toString())+rows.drop(1)).joinToString("\n")+"\n").toByteArray())
+      }
+    }).use{fixture->
+      lateinit var backend:NodeHandsFreeBackend
+      backend=fixture.backend(onVoiceSearchProgress={_,event->
+        projected.add(event)
+        if(event.getString("type")=="tool_status")backend.requestCancellation()
+      })
+      assertThrows(Exception::class.java){backend.execute(wav(),session,conversation,RecordingSink(),null,incremental=true)}
+      assertEquals(listOf("conversation","tool_status","interrupted"),projected.map{it.getString("type")})
+      assertTrue(projected.all{it.getString("conversationId")==conversation})
+      assertFalse(fixture.requests.any{it.path=="/api/voice/speech/segments"})
+    }
+  }
+
   @Test fun aMalformedOrNonexclusiveIgnoreCannotCompleteAnInteraction() {
     for(failure in listOf("turn","extra","before","after","duplicate","truncated")) {
       val changes=CopyOnWriteArrayList<String>()
@@ -1076,8 +1131,9 @@ class NodeHandsFreeBackendTest {
         }
       }
     }
-    fun backend(ttsDeadlineMilliseconds:Long=300000,onChanged:(NodeNativeSession.Session,String)->Unit=NodeConversationChanges::changed,onStage: (String, Long) -> Unit = { _, _ -> }) =
-      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds,onChanged)
+    fun backend(ttsDeadlineMilliseconds:Long=300000,onChanged:(NodeNativeSession.Session,String)->Unit=NodeConversationChanges::changed,onStage: (String, Long) -> Unit = { _, _ -> },
+                onVoiceSearchProgress:(NodeNativeSession.Session,JSONObject)->Unit={ _,_-> }) =
+      NodeHandsFreeBackend({ identity }, onStage,ttsDeadlineMilliseconds,onChanged,onVoiceSearchProgress)
     private fun normal(request: Request): Reply {
       if (request.method == "DELETE") return Reply.json(JSONObject())
       return when (request.path) {

@@ -5,6 +5,7 @@ import type {
   ConversationSummary,
   MessageFeedbackResponse,
   MemoryActivitySnapshot,
+  WebResearch,
   SendMessageRequest,
   SendMessageResponse,
   StartSpeechRequest,
@@ -113,6 +114,7 @@ export async function sendMessageStream(
       conversationTitle?: string | null;
       titleSource?: string | null;
       memoryActivity?: MemoryActivitySnapshot | null;
+      webResearch?: WebResearch | null;
     };
 
     switch (event.type) {
@@ -146,7 +148,8 @@ export async function sendMessageStream(
             messageId: event.assistantMessageId || event.messageId!,
             conversationTitle: event.conversationTitle,
             titleSource: event.titleSource,
-            memoryActivity: event.memoryActivity
+            memoryActivity: event.memoryActivity,
+            webResearch: event.webResearch
           });
         }
         break;

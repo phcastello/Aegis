@@ -195,7 +195,13 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
         let turn = &request_body["turnId"];
         chat.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
         for event in [
+            json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"started","message":"Unaccepted progress"}),
             json!({"type":"conversation","turnId":turn,"conversationId":conversation}),
+            json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"started","message":"Pesquisando na web…"}),
+            json!({"type":"tool_status","turnId":turn,"conversationId":Uuid::new_v4(),"category":"web_search","state":"started","message":"Wrong destination"}),
+            json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"arbitrary","message":"Invalid state"}),
+            json!({"type":"tool_status","turnId":turn,"category":"memory","state":"started","message":"Unrelated operation"}),
+            json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"completed","message":"Busca concluída"}),
             json!({"type":"token","turnId":turn,"content":"Never display uncommitted text."}),
             segment_event(turn, conversation, message, first, 0),
         ] {
@@ -214,10 +220,19 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             .expect("audio waited for HTTP EOF");
         {
             let events = server_observed.lock().unwrap();
-            assert_eq!(events.len(), 2);
+            assert_eq!(events.len(), 4);
             assert_eq!(events[0].kind, "conversation");
             assert_eq!(
                 json!(events[1]),
+                json!({
+                    "type":"tool_status","turnId":turn,"conversationId":conversation,
+                    "assistantMessageId":null,
+                    "toolStatus":{"category":"web_search","state":"started","message":"Pesquisando na web…"}
+                })
+            );
+            assert_eq!(events[2].tool_status.as_ref().unwrap().state, "completed");
+            assert_eq!(
+                json!(events[3]),
                 json!({
                     "type":"final_segment","turnId":turn,"conversationId":conversation,
                     "assistantMessageId":message,"segmentId":first,"sequence":0,"content":"Resposta."
@@ -260,11 +275,18 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
     let events = observed.lock().unwrap();
     assert_eq!(
         events.iter().map(|e| e.kind).collect::<Vec<_>>(),
-        ["conversation", "final_segment", "final_segment", "done"]
+        [
+            "conversation",
+            "tool_status",
+            "tool_status",
+            "final_segment",
+            "final_segment",
+            "done"
+        ]
     );
-    assert_eq!(events[2].segment_id, Some(second));
-    assert_eq!(events[2].sequence, Some(1));
-    assert_eq!(events[3].assistant_message_id, Some(message));
+    assert_eq!(events[4].segment_id, Some(second));
+    assert_eq!(events[4].sequence, Some(1));
+    assert_eq!(events[5].assistant_message_id, Some(message));
     assert!(events
         .iter()
         .all(|e| e.conversation_id == Some(conversation) && e.turn_id == report.turn_id));

@@ -49,3 +49,25 @@ test('reject invalid event shapes and accept no-conversation terminal ignored/ca
   assert.ok(parseNativeVoiceStreamEvent({type:'ignored',turnId,conversationId:null,assistantMessageId:null}));
   assert.equal(parseNativeVoiceStreamEvent({type:'done',turnId,conversationId:null,assistantMessageId:null}), null);
 });
+
+test('native web search status verifies accepted turn shape without establishing speech segments', () => {
+  const progress = { type: 'tool_status', turnId, conversationId, assistantMessageId: null,
+    toolStatus: { category: 'web_search', state: 'started', message: 'Pesquisando na web…' } };
+  const parsed = parseNativeVoiceStreamEvent(progress);
+  assert.equal(parsed.type, 'tool_status');
+  assert.equal(parsed.toolStatus.message, progress.toolStatus.message);
+  const stream = new NativeVoiceSegments(turnId, conversationId);
+  assert.ok(stream.matches(parsed));
+  assert.equal(stream.append(parsed), null);
+  assert.equal(stream.assistantMessageId, null);
+  for (const value of [
+    {...progress, conversationId: null},
+    {...progress, assistantMessageId},
+    {...progress, toolStatus: null},
+    {...progress, toolStatus: {...progress.toolStatus, category: 'calendar'}},
+    {...progress, toolStatus: {...progress.toolStatus, state: 'unknown'}},
+    {...progress, toolStatus: {...progress.toolStatus, message: ''}},
+    {...progress, toolStatus: {...progress.toolStatus, message: 'x'.repeat(241)}}
+  ]) assert.equal(parseNativeVoiceStreamEvent(value), null);
+  assert.equal(stream.matches(parseNativeVoiceStreamEvent({...progress, conversationId: assistantMessageId})), false);
+});
