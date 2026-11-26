@@ -41,7 +41,7 @@ Veja a [filosofia de desenvolvimento](README.md#filosofia-de-desenvolvimento).
   outras branches. Use uma worktree isolada quando necessário.
 - Não modifique diretamente a `main`, não use force push e não faça merge sem
   autorização. Preserve as regras de proteção e os checks obrigatórios.
-- Não abra um PR automaticamente a cada push. Preserve o estado draft quando pedido.
+- Desenvolva cada versão na branch autorizada, com commits e pushes incrementais. Publique as unstables para teste pelo `publish-dev` nessa branch. Não abra pull requests durante esse ciclo, inclusive para disparar a CI. Abra um PR somente quando o proprietário autorizar explicitamente sua criação para integração. Preserve o estado draft quando pedido.
 - Faça commits por responsabilidade e push na branch de desenvolvimento quando
   isso fizer parte da tarefa solicitada, após as verificações pertinentes.
 - Implementação comum: implemente, teste, corrija, faça commit e push na branch
