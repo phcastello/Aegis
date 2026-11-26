@@ -34,6 +34,10 @@ SAFE_MIGRATIONS = {
     # must preserve row hashes and prove old API/migrator compatibility.
     "20261027073015_SharedReminderIncidents":
         "c0f4a2591bbfe47a31b7c48f66b90b3b5a7104836108cf5db3af42c7dda94a78",
+    # Reviewed Up: creates an independent usage table and an index on that
+    # table only. It does not reference or modify any existing schema or rows.
+    "20261126180000_AddWebSearchUsage":
+        "7425c574af1898d36c88e28627db2738bce67afa7df3556acf2a42b7545a7622",
 }
 
 
@@ -100,6 +104,34 @@ def reconciled_reasoning_default(paths, before, after, runtime_env):
             and runtime_env.get("AEGIS_CHAT_REASONING_EFFORT") == "low"
             and before.count(old) == 1
             and after == before.replace(old, new, 1))
+
+
+def reconciled_web_search_defaults(paths, before, after, runtime_env, appsettings):
+    """Allow only the reviewed additive variables and already-active model defaults."""
+    old = """      AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-6-luna}
+      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-low}
+      AEGIS_TITLE_MODEL: ${AEGIS_TITLE_MODEL:-gpt-5-nano}
+      AEGIS_TITLE_REASONING_EFFORT: ${AEGIS_TITLE_REASONING_EFFORT:-minimal}
+"""
+    new = """      AEGIS_WEB_SEARCH_ENABLED: ${AEGIS_WEB_SEARCH_ENABLED:-true}
+      AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS: ${AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS:-${AEGIS_WEB_SEARCH_MAX_CALLS:-20}}
+      AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-6.1-terra}
+      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-low}
+      AEGIS_TITLE_MODEL: ${AEGIS_TITLE_MODEL:-gpt-6-luna}
+      AEGIS_TITLE_REASONING_EFFORT: ${AEGIS_TITLE_REASONING_EFFORT:-none}
+"""
+    expected_models = {
+        "AEGIS_CHAT_MODEL": "gpt-6.1-terra", "AEGIS_CHAT_REASONING_EFFORT": "low",
+        "AEGIS_TITLE_MODEL": "gpt-6-luna", "AEGIS_TITLE_REASONING_EFFORT": "none",
+    }
+    return (paths == ["docker-compose.yml"]
+            and before.count(old) == 1 and after == before.replace(old, new, 1)
+            and all(runtime_env.get(key) == value for key, value in expected_models.items())
+            and not any(key in runtime_env for key in (
+                "AEGIS_WEB_SEARCH_ENABLED", "AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS",
+                "AEGIS_WEB_SEARCH_MAX_CALLS", "AegisWebSearch__Enabled",
+                "AegisWebSearch__MaxSearchActionsPerTurn"))
+            and appsettings.get("AegisWebSearch") == {"Enabled": True, "MaxSearchActionsPerTurn": 20})
 
 
 def migration_policy(source, pending):
@@ -330,17 +362,23 @@ class PrivateHost:
                                       "docker-compose.yml", "docker-compose.private.yml")
             if config_changes:
                 paths = config_changes.splitlines()
-                reconciled = False
+                reviewed_change = None
                 if paths == ["docker-compose.yml"]:
                     # Keep complete bytes, including whitespace: a second edit must
                     # not be hidden by the git helper's normal output stripping.
                     previous_sha = plan["previous"]["backend"]["sha"]
                     before = self.run(["git", "show", previous_sha + ":docker-compose.yml"])
                     after = self.run(["git", "show", plan["sha"] + ":docker-compose.yml"])
-                    reconciled = reconciled_reasoning_default(paths, before, after, self.api_env)
-                require(reconciled, "Compose changes require reconciliation with the real installation before image publication.")
+                    if reconciled_reasoning_default(paths, before, after, self.api_env):
+                        reviewed_change = "conversation-reasoning-default-medium-to-low"
+                    else:
+                        settings = self.source / "backend/src/Aegis.Api/appsettings.json"
+                        if settings.is_file() and reconciled_web_search_defaults(
+                                paths, before, after, self.api_env, json.loads(settings.read_text())):
+                            reviewed_change = "web-search-app-defaults-and-existing-model-defaults"
+                require(reviewed_change, "Compose changes require reconciliation with the real installation before image publication.")
                 save(self.op / "compose-reconciliation.json", {
-                    "reviewedChange": "conversation-reasoning-default-medium-to-low",
+                    "reviewedChange": reviewed_change,
                     "runtimeReasoningEffort": self.api_env["AEGIS_CHAT_REASONING_EFFORT"],
                     "previousBackendCommit": previous_sha, "sourceCommit": plan["sha"]})
         checks = self.gh(f"commits/{plan['sha']}/check-runs?per_page=100")

@@ -136,6 +136,26 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(paths=paths, environment=environment, changed=new):
                 self.assertFalse(dev.reconciled_reasoning_default(paths, old, new, environment))
 
+    def test_reviewed_web_search_defaults_preserve_live_configuration(self):
+        root = Path(__file__).resolve().parents[1]
+        after = (root / "docker-compose.yml").read_text()
+        before = "\n".join(line for line in after.split("\n")
+                           if not line.startswith(("      AEGIS_WEB_SEARCH_ENABLED:",
+                                                   "      AEGIS_WEB_SEARCH_MAX_SEARCH_ACTIONS:")))
+        for live, previous in (("AEGIS_CHAT_MODEL:-gpt-6.1-terra", "AEGIS_CHAT_MODEL:-gpt-6-luna"),
+                               ("AEGIS_TITLE_MODEL:-gpt-6-luna", "AEGIS_TITLE_MODEL:-gpt-5-nano"),
+                               ("AEGIS_TITLE_REASONING_EFFORT:-none", "AEGIS_TITLE_REASONING_EFFORT:-minimal")):
+            before = before.replace(live, previous)
+        settings = json.loads((root / "backend/src/Aegis.Api/appsettings.json").read_text())
+        env = {"AEGIS_CHAT_MODEL": "gpt-6.1-terra", "AEGIS_CHAT_REASONING_EFFORT": "low",
+               "AEGIS_TITLE_MODEL": "gpt-6-luna", "AEGIS_TITLE_REASONING_EFFORT": "none"}
+        paths = ["docker-compose.yml"]
+        self.assertTrue(dev.reconciled_web_search_defaults(paths, before, after, env, settings))
+        self.assertFalse(dev.reconciled_web_search_defaults(paths, before, after + "\n", env, settings))
+        self.assertFalse(dev.reconciled_web_search_defaults(paths, before, after, {**env, "AEGIS_WEB_SEARCH_MAX_CALLS": "10"}, settings))
+        self.assertFalse(dev.reconciled_web_search_defaults(paths, before, after, {**env, "AEGIS_TITLE_MODEL": "gpt-5-nano"}, settings))
+        self.assertFalse(dev.reconciled_web_search_defaults(paths, before, after, env, {}))
+
     def test_preflight_records_only_proved_reasoning_reconciliation(self):
         before = "services:\n  aegis-api:\n    environment:\n      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}\n"
         after = before.replace("EFFORT:-medium", "EFFORT:-low")

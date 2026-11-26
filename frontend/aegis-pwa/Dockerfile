@@ -13,6 +13,8 @@ FROM nginx:1.27-alpine AS runtime
 
 COPY frontend/aegis-pwa/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workspace/frontend/aegis-pwa/dist /usr/share/nginx/html
+# publish-dev checks out source privately; nginx workers still need public assets.
+RUN chmod -R a+rX /usr/share/nginx/html
 
 EXPOSE 80
 
