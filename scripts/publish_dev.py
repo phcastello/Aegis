@@ -38,6 +38,11 @@ SAFE_MIGRATIONS = {
     # table only. It does not reference or modify any existing schema or rows.
     "20261126180000_AddWebSearchUsage":
         "7425c574af1898d36c88e28627db2738bce67afa7df3556acf2a42b7545a7622",
+    # Reviewed Up creates only the background jobs table, its indexes and
+    # relationships to existing conversations/messages. No historical rows
+    # or definitions of previously deployed tables are changed.
+    "20261126202048_AddBackgroundResearchJobs":
+        "7cb9e393e04f6ba0de0af3c83aa2119e9e0f2e502981960134921ca3373e37f9",
 }
 
 
