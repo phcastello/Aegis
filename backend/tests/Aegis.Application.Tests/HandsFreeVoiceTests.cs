@@ -635,6 +635,228 @@ public sealed class HandsFreeVoiceTests
         Assert.Throws<ArgumentException>(() => HandsFreeReply.UserContent(VoiceRequest(Guid.NewGuid(), Guid.NewGuid(), "Oi", new(id, new string('x', 16385)))));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProvisionalIgnoredUtteranceDoesNotCancelOrPersist(bool streaming)
+    {
+        var options = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var priorContext = new AegisDbContext(options);
+        using var candidateContext = new AegisDbContext(options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var priorId = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var priorModel = new Model([SegmentReply()]) { EarlySegment = "Primeira." };
+        var prior = new ChatService(priorContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(priorModel, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        await using var initial = prior.StreamMessageAsync(VoiceRequest(priorId, session, "Conte uma história.")).GetAsyncEnumerator();
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("conversation", initial.Current.Type);
+        var destination = initial.Current.ConversationId!.Value;
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("final_segment", initial.Current.Type);
+        Assert.False(priorModel.Completed);
+        var predecessor = registry.Find(priorId)!;
+        Assert.True(registry.IsCurrent(destination, priorId));
+
+        var ignored = Response([new("ignore", HandsFreeDirection.IgnoreToolName, JsonSerializer.SerializeToElement(new { }))]);
+        var model = new Model([ignored]);
+        model.OnRespond = () =>
+        {
+            Assert.True(registry.IsCurrent(destination, priorId));
+            Assert.False(predecessor.Cancellation.IsCancellationRequested);
+        };
+        var benign = new BenignTool();
+        var chat = new ChatService(candidateContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([benign]), NullLogger<AegisToolLoop>.Instance, metrics, new WebSearchOptions()),
+            Titles(), registry, HandoffVoice(registry));
+        var request = ProvisionalRequest(Guid.NewGuid(), session, destination, "Conversa ao fundo.", priorId);
+        if (streaming)
+        {
+            var discarded = new List<ChatStreamEvent>();
+            await foreach (var item in chat.StreamMessageAsync(request)) discarded.Add(item);
+            Assert.Equal("ignored", Assert.Single(discarded).Type);
+        }
+        else Assert.Null(await chat.SendMessageAsync(request));
+
+        Assert.True(registry.IsCurrent(destination, priorId));
+        Assert.False(predecessor.Cancellation.IsCancellationRequested);
+        Assert.Equal(2, await candidateContext.ChatMessages.CountAsync());
+        Assert.Equal(1, await candidateContext.Conversations.CountAsync());
+        Assert.Empty(await candidateContext.LlmRequestAudits.ToListAsync());
+        Assert.Equal(0, benign.Calls);
+        var decision = Assert.Single(model.Requests);
+        Assert.Equal(0, decision.NativeWebSearchCallLimit);
+        Assert.Equal(new[] { HandsFreeDirection.IgnoreToolName, HandsFreeDirection.ProvisionalAcceptToolName,
+            HandsFreeDirection.ProvisionalEndSpeechToolName }, decision.Tools.Select(tool => tool.Name));
+        using var decisionData = JsonDocument.Parse(decision.Request.InputItems![1].GetProperty("content").GetString()!);
+        Assert.Equal("Conte uma história.", decisionData.RootElement.GetProperty("pedidoAnterior").GetString());
+        Assert.Equal("Conversa ao fundo.", decisionData.RootElement.GetProperty("falaNova").GetString());
+
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("final_segment", initial.Current.Type);
+        Assert.Equal("Segunda.", initial.Current.Content);
+        Assert.True(await initial.MoveNextAsync());
+        Assert.Equal("done", initial.Current.Type);
+        Assert.False(await initial.MoveNextAsync());
+        Assert.Single(await candidateContext.LlmRequestAudits.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ProvisionalAcceptedUtteranceCancelsOnlyAfterDecisionAndRebuildsContext(bool playback, bool alreadyCompleted)
+    {
+        var options = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var priorContext = new AegisDbContext(options);
+        using var candidateContext = new AegisDbContext(options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var priorId = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var prior = new ChatService(priorContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(new Model([SegmentReply()]), new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in prior.StreamMessageAsync(VoiceRequest(priorId, session, "Conte uma história.")))
+            events.Add(item);
+        var destination = events[0].ConversationId!.Value;
+        var predecessor = registry.Find(priorId)!;
+        if (alreadyCompleted) registry.Complete(priorId);
+        VoicePlaybackInterruption? position = null;
+        if (playback)
+        {
+            var first = events.First(item => item.Type == "final_segment");
+            position = new VoicePlaybackInterruption(priorId, first.AssistantMessageId!.Value,
+                first.SegmentId!.Value, first.Sequence!.Value, 120, 240);
+        }
+        var candidateId = Guid.NewGuid();
+        var accept = Response([new("accept", HandsFreeDirection.ProvisionalAcceptToolName, JsonSerializer.SerializeToElement(new { }))]);
+        var model = new Model([accept, SegmentReply()]);
+        model.OnRespond = () =>
+        {
+            if (model.Requests.Count == 1)
+            {
+                Assert.False(predecessor.Cancellation.IsCancellationRequested);
+                if (alreadyCompleted) Assert.Equal(TurnStatus.Completed, predecessor.Status);
+                else Assert.True(registry.IsCurrent(destination, priorId));
+            }
+            else
+            {
+                Assert.Equal(!alreadyCompleted, predecessor.Cancellation.IsCancellationRequested);
+                Assert.True(registry.IsCurrent(destination, candidateId));
+            }
+        };
+        var chat = new ChatService(candidateContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        var accepted = new List<ChatStreamEvent>();
+        await foreach (var item in chat.StreamMessageAsync(ProvisionalRequest(candidateId, session, destination, "Mais curta.", priorId, position)))
+            accepted.Add(item);
+
+        Assert.Equal("done", accepted[^1].Type);
+        Assert.Equal(destination, accepted[0].ConversationId);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name == HandsFreeDirection.IgnoreToolName);
+        Assert.Single(await candidateContext.Conversations.ToListAsync());
+        var messages = await candidateContext.ChatMessages.Where(message => message.Role == Aegis.Domain.ChatRoles.User).ToListAsync();
+        Assert.Equal(2, messages.Count);
+        var candidate = Assert.Single(messages.Where(message => message.Content == "Mais curta."));
+        Assert.Contains(playback ? "\"playedFramesInSegment\":120" : "\"playedFramesInSegment\":0", candidate.MetadataJson);
+        Assert.Contains(model.Requests[1].InputItems!, item => item.GetRawText().Contains("milissegundosOuvidosNoTrecho"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProvisionalPlaybackRequiresValidCursorAndIgnoredCandidatePreservesPredecessor(bool alreadyCompleted)
+    {
+        var options = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var priorContext = new AegisDbContext(options);
+        using var candidateContext = new AegisDbContext(options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var priorId = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var prior = new ChatService(priorContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(new Model([SegmentReply()]), new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in prior.StreamMessageAsync(VoiceRequest(priorId, session, "Conte uma história.")))
+            events.Add(item);
+        var destination = events[0].ConversationId!.Value;
+        var predecessor = registry.Find(priorId)!;
+        if (alreadyCompleted) registry.Complete(priorId);
+        var first = events.First(item => item.Type == "final_segment");
+        var position = new VoicePlaybackInterruption(priorId, first.AssistantMessageId!.Value,
+            first.SegmentId!.Value, first.Sequence!.Value, 120, 240);
+        var ignored = Response([new("ignore", HandsFreeDirection.IgnoreToolName, JsonSerializer.SerializeToElement(new { }))]);
+        var model = new Model([ignored]);
+        var chat = new ChatService(candidateContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        await Assert.ThrowsAsync<ArgumentException>(() => chat.SendMessageAsync(
+            ProvisionalRequest(Guid.NewGuid(), session, destination, "Conversa ao fundo.", priorId,
+                position with { SegmentId = Guid.NewGuid() })));
+        Assert.Empty(model.Requests);
+        Assert.Null(await chat.SendMessageAsync(
+            ProvisionalRequest(Guid.NewGuid(), session, destination, "Conversa ao fundo.", priorId, position)));
+
+        Assert.False(predecessor.Cancellation.IsCancellationRequested);
+        if (alreadyCompleted) Assert.Equal(TurnStatus.Completed, predecessor.Status);
+        else Assert.True(registry.IsCurrent(destination, priorId));
+        Assert.Equal(2, await candidateContext.ChatMessages.CountAsync());
+        var request = Assert.Single(model.Requests);
+        using var decision = JsonDocument.Parse(request.Request.InputItems![1].GetProperty("content").GetString()!);
+        Assert.Contains("\"milissegundosOuvidosNoTrecho\":5",
+            decision.RootElement.GetProperty("dadosDeReproducao").GetString());
+    }
+
+    [Fact]
+    public async Task ProvisionalSpeechOnlyTerminationDoesNotCancelGeneration()
+    {
+        var options = new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var priorContext = new AegisDbContext(options);
+        using var candidateContext = new AegisDbContext(options);
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var priorId = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var prior = new ChatService(priorContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(new Model([SegmentReply()]), new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+        var events = new List<ChatStreamEvent>();
+        await foreach (var item in prior.StreamMessageAsync(VoiceRequest(priorId, session, "Conte uma história.")))
+            events.Add(item);
+        var destination = events[0].ConversationId!.Value;
+        var stop = Response([new("end", HandsFreeDirection.ProvisionalEndSpeechToolName, JsonSerializer.SerializeToElement(new { }))]);
+        var model = new Model([stop]);
+        var chat = new ChatService(candidateContext, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, metrics),
+            Titles(), registry, HandoffVoice(registry));
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => chat.SendMessageAsync(
+            ProvisionalRequest(Guid.NewGuid(), session, destination, "Já deu, valeu.", priorId)));
+
+        Assert.True(registry.IsCurrent(destination, priorId));
+        Assert.False(registry.Find(priorId)!.Cancellation.IsCancellationRequested);
+        Assert.Equal(2, await candidateContext.ChatMessages.CountAsync());
+        Assert.Single(model.Requests);
+    }
+
+    private static SendMessageRequest ProvisionalRequest(Guid turn, Guid session, Guid conversation, string content, Guid predecessor,
+        VoicePlaybackInterruption? playback = null) =>
+        new()
+        {
+            TurnId = turn, VoiceSessionId = session, Origin = HandsFreeReply.Origin, ConversationId = conversation,
+            AllowSilentIgnore = true, VoiceSegments = true, ProvisionalInterruption = true,
+            Content = content, InterruptedGeneration = playback is null ? new(predecessor) : null,
+            InterruptedPlayback = playback
+        };
+
     private static SendMessageRequest VoiceRequest(Guid turn, Guid session, string content, VoiceGenerationInterruption? handoff = null) => new()
     {
         TurnId = turn, VoiceSessionId = session, Origin = "hands_free", AllowSilentIgnore = true, VoiceSegments = true,
@@ -657,6 +879,8 @@ public sealed class HandsFreeVoiceTests
             nameof(IVoiceService.CancelTurnAsync) => Task.FromResult(registry.CancelAndGetInfo((Guid)args![0]!, (string)args[1]!).Result),
             nameof(IVoiceService.CancelVoiceGenerationAsync) => Task.FromResult(registry.BeginVoiceGenerationHandoff(
                 (Guid)args![0]!, (Guid)args[1]!, (Guid?)args[2], (CancellationToken)args[3]!).Receipt),
+            nameof(IVoiceService.CommitProvisionalVoiceInterruptionAsync) => Task.FromResult(registry.CommitProvisionalVoiceInterruption(
+                (Guid)args![0]!, (Guid)args[1]!, (Guid)args[2]!, (Guid)args[3]!, (CancellationToken)args[4]!).Receipt),
             _ => throw new NotSupportedException()
         };
         return voice;

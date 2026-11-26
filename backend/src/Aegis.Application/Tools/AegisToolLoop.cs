@@ -39,6 +39,42 @@ public sealed class AegisToolLoop(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    public async Task<ProvisionalVoiceDisposition> DecideProvisionalVoiceInterruptionAsync(
+        string previousRequest, string candidate, string? playbackContext, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var instructions = HandsFreeDirection.ProvisionalGuidance;
+        var input = new[]
+        {
+            ToJsonElement(new { role = "developer", content = instructions }),
+            ToJsonElement(new { role = "user", content = JsonSerializer.Serialize(new
+            {
+                pedidoAnterior = previousRequest,
+                falaNova = candidate,
+                dadosDeReproducao = playbackContext
+            }, JsonOptions) })
+        };
+        var request = new ModelRequest(instructions, candidate, InputItems: input, AuditInputItems: input);
+        var reply = await modelClient.RespondWithToolsAsync(new ModelToolRequest(request,
+            [HandsFreeDirection.IgnoreDefinition, HandsFreeDirection.ProvisionalAcceptDefinition,
+                HandsFreeDirection.ProvisionalEndSpeechDefinition]), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.IsNullOrWhiteSpace(reply.Content) || reply.ToolCalls.Count != 1 ||
+            reply.OutputItems.Any(item => item.ValueKind == JsonValueKind.Object &&
+                item.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String &&
+                type.GetString() == "web_search_call") ||
+            reply.ToolCalls[0].Arguments.ValueKind != JsonValueKind.Object ||
+            reply.ToolCalls[0].Arguments.EnumerateObject().Any())
+            throw new InvalidOperationException("A decisão da interrupção por voz não foi válida.");
+        return reply.ToolCalls[0].Name switch
+        {
+            HandsFreeDirection.IgnoreToolName => ProvisionalVoiceDisposition.Ignore,
+            HandsFreeDirection.ProvisionalAcceptToolName => ProvisionalVoiceDisposition.Accept,
+            HandsFreeDirection.ProvisionalEndSpeechToolName => ProvisionalVoiceDisposition.EndSpeech,
+            _ => throw new InvalidOperationException("A decisão da interrupção por voz não foi válida.")
+        };
+    }
+
     public async Task<ModelToolResponse> RunAsync(
         ModelRequest request,
         ToolExecutionContext context,

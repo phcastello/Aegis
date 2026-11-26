@@ -11,13 +11,15 @@ public sealed class VoiceGenerationReceipt(Guid sessionId, Guid conversationId, 
     private readonly TaskCompletionSource settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long settledUtcTicks;
     private int ignored;
+    private VoicePlaybackInterruption? retainedPlayback = playback;
     private string retainedContent = content.Length <= 16384 ? content : content[^16384..];
     public Guid SessionId { get; } = sessionId;
     public Guid ConversationId { get; } = conversationId;
     public Guid UserMessageId { get; } = userMessageId;
     // Only the bounded recent user text, never PCM or generated output.
     public string Content => Volatile.Read(ref retainedContent);
-    public VoicePlaybackInterruption? Playback { get; } = playback;
+    public VoicePlaybackInterruption? Playback => Volatile.Read(ref retainedPlayback);
+    internal void SetPlayback(VoicePlaybackInterruption? value) => Volatile.Write(ref retainedPlayback, value);
     public Task Settled => settled.Task;
     public bool Ignored => Volatile.Read(ref ignored) != 0;
     internal void MarkIgnored()
@@ -37,3 +39,5 @@ public sealed class VoiceGenerationReceipt(Guid sessionId, Guid conversationId, 
 
 /// <summary>The validated receipt and cancellation captured under the same registry lock.</summary>
 public sealed record VoiceGenerationHandoff(VoiceGenerationReceipt? Receipt, TurnCancellationInfo Cancellation);
+
+public sealed record ProvisionalVoiceReservation(VoiceGenerationReceipt Predecessor, IDisposable Reservation);

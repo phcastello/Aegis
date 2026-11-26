@@ -60,7 +60,65 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         }
     }
 
-    private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation);
+    private sealed record PendingTurn(Guid ConversationId, long Sequence, CancellationTokenSource Cancellation)
+    {
+        public Guid? ProvisionalPredecessor { get; set; }
+        public bool ProvisionalCommitted { get; set; }
+    }
+
+    public ProvisionalVoiceReservation TrackProvisionalVoiceInterruption(Guid candidateTurnId, Guid predecessorTurnId,
+        Guid sessionId, Guid conversationId, CancellationTokenSource cancellation, VoiceGenerationReceipt candidateReceipt,
+        bool allowCompleted = false)
+    {
+        cancellation.Token.ThrowIfCancellationRequested();
+        if (candidateTurnId == predecessorTurnId || sessionId == Guid.Empty ||
+            candidateReceipt.SessionId != sessionId || candidateReceipt.ConversationId != conversationId)
+            throw new ArgumentException("A interrupção provisória não pertence a esta sessão.");
+        lock (gate)
+        {
+            ThrowIfStopping();
+            CleanupUnsafe();
+            var predecessor = RequireProvisionalPredecessorUnsafe(predecessorTurnId, sessionId, conversationId, allowCompleted);
+            var reservation = TrackPendingTurn(candidateTurnId, conversationId, cancellation, candidateReceipt);
+            pendingTurns[candidateTurnId].ProvisionalPredecessor = predecessorTurnId;
+            return new ProvisionalVoiceReservation(predecessor, reservation);
+        }
+    }
+
+    public VoiceGenerationHandoff CommitProvisionalVoiceInterruption(Guid candidateTurnId, Guid predecessorTurnId,
+        Guid sessionId, Guid conversationId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            ThrowIfStopping();
+            if (!pendingTurns.TryGetValue(candidateTurnId, out var candidate) ||
+                candidate.ConversationId != conversationId || candidate.ProvisionalPredecessor != predecessorTurnId ||
+                candidate.ProvisionalCommitted || candidate.Cancellation.IsCancellationRequested ||
+                !voiceGenerations.TryGetValue(candidateTurnId, out var candidateReceipt) ||
+                candidateReceipt.SessionId != sessionId || candidateReceipt.Ignored)
+                throw new OperationCanceledException("A interrupção provisória não está mais disponível.", cancellationToken);
+            var predecessor = RequireProvisionalPredecessorUnsafe(predecessorTurnId, sessionId, conversationId, true);
+            candidate.ProvisionalCommitted = true;
+            return new(predecessor, CancelAndGetInfoUnsafe(predecessorTurnId, "voice_generation_interrupted",
+                activeSegmentsOnly: true));
+        }
+    }
+
+    private VoiceGenerationReceipt RequireProvisionalPredecessorUnsafe(Guid turnId, Guid sessionId,
+        Guid conversationId, bool allowCompleted)
+    {
+        if (!voiceGenerations.TryGetValue(turnId, out var receipt) || receipt.Ignored ||
+            receipt.SessionId != sessionId || receipt.ConversationId != conversationId ||
+            !turns.TryGetValue(turnId, out var predecessor) ||
+            (currentByConversation.TryGetValue(conversationId, out var current)
+                ? current != turnId || !IsActiveUnsafe(predecessor)
+                : !allowCompleted || predecessor.Status != TurnStatus.Completed ||
+                  turns.Values.Any(other => other.ConversationId == conversationId && other.TurnId != turnId &&
+                      other.CreatedAt >= predecessor.CreatedAt)))
+            throw new ArgumentException("A geração interrompida não pertence a uma sessão ativa.");
+        return receipt;
+    }
 
     public VoiceGenerationHandoff BeginVoiceGenerationHandoff(Guid turnId, Guid sessionId, Guid? destination,
         CancellationToken cancellationToken = default)
@@ -72,6 +130,10 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
         {
             ThrowIfStopping();
             CleanupUnsafe();
+            if (pendingTurns.TryGetValue(turnId, out var unresolved) &&
+                unresolved.ProvisionalPredecessor is not null && !unresolved.ProvisionalCommitted)
+                throw new ArgumentException("A interrupção provisória ainda não foi aceita.");
+
             var receipt = voiceGenerations.GetValueOrDefault(turnId);
             if (receipt is not null)
             {
@@ -125,6 +187,8 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             pendingTurns.TryGetValue(turnId, out var pending);
             if (pending is not null && pending.ConversationId != conversationId)
                 throw new InvalidOperationException("The pending turn belongs to another conversation.");
+            if (pending?.ProvisionalPredecessor is not null && !pending.ProvisionalCommitted)
+                throw new InvalidOperationException("The provisional interruption has not been accepted.");
             pendingTurns.Remove(turnId);
             var turn = new ActiveTurn(turnId, conversationId);
             if (cancelledBeforeRegistration.Remove(turnId) || pending?.Cancellation.IsCancellationRequested == true)
@@ -138,7 +202,8 @@ public sealed class ActiveTurnRegistry : IActiveTurnRegistry, IDisposable
             // reservation by itself does not interrupt speech or an active text turn.
             var acceptedSequence = pending?.Sequence ?? ++turnSequence;
             foreach (var candidate in pendingTurns.Values.Where(candidate =>
-                candidate.ConversationId == conversationId && candidate.Sequence < acceptedSequence).ToList())
+                candidate.ConversationId == conversationId &&
+                (candidate.Sequence < acceptedSequence || candidate.ProvisionalPredecessor is not null)).ToList())
                 candidate.Cancellation.Cancel();
 
             string? supersededNativeSpeechRequestId = null;

@@ -326,5 +326,67 @@ public sealed class ActiveTurnRegistryTests
         Assert.Equal(TurnStatus.Completed, completed.Status);
     }
 
+    [Fact]
+    public void ProvisionalReservationRejectsAnotherSessionAndPreservesPredecessorAfterCandidateCancellation()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var predecessorId = Guid.NewGuid();
+        var candidateId = Guid.NewGuid();
+        using var earlier = new CancellationTokenSource();
+        var priorReceipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "anterior", null);
+        using var priorReservation = registry.TrackPendingTurn(predecessorId, conversation, earlier, priorReceipt);
+        var predecessor = registry.Register(predecessorId, conversation);
+        using var candidate = new CancellationTokenSource();
+        var candidateReceipt = new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "nova fala", null);
+        Assert.Throws<ArgumentException>(() => registry.TrackProvisionalVoiceInterruption(candidateId, predecessorId,
+            Guid.NewGuid(), conversation, candidate, candidateReceipt));
+        Assert.Throws<ArgumentException>(() => registry.TrackProvisionalVoiceInterruption(candidateId, Guid.NewGuid(),
+            session, conversation, candidate, candidateReceipt));
+        var tracked = registry.TrackProvisionalVoiceInterruption(candidateId, predecessorId,
+            session, conversation, candidate, candidateReceipt);
+        using var reservation = tracked.Reservation;
+        Assert.Same(priorReceipt, tracked.Predecessor);
+        Assert.Throws<InvalidOperationException>(() => registry.Register(candidateId, conversation));
+        Assert.Throws<ArgumentException>(() => registry.BeginVoiceGenerationHandoff(candidateId, session, conversation));
+        Assert.True(registry.IsCurrent(conversation, predecessorId));
+        registry.CancelAndGetInfo(candidateId, "explicit");
+        Assert.Throws<OperationCanceledException>(() => registry.CommitProvisionalVoiceInterruption(
+            candidateId, predecessorId, session, conversation));
+        Assert.False(predecessor.Cancellation.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversation, predecessorId));
+    }
+
+    [Fact]
+    public void ProvisionalReservationCannotCancelAReplacementTurnOrCommitTwice()
+    {
+        using var registry = CreateRegistry();
+        var conversation = Guid.NewGuid();
+        var session = Guid.NewGuid();
+        var predecessorId = Guid.NewGuid();
+        using var earlier = new CancellationTokenSource();
+        using var priorReservation = registry.TrackPendingTurn(predecessorId, conversation, earlier,
+            new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "anterior", null));
+        var predecessor = registry.Register(predecessorId, conversation);
+        var candidateId = Guid.NewGuid();
+        using var candidate = new CancellationTokenSource();
+        using var reservation = registry.TrackProvisionalVoiceInterruption(candidateId, predecessorId,
+            session, conversation, candidate,
+            new VoiceGenerationReceipt(session, conversation, Guid.NewGuid(), "nova fala", null)).Reservation;
+        var handoff = registry.CommitProvisionalVoiceInterruption(candidateId, predecessorId, session, conversation);
+        Assert.True(handoff.Cancellation.Result.LlmCancellationRequested);
+        Assert.True(predecessor.Cancellation.IsCancellationRequested);
+        Assert.Throws<OperationCanceledException>(() => registry.CommitProvisionalVoiceInterruption(
+            candidateId, predecessorId, session, conversation));
+
+        var replacement = registry.Register(Guid.NewGuid(), conversation);
+        Assert.True(candidate.IsCancellationRequested);
+        var lateCandidate = registry.Register(candidateId, conversation);
+        Assert.True(lateCandidate.Cancellation.IsCancellationRequested);
+        Assert.True(registry.IsCurrent(conversation, replacement.TurnId));
+        Assert.False(replacement.Cancellation.IsCancellationRequested);
+    }
+
     private static ActiveTurnRegistry CreateRegistry() => new(new AegisMetrics());
 }

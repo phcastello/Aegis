@@ -51,6 +51,9 @@ public interface IAegisDbContext
         Guid messageId,
         CancellationToken cancellationToken = default);
 
+    Task<ChatMessage?> GetChatMessageSnapshotAsync(Guid messageId, CancellationToken cancellationToken = default)
+        => GetChatMessageAsync(messageId, cancellationToken);
+
     Task<ChatMessage?> GetPreviousUserMessageAsync(
         Guid conversationId,
         DateTimeOffset before,

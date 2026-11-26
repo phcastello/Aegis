@@ -159,6 +159,19 @@ public sealed class VoiceService(
         CancellationToken cancellationToken = default)
     {
         var handoff = turnRegistry.BeginVoiceGenerationHandoff(turnId, sessionId, destination, cancellationToken);
+        return await CancelHandoffSpeechAsync(handoff);
+    }
+
+    public async Task<VoiceGenerationReceipt?> CommitProvisionalVoiceInterruptionAsync(Guid candidateTurnId,
+        Guid predecessorTurnId, Guid sessionId, Guid conversationId, CancellationToken cancellationToken = default)
+    {
+        var handoff = turnRegistry.CommitProvisionalVoiceInterruption(candidateTurnId, predecessorTurnId,
+            sessionId, conversationId, cancellationToken);
+        return await CancelHandoffSpeechAsync(handoff);
+    }
+
+    private async Task<VoiceGenerationReceipt?> CancelHandoffSpeechAsync(VoiceGenerationHandoff handoff)
+    {
         // Ownership and local invalidation are already committed together. Stop
         // only the unfinished native speech requests from that snapshot; do not
         // serially repeat a DELETE for every completed segment of a long reply.

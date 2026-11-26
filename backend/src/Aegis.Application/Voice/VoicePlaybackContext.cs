@@ -48,6 +48,9 @@ internal static class VoicePlaybackContext
             JsonSerializer.Serialize(new PlaybackEnvelope(new PlaybackMetadata(1, interruption)), JsonOptions));
     }
 
+    internal static bool IsValidInterruption(Guid conversationId, VoicePlaybackInterruption interruption,
+        IEnumerable<ChatMessage> history) => FindSegments(history, conversationId, interruption) is not null;
+
     // The generation may have committed a first speech segment before the
     // client could play anything. Preserve the zero-played boundary rather
     // than letting the model assume generated text was heard.

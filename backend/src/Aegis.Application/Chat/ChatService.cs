@@ -47,14 +47,16 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var defer = request.IsHandsFree && request.AllowSilentIgnore;
-        if (defer && userContent.Length == 0)
+        var mayIgnore = request.IsHandsFree && request.AllowSilentIgnore;
+        var defer = mayIgnore && !request.ProvisionalInterruption;
+        if (mayIgnore && userContent.Length == 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return null;
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
+        if (pending is null) return null;
         if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
@@ -149,8 +151,9 @@ public sealed class ChatService(
         var effectiveTurnId = request.TurnId ?? Guid.NewGuid();
         using var profile = TurnLatencyProfile.Begin(effectiveTurnId, logger);
         var userContent = HandsFreeReply.UserContent(request);
-        var defer = request.IsHandsFree && request.AllowSilentIgnore;
-        if (defer && userContent.Length == 0)
+        var mayIgnore = request.IsHandsFree && request.AllowSilentIgnore;
+        var defer = mayIgnore && !request.ProvisionalInterruption;
+        if (mayIgnore && userContent.Length == 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return ChatStreamEvent.Ignored(turnId);
@@ -158,6 +161,11 @@ public sealed class ChatService(
         }
 
         using var pending = await PrepareTurnAsync(request, userContent, cancellationToken);
+        if (pending is null)
+        {
+            yield return ChatStreamEvent.Ignored(turnId);
+            yield break;
+        }
         if (defer) pending.Track(turnRegistry, effectiveTurnId, request);
         var conversation = pending.Conversation;
         var userMessage = pending.UserMessage;
@@ -398,10 +406,12 @@ public sealed class ChatService(
         return true;
     }
 
-    private async Task<PendingChatTurn> PrepareTurnAsync(SendMessageRequest request, string userContent,
+    private async Task<PendingChatTurn?> PrepareTurnAsync(SendMessageRequest request, string userContent,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (request.ProvisionalInterruption)
+            return await PrepareProvisionalTurnAsync(request, userContent, cancellationToken);
         var destination = request.ConversationId;
         Conversation? conversation = null;
         var playback = request.InterruptedPlayback;
@@ -454,6 +464,99 @@ public sealed class ChatService(
         return new PendingChatTurn(conversation, userMessage, isNewConversation, playback, cancellationToken);
     }
 
+    private async Task<PendingChatTurn?> PrepareProvisionalTurnAsync(SendMessageRequest request, string userContent,
+        CancellationToken cancellationToken)
+    {
+        // Contract validation in HandsFreeReply requires a segmented hands-free request
+        // with an explicit destination, a different candidate ID and silent discard.
+        var destination = request.ConversationId!.Value;
+        var session = request.VoiceSessionId!.Value;
+        var candidateId = request.TurnId!.Value;
+        var predecessorId = request.InterruptedGeneration?.TurnId ?? request.InterruptedPlayback!.TurnId;
+        var candidateMessage = new ChatMessage(destination, ChatRoles.User, userContent);
+        var receipt = new VoiceGenerationReceipt(session, destination, candidateMessage.Id, candidateMessage.Content, null);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        IDisposable? reservation = null;
+        var transferred = false;
+        var committed = false;
+        try
+        {
+            var provisional = turnRegistry.TrackProvisionalVoiceInterruption(candidateId, predecessorId, session,
+                destination, cancellation, receipt, allowCompleted: request.InterruptedPlayback is not null);
+            reservation = provisional.Reservation;
+            var token = cancellation.Token;
+            token.ThrowIfCancellationRequested();
+
+            // This initial opt-in covers predecessors whose user message is already
+            // persisted. No database history or predecessor audio is modified here.
+            var previous = await dbContext.GetChatMessageSnapshotAsync(provisional.Predecessor.UserMessageId, token);
+            if (previous is null || previous.Role != ChatRoles.User || previous.ConversationId != destination)
+                throw new ArgumentException("A geração interrompida ainda não tem uma mensagem persistida.");
+
+            string? playbackContext = null;
+            if (request.InterruptedPlayback is { } position)
+            {
+                var assistant = await dbContext.GetChatMessageSnapshotAsync(position.AssistantMessageId, token);
+                if (assistant is null || !VoicePlaybackContext.IsValidInterruption(destination, position, [assistant]))
+                    throw new ArgumentException("A posição de reprodução não pertence ao turno interrompido.");
+                VoicePlaybackContext.Attach(candidateMessage, position, [assistant]);
+                playbackContext = VoicePlaybackContext.Describe([assistant], candidateMessage);
+            }
+
+            var disposition = await TurnLatencyProfile.MeasureAsync("chat.provisional_interruption", () =>
+                toolLoop.DecideProvisionalVoiceInterruptionAsync(provisional.Predecessor.Content, userContent,
+                    playbackContext, token));
+            token.ThrowIfCancellationRequested();
+            if (disposition == ProvisionalVoiceDisposition.Ignore)
+            {
+                receipt.MarkIgnored();
+                return null;
+            }
+
+            // Speech-only termination needs the client/server playback state machine.
+            // This opt-in does not turn that intention into a cancellation of work.
+            if (disposition != ProvisionalVoiceDisposition.Accept)
+                throw new NotSupportedException("O encerramento apenas da locução ainda não está disponível.");
+
+            var preceding = await voiceService.CommitProvisionalVoiceInterruptionAsync(candidateId, predecessorId,
+                session, destination, token) ?? throw new InvalidOperationException("A geração anterior não foi localizada.");
+            committed = true;
+            await preceding.Settled.WaitAsync(TimeSpan.FromSeconds(5), token);
+            token.ThrowIfCancellationRequested();
+
+            // The prior generation is settled. Read assistant messages for the first
+            // time now; this includes any segment committed during classification.
+            var conversation = await dbContext.GetConversationWithMessagesAsync(destination, token)
+                ?? throw new ConversationNotFoundException(destination);
+            if (!conversation.Messages.Any(message => message.Id == preceding.UserMessageId && message.Role == ChatRoles.User))
+                throw new InvalidOperationException("A mensagem anterior não está mais disponível.");
+            var playback = request.InterruptedPlayback;
+            if (playback is not null &&
+                !VoicePlaybackContext.IsValidInterruption(conversation.Id, playback, conversation.Messages))
+                throw new InvalidOperationException("A posição de reprodução anterior não está mais disponível.");
+            playback ??= VoicePlaybackContext.FirstUnplayed(predecessorId, conversation.Id, conversation.Messages);
+            VoicePlaybackContext.Attach(candidateMessage, playback, conversation.Messages);
+            receipt.SetPlayback(playback);
+
+            var pending = new PendingChatTurn(conversation, candidateMessage, false, playback, cancellationToken,
+                cancellation, reservation, receipt);
+            transferred = true;
+            return pending;
+        }
+        finally
+        {
+            if (!transferred)
+            {
+                // A rejected candidate or failed decision remains unused. Keeping only
+                // an ignored receipt avoids resurrection by a future legacy fallback.
+                if (!committed) receipt.MarkIgnored();
+                reservation?.Dispose();
+                cancellation.Dispose();
+                receipt.Settle();
+            }
+        }
+    }
+
     private static string MergeInterruptedContent(string? previous, string current)
     {
         if (string.IsNullOrWhiteSpace(previous)) return current;
@@ -490,12 +593,14 @@ public sealed class ChatService(
     }
 
     private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage,
-        bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
+        bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken,
+        CancellationTokenSource? existingCancellation = null, IDisposable? existingReservation = null,
+        VoiceGenerationReceipt? existingReceipt = null) : IDisposable
     {
-        private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        private readonly CancellationTokenSource cancellation = existingCancellation ?? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         private CancellationTokenRegistration registration;
-        private IDisposable? reservation;
-        private VoiceGenerationReceipt? generationReceipt;
+        private IDisposable? reservation = existingReservation;
+        private VoiceGenerationReceipt? generationReceipt = existingReceipt;
         public Conversation Conversation { get; } = conversation;
         public ChatMessage UserMessage { get; } = userMessage;
         public bool IsNewConversation { get; } = isNewConversation;

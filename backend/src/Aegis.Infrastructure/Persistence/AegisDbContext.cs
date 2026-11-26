@@ -204,6 +204,14 @@ public sealed class AegisDbContext(
                 cancellationToken);
     }
 
+    public async Task<ChatMessage?> GetChatMessageSnapshotAsync(Guid messageId,
+        CancellationToken cancellationToken = default)
+    {
+        return await ChatMessages.AsNoTracking().Include(message => message.Conversation).FirstOrDefaultAsync(
+            message => message.Id == messageId && message.Conversation!.DeletedAt == null,
+            cancellationToken);
+    }
+
     public async Task<ChatMessage?> GetPreviousUserMessageAsync(
         Guid conversationId,
         DateTimeOffset before,

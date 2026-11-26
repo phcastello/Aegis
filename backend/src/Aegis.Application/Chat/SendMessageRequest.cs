@@ -21,6 +21,10 @@ public sealed class SendMessageRequest
 
     public VoiceGenerationInterruption? InterruptedGeneration { get; init; }
 
+    /// <summary>Experimental two-stage acceptance for an interrupted, already registered voice turn.
+    /// The predecessor remains authoritative until the new utterance is classified as directed.</summary>
+    public bool ProvisionalInterruption { get; init; }
+
     public string Content { get; init; } = string.Empty;
 }
 
