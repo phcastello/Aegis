@@ -84,6 +84,56 @@ public sealed class FinalSpeechSegmentTests
         Assert.True(fixture.Voice.TryCompleteTurnWithoutSpeech(first.TurnId.Value));
     }
 
+    [Fact]
+    public async Task ParenthesesAreSilentAcrossSegmentsWithoutChangingHistoryOrSequence()
+    {
+        using var fixture = new Fixture();
+        fixture.Model.Segments = [
+            "Disponível (fonte",
+            "(detalhe de referência)",
+            "primária) com entrega amanhã (https://example.org).",
+            "Fim （referência sem fechamento"
+        ];
+        fixture.Model.Release.TrySetResult();
+        var events = new List<ChatStreamEvent>();
+
+        await foreach (var item in fixture.Chat.StreamMessageAsync(fixture.Request()))
+        {
+            events.Add(item);
+            if (item.Type != "final_segment") continue;
+            await using var pcm = await fixture.Voice.StartSegmentSpeechAsync(new(item.TurnId!.Value, Guid.NewGuid(),
+                item.AssistantMessageId!.Value, item.SegmentId!.Value, item.Sequence!.Value));
+            fixture.Voice.CompleteSpeech(pcm.SpeechRequestId);
+        }
+
+        var segments = events.Where(item => item.Type == "final_segment").ToArray();
+        Assert.Equal(fixture.Model.Segments, segments.Select(item => item.Content));
+        Assert.Equal(new[] { "Disponível", "", "com entrega amanhã.", "Fim" },
+            fixture.Speech.Requests.Select(request => request.Text));
+        Assert.True(fixture.Voice.TryCompleteTurnWithoutSpeech(segments[0].TurnId!.Value));
+        var persisted = await fixture.Db.ChatMessages.SingleAsync(x => x.Role == "assistant");
+        Assert.Equal(string.Join(' ', fixture.Model.Segments), persisted.Content);
+        using var metadata = JsonDocument.Parse(persisted.MetadataJson!);
+        var saved = metadata.RootElement.GetProperty("voiceSegments").GetProperty("segments");
+        Assert.Equal(fixture.Model.Segments[1], saved[1].GetProperty("Content").GetString());
+        Assert.Equal("", saved[1].GetProperty("SpokenContent").GetString());
+    }
+
+    [Fact]
+    public async Task ReplayingAWholeAnswerOmitsParentheticalTextOnlyFromSpeech()
+    {
+        using var fixture = new Fixture();
+        const string answer = "Use no sábado (apenas se houver sol (fonte local)). A opção （extra） funciona.";
+        fixture.Model.Answer = answer;
+        var reply = Assert.IsType<SendMessageResponse>(await fixture.Chat.SendMessageAsync(
+            new SendMessageRequest { Content = "Qual opção funciona?" }));
+        await using var pcm = await fixture.Voice.StartSpeechAsync(new(Guid.NewGuid(), Guid.NewGuid(), reply.Message.Id));
+
+        Assert.Equal("Use no sábado. A opção funciona.", Assert.Single(fixture.Speech.Requests).Text);
+        Assert.Equal(answer, reply.Message.Content);
+        Assert.Equal(answer, (await fixture.Db.ChatMessages.SingleAsync(x => x.Role == "assistant")).Content);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -363,11 +413,13 @@ public sealed class FinalSpeechSegmentTests
     {
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Finished, FailAfterFirst;
+        public string[] Segments { get; set; } = ["Ora, tudo certo.", "Quer conferir mais alguma coisa?"];
+        public string Answer { get; set; } = "Resposta natural.";
         public List<ModelToolRequest> Requests { get; } = [];
         public IReadOnlyList<JsonElement> ResearchOutputs { get; set; } = [];
         private static readonly LlmRequestAuditData Audit = new("test", "test", true, 1, "{}", 200, "{}", null, null);
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
-        { Requests.Add(request); return Task.FromResult(new ModelToolResponse("Resposta natural.", "test", "test", ModelPurpose.Chat, [], ResearchOutputs, null, null, Audit)); }
+        { Requests.Add(request); return Task.FromResult(new ModelToolResponse(Answer, "test", "test", ModelPurpose.Chat, [], ResearchOutputs, null, null, Audit)); }
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
@@ -390,12 +442,13 @@ public sealed class FinalSpeechSegmentTests
                 }
                 yield break;
             }
-            yield return new(null, false, [], [], FinalSpeechSegment: "Ora, tudo certo.");
+            yield return new(null, false, [], [], FinalSpeechSegment: Segments[0]);
             await Release.Task.WaitAsync(cancellationToken);
             if (FailAfterFirst) throw new InvalidOperationException("Controlled provider failure.");
-            yield return new(null, false, [], [], FinalSpeechSegment: "Quer conferir mais alguma coisa?");
+            foreach (var segment in Segments.Skip(1))
+                yield return new(null, false, [], [], FinalSpeechSegment: segment);
             Finished = true;
-            yield return new(null, true, [new("terminal", FinalSpeechSegments.ToolName, JsonSerializer.SerializeToElement(new { segments = new[] { "Ora, tudo certo.", "Quer conferir mais alguma coisa?" }, continuation = "continue" }))], ResearchOutputs, Provider: "test", Model: "test", Purpose: ModelPurpose.Chat, AuditData: Audit);
+            yield return new(null, true, [new("terminal", FinalSpeechSegments.ToolName, JsonSerializer.SerializeToElement(new { segments = Segments, continuation = "continue" }))], ResearchOutputs, Provider: "test", Model: "test", Purpose: ModelPurpose.Chat, AuditData: Audit);
         }
     }
 }

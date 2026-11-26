@@ -44,7 +44,7 @@ public sealed class VoiceService(
         {
             using var acquisition = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, turn.Cancellation.Token);
             var upstream = await speechClient.StreamSpeechAsync(new SpeechRequest(turn.TurnId, request.SpeechRequestId, nativeId,
-                segment.Content, turn.ConversationId), acquisition.Token);
+                segment.SpokenContent ?? new SpeechTextFilter().Append(segment.Content), turn.ConversationId), acquisition.Token);
             if (!turnRegistry.IsCurrent(turn.ConversationId, turn.TurnId))
             {
                 await upstream.DisposeAsync();
@@ -100,7 +100,8 @@ public sealed class VoiceService(
         try
         {
             var upstream = await speechClient.StreamSpeechAsync(
-                new SpeechRequest(turn.TurnId, request.SpeechRequestId, nativeRequestId, message.Content, message.ConversationId),
+                new SpeechRequest(turn.TurnId, request.SpeechRequestId, nativeRequestId,
+                    new SpeechTextFilter().Append(message.Content), message.ConversationId),
                 turn.Cancellation.Token);
             if (!turnRegistry.TrySetStreamingAudio(turn.TurnId, request.SpeechRequestId))
             {

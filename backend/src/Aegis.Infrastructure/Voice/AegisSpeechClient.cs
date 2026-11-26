@@ -22,12 +22,20 @@ public sealed class AegisSpeechClient(
     public async Task<SpeechStreamResponse> StreamSpeechAsync(SpeechRequest request, CancellationToken cancellationToken = default)
     {
         var settings = options.Value;
-        metrics.TtsRequests.Add(1);
         if (!settings.Enabled)
         {
             throw new InvalidOperationException("Speech is disabled.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.Text))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Installed clients expect a completed PCM stream for every authorized unit.
+            return new SpeechStreamResponse(new MemoryStream(new byte[SampleRate / 50 * Channels * sizeof(short)], writable: false),
+                new SpeechAudioFormat(PcmFormat, SampleRate, Channels, settings.Profile));
+        }
+
+        metrics.TtsRequests.Add(1);
         var payload = new
         {
             request_id = request.NativeRequestId,

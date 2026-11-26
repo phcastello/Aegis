@@ -83,17 +83,19 @@ internal static class VoicePlaybackContext
             var active = segments[position.Sequence];
             var completelyPlayed = position.SegmentFrames is { } total && position.PlayedFramesInSegment >= total;
             var completeCount = position.Sequence + (completelyPlayed ? 1 : 0);
+            var spoken = segments.Select(segment => segment.SpokenContent ?? segment.Content).ToArray();
+            var heard = spoken.Take(completeCount).Where(text => text.Length > 0).ToArray();
             marks.Add(new
             {
                 pedidoQueInterrompeu = userMessage.Content.Length > 240 ? userMessage.Content[..240] : userMessage.Content,
-                unidadesIntegralmenteOuvidas = completeCount,
-                ultimoTrechoIntegralmenteOuvido = completeCount > 0 ? segments[completeCount - 1].Content : null,
-                trechoNoMomentoDaInterrupcao = active.Content,
+                unidadesIntegralmenteOuvidas = heard.Length,
+                ultimoTrechoIntegralmenteOuvido = heard.LastOrDefault(),
+                trechoNoMomentoDaInterrupcao = active.SpokenContent ?? active.Content,
                 milissegundosOuvidosNoTrecho = position.PlayedFramesInSegment * 1000 / SampleRate,
                 duracaoDoTrechoEmMilissegundos = position.SegmentFrames * 1000 / SampleRate,
                 trechoIntegralmenteOuvido = completelyPlayed,
-                primeiroTrechoAindaNaoOuvido = completelyPlayed && completeCount < segments.Length
-                    ? segments[completeCount].Content : null
+                primeiroTrechoAindaNaoOuvido = completelyPlayed
+                    ? spoken.Skip(completeCount).FirstOrDefault(text => text.Length > 0) : null
             });
             if (marks.Count == 8) break;
         }

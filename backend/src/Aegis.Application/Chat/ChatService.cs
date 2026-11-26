@@ -185,6 +185,7 @@ public sealed class ChatService(
         var content = new StringBuilder();
         ChatMessage? segmentedMessage = null;
         var segments = new List<FinalSpeechSegment>();
+        SpeechTextFilter? speechText = null;
         var streamCompleted = false;
         try
         {
@@ -222,7 +223,11 @@ public sealed class ChatService(
                     dbContext.AddChatMessage(segmentedMessage);
                 }
                 else segmentedMessage.UpdateContent(content.ToString());
-                var segment = new FinalSpeechSegment(Guid.NewGuid(), segments.Count, segmentedMessage.Id, segmentContent);
+                var spokenContent = (speechText ??= new SpeechTextFilter()).Append(segmentContent);
+                var segment = new FinalSpeechSegment(Guid.NewGuid(), segments.Count, segmentedMessage.Id, segmentContent)
+                {
+                    SpokenContent = spokenContent == segmentContent ? null : spokenContent
+                };
                 segments.Add(segment);
                 segmentedMessage.AttachAuditData(null, null, null, SpeechSegmentMetadata(turn.TurnId, "generating", segments));
                 await dbContext.SaveChangesAsync(turnToken);

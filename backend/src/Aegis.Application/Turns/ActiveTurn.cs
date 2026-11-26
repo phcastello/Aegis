@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Aegis.Application.Turns;
 
 public sealed class ActiveTurn : IDisposable
@@ -31,4 +33,8 @@ public sealed class ActiveTurn : IDisposable
     public void Dispose() => Cancellation.Dispose();
 }
 
-public sealed record FinalSpeechSegment(Guid Id, int Sequence, Guid AssistantMessageId, string Content);
+public sealed record FinalSpeechSegment(Guid Id, int Sequence, Guid AssistantMessageId, string Content)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SpokenContent { get; init; }
+}
