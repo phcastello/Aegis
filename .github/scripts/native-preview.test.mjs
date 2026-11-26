@@ -4,7 +4,7 @@ import { mkdtempSync, cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, ex
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { parameters, assertTrustedDispatch, assertPlanAttempt, verifyReservedAttempt, assertEnvironment, assertIncreasing, prepareCandidate, manifest, verifyInput, resolvePreview, output } from './native-preview.mjs';
 import { githubFixture } from './distribution-state.fixture.mjs';
 import { recommendedFeed } from './distribution-state.mjs';
@@ -93,7 +93,8 @@ test('temporary synchronization updates all consumers without changing branch fi
     'apps/aegis-node/src-tauri/Cargo.toml', 'apps/aegis-node/src-tauri/Cargo.lock', 'apps/aegis-node/scripts/version.mjs', 'apps/aegis-node/scripts/version.test.mjs',
     // The static gateway retains version-only manifests at the old path for
     // compatibility with the trusted main preview version synchronizer.
-    'packages/aegis-client/package.json', 'packages/aegis-client/package-lock.json', 'frontend/aegis-pwa/package.json', 'frontend/aegis-pwa/package-lock.json'];
+    'packages/aegis-client/package.json', 'packages/aegis-client/package-lock.json', 'packages/aegis-client/src/services/releaseIdentity.ts',
+    'frontend/aegis-pwa/package.json', 'frontend/aegis-pwa/package-lock.json'];
   const original = readFileSync(join(root, files[0]), 'utf8');
   try {
     for (const file of files) { mkdirSync(dirname(join(work, file)), { recursive: true }); cpSync(join(root, file), join(work, file)); }
@@ -126,6 +127,16 @@ test('temporary synchronization updates all consumers without changing branch fi
     prepareCandidate(work, root, '0.7.2-unstable.22', independentCode + 2);
     checkSnapshot();
     assert.throws(() => prepareCandidate(work, root, plan.version), /Command failed/, 'A new prerelease must never silently derive its installation code from SemVer.');
+    const previousManifest = readFileSync(join(work, files[0]), 'utf8');
+    for (const version of ['20.99.999', '20.99.999-unstable.1']) {
+      writeFileSync(join(work, files[0]), JSON.stringify({ ...JSON.parse(previousManifest), version: '20.99.999' }));
+      assert.throws(() => prepareCandidate(work, root, version, version.includes('-') ? 2099999001 : undefined), /Command failed/,
+        `Preparation must reject a family without a codename: ${version}.`);
+      const check = spawnSync(process.execPath, ['scripts/version.mjs'], { cwd: join(work, 'apps/aegis-node'), encoding: 'utf8' });
+      assert.notEqual(check.status, 0);
+      assert.match(check.stderr, /Release family 20\.99 requires a codename/);
+    }
+    writeFileSync(join(work, files[0]), previousManifest);
     const config = JSON.parse(readFileSync(configPath));
     config.plugins.updater.endpoints = ['https://github.com/phcastello/Aegis/releases/download/node-preview/latest.json'];
     writeFileSync(configPath, JSON.stringify(config));

@@ -29,6 +29,12 @@ Veja a [filosofia de desenvolvimento](README.md#filosofia-de-desenvolvimento).
   persistência, observabilidade e tratamento de falhas.
 - Nunca exponha credenciais, dados pessoais ou segredos em código, logs ou artefatos.
 
+## Identidade de versões
+
+- Antes de iniciar uma nova versão, confirme com o proprietário o número da versão. O agente deve perguntar sempre que essa decisão ainda estiver em aberto. Nunca proponha nem escolha por iniciativa própria uma versão ou um número de versão.
+- Ao iniciar uma nova família major/minor, pergunte também qual é o codinome. Registre somente o codinome escolhido pelo proprietário. Ideias de nomes podem ser apresentadas quando o proprietário as pedir. A família mantém seu codinome nos patches e nas prévias.
+- Toda versão candidata a build ou distribuição deve ter uma identidade editorial definida e passar a validação de codinome. A interface pode mostrar que a identidade é indisponível para uma versão desconhecida, mas uma nova release conhecida pelo projeto exige codinome explícito.
+
 ## Branches e distribuição
 
 - Trabalhe na branch designada; preserve a worktree original, alterações locais e

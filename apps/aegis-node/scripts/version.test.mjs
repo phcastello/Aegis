@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getReleaseIdentity } from '../../../packages/aegis-client/src/services/releaseIdentity.ts';
 import { androidVersionCode, synchronize, parseDistributionVersion, compareVersions, rollbackVersion, allocateVersionCode, validateVersionCode } from './version.mjs';
 
 test('Android codes increase across legacy previews, unstable channel, stable and next patch', () => {
@@ -20,6 +21,10 @@ test('checked-in versions and locks agree with the source of truth', () => {
   const { version, versionCode } = synchronize();
   assert.equal(validateVersionCode(versionCode), versionCode);
   assert.ok(parseDistributionVersion(version));
+  // Preview preparation may use an older trusted synchronizer from main.
+  const codename = getReleaseIdentity(version).codename;
+  assert.ok(codename?.trim() && codename.trim() !== getReleaseIdentity().codename,
+    `Missing codename for release ${version}.`);
 });
 
 

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { getReleaseIdentity } from '../../../packages/aegis-client/src/services/releaseIdentity.ts';
 
 export function androidVersionCode(version) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:stage|unstable)\.([1-9]\d*))?$/.exec(version);
@@ -83,6 +84,9 @@ export function synchronize(write = false, options = {}) {
   const jsonPath = new URL('package.json', root);
   const version = JSON.parse(readFileSync(jsonPath, 'utf8')).version;
   const parsed = parseDistributionVersion(version);
+  const codename = getReleaseIdentity(version).codename;
+  if (!codename?.trim() || codename.trim() === getReleaseIdentity().codename)
+    throw new Error(`Release family ${parsed.major}.${parsed.minor} requires a codename in packages/aegis-client/src/services/releaseIdentity.ts.`);
   const configPath = new URL('src-tauri/tauri.conf.json', root);
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
   const explicitCode = options.versionCode ?? (process.env.AEGIS_VERSION_CODE ? Number(process.env.AEGIS_VERSION_CODE) : undefined);

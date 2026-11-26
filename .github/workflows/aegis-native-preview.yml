@@ -200,6 +200,9 @@ jobs:
         with:
           name: Preview-plan-${{ github.run_id }}
           path: preview-plan
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
       - name: Apply temporary version using trusted synchronization and identity contracts
         env:
           PREVIEW_SHA: ${{ needs.plan.outputs.sha }}
