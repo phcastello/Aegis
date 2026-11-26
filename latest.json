@@ -1,27 +1,27 @@
 {
-  "version": "0.8.0",
-  "notes": "Aegis 0.8.0",
-  "pub_date": "2026-11-25T18:48:06.552Z",
+  "version": "0.9.0-unstable.1",
+  "notes": "Aegis 0.9.0-unstable.1",
+  "pub_date": "2026-11-26T19:21:43.897Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0/Aegis-Windows-x86_64-Setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcTBXRWtRVndyNVVic2lBNWxOMjBNeTFwZGlnUDRPbTY3ZGRCUFFBLzE2ZmN4dzRCemYydmpSV01vZTBVTi96K3owbExzd3ltYzlWM0NmYzVQSVFVTFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjMzMjcwCWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC44LjAKNzQzR1VHenR3OWswWEU1aGkwSU1vWnduU1JaYUhmOEt6eTA1U1N3aHhoV0FCNjNlZzBWOFphL3Vnd1pHWURMRURkOUZzQXVZakZpZmNhcE02U05VRGc9PQo=",
-      "sha256": "82d62c3cf316f0c8b1cf542252fe35d8c2da194b868ed9622eec8b2893349bc7"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.9.0-unstable.1/Aegis-Windows-x86_64-Setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRaWlWMm9xQkRNcTd1Y3AwM3grc1BNa0VzRThFM1lMajN2em9STVZOV2s2R3hWMlFnenFsUjRQd0V4Z0oxTjlJWlpFSVNJN2lRTHRzbnJpSDRiaDhTRmI1K0lvaE83V0FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzIxNDE3CWZpbGU6QWVnaXMtV2luZG93cy14ODZfNjQtU2V0dXAuZXhlCXZlcnNpb246MC45LjAtdW5zdGFibGUuMQpRWTVkUDQ3NGpTSVFHL29uSWR6Qml2T0lpVDc3MkhuYmo2NlZnN21rQnZLNjFzMHRtSElreDlNQTV0Z2w2NGVnV3ZORlBFTkl5WGJnWnVpMEhlVVVEQT09Cg==",
+      "sha256": "13683119f7049070a069ce229f95f36223fc9c9ecb5ac969c7550c3fc2d30454"
     }
   },
   "android": {
     "aarch64": {
-      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.8.0/Aegis-Android-arm64.apk",
-      "versionCode": 8000999,
-      "sha256": "95f4ae8c45a51d7336b65fde1d60f9528e0b8dc7727e7bbf52e132c058aba75b"
+      "url": "https://github.com/phcastello/Aegis/releases/download/node-v0.9.0-unstable.1/Aegis-Android-arm64.apk",
+      "versionCode": 9000001,
+      "sha256": "bb3d400dd8b22a38b99e5c2bc4011b26cb058b7bbd1a20f373939e0e81bef36f"
     }
   },
   "schema": 2,
-  "versionCode": 8000999,
+  "versionCode": 9000001,
   "kind": "normal",
-  "sourceCommit": "2cc787d93d7906e801c84002b2f66987f3f040b7",
-  "sourceVersion": "0.8.0",
-  "publishedAt": "2026-11-25T18:48:06.552Z",
+  "sourceCommit": "0f446431f27115b017fae4ddc12463261caa8a68",
+  "sourceVersion": "0.9.0",
+  "publishedAt": "2026-11-26T19:21:43.897Z",
   "compatibility": {
     "api": 1,
     "nodeData": 1

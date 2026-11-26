@@ -1710,8 +1710,8 @@
     }
   ],
   "recommended": {
-    "version": "0.8.0",
-    "versionCode": 8000999,
-    "sha256": "5036e75e44d330713a1acd73c6d49fb23f2156c6303ca28a27f9c93d99a999da"
+    "version": "0.9.0-unstable.1",
+    "versionCode": 9000001,
+    "sha256": "c4bc973c437772f21234f4180540d3682a7deeecad38f04010234f51412cc975"
   }
 }
