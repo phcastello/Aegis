@@ -30,7 +30,7 @@ function researchLink(value: unknown): ResearchLink | null {
     return {
       url: parsed.href,
       host: site.host,
-      siteName: evidenceText(siteName, 80) || site.name,
+      siteName: site.name !== site.host ? site.name : evidenceText(siteName, 80) || site.name,
       title: evidenceText(title, 300) || (parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname)).slice(0, 300),
       snippet: evidenceText(snippet, 400) || undefined
     };

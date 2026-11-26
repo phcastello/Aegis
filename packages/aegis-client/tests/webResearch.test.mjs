@@ -126,3 +126,16 @@ test('evidenced parenthesized links can be rendered even when sources have no of
   assert.match(result.html, /outra \( <a href="https:\/\/example\.test\/two">Referência<\/a> \)\./);
   assert.deepEqual(result.unplacedCitations, []);
 });
+
+test('Agência Brasil badges use the stable official icon and short site name for exact host aliases', () => {
+  const content = 'Uma informação consultada.';
+  const url = 'https://www.agenciabrasil.ebc.com.br/noticia/uma-informacao';
+  const result = renderWebResearchMarkdown(markdown, content, {
+    sources: [{ url, kind: 'opened', title: 'Uma informação', siteName: 'Agência Brasil | Últimas notícias do Brasil e do mundo' }],
+    citations: [{ ...citation(url, content, content), siteName: 'Agência Brasil - EBC' }]
+  });
+  assert.equal(result.inlineCitations[0].siteName, 'Agência Brasil');
+  assert.match(result.html, /href="https:\/\/www\.agenciabrasil\.ebc\.com\.br\/noticia\/uma-informacao"/);
+  assert.match(result.html, /src="https:\/\/agenciabrasil\.ebc\.com\.br\/sites\/default\/themes\/agenciabrasil_v3\/favicon\.ico"/);
+  assert.match(result.html, /class="web-citation__label">Agência Brasil<\/span>/);
+});

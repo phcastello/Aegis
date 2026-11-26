@@ -8,7 +8,13 @@ const siteNames: Readonly<Record<string, string>> = {
   'wikipedia.org': 'Wikipédia',
   'bbc.com': 'BBC',
   'reuters.com': 'Reuters',
-  'gov.br': 'Gov.br'
+  'gov.br': 'Gov.br',
+  'agenciabrasil.ebc.com.br': 'Agência Brasil'
+};
+
+const siteIconPaths: Readonly<Record<string, string>> = {
+  // The canonical page declares this theme icon. The root icon is a 1×1 pixel.
+  'agenciabrasil.ebc.com.br': '/sites/default/themes/agenciabrasil_v3/favicon.ico'
 };
 
 export function researchSite(value: string): ResearchSite | null {
@@ -28,8 +34,14 @@ export function researchSite(value: string): ResearchSite | null {
 
 export function researchFavicon(host: string): string | undefined {
   const site = researchSite(host);
-  if (!site || site.host !== host || /(?:^|\.)(?:local|localhost|test|example|invalid|onion|internal|arpa)$/.test(host)) return undefined;
-  return 'https://' + host + '/favicon.ico';
+  if (!site || (host !== site.host && host !== 'www.' + site.host) ||
+    /(?:^|\.)(?:local|localhost|test|example|invalid|onion|internal|arpa)$/.test(site.host)) return undefined;
+  const path = Object.prototype.hasOwnProperty.call(siteIconPaths, site.host) ? siteIconPaths[site.host] : '/favicon.ico';
+  return 'https://' + site.host + path;
+}
+
+export function isUsableResearchFavicon(image: Pick<HTMLImageElement, 'complete' | 'naturalWidth' | 'naturalHeight'>): boolean {
+  return image.complete && image.naturalWidth > 1 && image.naturalHeight > 1;
 }
 
 export function mergeResearchSites(previous: ReadonlyMap<string, number>, incoming: readonly WebResearchSourceCount[]): Map<string, number> {

@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useId, watch } fr
 import { clientEnvironment, externalUrl, openClientLink } from '../services/clientEnvironment';
 import { isGoogleAuthorizationLink } from '../services/emailConnectionLinks';
 import { renderWebResearchMarkdown, type ResearchLink } from '../services/webResearchPresentation';
+import { isUsableResearchFavicon } from '../services/researchSites';
 import type { WebResearch } from '../types/chat';
 import WebSourceIcon from './WebSourceIcon.vue';
 
@@ -131,9 +132,13 @@ function clickMessage(event: MouseEvent): void {
   void followLink(event);
 }
 
-function showCitationIcon(event: Event): void {
+function syncCitationIcon(image: HTMLImageElement): void {
+  image.parentElement?.classList.toggle('web-citation__icon--ready', isUsableResearchFavicon(image));
+}
+
+function onCitationIconEvent(event: Event): void {
   if (event.target instanceof HTMLImageElement && event.target.matches('.web-citation__favicon'))
-    event.target.parentElement?.classList.add('web-citation__icon--ready');
+    syncCitationIcon(event.target);
 }
 
 function positionCitationPreview(): void {
@@ -207,6 +212,8 @@ watch(
       return;
     }
 
+    // Images from cache may already be complete when v-html is replaced.
+    element.querySelectorAll<HTMLImageElement>('.web-citation__favicon').forEach(syncCitationIcon);
     const visibleText = (element.textContent ?? '').trimEnd();
     const stableLength = visibleText.startsWith(previousVisibleText)
       ? previousVisibleText.length
@@ -334,7 +341,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
 <template>
   <div ref="messageElement" class="markdown-message" @click="clickMessage" @auxclick="followLink"
     @pointerover="enterCitation" @pointerout="leaveCitation" @focusin="focusCitation" @focusout="blurCitation"
-    @load.capture="showCitationIcon" v-html="renderedContent"></div>
+    @load.capture="onCitationIconEvent" @error.capture="onCitationIconEvent" v-html="renderedContent"></div>
   <Teleport to="body">
     <div v-if="citationPreview" :id="previewId" ref="previewElement" class="web-citation-preview" role="tooltip"
       :style="previewPosition ?? { visibility: 'hidden' }" @pointerenter="keepCitationPreview" @pointerleave="leaveCitation">
@@ -365,11 +372,11 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   align-items: stretch;
   max-inline-size: min(13rem, calc(100% - .5em));
   margin-inline: .28em .14em;
-  vertical-align: -.12em;
+  vertical-align: middle;
   white-space: nowrap;
   font-size: .79em;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.35;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-inline);
   background: var(--surface-soft);
@@ -396,6 +403,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.4;
 }
 .markdown-message :deep(.web-citation__icon) {
   position: relative;

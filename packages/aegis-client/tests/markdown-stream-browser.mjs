@@ -55,6 +55,69 @@ try {
   await page.context().route('https://reuters.com/first?article=1', route => route.fulfill({ status: 200, body: 'Source' }));
   await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
   await page.waitForFunction(() => typeof window.updateMarkdown === 'function');
+  const agencyUrl = 'https://www.agenciabrasil.ebc.com.br/noticia';
+  const agencyIcon = 'https://agenciabrasil.ebc.com.br/sites/default/themes/agenciabrasil_v3/favicon.ico';
+  const agencyIconRequests = [];
+  await page.context().route(agencyIcon + '?fixture=1', route => {
+    agencyIconRequests.push(route.request());
+    return route.fulfill({ status: 200, contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="green"/></svg>' });
+  });
+  await page.evaluate(url => window.updateMarkdown('Informação pública.', {
+    sources: [{ url, kind: 'opened', title: 'Uma notícia', siteName: 'Agência Brasil | Últimas notícias do Brasil e do mundo' }],
+    citations: [{ url, startIndex: 0, endIndex: 'Informação pública.'.length }]
+  }), agencyUrl);
+  const agencyBadge = page.getByRole('link', { name: 'Fonte: Agência Brasil · Uma notícia' });
+  const agencyImage = agencyBadge.locator('img');
+  assert.equal(await agencyImage.getAttribute('src'), agencyIcon);
+  assert.equal(await agencyImage.getAttribute('referrerpolicy'), 'no-referrer');
+  // Chromium may bypass request routing for the exact favicon.ico URL.
+  await agencyImage.evaluate(icon => { icon.src += '?fixture=1'; });
+  await agencyBadge.locator('.web-citation__icon--ready').waitFor();
+  assert.equal(await agencyBadge.textContent(), 'Agência Brasil');
+  const agencyLabel = await agencyBadge.locator('.web-citation__label').evaluate(label => {
+    const range = document.createRange();
+    range.selectNodeContents(label);
+    const text = range.getBoundingClientRect();
+    const bounds = label.getBoundingClientRect();
+    const css = getComputedStyle(label);
+    return { textTop: text.top, textBottom: text.bottom, top: bounds.top, bottom: bounds.bottom,
+      lineHeight: parseFloat(css.lineHeight), fontSize: parseFloat(css.fontSize) };
+  });
+  assert.ok(agencyLabel.lineHeight >= 1.3 * agencyLabel.fontSize);
+  assert.ok(agencyLabel.textTop >= agencyLabel.top - 1 && agencyLabel.textBottom <= agencyLabel.bottom + 1,
+    'The label keeps glyph descenders inside its clipping box');
+  await agencyBadge.hover();
+  const agencyPreview = page.getByRole('tooltip');
+  const agencyPreviewImage = agencyPreview.locator('img');
+  assert.equal(await agencyPreviewImage.getAttribute('src'), agencyIcon);
+  await agencyPreviewImage.evaluate(icon => { icon.src += '?fixture=1'; });
+  await agencyPreview.locator('.web-source-icon--ready').waitFor();
+  assert.ok(agencyIconRequests.length > 0 && agencyIconRequests.every(request => !request.headers().referer));
+  await page.keyboard.press('Escape');
+  await agencyPreview.waitFor({ state: 'hidden' });
+
+  await page.context().route('https://pixel.example.org/favicon.ico?fixture=1', route => route.fulfill({
+    status: 200, contentType: 'image/gif',
+    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+  }));
+  await page.evaluate(() => {
+    const url = 'https://pixel.example.org/article';
+    return window.updateMarkdown('Referência pública.', {
+      sources: [{ url, kind: 'opened', title: 'Um artigo', siteName: 'Portal' }],
+      citations: [{ url, startIndex: 0, endIndex: 'Referência pública.'.length }]
+    });
+  });
+  const placeholderBadge = page.getByRole('link', { name: 'Fonte: Portal · Um artigo' });
+  const placeholderIcon = placeholderBadge.locator('img');
+  await placeholderIcon.evaluate(icon => { icon.src += '?fixture=1'; });
+  await page.waitForFunction(() =>
+    document.querySelector('.web-citation__favicon')?.naturalWidth === 1);
+  assert.equal(await placeholderBadge.locator('.web-citation__icon--ready').count(), 0,
+    'A successful transparent one-pixel response must preserve the monogram');
+  assert.equal(await placeholderBadge.locator('[data-monogram="P"]').count(), 1);
+  await page.mouse.move(1000, 600);
+
   const sourcedText = 'A primeira informação. A segunda informação.';
   const sourcedMessage = {
     content: sourcedText,
