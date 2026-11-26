@@ -4,5 +4,5 @@ public sealed class WebSearchOptions
 {
     public const string SectionName = "AegisWebSearch";
     public bool Enabled { get; set; } = true;
-    public int MaxCallsPerTurn { get; set; } = 20;
+    public int MaxSearchActionsPerTurn { get; set; } = 20;
 }

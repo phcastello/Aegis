@@ -1,3 +1,4 @@
+using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -85,4 +86,61 @@ public sealed class PrivateOperationPostgresTests
         Assert.Equal(1, await restarted.Conversations.CountAsync());
         Assert.Equal(1, await restarted.ChatMessages.CountAsync());
     });
+
+    [OperationFact]
+    public Task WebSearchUsageUpsertsKeepUniqueCallsAndAggregateExactUtcRanges() => WithSchema(async create =>
+    {
+        var first = DateTimeOffset.Parse("2026-11-25T23:59:59Z");
+        var boundary = DateTimeOffset.Parse("2026-11-26T00:00:00Z");
+        var end = boundary.AddDays(1);
+        await using (var db = create())
+        {
+            await db.Database.MigrateAsync();
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_prev", null, "unknown", "in_progress", first)));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_prev", "resp_prev", "search", "completed", boundary)));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_prev", "resp_prev", "unknown", "in_progress", boundary.AddSeconds(2))));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_search", "resp_1", "search", "completed", boundary)));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_open", "resp_1", "open_page", "completed", boundary.AddHours(1))));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_find", "resp_1", "find_in_page", "failed", boundary.AddHours(1))));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_unknown", null, "unknown", "in_progress", boundary.AddHours(2))));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_other", "resp_other", "other", "incomplete", boundary.AddHours(2))));
+            Assert.True(await WebSearchUsageRecorder.UpsertAsync(db, new("ws_next", "resp_next", "search", "completed", end)));
+        }
+        // Replay from separate contexts concurrently; the unique key handles both.
+        async Task<bool> Replay()
+        {
+            await using var db = create();
+            return await WebSearchUsageRecorder.UpsertAsync(db, new("ws_open", "resp_1", "open_page", "completed", boundary.AddHours(3)));
+        }
+        Assert.All(await Task.WhenAll(Replay(), Replay()), result => Assert.True(result));
+
+        await using var restarted = create();
+        var conflict = await WebSearchUsageRecorder.UpsertAsync(restarted,
+            new("ws_open", "different_response", "search", "completed", boundary));
+        Assert.False(conflict);
+        var old = await restarted.WebSearchUsage.SingleAsync(item => item.CallId == "ws_prev");
+        Assert.Equal("resp_prev", old.ResponseId);
+        Assert.Equal("search", old.ActionType);
+        Assert.Equal("completed", old.Status);
+        Assert.Equal(first, old.FirstObservedAt);
+        Assert.Equal(boundary.AddSeconds(2), old.LastObservedAt);
+        var report = await WebSearchUsageReport.ReadAsync(restarted, boundary, end);
+        Assert.Equal(1, report.Search);
+        Assert.Equal(1, report.OpenPage);
+        Assert.Equal(1, report.FindInPage);
+        Assert.Equal(1, report.Unknown);
+        Assert.Equal(1, report.Other);
+        Assert.Equal(5, report.Total);
+        Assert.Equal(2, report.Statuses["completed"]);
+        Assert.Equal(1, report.Statuses["failed"]);
+        Assert.Equal(1, report.Statuses["in_progress"]);
+        Assert.Equal(1, report.Statuses["incomplete"]);
+        var before = await WebSearchUsageReport.ReadAsync(restarted, boundary.AddDays(-1), boundary);
+        Assert.Equal(1, before.Total);
+        Assert.Equal(1, before.Search);
+        Assert.Equal(7, await restarted.WebSearchUsage.CountAsync());
+        await restarted.Database.MigrateAsync();
+        Assert.Equal(5, (await WebSearchUsageReport.ReadAsync(restarted, boundary, end)).Total);
+    });
+
 }

@@ -194,27 +194,87 @@ public sealed class ToolLoopTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task NativeWebSearchSharesBudgetAcrossRounds(bool streaming)
+    public async Task NativeWebSearchCountsOnlySearchActionsAcrossRounds(bool streaming)
     {
         var first = Call("fake_tool");
-        first = first with { OutputItems = [.. first.OutputItems, SearchItem("ws_1"), SearchItem("ws_2")] };
+        first = first with { OutputItems = [.. first.OutputItems,
+            .. Enumerable.Range(1, 19).Select(index => SearchItem($"ws_{index}")),
+            SearchItem("ws_open_1", "open_page"), SearchItem("ws_find_1", "find_in_page")] };
         var second = Call("fake_tool");
-        second = second with { OutputItems = [.. second.OutputItems, SearchItem("ws_3")] };
-        var model = new FakeModelClient([first, second, Reply("Resultado")]);
+        second = second with { OutputItems = [.. second.OutputItems, SearchItem("ws_20"),
+            SearchItem("ws_open_2", "open_page")] };
+        var final = Reply("Resultado") with { OutputItems = [SearchItem("ws_open_3", "open_page"),
+            SearchItem("ws_find_2", "find_in_page")] };
+        var model = new FakeModelClient([first, second, final]);
         using var metrics = new AegisMetrics();
         var loop = new AegisToolLoop(model, new AegisToolRegistry([new FakeTool()]), NullLogger<AegisToolLoop>.Instance,
-            metrics, new WebSearchOptions { MaxCallsPerTurn = 3 });
+            metrics, new WebSearchOptions());
         var request = new ModelRequest("identity", "Pesquise.");
         var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        LlmRequestAuditData audit;
         if (streaming)
         {
-            await foreach (var _ in loop.StreamAsync(request, context)) { }
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            audit = chunks[^1].AuditData!;
         }
-        else await loop.RunAsync(request, context);
+        else audit = (await loop.RunAsync(request, context)).AuditData;
 
-        Assert.Equal(new[] { 3, 1, 0 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
+        Assert.Equal(new int?[] { 20, 1, 0 }, model.Requests.Select(round => round.NativeSearchActionBudget));
         Assert.All(model.Requests, round => Assert.DoesNotContain(round.Tools, tool => tool.Name == "request_web_search"));
         Assert.Contains(model.Requests[1].InputItems!, item => item.TryGetProperty("id", out var id) && id.GetString() == "ws_1");
+        var zeroBudgetGuidance = model.Requests[2].InputItems![^1].GetProperty("content").GetString();
+        Assert.Contains("Não faça novas ações search", zeroBudgetGuidance);
+        Assert.Contains("open_page e find_in_page", zeroBudgetGuidance);
+        using var summary = JsonDocument.Parse(audit.RequestPayloadJson!);
+        var actions = summary.RootElement.GetProperty("nativeWebSearch");
+        Assert.Equal(20, actions.GetProperty("searchActionBudget").GetInt32());
+        Assert.Equal(20, actions.GetProperty("search").GetInt32());
+        Assert.Equal(3, actions.GetProperty("openPage").GetInt32());
+        Assert.Equal(2, actions.GetProperty("findInPage").GetInt32());
+        Assert.Equal(0, actions.GetProperty("unknown").GetInt32());
+        Assert.Equal(0, actions.GetProperty("searchActionsOverBudget").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProviderSearchOverrunIsAuditedWithoutDiscardingAnswer(bool streaming)
+    {
+        var first = Call("fake_tool");
+        first = first with { OutputItems = [.. first.OutputItems,
+            .. Enumerable.Range(1, 21).Select(index => SearchItem($"ws_{index}"))] };
+        var final = Reply("Resposta útil") with { OutputItems = [SearchItem("ws_22"),
+            SearchItem("ws_open", "open_page"), SearchItem("ws_find", "find_in_page")] };
+        var model = new FakeModelClient([first, final]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new FakeTool()]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "Pesquise.");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        LlmRequestAuditData audit;
+        string answer;
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            answer = string.Concat(chunks.Select(chunk => chunk.Content));
+            audit = chunks[^1].AuditData!;
+        }
+        else
+        {
+            var result = await loop.RunAsync(request, context);
+            answer = result.Content;
+            audit = result.AuditData;
+        }
+        Assert.Equal("Resposta útil", answer);
+        Assert.Equal(new int?[] { 20, 0 }, model.Requests.Select(round => round.NativeSearchActionBudget));
+        using var summary = JsonDocument.Parse(audit.RequestPayloadJson!);
+        var actions = summary.RootElement.GetProperty("nativeWebSearch");
+        Assert.Equal(22, actions.GetProperty("search").GetInt32());
+        Assert.Equal(1, actions.GetProperty("openPage").GetInt32());
+        Assert.Equal(1, actions.GetProperty("findInPage").GetInt32());
+        Assert.Equal(2, actions.GetProperty("searchActionsOverBudget").GetInt32());
     }
 
     [Theory]
@@ -259,7 +319,7 @@ public sealed class ToolLoopTests
         }
 
         Assert.Equal(1, acceptances);
-        Assert.Equal(new[] { 0, 20 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
+        Assert.Equal(new int?[] { null, 20 }, model.Requests.Select(round => round.NativeSearchActionBudget));
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "hands_free_ignore");
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "request_web_search");
         Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name is "request_web_search" or "hands_free_ignore" or "hands_free_reply" or "hands_free_reply_segments");
@@ -285,7 +345,7 @@ public sealed class ToolLoopTests
             Assert.True(Assert.Single(chunks).Ignored);
         }
         else Assert.True((await loop.RunAsync(request, context)).Ignored);
-        Assert.Equal(0, Assert.Single(model.Requests).NativeWebSearchCallLimit);
+        Assert.Null(Assert.Single(model.Requests).NativeSearchActionBudget);
     }
 
     [Theory]
@@ -302,7 +362,7 @@ public sealed class ToolLoopTests
             Origin: handsFree ? "hands_free" : null);
         await loop.RunAsync(request, context);
         var round = Assert.Single(model.Requests);
-        Assert.Equal(0, round.NativeWebSearchCallLimit);
+        Assert.Null(round.NativeSearchActionBudget);
         Assert.DoesNotContain(round.Tools, tool => tool.Name == "request_web_search");
     }
 
@@ -314,17 +374,19 @@ public sealed class ToolLoopTests
         var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
             metrics, new WebSearchOptions());
         var chunks = await CollectAsync(loop);
-        Assert.Equal(20, Assert.Single(model.Requests).NativeWebSearchCallLimit);
+        Assert.Equal(20, Assert.Single(model.Requests).NativeSearchActionBudget);
         Assert.Equal("Brasília", string.Concat(chunks.Where(chunk => !chunk.IsDone).Select(chunk => chunk.Content)));
         Assert.DoesNotContain(chunks, chunk => chunk.ToolStatus is not null);
     }
 
-    private static JsonElement SearchItem(string id) => JsonSerializer.SerializeToElement(new
+    private static JsonElement SearchItem(string id, string actionType = "search") => JsonSerializer.SerializeToElement(new
     {
         id,
         type = "web_search_call",
         status = "completed",
-        action = new { type = "search", queries = new[] { "informação pública" }, sources = new[] { new { type = "url", url = "https://example.com/" } } }
+        action = actionType == "search"
+            ? (object)new { type = actionType, queries = new[] { "informação pública", "outra consulta" }, sources = new[] { new { type = "url", url = "https://example.com/" } } }
+            : new { type = actionType, url = "https://example.com/", pattern = "termo" }
     });
 
     private sealed class RecoveryTool(string failure) : IAegisTool

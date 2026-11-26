@@ -17,7 +17,8 @@ public sealed class OpenAIResponsesClient(
     HttpClient httpClient,
     IOptions<OpenAIOptions> options,
     AegisMetrics metrics,
-    ILogger<OpenAIResponsesClient> logger) : IAegisModelClient
+    ILogger<OpenAIResponsesClient> logger,
+    IWebSearchUsageRecorder? webSearchUsage = null) : IAegisModelClient
 {
     private const string Provider = "openai";
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
@@ -40,20 +41,21 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems, request.NativeWebSearchCallLimit);
+            request.InputItems, request.NativeSearchActionBudget);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: false, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeSearchActionBudget), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
         var stopwatch = Stopwatch.StartNew();
         int? httpStatusCode = null;
         string? responseBody = null;
+        var usageCollector = new WebSearchUsageCollector(webSearchUsage);
 
         try
         {
@@ -65,10 +67,12 @@ public sealed class OpenAIResponsesClient(
 
             if (!response.IsSuccessStatusCode)
             {
+                await usageCollector.ObserveFailureBodyAsync(responseBody);
                 throw new InvalidOperationException($"Model tool request failed with HTTP {httpStatusCode}.");
             }
 
             using var document = JsonDocument.Parse(responseBody);
+            await usageCollector.ObserveResponseAsync(document.RootElement);
             RecordUsage(document.RootElement);
             var content = ExtractOutputText(document.RootElement);
             var toolCalls = ExtractToolCalls(document.RootElement);
@@ -125,14 +129,14 @@ public sealed class OpenAIResponsesClient(
             request.Tools,
             request.PreviousResponseId,
             request.ToolOutputs,
-            request.InputItems, request.NativeWebSearchCallLimit);
+            request.InputItems, request.NativeSearchActionBudget);
         var requestPayloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         var realPayloadJson = requestPayloadJson;
         requestPayloadJson = JsonSerializer.Serialize(CreateRequestPayload(
             request.Request with { Purpose = ModelPurpose.Chat,
                 InputItems = request.Request.AuditInputItems ?? request.Request.InputItems },
             model, stream: true, request.Tools, request.PreviousResponseId,
-            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeWebSearchCallLimit), JsonOptions);
+            request.ToolOutputs, request.AuditInputItems ?? request.Request.AuditInputItems, request.NativeSearchActionBudget), JsonOptions);
         TurnLatencyProfile.Mark("model.request_characters", realPayloadJson.Length);
         TurnLatencyProfile.Mark("model.request_start");
         metrics.LlmModelCalls.Add(1);
@@ -150,7 +154,8 @@ public sealed class OpenAIResponsesClient(
         string? terminalItemId = null;
         var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
         var webSearchStates = new Dictionary<string, string>(StringComparer.Ordinal);
-        var trackWebSearch = request.NativeWebSearchCallLimit > 0 &&
+        var usageCollector = new WebSearchUsageCollector(webSearchUsage);
+        var trackWebSearch = request.NativeSearchActionBudget.HasValue &&
             !request.Tools.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName);
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -167,6 +172,7 @@ public sealed class OpenAIResponsesClient(
             if (!response.IsSuccessStatusCode)
             {
                 responseBody.Append(await response.Content.ReadAsStringAsync(cancellationToken));
+                await usageCollector.ObserveFailureBodyAsync(responseBody.ToString());
                 throw new InvalidOperationException($"Model tool stream request failed with HTTP {httpStatusCode}.");
             }
         }
@@ -279,6 +285,9 @@ public sealed class OpenAIResponsesClient(
                         var eventType = root.TryGetProperty("type", out var typeElement)
                             ? typeElement.GetString()
                             : null;
+                        // Persist each provider-observed action before passing any status
+                        // or token to the caller, even if the stream is later interrupted.
+                        await usageCollector.ObserveEventAsync(root, eventType);
 
                         if (!firstArguments && eventType == "response.function_call_arguments.delta" &&
                             root.TryGetProperty("delta", out var argumentDelta) && !string.IsNullOrWhiteSpace(argumentDelta.GetString()))
@@ -503,7 +512,7 @@ public sealed class OpenAIResponsesClient(
         string? previousResponseId = null,
         IReadOnlyList<ModelToolOutput>? toolOutputs = null,
         IReadOnlyList<JsonElement>? inputItems = null,
-        int nativeWebSearchCallLimit = 0)
+        int? nativeSearchActionBudget = null)
     {
         var openAIOptions = options.Value;
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -534,7 +543,7 @@ public sealed class OpenAIResponsesClient(
             : request.Input;
 
         // Hosted tools must not run before an undecided hands-free turn is accepted.
-        var webSearchEnabled = nativeWebSearchCallLimit > 0 &&
+        var webSearchEnabled = nativeSearchActionBudget.HasValue &&
             !(tools?.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName) ?? false);
         var providerTools = tools?.OrderBy(tool => tool.Name, StringComparer.Ordinal).Select(tool => (object)new
         {
@@ -566,7 +575,6 @@ public sealed class OpenAIResponsesClient(
             metadata,
             tools = providerTools,
             include = webSearchEnabled ? new[] { "web_search_call.action.sources" } : null,
-            max_tool_calls = webSearchEnabled ? nativeWebSearchCallLimit : (int?)null,
             parallel_tool_calls = tools is { Count: > 0 } ? false : (bool?)null,
             tool_choice = providerTools is { Count: > 0 } ? "auto" : null
         };

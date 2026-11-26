@@ -688,7 +688,7 @@ public sealed class HandsFreeVoiceTests
         Assert.Empty(await candidateContext.LlmRequestAudits.ToListAsync());
         Assert.Equal(0, benign.Calls);
         var decision = Assert.Single(model.Requests);
-        Assert.Equal(0, decision.NativeWebSearchCallLimit);
+        Assert.Null(decision.NativeSearchActionBudget);
         Assert.Equal(new[] { HandsFreeDirection.IgnoreToolName, HandsFreeDirection.ProvisionalAcceptToolName,
             HandsFreeDirection.ProvisionalEndSpeechToolName }, decision.Tools.Select(tool => tool.Name));
         using var decisionData = JsonDocument.Parse(decision.Request.InputItems![1].GetProperty("content").GetString()!);
