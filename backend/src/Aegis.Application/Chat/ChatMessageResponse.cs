@@ -1,4 +1,5 @@
 using Aegis.Application.Memory;
+using Aegis.Application.Models;
 
 namespace Aegis.Application.Chat;
 
@@ -10,4 +11,5 @@ public sealed record ChatMessageResponse(
     DateTimeOffset CreatedAt,
     string? Model,
     MemoryActivitySnapshot? MemoryActivity = null,
-    bool IsProactive = false, long? ProactiveSequence = null);
+    bool IsProactive = false, long? ProactiveSequence = null,
+    WebResearchEvidence? WebResearch = null);

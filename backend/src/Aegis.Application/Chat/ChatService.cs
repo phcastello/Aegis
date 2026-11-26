@@ -269,7 +269,8 @@ public sealed class ChatService(
                 await TurnLatencyProfile.MeasureAsync("chat.title_queue", () => QueueConversationTitleGenerationAsync(conversation, CancellationToken.None));
                 streamCompleted = true;
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
-                    conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation);
+                    conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation,
+                    WebResearchMetadata.Read(assistantMessage.MetadataJson, assistantMessage.Content));
             }
             streamCompleted = true;
             yield break;
@@ -635,7 +636,8 @@ public sealed class ChatService(
             message.Content,
             message.CreatedAt,
             message.Model,
-            memoryActivity, message.IsProactive, message.ProactiveSequence);
+            memoryActivity, message.IsProactive, message.ProactiveSequence,
+            WebResearchMetadata.Read(message.MetadataJson, message.Content));
     }
 
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(

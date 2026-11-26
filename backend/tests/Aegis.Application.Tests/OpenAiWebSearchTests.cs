@@ -37,6 +37,12 @@ public sealed class OpenAiWebSearchTests
             await foreach (var chunk in client.RespondWithToolsStreamAsync(request))
                 chunks.Add(chunk);
             Assert.Equal("Resultado.", string.Concat(chunks.Select(chunk => chunk.Content)));
+            Assert.Equal(new[] { "started", "completed" },
+                chunks.Where(chunk => chunk.ToolStatus is not null).Select(chunk => chunk.ToolStatus!.State));
+            Assert.All(chunks.Where(chunk => chunk.ToolStatus is not null),
+                chunk => Assert.Equal("web_search", chunk.ToolStatus!.Category));
+            Assert.True(chunks.FindIndex(chunk => chunk.ToolStatus?.State == "started") <
+                chunks.FindIndex(chunk => !string.IsNullOrEmpty(chunk.Content)));
             var completed = Assert.Single(chunks, chunk => chunk.IsDone);
             Assert.Empty(completed.ToolCalls);
             output = completed.OutputItems;
@@ -103,7 +109,11 @@ public sealed class OpenAiWebSearchTests
                   {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Resultado.","annotations":[{"type":"url_citation","start_index":0,"end_index":10,"title":"Exemplo","url":"https://example.org/source"}]}]}]}
                 """ : "{\"output_text\":\"Resultado.\"}";
             var body = stream
-                ? "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Resultado.\"}\n\n"
+                ? "data: {\"type\":\"response.web_search_call.in_progress\",\"item_id\":\"ws_test\"}\n\n"
+                    + "data: {\"type\":\"response.web_search_call.searching\",\"item_id\":\"ws_test\"}\n\n"
+                    + "data: {\"type\":\"response.web_search_call.completed\",\"item_id\":\"ws_test\"}\n\n"
+                    + "data: {\"type\":\"response.web_search_call.completed\",\"item_id\":\"ws_test\"}\n\n"
+                    + "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Resultado.\"}\n\n"
                     + "data: {\"type\":\"response.completed\",\"response\":" + response.Replace("\r", "").Replace("\n", "") + "}\n\ndata: [DONE]\n\n"
                 : response;
             return new HttpResponseMessage(HttpStatusCode.OK)

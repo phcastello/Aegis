@@ -84,6 +84,67 @@ public sealed class FinalSpeechSegmentTests
         Assert.True(fixture.Voice.TryCompleteTurnWithoutSpeech(first.TurnId.Value));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResearchEvidenceSurvivesTheResponseAndConversationHistory(bool segmented)
+    {
+        using var fixture = new Fixture();
+        using var output = JsonDocument.Parse("""
+            [
+              {"type":"web_search_call","status":"completed","action":{"type":"search","sources":[
+                {"type":"url","url":"https://example.org/source"}
+              ]}},
+              {"type":"message","phase":"final_answer","content":[
+                {"type":"output_text","text":"Resposta natural.","annotations":[
+                  {"type":"url_citation","url":"https://example.org/source","title":"Fonte","start_index":0,"end_index":8}
+                ]}
+              ]}
+            ]
+            """);
+        fixture.Model.ResearchOutputs = output.RootElement.EnumerateArray().Select(item => item.Clone()).ToArray();
+        var chat = fixture.CreateChat(webSearch: new WebSearchOptions());
+
+        Guid conversationId;
+        WebResearchEvidence? evidence;
+        string answer;
+        if (segmented)
+        {
+            fixture.Model.Release.TrySetResult();
+            var events = new List<ChatStreamEvent>();
+            var request = fixture.Request();
+            await foreach (var item in chat.StreamMessageAsync(request)) events.Add(item);
+            var done = Assert.Single(events.Where(item => item.Type == "done"));
+            conversationId = done.ConversationId!.Value;
+            evidence = done.WebResearch;
+            answer = string.Join(" ", events.Where(item => item.Type == "final_segment").Select(item => item.Content));
+        }
+        else
+        {
+            var reply = Assert.IsType<SendMessageResponse>(await chat.SendMessageAsync(
+                new SendMessageRequest { Content = "Pesquise a fonte." }));
+            conversationId = reply.ConversationId;
+            evidence = reply.Message.WebResearch;
+            answer = reply.Message.Content;
+        }
+
+        Assert.NotNull(evidence);
+        Assert.Equal("https://example.org/source", Assert.Single(evidence!.Sources).Url);
+        Assert.Equal("Resposta natural.", answer);
+        Assert.Equal(8, Assert.Single(evidence.Citations).EndIndex);
+        Assert.Equal(segmented ? 2 : 1, fixture.Model.Requests.Count);
+        if (segmented) Assert.Equal(0, fixture.Model.Requests[0].NativeWebSearchCallLimit);
+        Assert.True(fixture.Model.Requests[^1].NativeWebSearchCallLimit > 0);
+
+        var conversation = Assert.IsType<ConversationResponse>(await chat.GetConversationAsync(conversationId));
+        var message = Assert.Single(conversation.Messages.Where(item => item.Role == "assistant"));
+        Assert.Equal(answer, message.Content);
+        Assert.NotNull(message.WebResearch);
+        Assert.Equal(evidence.Sources.ToArray(), message.WebResearch!.Sources.ToArray());
+        Assert.Equal(evidence.Citations.ToArray(), message.WebResearch.Citations.ToArray());
+        Assert.Null(Assert.Single(conversation.Messages.Where(item => item.Role == "user")).WebResearch);
+    }
+
     [Fact]
     public async Task InterruptedPlaybackSurvivesAnInterveningQuestionInModelContext()
     {
@@ -271,8 +332,9 @@ public sealed class FinalSpeechSegmentTests
             ((HandsFreeVoiceTests.Proxy)(object)titles).Call = (_, _) => ValueTask.CompletedTask;
             Chat = CreateChat();
         }
-        public ChatService CreateChat(MemoryHybridRetriever? hybrid = null, MemoryAutomaticOptions? automatic = null) => new(Db, new PromptBuilder(new Runtime()),
-            new AegisToolLoop(Model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, Metrics), titles, Registry, Voice,
+        public ChatService CreateChat(MemoryHybridRetriever? hybrid = null, MemoryAutomaticOptions? automatic = null,
+            WebSearchOptions? webSearch = null) => new(Db, new PromptBuilder(new Runtime()),
+            new AegisToolLoop(Model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, Metrics, webSearch), titles, Registry, Voice,
             hybrid: hybrid, automaticMemory: automatic);
         public SendMessageRequest Request() => new() { TurnId = Guid.NewGuid(), Content = "Como vai?", Origin = "hands_free", VoiceSessionId = Guid.NewGuid(), VoiceSegments = true };
         public void Dispose() { Db.Dispose(); Registry.Dispose(); Metrics.Dispose(); }
@@ -302,18 +364,38 @@ public sealed class FinalSpeechSegmentTests
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Finished, FailAfterFirst;
         public List<ModelToolRequest> Requests { get; } = [];
+        public IReadOnlyList<JsonElement> ResearchOutputs { get; set; } = [];
         private static readonly LlmRequestAuditData Audit = new("test", "test", true, 1, "{}", 200, "{}", null, null);
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
-        { Requests.Add(request); return Task.FromResult(new ModelToolResponse("Resposta natural.", "test", "test", ModelPurpose.Chat, [], [], null, null, Audit)); }
+        { Requests.Add(request); return Task.FromResult(new ModelToolResponse("Resposta natural.", "test", "test", ModelPurpose.Chat, [], ResearchOutputs, null, null, Audit)); }
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (ResearchOutputs.Count > 0)
+            {
+                if (request.NativeWebSearchCallLimit == 0)
+                {
+                    Assert.Contains(request.Tools, tool => tool.Name == "request_web_search");
+                    var gateOutput = JsonSerializer.SerializeToElement(new {
+                        type = "function_call", call_id = "search-gate", name = "request_web_search", arguments = "{}"
+                    });
+                    yield return new(null, true, [new("search-gate", "request_web_search", JsonSerializer.SerializeToElement(new { }))],
+                        [gateOutput], Provider: "test", Model: "test", Purpose: ModelPurpose.Chat, AuditData: Audit);
+                }
+                else
+                {
+                    yield return new("Resposta natural.", false, [], []);
+                    yield return new(null, true, [], ResearchOutputs, Provider: "test", Model: "test",
+                        Purpose: ModelPurpose.Chat, AuditData: Audit);
+                }
+                yield break;
+            }
             yield return new(null, false, [], [], FinalSpeechSegment: "Ora, tudo certo.");
             await Release.Task.WaitAsync(cancellationToken);
             if (FailAfterFirst) throw new InvalidOperationException("Controlled provider failure.");
             yield return new(null, false, [], [], FinalSpeechSegment: "Quer conferir mais alguma coisa?");
             Finished = true;
-            yield return new(null, true, [new("terminal", FinalSpeechSegments.ToolName, JsonSerializer.SerializeToElement(new { segments = new[] { "Ora, tudo certo.", "Quer conferir mais alguma coisa?" }, continuation = "continue" }))], [], Provider: "test", Model: "test", Purpose: ModelPurpose.Chat, AuditData: Audit);
+            yield return new(null, true, [new("terminal", FinalSpeechSegments.ToolName, JsonSerializer.SerializeToElement(new { segments = new[] { "Ora, tudo certo.", "Quer conferir mais alguma coisa?" }, continuation = "continue" }))], ResearchOutputs, Provider: "test", Model: "test", Purpose: ModelPurpose.Chat, AuditData: Audit);
         }
     }
 }

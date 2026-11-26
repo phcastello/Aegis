@@ -14,4 +14,5 @@ public sealed record ModelToolStreamChunk(
     ModelPurpose? Purpose = null,
     string? MetadataJson = null,
     LlmRequestAuditData? AuditData = null,
-    string? FinalSpeechSegment = null);
+    string? FinalSpeechSegment = null,
+    ToolStatus? ToolStatus = null);

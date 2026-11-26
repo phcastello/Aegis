@@ -149,6 +149,9 @@ public sealed class OpenAIResponsesClient(
         var segmentParser = request.Tools.Any(t => t.Name == FinalSpeechSegments.ToolName) ? new FinalSpeechSegmentParser() : null;
         string? terminalItemId = null;
         var functionItemIds = new HashSet<string>(StringComparer.Ordinal);
+        var webSearchStates = new Dictionary<string, string>(StringComparer.Ordinal);
+        var trackWebSearch = request.NativeWebSearchCallLimit > 0 &&
+            !request.Tools.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName);
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -303,6 +306,11 @@ public sealed class OpenAIResponsesClient(
                                 yield return new ModelToolStreamChunk(null, false, [], [], FinalSpeechSegment: segment);
                             }
                         }
+                        if (trackWebSearch &&
+                            ReadWebSearchStatus(root, eventType, webSearchStates) is { } searchStatus)
+                        {
+                            yield return new ModelToolStreamChunk(null, false, [], [], ToolStatus: searchStatus);
+                        }
                         TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
 
                         if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
@@ -405,6 +413,45 @@ public sealed class OpenAIResponsesClient(
                 SafeAuditResponse(requestPayloadJson, finalResponseBody),
                 FailureReason: null,
                 ErrorType: null));
+    }
+
+    private static ToolStatus? ReadWebSearchStatus(
+        JsonElement root, string? eventType, IDictionary<string, string> states)
+    {
+        string? state = eventType switch
+        {
+            "response.web_search_call.in_progress" or "response.web_search_call.searching" => "started",
+            "response.web_search_call.completed" => "completed",
+            _ => null
+        };
+        string? itemId = null;
+        if (state is not null && root.TryGetProperty("item_id", out var id) && id.ValueKind == JsonValueKind.String)
+        {
+            itemId = id.GetString();
+        }
+        else if (eventType == "response.output_item.done" &&
+            root.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object &&
+            item.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String &&
+            type.GetString() == "web_search_call" &&
+            item.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String &&
+            status.GetString() is "failed" or "incomplete" &&
+            item.TryGetProperty("id", out var completedId) && completedId.ValueKind == JsonValueKind.String)
+        {
+            state = "failed";
+            itemId = completedId.GetString();
+        }
+        if (state is null || string.IsNullOrWhiteSpace(itemId)) return null;
+
+        if (states.TryGetValue(itemId, out var previous) &&
+            (previous == state || previous is "completed" or "failed")) return null;
+        states[itemId] = state;
+
+        return new ToolStatus("web_search", state, state switch
+        {
+            "started" => "Pesquisando na web…",
+            "completed" => "Busca concluída",
+            _ => "Não foi possível concluir a busca"
+        });
     }
 
     private HttpRequestMessage CreateHttpRequest(string requestPayloadJson)

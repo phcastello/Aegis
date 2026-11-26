@@ -45,6 +45,14 @@ public static class DependencyInjection
         services.AddDataProtection()
             .SetApplicationName("Aegis");
 
+        var webSearch = new WebSearchOptions();
+        configuration.GetSection(WebSearchOptions.SectionName).Bind(webSearch);
+        webSearch.Enabled = ReadBool(configuration, "AEGIS_WEB_SEARCH_ENABLED", webSearch.Enabled);
+        webSearch.MaxCallsPerTurn = ReadInt(configuration, "AEGIS_WEB_SEARCH_MAX_CALLS", webSearch.MaxCallsPerTurn);
+        if (webSearch.MaxCallsPerTurn is < 1 or > 10)
+            throw new InvalidOperationException("Invalid web search call limit.");
+        services.AddSingleton(webSearch);
+
         services.Configure<OpenAIOptions>(options =>
         {
             configuration.GetSection(OpenAIOptions.SectionName).Bind(options);

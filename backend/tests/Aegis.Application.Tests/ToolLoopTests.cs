@@ -191,6 +191,142 @@ public sealed class ToolLoopTests
         Assert.Equal(expected, JsonDocument.Parse(output.GetProperty("output").GetString()!).RootElement.GetProperty("error").GetString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeWebSearchSharesBudgetAcrossRounds(bool streaming)
+    {
+        var first = Call("fake_tool");
+        first = first with { OutputItems = [.. first.OutputItems, SearchItem("ws_1"), SearchItem("ws_2")] };
+        var second = Call("fake_tool");
+        second = second with { OutputItems = [.. second.OutputItems, SearchItem("ws_3")] };
+        var model = new FakeModelClient([first, second, Reply("Resultado")]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new FakeTool()]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "Pesquise.");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
+        if (streaming)
+        {
+            await foreach (var _ in loop.StreamAsync(request, context)) { }
+        }
+        else await loop.RunAsync(request, context);
+
+        Assert.Equal(new[] { 3, 1, 0 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
+        Assert.All(model.Requests, round => Assert.DoesNotContain(round.Tools, tool => tool.Name == "request_web_search"));
+        Assert.Contains(model.Requests[1].InputItems!, item => item.TryGetProperty("id", out var id) && id.GetString() == "ws_1");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandsFreeAcceptsBeforeHostedSearchAndReturnsTextWithSources(bool streaming)
+    {
+        var model = new FakeModelClient([
+            Call("request_web_search"),
+            Reply("Resultado público") with
+            {
+                OutputItems = [SearchItem("ws_1")],
+                ToolStatus = new ToolStatus("web_search", "started", "Pesquisando…")
+            }
+        ]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "Pesquise.");
+        var acceptances = 0;
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
+            Origin: "hands_free", VoiceSessionId: Guid.NewGuid(), VoiceSegments: true,
+            AcceptVoiceTurn: _ =>
+            {
+                Assert.Single(model.Requests);
+                acceptances++;
+                return Task.CompletedTask;
+            });
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context))
+                chunks.Add(chunk);
+            Assert.Equal("Resultado público", Assert.Single(chunks.Where(chunk => chunk.FinalSpeechSegment is not null)).FinalSpeechSegment);
+            Assert.Contains(chunks, chunk => chunk.ToolStatus?.Category == "web_search");
+            Assert.True(chunks[^1].IsDone);
+        }
+        else
+        {
+            var result = await loop.RunAsync(request, context);
+            Assert.Equal("Resultado público", result.Content);
+        }
+
+        Assert.Equal(1, acceptances);
+        Assert.Equal(new[] { 0, 3 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
+        Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "hands_free_ignore");
+        Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "request_web_search");
+        Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name is "request_web_search" or "hands_free_ignore" or "hands_free_reply" or "hands_free_reply_segments");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IgnoredHandsFreeTurnCannotUseNativeSearch(bool streaming)
+    {
+        var model = new FakeModelClient([Call("hands_free_ignore")]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var request = new ModelRequest("identity", "fala alheia");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
+            Origin: "hands_free", VoiceSessionId: Guid.NewGuid(),
+            AcceptVoiceTurn: _ => throw new InvalidOperationException("Não deveria aceitar."));
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.True(Assert.Single(chunks).Ignored);
+        }
+        else Assert.True((await loop.RunAsync(request, context)).Ignored);
+        Assert.Equal(0, Assert.Single(model.Requests).NativeWebSearchCallLimit);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DisabledNativeSearchDoesNotOfferGate(bool handsFree)
+    {
+        var model = new FakeModelClient([Reply("Resposta")]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions { Enabled = false });
+        var request = new ModelRequest("identity", "pedido");
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
+            Origin: handsFree ? "hands_free" : null);
+        await loop.RunAsync(request, context);
+        var round = Assert.Single(model.Requests);
+        Assert.Equal(0, round.NativeWebSearchCallLimit);
+        Assert.DoesNotContain(round.Tools, tool => tool.Name == "request_web_search");
+    }
+
+    [Fact]
+    public async Task SimpleQuestionKeepsOneRoundWithSearchAvailable()
+    {
+        var model = new FakeModelClient([Reply("Brasília")]);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
+            metrics, new WebSearchOptions());
+        var chunks = await CollectAsync(loop);
+        Assert.Equal(3, Assert.Single(model.Requests).NativeWebSearchCallLimit);
+        Assert.Equal("Brasília", string.Concat(chunks.Where(chunk => !chunk.IsDone).Select(chunk => chunk.Content)));
+        Assert.DoesNotContain(chunks, chunk => chunk.ToolStatus is not null);
+    }
+
+    private static JsonElement SearchItem(string id) => JsonSerializer.SerializeToElement(new
+    {
+        id,
+        type = "web_search_call",
+        status = "completed",
+        action = new { type = "search", queries = new[] { "informação pública" }, sources = new[] { new { type = "url", url = "https://example.com/" } } }
+    });
+
     private sealed class RecoveryTool(string failure) : IAegisTool
     {
         public string Name => "email_search";
@@ -257,6 +393,8 @@ public sealed class ToolLoopTests
             Requests.Add(request with { InputItems = request.InputItems?.ToList() });
             StreamCalls++;
             var response = responses[responseCalls++];
+            if (response.ToolStatus is { } status)
+                yield return new ModelToolStreamChunk(null, false, [], [], ToolStatus: status);
             if (!string.IsNullOrEmpty(response.Content))
                 yield return new ModelToolStreamChunk(response.Content, false, [], []);
             await Task.Yield();
