@@ -69,6 +69,12 @@ pub(crate) struct VoiceToolStatus {
     pub message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct VoiceResearchSourceCount {
+    pub url: String,
+    pub count: u64,
+}
+
 /// Local projection of validated, already committed chat events and observable web search. Speech
 /// playback and server reconciliation remain independent of this observer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -87,6 +93,8 @@ pub(crate) struct VoiceChatStreamEvent {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_status: Option<VoiceToolStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<VoiceResearchSourceCount>>,
 }
 
 impl VoiceChatStreamEvent {
@@ -105,7 +113,48 @@ impl VoiceChatStreamEvent {
             sequence: None,
             content: None,
             tool_status: None,
+            sources: None,
         }
+    }
+    fn web_research_sources(turn_id: Uuid, conversation_id: Uuid, event: &Value) -> Option<Self> {
+        if parse_uuid(&event["conversationId"]).ok() != Some(conversation_id) {
+            return None;
+        }
+        let sources = event["sources"].as_array()?;
+        if sources.is_empty() || sources.len() > 8 {
+            return None;
+        }
+        let sources: Vec<_> = sources
+            .iter()
+            .filter_map(|source| {
+                let url = source["url"].as_str()?;
+                let count = source["count"].as_u64()?;
+                if !(1..=i32::MAX as u64).contains(&count)
+                    || url.encode_utf16().count() > 1024
+                    || url.contains('\\')
+                    || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+                {
+                    return None;
+                }
+                let parsed = reqwest::Url::parse(url).ok()?;
+                if !matches!(parsed.scheme(), "http" | "https")
+                    || (!url.starts_with("https://") && !url.starts_with("http://"))
+                    || parsed.host().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                {
+                    return None;
+                }
+                Some(VoiceResearchSourceCount {
+                    url: url.to_owned(),
+                    count,
+                })
+            })
+            .collect();
+        (!sources.is_empty()).then(|| Self {
+            sources: Some(sources),
+            ..Self::new("web_research_sources", turn_id, Some(conversation_id), None)
+        })
     }
     fn web_search(turn_id: Uuid, conversation_id: Uuid, event: &Value) -> Option<Self> {
         if event["category"] != "web_search"
@@ -465,6 +514,7 @@ impl Backend {
         let mut payload = json!({
             "turnId": turn_id, "conversationId": destination, "voiceSessionId": session,
             "origin": "hands_free", "content": text, "voiceSegments": true, "allowSilentIgnore": true,
+            "includeWebResearchSources": true,
         });
         match interruption {
             Some(Interruption::Playback(position))
@@ -756,6 +806,15 @@ impl Backend {
                                 .and_then(|id| VoiceChatStreamEvent::web_search(turn, id, &event))
                             {
                                 on_stream(status);
+                            }
+                        }
+                    }
+                    "web_research_sources" => {
+                        if accepted {
+                            if let Some(sources) = conversation.and_then(|id| {
+                                VoiceChatStreamEvent::web_research_sources(turn, id, &event)
+                            }) {
+                                on_stream(sources);
                             }
                         }
                     }

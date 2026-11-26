@@ -30,6 +30,11 @@ export interface WebResearch {
   citations: WebResearchCitation[];
 }
 
+export interface WebResearchSourceCount {
+  url: string;
+  count: number;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;

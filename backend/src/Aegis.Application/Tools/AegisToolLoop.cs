@@ -209,6 +209,8 @@ public sealed class AegisToolLoop(
                 }
                 if (chunk.ToolStatus is { } providerStatus && !decisionPending && round.NativeSearchActionBudget.HasValue)
                     yield return new ModelStreamChunk(null, false, ToolStatus: providerStatus);
+                if (chunk.WebResearchSources is { Count: > 0 } sources && !decisionPending && round.NativeSearchActionBudget.HasValue)
+                    yield return new ModelStreamChunk(null, false, WebResearchSources: sources);
                 if (chunk.FinalSpeechSegment is { } finalSegment)
                 {
                     if (!segmented || webSearchRequested) throw new InvalidOperationException("Unexpected speech segment.");

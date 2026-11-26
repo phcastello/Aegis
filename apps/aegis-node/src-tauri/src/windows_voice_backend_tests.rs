@@ -193,14 +193,25 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
         let (mut chat, payload) = request(&server, "/api/chat/messages/stream");
         let request_body: Value = serde_json::from_slice(&payload).unwrap();
         let turn = &request_body["turnId"];
+        assert_eq!(request_body["includeWebResearchSources"], true);
+        let sources_event = |id| {
+            json!({"type":"web_research_sources","turnId":turn,"conversationId":id,"sources":[
+                {"url":"https://example.org/source","count":2},
+                {"url":"https://user:secret@example.org/source","count":1},
+                {"url":"https://example.org/unobserved","count":0}
+            ]})
+        };
         chat.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
         for event in [
             json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"started","message":"Unaccepted progress"}),
+            sources_event(conversation),
             json!({"type":"conversation","turnId":turn,"conversationId":conversation}),
             json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"started","message":"Pesquisando na web…"}),
             json!({"type":"tool_status","turnId":turn,"conversationId":Uuid::new_v4(),"category":"web_search","state":"started","message":"Wrong destination"}),
             json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"arbitrary","message":"Invalid state"}),
             json!({"type":"tool_status","turnId":turn,"category":"memory","state":"started","message":"Unrelated operation"}),
+            sources_event(Uuid::new_v4()),
+            sources_event(conversation),
             json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"completed","message":"Busca concluída"}),
             json!({"type":"token","turnId":turn,"content":"Never display uncommitted text."}),
             segment_event(turn, conversation, message, first, 0),
@@ -220,7 +231,7 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             .expect("audio waited for HTTP EOF");
         {
             let events = server_observed.lock().unwrap();
-            assert_eq!(events.len(), 4);
+            assert_eq!(events.len(), 5);
             assert_eq!(events[0].kind, "conversation");
             assert_eq!(
                 json!(events[1]),
@@ -230,9 +241,16 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
                     "toolStatus":{"category":"web_search","state":"started","message":"Pesquisando na web…"}
                 })
             );
-            assert_eq!(events[2].tool_status.as_ref().unwrap().state, "completed");
             assert_eq!(
-                json!(events[3]),
+                json!(events[2]),
+                json!({
+                    "type":"web_research_sources","turnId":turn,"conversationId":conversation,
+                    "assistantMessageId":null,"sources":[{"url":"https://example.org/source","count":2}]
+                })
+            );
+            assert_eq!(events[3].tool_status.as_ref().unwrap().state, "completed");
+            assert_eq!(
+                json!(events[4]),
                 json!({
                     "type":"final_segment","turnId":turn,"conversationId":conversation,
                     "assistantMessageId":message,"segmentId":first,"sequence":0,"content":"Resposta."
@@ -278,15 +296,16 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
         [
             "conversation",
             "tool_status",
+            "web_research_sources",
             "tool_status",
             "final_segment",
             "final_segment",
             "done"
         ]
     );
-    assert_eq!(events[4].segment_id, Some(second));
-    assert_eq!(events[4].sequence, Some(1));
-    assert_eq!(events[5].assistant_message_id, Some(message));
+    assert_eq!(events[5].segment_id, Some(second));
+    assert_eq!(events[5].sequence, Some(1));
+    assert_eq!(events[6].assistant_message_id, Some(message));
     assert!(events
         .iter()
         .all(|e| e.conversation_id == Some(conversation) && e.turn_id == report.turn_id));

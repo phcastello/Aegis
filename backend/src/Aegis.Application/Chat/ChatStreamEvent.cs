@@ -19,7 +19,8 @@ public sealed record ChatStreamEvent(
     string? VoiceContinuation = null,
     Guid? SegmentId = null,
     int? Sequence = null,
-    WebResearchEvidence? WebResearch = null)
+    WebResearchEvidence? WebResearch = null,
+    IReadOnlyList<WebResearchSourceCount>? Sources = null)
 {
     public static ChatStreamEvent Ignored(Guid turnId) => new("ignored", turnId);
 
@@ -34,6 +35,9 @@ public sealed record ChatStreamEvent(
 
     public static ChatStreamEvent ToolStatus(Guid turnId, string category, string state, string message) =>
         new("tool_status", turnId, Category: category, State: state, Message: message);
+
+    public static ChatStreamEvent WebResearchSources(Guid turnId, Guid conversationId, IReadOnlyList<WebResearchSourceCount> sources) =>
+        new("web_research_sources", turnId, conversationId, Sources: sources);
 
     public static ChatStreamEvent Done(
         Guid turnId,

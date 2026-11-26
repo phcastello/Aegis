@@ -5,6 +5,7 @@ namespace Aegis.Application.Models;
 
 public sealed record WebResearchSource(string Url, string? Title, string Kind, bool Cited = false);
 public sealed record WebResearchCitation(string Url, string? Title, int StartIndex, int EndIndex);
+public sealed record WebResearchSourceCount(string Url, int Count);
 public sealed record WebResearchEvidence(
     IReadOnlyList<WebResearchSource> Sources,
     IReadOnlyList<WebResearchCitation> Citations);
@@ -98,6 +99,28 @@ public static class WebResearchMetadata
         }
         catch (JsonException) { return null; }
     }
+
+    public static IReadOnlyCollection<string> ReadProgressUrls(JsonElement item)
+    {
+        var sources = new Dictionary<string, WebResearchSource>(StringComparer.Ordinal);
+        if (StringProperty(item, "type") == "web_search_call" &&
+            StringProperty(item, "status") == "completed" && item.TryGetProperty("action", out var action))
+        {
+            AddActionSources(action, sources);
+        }
+        else if (StringProperty(item, "type") == "message" && TryArray(item, "content", out var content))
+        {
+            foreach (var part in content.EnumerateArray())
+                if (StringProperty(part, "type") == "output_text")
+                    ReadAnnotations(part, sources);
+        }
+        return sources.Keys;
+    }
+
+    public static string? ReadProgressCitationUrl(JsonElement annotation) =>
+        StringProperty(annotation, "type") == "url_citation"
+            ? NormalizeSourceUrl(StringProperty(annotation, "url"))
+            : null;
 
     private static void AddActionSources(JsonElement action, Dictionary<string, WebResearchSource> sources)
     {
@@ -198,14 +221,8 @@ public static class WebResearchMetadata
     private static string? AddSource(Dictionary<string, WebResearchSource> sources,
         string? value, string? title, string kind, bool cited = false)
     {
-        if (string.IsNullOrWhiteSpace(value) ||
-            value.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c == '\\') ||
-            !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(uri.Host) ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !value.StartsWith(uri.Scheme + "://", StringComparison.OrdinalIgnoreCase)) return null;
-
-        var url = uri.AbsoluteUri;
+        var url = NormalizeSourceUrl(value);
+        if (url is null) return null;
         title = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
         cited = cited || kind == "citation";
         if (sources.TryGetValue(url, out var existing))
@@ -216,6 +233,17 @@ public static class WebResearchMetadata
         }
         sources[url] = new WebResearchSource(url, title, kind, cited);
         return url;
+    }
+
+    private static string? NormalizeSourceUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c == '\\') ||
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !value.StartsWith(uri.Scheme + "://", StringComparison.OrdinalIgnoreCase)) return null;
+        return uri.AbsoluteUri;
     }
 
     private static int Rank(string kind) => kind switch { "opened" => 3, "consulted" => 2, _ => 1 };

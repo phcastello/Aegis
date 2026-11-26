@@ -16,6 +16,7 @@ public sealed class SendMessageRequest
     public bool AllowSilentIgnore { get; init; }
 
     public bool VoiceSegments { get; init; }
+    public bool IncludeWebResearchSources { get; init; }
 
     public Aegis.Application.Voice.VoicePlaybackInterruption? InterruptedPlayback { get; init; }
 

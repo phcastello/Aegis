@@ -211,6 +211,10 @@ public sealed class ChatService(
             {
                 yield return ChatStreamEvent.ToolStatus(turn.TurnId, status.Category, status.State, status.Message);
             }
+            if (request.IncludeWebResearchSources && chunk.WebResearchSources is { Count: > 0 } sources)
+            {
+                yield return ChatStreamEvent.WebResearchSources(turn.TurnId, conversation.Id, sources);
+            }
             if (chunk.FinalSpeechSegment is { } segmentContent)
             {
                 if (!request.IsHandsFree || !request.VoiceSegments) throw new InvalidOperationException("Unexpected speech segment.");

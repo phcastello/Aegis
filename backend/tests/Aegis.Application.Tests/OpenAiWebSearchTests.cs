@@ -43,6 +43,13 @@ public sealed class OpenAiWebSearchTests
                 chunk => Assert.Equal("web_search", chunk.ToolStatus!.Category));
             Assert.True(chunks.FindIndex(chunk => chunk.ToolStatus?.State == "started") <
                 chunks.FindIndex(chunk => !string.IsNullOrEmpty(chunk.Content)));
+            var sourceDeltas = chunks.Where(chunk => chunk.WebResearchSources is not null).ToArray();
+            Assert.Collection(sourceDeltas,
+                first => Assert.Equal(new WebResearchSourceCount("https://example.org/source", 1), Assert.Single(first.WebResearchSources!)),
+                second => Assert.Equal(new WebResearchSourceCount("https://example.org/source", 1), Assert.Single(second.WebResearchSources!)),
+                fallback => Assert.Equal(new WebResearchSourceCount("https://example.org/opened", 1), Assert.Single(fallback.WebResearchSources!)));
+            Assert.True(Array.IndexOf(chunks.ToArray(), sourceDeltas[0]) <
+                chunks.FindIndex(chunk => !string.IsNullOrEmpty(chunk.Content)));
             var completed = Assert.Single(chunks, chunk => chunk.IsDone);
             Assert.Empty(completed.ToolCalls);
             output = completed.OutputItems;
@@ -125,13 +132,15 @@ public sealed class OpenAiWebSearchTests
             var response = searched ? """
                 {"id":"resp_test","model":"gpt-6.1-terra","status":"completed","output":[
                   {"type":"web_search_call","id":"ws_test","status":"completed","action":{"type":"search","query":"teste","sources":[{"type":"url","url":"https://example.org/source"}]}},
-                  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Resultado.","annotations":[{"type":"url_citation","start_index":0,"end_index":10,"title":"Exemplo","url":"https://example.org/source"}]}]}]}
+                  {"type":"message","id":"msg_test","role":"assistant","content":[{"type":"output_text","text":"Resultado.","annotations":[{"type":"url_citation","start_index":0,"end_index":10,"title":"Exemplo","url":"https://example.org/source"}]}]},
+                  {"type":"web_search_call","id":"ws_opened","status":"completed","action":{"type":"open_page","url":"https://example.org/opened"}}]}
                 """ : "{\"output_text\":\"Resultado.\"}";
             var body = stream
                 ? "data: {\"type\":\"response.web_search_call.in_progress\",\"item_id\":\"ws_test\"}\n\n"
                     + "data: {\"type\":\"response.web_search_call.searching\",\"item_id\":\"ws_test\"}\n\n"
                     + "data: {\"type\":\"response.web_search_call.completed\",\"item_id\":\"ws_test\"}\n\n"
                     + "data: {\"type\":\"response.web_search_call.completed\",\"item_id\":\"ws_test\"}\n\n"
+                    + EvidenceEvents
                     + "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Resultado.\"}\n\n"
                     + "data: {\"type\":\"response.completed\",\"response\":" + response.Replace("\r", "").Replace("\n", "") + "}\n\ndata: [DONE]\n\n"
                 : response;
@@ -140,5 +149,13 @@ public sealed class OpenAiWebSearchTests
                 Content = new StringContent(body, Encoding.UTF8, stream ? "text/event-stream" : "application/json")
             };
         }
+
+        private const string EvidenceEvents = """
+            data: {"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_test","status":"completed","action":{"type":"search","sources":[{"type":"url","url":"https://example.org/source"},{"type":"url","url":"https://EXAMPLE.org:443/source"},{"type":"url","url":"https://user:secret@example.org/source"},{"type":"url","url":"javascript:alert(1)"}]}}}
+            data: {"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_pending","status":"in_progress","action":{"type":"open_page","url":"https://example.org/pending"}}}
+            data: {"type":"response.output_text.annotation.added","item_id":"msg_test","annotation":{"type":"url_citation","url":"https://example.org/source"}}
+            data: {"type":"response.output_text.annotation.added","item_id":"msg_test","annotation":{"type":"url_citation","url":"https://example.org/source"}}
+
+            """;
     }
 }

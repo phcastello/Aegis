@@ -1,5 +1,6 @@
 package com.aegis.node
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -116,14 +117,23 @@ class NodeHandsFreeBackendTest {
     Fixture(respond={request,normal->
       when(request.path) {
         "/api/chat/messages/stream" -> {
-          val turn=JSONObject(request.text()).getString("turnId")
+          val payload = JSONObject(request.text())
+          assertTrue(payload.getBoolean("includeWebResearchSources"))
+          val turn = payload.getString("turnId")
           fun status(state:String,category:String="web_search",destination:String?=null)=JSONObject()
             .put("type","tool_status").put("turnId",turn).put("category",category)
             .put("state",state).put("message","Pesquisando na web…").apply{destination?.let{put("conversationId",it)}}
+          fun sources(destination: String) = JSONObject().put("type", "web_research_sources")
+            .put("turnId", turn).put("conversationId", destination)
+            .put("sources", JSONArray()
+              .put(JSONObject().put("url", "https://example.org/source").put("count", 2))
+              .put(JSONObject().put("url", "https://user:secret@example.org/source").put("count", 1))
+              .put(JSONObject().put("url", "https://example.org/unobserved").put("count", 0)))
           val rows=String(segmentedReply(request).bytes,Charsets.UTF_8).trimEnd().split("\n")
-          Reply(bytes=((listOf(status("started").toString(),rows.first(),
+          Reply(bytes=((listOf(status("started").toString(), sources(conversation).toString(), rows.first(),
             status("started").toString(),status("arbitrary").toString(),status("started","memory").toString(),
-            status("started",destination=UUID.randomUUID().toString()).toString(),status("completed").toString())+
+            status("started",destination=UUID.randomUUID().toString()).toString(),
+            sources(UUID.randomUUID().toString()).toString(), sources(conversation).toString(), status("completed").toString())+
             rows.drop(1)).joinToString("\n")+"\n").toByteArray())
         }
         "/api/voice/speech/segments" -> segmentPcmReply()
@@ -133,9 +143,13 @@ class NodeHandsFreeBackendTest {
       val result=fixture.backend(onVoiceSearchProgress={_,event->projected.add(event)})
         .execute(wav(),session,conversation,RecordingSink(),null,incremental=true)
       assertTrue(result.playedAudio)
-      assertEquals(listOf("conversation","tool_status","tool_status","done"),projected.map{it.getString("type")})
+      assertEquals(listOf("conversation","tool_status","web_research_sources","tool_status","done"),projected.map{it.getString("type")})
       assertEquals("started",projected[1].getJSONObject("toolStatus").getString("state"))
-      assertEquals("completed",projected[2].getJSONObject("toolStatus").getString("state"))
+      val sources = projected[2].getJSONArray("sources")
+      assertEquals(1, sources.length())
+      assertEquals("https://example.org/source", sources.getJSONObject(0).getString("url"))
+      assertEquals(2, sources.getJSONObject(0).getInt("count"))
+      assertEquals("completed",projected[3].getJSONObject("toolStatus").getString("state"))
       assertEquals(message,projected.last().getString("assistantMessageId"))
       assertTrue(projected.all{it.getString("conversationId")==conversation})
       assertEquals(1,projected.map{it.getString("turnId")}.distinct().size)

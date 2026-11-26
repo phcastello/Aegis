@@ -13,4 +13,5 @@ public sealed record ModelStreamChunk(
     ToolStatus? ToolStatus = null,
     string? VoiceContinuation = null,
     string? FinalSpeechSegment = null,
-    bool Ignored = false);
+    bool Ignored = false,
+    IReadOnlyList<WebResearchSourceCount>? WebResearchSources = null);

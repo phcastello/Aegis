@@ -15,4 +15,5 @@ public sealed record ModelToolStreamChunk(
     string? MetadataJson = null,
     LlmRequestAuditData? AuditData = null,
     string? FinalSpeechSegment = null,
-    ToolStatus? ToolStatus = null);
+    ToolStatus? ToolStatus = null,
+    IReadOnlyList<WebResearchSourceCount>? WebResearchSources = null);

@@ -1,6 +1,7 @@
 package com.aegis.node
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import okhttp3.Call
@@ -74,6 +75,24 @@ class NodeHandsFreeBackend internal constructor(
         onVoiceSearchProgress(pinned,event)
       }
     }catch(_:Exception){}
+  }
+
+  private fun webResearchSources(event: JSONObject): JSONArray? {
+    val sources = event.optJSONArray("sources") ?: return null
+    if (sources.length() !in 1..8) return null
+    val valid = JSONArray()
+    for (index in 0 until sources.length()) {
+      val source = sources.optJSONObject(index) ?: continue
+      val url = source.opt("url") as? String ?: continue
+      val count = source.opt("count") as? Int ?: continue
+      if (count < 1 || url.length !in 1..1024 || url.contains('\\') ||
+          url.any { it.isWhitespace() || it.isISOControl() }) continue
+      val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: continue
+      val authority = parsed.rawAuthority ?: continue
+      if (parsed.scheme !in listOf("http", "https") || authority.isBlank() || '@' in authority) continue
+      valid.put(JSONObject().put("url", url).put("count", count))
+    }
+    return valid.takeIf { it.length() > 0 }
   }
 
   private fun checkNotCancelled() {if(cancelled.get())throw CancellationException()}
@@ -401,6 +420,11 @@ class NodeHandsFreeBackend internal constructor(
     val searchDestination=java.util.concurrent.atomic.AtomicReference<String?>()
     fun presentation(type:String,destination:String,messageId:String?=null)=JSONObject()
       .put("type",type).put("turnId",id).put("conversationId",destination).put("assistantMessageId",messageId?:JSONObject.NULL)
+    fun reportSearchPresentation(destination: String, event: JSONObject) {
+      if (searchDestination.compareAndSet(null, destination))
+        voiceSearchProgress(presentation("conversation", destination))
+      voiceSearchProgress(event)
+    }
     fun finishSearchPresentation(type:String,messageId:String?=null) {
       searchDestination.getAndSet(null)?.let { destination ->
         voiceSearchProgress(presentation(type,destination,messageId),terminal=true)
@@ -413,7 +437,7 @@ class NodeHandsFreeBackend internal constructor(
     }
     val bytes=JSONObject().put("turnId",id).put("conversationId",conversationId?:JSONObject.NULL)
       .put("content",command).put("origin","hands_free").put("voiceSessionId",sessionId).put("voiceSegments",true)
-      .put("allowSilentIgnore",true)
+      .put("allowSilentIgnore",true).put("includeWebResearchSources",true)
       .apply { interruptedPlayback?.takeIf { it.conversationId == conversationId }?.let { put("interruptedPlayback", it.toJson()) } }
       .apply { interruptedGeneration?.let { put("interruptedGeneration",it.toJson()) } }
       .toString().toByteArray(Charsets.UTF_8)
@@ -475,10 +499,16 @@ class NodeHandsFreeBackend internal constructor(
                 (event.isNull("conversationId") || event.opt("conversationId")==destination) &&
                 state is String && state in listOf("started","completed","failed") && statusMessage is String &&
                 statusMessage.isNotBlank() && statusMessage.length<=256 && statusMessage.none{it.isISOControl()}) {
-                if(searchDestination.compareAndSet(null,destination))
-                  voiceSearchProgress(presentation("conversation",destination))
-                voiceSearchProgress(presentation("tool_status",destination).put("toolStatus",
+                reportSearchPresentation(destination, presentation("tool_status",destination).put("toolStatus",
                   JSONObject().put("category","web_search").put("state",state).put("message",statusMessage)))
+              }
+            }
+            "web_research_sources" -> {
+              val destination = persistedDestination
+              if (accepted && !stopped.get() && destination != null && event.opt("conversationId") == destination) {
+                webResearchSources(event)?.let { sources ->
+                  reportSearchPresentation(destination, presentation("web_research_sources", destination).put("sources", sources))
+                }
               }
             }
             "memory_activity","token" -> Unit

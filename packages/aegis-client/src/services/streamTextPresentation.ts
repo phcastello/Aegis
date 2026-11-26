@@ -1,3 +1,5 @@
+import type { WebResearchSourceCount } from '../types/chat';
+
 /** Presentation only. Reveal actual received text in short increments, independently
  * of transport chunk size. No audio/request backpressure and no fabricated text. */
 export const STREAM_FRAME_MS = 32;
@@ -32,7 +34,7 @@ export class StreamTextReveal {
 }
 
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-export type NativeVoiceStreamKind = 'conversation' | 'final_segment' | 'done' | 'interrupted' | 'error' | 'ignored' | 'tool_status';
+export type NativeVoiceStreamKind = 'conversation' | 'final_segment' | 'done' | 'interrupted' | 'error' | 'ignored' | 'tool_status' | 'web_research_sources';
 export interface NativeResearchStatus {
   category: 'web_search';
   state: 'started' | 'completed' | 'failed';
@@ -47,11 +49,31 @@ export interface NativeVoiceStreamEvent {
   sequence?: number;
   content?: string;
   toolStatus?: NativeResearchStatus;
+  sources?: WebResearchSourceCount[];
 }
+
+export function parseWebResearchSourceCounts(value: unknown): WebResearchSourceCount[] {
+  if (!Array.isArray(value) || value.length > 8) return [];
+  const sources = new Map<string, WebResearchSourceCount>();
+  for (const source of value) {
+    if (!source || typeof source !== 'object') continue;
+    const { url, count } = source as Record<string, unknown>;
+    if (typeof url !== 'string' || url.length > 1024 || !/^https?:\/\//i.test(url) ||
+      /[\s\\\u0000-\u001f\u007f]/.test(url) || typeof count !== 'number' ||
+      !Number.isInteger(count) || count < 1 || count > 2_147_483_647) continue;
+    try {
+      const parsed = new URL(url);
+      if (!parsed.hostname || parsed.username || parsed.password || sources.has(parsed.href)) continue;
+      sources.set(parsed.href, { url: parsed.href, count });
+    } catch { /* An invalid source cannot affect the chat stream. */ }
+  }
+  return [...sources.values()];
+}
+
 export function parseNativeVoiceStreamEvent(payload: unknown): NativeVoiceStreamEvent | null {
   if (!payload || typeof payload !== 'object') return null;
   const row = payload as Record<string, unknown>;
-  if (!uuid(row.turnId) || typeof row.type !== 'string' || !['conversation', 'final_segment', 'done', 'interrupted', 'error', 'ignored', 'tool_status'].includes(row.type)) return null;
+  if (!uuid(row.turnId) || typeof row.type !== 'string' || !['conversation', 'final_segment', 'done', 'interrupted', 'error', 'ignored', 'tool_status', 'web_research_sources'].includes(row.type)) return null;
   if (row.conversationId != null && !uuid(row.conversationId) || row.assistantMessageId != null && !uuid(row.assistantMessageId)) return null;
   const conversationId = uuid(row.conversationId) ? row.conversationId : null;
   const assistantMessageId = uuid(row.assistantMessageId) ? row.assistantMessageId : null;
@@ -64,6 +86,11 @@ export function parseNativeVoiceStreamEvent(payload: unknown): NativeVoiceStream
       typeof status.message !== 'string' || !status.message.trim() || status.message.length > 240) return null;
     return { type, turnId: row.turnId, conversationId, assistantMessageId,
       toolStatus: { category: 'web_search', state: status.state, message: status.message } };
+  }
+  if (type === 'web_research_sources') {
+    if (!conversationId || assistantMessageId !== null) return null;
+    const sources = parseWebResearchSourceCounts(row.sources);
+    return sources.length ? { type, turnId: row.turnId, conversationId, assistantMessageId, sources } : null;
   }
   if (type === 'final_segment') {
     if (!conversationId || !assistantMessageId || !uuid(row.segmentId) || typeof row.sequence !== 'number' ||

@@ -135,9 +135,10 @@ public sealed class FinalSpeechSegmentTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ResearchEvidenceSurvivesTheResponseAndConversationHistory(bool segmented)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ResearchEvidenceSurvivesTheResponseAndConversationHistory(bool segmented, bool includeProgress)
     {
         using var fixture = new Fixture();
         using var output = JsonDocument.Parse("""
@@ -162,12 +163,22 @@ public sealed class FinalSpeechSegmentTests
         {
             fixture.Model.Release.TrySetResult();
             var events = new List<ChatStreamEvent>();
-            var request = fixture.Request();
+            var request = fixture.Request(includeProgress);
             await foreach (var item in chat.StreamMessageAsync(request)) events.Add(item);
             var done = Assert.Single(events.Where(item => item.Type == "done"));
             conversationId = done.ConversationId!.Value;
             evidence = done.WebResearch;
             answer = string.Join(" ", events.Where(item => item.Type == "final_segment").Select(item => item.Content));
+            var progress = events.Where(item => item.Type == "web_research_sources").ToArray();
+            if (includeProgress)
+            {
+                var item = Assert.Single(progress);
+                Assert.Equal(conversationId, item.ConversationId);
+                Assert.Equal(request.TurnId, item.TurnId);
+                Assert.Equal(new WebResearchSourceCount("https://example.org/source", 1), Assert.Single(item.Sources!));
+                Assert.Equal("conversation", events[0].Type);
+            }
+            else Assert.Empty(progress);
         }
         else
         {
@@ -386,7 +397,7 @@ public sealed class FinalSpeechSegmentTests
             WebSearchOptions? webSearch = null) => new(Db, new PromptBuilder(new Runtime()),
             new AegisToolLoop(Model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance, Metrics, webSearch), titles, Registry, Voice,
             hybrid: hybrid, automaticMemory: automatic);
-        public SendMessageRequest Request() => new() { TurnId = Guid.NewGuid(), Content = "Como vai?", Origin = "hands_free", VoiceSessionId = Guid.NewGuid(), VoiceSegments = true };
+        public SendMessageRequest Request(bool includeProgress = false) => new() { TurnId = Guid.NewGuid(), Content = "Como vai?", Origin = "hands_free", VoiceSessionId = Guid.NewGuid(), VoiceSegments = true, IncludeWebResearchSources = includeProgress };
         public void Dispose() { Db.Dispose(); Registry.Dispose(); Metrics.Dispose(); }
     }
     private sealed class Runtime : IRuntimeContextProvider
@@ -427,6 +438,7 @@ public sealed class FinalSpeechSegmentTests
             {
                 if (request.NativeSearchActionBudget is null)
                 {
+                    yield return new(null, false, [], [], WebResearchSources: [new("https://example.org/speculative", 1)]);
                     Assert.Contains(request.Tools, tool => tool.Name == "request_web_search");
                     var gateOutput = JsonSerializer.SerializeToElement(new {
                         type = "function_call", call_id = "search-gate", name = "request_web_search", arguments = "{}"
@@ -436,6 +448,7 @@ public sealed class FinalSpeechSegmentTests
                 }
                 else
                 {
+                    yield return new(null, false, [], [], WebResearchSources: [new("https://example.org/source", 1)]);
                     yield return new("Resposta natural.", false, [], []);
                     yield return new(null, true, [], ResearchOutputs, Provider: "test", Model: "test",
                         Purpose: ModelPurpose.Chat, AuditData: Audit);

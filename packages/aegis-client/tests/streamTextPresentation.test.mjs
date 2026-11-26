@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 const exports = {};
-vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/services/streamTextPresentation.ts', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports });
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/services/streamTextPresentation.ts', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports, URL });
 const { StreamTextReveal, STREAM_FRAME_MS, NativeVoiceSegments, parseNativeVoiceStreamEvent } = exports;
 
 test('one burst unfolds in small real prefixes and settles with byte-for-byte original text', () => {
@@ -70,4 +70,22 @@ test('native web search status verifies accepted turn shape without establishing
     {...progress, toolStatus: {...progress.toolStatus, message: 'x'.repeat(241)}}
   ]) assert.equal(parseNativeVoiceStreamEvent(value), null);
   assert.equal(stream.matches(parseNativeVoiceStreamEvent({...progress, conversationId: assistantMessageId})), false);
+});
+
+test('native research increments retain safe URLs and positive counts for the owning turn', () => {
+  const event = { type: 'web_research_sources', turnId, conversationId, sources: [
+    { url: 'https://EXAMPLE.test:443/source', count: 2 },
+    { url: 'https://user:secret@example.test/source', count: 1 },
+    { url: 'javascript:alert(1)', count: 1 },
+    { url: 'https://example.test/unobserved', count: 0 },
+  ] };
+  const parsed = parseNativeVoiceStreamEvent(event);
+  assert.equal(parsed.type, 'web_research_sources');
+  assert.equal(JSON.stringify(parsed.sources), '[{"url":"https://example.test/source","count":2}]');
+  const stream = new NativeVoiceSegments(turnId, conversationId);
+  assert.ok(stream.matches(parsed));
+  assert.equal(stream.append(parsed), null);
+  assert.equal(parseNativeVoiceStreamEvent({ ...event, conversationId: null }), null);
+  assert.equal(parseNativeVoiceStreamEvent({ ...event, assistantMessageId }), null);
+  assert.equal(parseNativeVoiceStreamEvent({ ...event, sources: event.sources.slice(1) }), null);
 });

@@ -157,6 +157,7 @@ public sealed class OpenAIResponsesClient(
         var usageCollector = new WebSearchUsageCollector(webSearchUsage);
         var trackWebSearch = request.NativeSearchActionBudget.HasValue &&
             !request.Tools.Any(tool => tool.Name == HandsFreeDirection.IgnoreToolName);
+        var researchEvidence = trackWebSearch ? new WebResearchStreamEvidence() : null;
         var outputPhasesByIndex = new Dictionary<int, string?>();
         var outputPhasesByItemId = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -320,6 +321,9 @@ public sealed class OpenAIResponsesClient(
                         {
                             yield return new ModelToolStreamChunk(null, false, [], [], ToolStatus: searchStatus);
                         }
+                        if (researchEvidence is not null)
+                            foreach (var sources in researchEvidence.Observe(root, eventType))
+                                yield return new ModelToolStreamChunk(null, false, [], [], WebResearchSources: sources);
                         TrackOutputItemPhase(root, outputPhasesByIndex, outputPhasesByItemId);
 
                         if (string.Equals(eventType, "response.output_text.delta", StringComparison.Ordinal) &&
