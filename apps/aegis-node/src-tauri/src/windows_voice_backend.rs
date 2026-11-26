@@ -1,4 +1,8 @@
-use crate::{node_commands::NodeRuntime, windows_voice_audio::Output, windows_voice_signal::wav};
+use crate::{
+    node_commands::NodeRuntime,
+    windows_voice_audio::{Output, PlaybackPause},
+    windows_voice_signal::wav,
+};
 use reqwest::{Client, RequestBuilder, Response};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -153,6 +157,10 @@ pub(crate) trait TurnAudio {
     fn write(&mut self, samples: &[i16], cancel: &CancellationToken) -> Result<()>;
     fn finish(&mut self, cancel: &CancellationToken) -> Result<()>;
     fn played_frames(&self) -> Option<u64>;
+    /// Only a controllable player can be paused across its owner thread.
+    fn pause_control(&self) -> Option<PlaybackPause> {
+        None
+    }
 }
 
 impl TurnAudio for Output {
@@ -164,6 +172,9 @@ impl TurnAudio for Output {
     }
     fn played_frames(&self) -> Option<u64> {
         Output::played_frames(self)
+    }
+    fn pause_control(&self) -> Option<PlaybackPause> {
+        Some(Output::pause_control(self))
     }
 }
 

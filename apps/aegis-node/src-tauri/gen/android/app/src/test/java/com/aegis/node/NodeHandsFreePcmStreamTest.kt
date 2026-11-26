@@ -276,6 +276,197 @@ class NodeHandsFreePcmStreamTest {
         current.close()
     }
 
+    @Test fun pauseBeforeDeviceCreationKeepsTheFirstAudioOnTheOriginalTurn() {
+        val created = CountDownLatch(1)
+        val writerStarted = CountDownLatch(1)
+        val device = Device(autoPlay = true)
+        val sink = HandsFreeStreamingPcmSink({ created.countDown(); device })
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            assertTrue(sink.pause())
+            val producer = executor.submit {
+                writerStarted.countDown()
+                sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
+                sink.finish()
+            }
+            assertTrue(writerStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(created.await(100, TimeUnit.MILLISECONDS))
+            assertTrue(sink.resume())
+            producer.get(5, TimeUnit.SECONDS)
+            assertArrayEquals(byteArrayOf(1, 2, 3, 4), device.recorded.toByteArray())
+            assertFalse(sink.pause())
+            assertFalse(sink.resume())
+        } finally { sink.close(); executor.shutdownNow() }
+    }
+
+    @Test fun pauseDuringPlaybackReadyDefersFirstPlayAndKeepsTheDevice() {
+        val device = Device(autoPlay = true)
+        val ready = CountDownLatch(1)
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val executor = Executors.newSingleThreadExecutor()
+        lateinit var sink: HandsFreeStreamingPcmSink
+        sink = HandsFreeStreamingPcmSink({ device },
+            onPlaybackReady = {
+                assertTrue(sink.pause())
+                ready.countDown()
+            },
+            onPlaybackEvent = { events.add(it) })
+        try {
+            val producer = executor.submit {
+                sink.write(byteArrayOf(1, 2), 0, 2)
+                sink.finish()
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            assertFalse(device.firstWrite.await(100, TimeUnit.MILLISECONDS))
+            assertTrue(events.isEmpty())
+            assertTrue(sink.resume())
+            producer.get(5, TimeUnit.SECONDS)
+            assertArrayEquals(byteArrayOf(1, 2), device.recorded.toByteArray())
+            assertEquals(1, events.count { it == "player_play_called" })
+            assertEquals(1, events.count { it == "player_drained" })
+        } finally { sink.close(); executor.shutdownNow() }
+    }
+
+    @Test fun pauseDuringBlockingWritePreservesPartialTransferAndQueuedFrames() {
+        val device = Device(autoPlay = false, capacityFrames = 2)
+        val sink = HandsFreeStreamingPcmSink({ device })
+        val expected = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val producer = executor.submit { sink.write(expected, 0, expected.size) }
+            assertTrue(device.backpressured.await(5, TimeUnit.SECONDS))
+            assertEquals(2, device.queuedFrames)
+            assertTrue(sink.pause())
+            assertTrue(device.pausedWrite.await(5, TimeUnit.SECONDS))
+            device.advance(2)
+            assertEquals(0L, device.playedFrames())
+            assertEquals(2, device.queuedFrames)
+            assertFalse(producer.isDone)
+            assertTrue(sink.pause()) // idempotent
+            assertTrue(sink.resume())
+            device.advance(2)
+            producer.get(5, TimeUnit.SECONDS)
+            assertArrayEquals(expected, device.recorded.toByteArray())
+            assertEquals(2L, device.playedFrames())
+            assertEquals(2, device.queuedFrames)
+            device.advance(2)
+            sink.finish()
+            assertEquals(4L, device.playedFrames())
+            assertTrue(device.maxQueued <= 2)
+        } finally { sink.abort(); sink.close(); executor.shutdownNow() }
+    }
+
+    @Test fun pausedDrainUsesPlaybackTimeAndDoesNotDiscardUnheardAudio() {
+        val backing = Device(autoPlay = false)
+        val observeResume = java.util.concurrent.atomic.AtomicBoolean(false)
+        val readAfterResume = CountDownLatch(1)
+        val device = object : HandsFreePcmDevice by backing {
+            override fun playedFrames(): Long {
+                if (observeResume.get()) readAfterResume.countDown()
+                return backing.playedFrames()
+            }
+        }
+        val now = java.util.concurrent.atomic.AtomicLong(1000L)
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val sink = HandsFreeStreamingPcmSink({ device }, onPlaybackEvent = { events.add(it) }, nanoTime = now::get)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val expected = byteArrayOf(1, 2, 3, 4, 5, 6)
+            sink.write(expected, 0, expected.size)
+            backing.advance(1)
+            val completed = executor.submit { sink.finish() }
+            assertTrue(backing.markerArmed.await(5, TimeUnit.SECONDS))
+            assertTrue(sink.pause())
+            now.addAndGet(TimeUnit.SECONDS.toNanos(20))
+            backing.advance(2)
+            assertEquals(1L, backing.playedFrames())
+            assertEquals(2, backing.queuedFrames)
+            assertFalse(completed.isDone)
+            observeResume.set(true)
+            assertTrue(sink.resume())
+            assertTrue(readAfterResume.await(5, TimeUnit.SECONDS))
+            // A wall-clock drain deadline would have already expired by 15 s.
+            // The producer must remain blocked until the queued frames play.
+            assertThrows(java.util.concurrent.TimeoutException::class.java) {
+                completed.get(100, TimeUnit.MILLISECONDS)
+            }
+            backing.advance(2)
+            completed.get(5, TimeUnit.SECONDS)
+            assertArrayEquals(expected, backing.recorded.toByteArray())
+            assertEquals(3L, backing.playedFrames())
+            assertEquals(listOf("player_play_called", "player_drained"), events)
+        } finally { sink.abort(); sink.close(); executor.shutdownNow() }
+    }
+
+    @Test fun abortAndCloseAwakenPausedWriterOrDrainWithoutAResume() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            for (useAbort in listOf(true, false)) {
+                val device = Device(autoPlay = false, capacityFrames = 2)
+                val sink = HandsFreeStreamingPcmSink({ device })
+                try {
+                    val producer = executor.submit { sink.write(ByteArray(12), 0, 12) }
+                    assertTrue(device.backpressured.await(5, TimeUnit.SECONDS))
+                    assertTrue(sink.pause())
+                    if (useAbort) sink.abort() else sink.close()
+                    val failure = assertThrows(ExecutionException::class.java) { producer.get(5, TimeUnit.SECONDS) }
+                    assertTrue(failure.cause is CancellationException)
+                    assertFalse(sink.resume())
+                    assertEquals(0, device.queuedFrames)
+                } finally { sink.close() }
+            }
+            val device = Device(autoPlay = false)
+            val sink = HandsFreeStreamingPcmSink({ device })
+            try {
+                sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
+                val drained = executor.submit { sink.finish() }
+                assertTrue(device.markerArmed.await(5, TimeUnit.SECONDS))
+                assertTrue(sink.pause())
+                sink.abort()
+                val failure = assertThrows(ExecutionException::class.java) { drained.get(5, TimeUnit.SECONDS) }
+                assertTrue(failure.cause is CancellationException)
+                assertFalse(sink.resume())
+            } finally { sink.close() }
+        } finally { executor.shutdownNow() }
+    }
+
+    @Test fun oldPausedTrackCannotResumeAfterNewTurnOrFocusLoss() {
+        val devices = mutableListOf<Device>()
+        val focusLoss = mutableListOf<() -> Unit>()
+        val player = HandsFreePlayback { onLoss ->
+            focusLoss.add(onLoss)
+            Device(autoPlay = true).also { devices.add(it) }
+        }
+        val old = player.openStream { true }
+        var fresh: HandsFreePcmSink? = null
+        try {
+            old.write(byteArrayOf(1, 2), 0, 2)
+            assertTrue(old.pause())
+            val next = player.openStream { true }.also { fresh = it }
+            assertFalse(old.resume())
+            old.close()
+            next.write(byteArrayOf(3, 4), 0, 2)
+            assertFalse(devices[1].closed)
+            assertArrayEquals(byteArrayOf(3, 4), devices[1].recorded.toByteArray())
+            assertTrue(next.pause())
+            focusLoss[1]()
+            assertFalse(next.resume())
+        } finally { old.close(); fresh?.close() }
+    }
+
+    @Test fun zeroDeviceWriteWithoutPauseStillFails() {
+        val backing = Device(autoPlay = true)
+        val device = object : HandsFreePcmDevice by backing {
+            override fun write(bytes: ByteArray, offset: Int, count: Int) = 0
+        }
+        val sink = HandsFreeStreamingPcmSink({ device })
+        try {
+            assertThrows(IllegalStateException::class.java) {
+                sink.write(byteArrayOf(1, 2), 0, 2)
+            }
+        } finally { sink.close() }
+    }
+
     internal class Device(
         private val autoPlay:Boolean,
         private val capacityFrames:Int=24000,
@@ -286,22 +477,25 @@ class NodeHandsFreePcmStreamTest {
         val markerArmed=CountDownLatch(1)
         val firstWrite=CountDownLatch(1)
         val backpressured=CountDownLatch(1)
+        val pausedWrite=CountDownLatch(1)
         @Volatile var queuedFrames=0;private set
         @Volatile var maxQueued=0;private set
         @Volatile var maxWrite=0;private set
         @Volatile var closed=false;private set
         private var stopped=false
+        private var paused=false
         private var played=0L
         private var marker=Int.MAX_VALUE
         private var reached:(()->Unit)?=null
         override fun write(bytes:ByteArray,offset:Int,count:Int):Int=synchronized(lock) {
             val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
-            while(!stopped && queuedFrames>=capacityFrames) {
+            while(!stopped && !paused && queuedFrames>=capacityFrames) {
                 backpressured.countDown()
                 check(System.nanoTime()<deadline){"Test device timed out"}
                 lock.wait(1000)
             }
             check(!stopped && !closed)
+            if(paused){pausedWrite.countDown();return@synchronized 0}
             val accepted=minOf(count,(capacityFrames-queuedFrames)*2)
             require(accepted>0 && accepted%2==0)
             recorded.write(bytes,offset,accepted);maxWrite=maxOf(maxWrite,accepted)
@@ -316,11 +510,17 @@ class NodeHandsFreePcmStreamTest {
             if(played>=marker)reached()
         }
         fun advance(frames:Int)=synchronized(lock) {
+            if(paused)return@synchronized
             val consumed=minOf(frames,queuedFrames);queuedFrames-=consumed;played+=consumed
             lock.notifyAll();if(played>=marker)reached?.invoke()
         }
-        override fun play(){}
+        override fun play()=synchronized(lock){paused=false;lock.notifyAll()}
+        override fun pause():Boolean=synchronized(lock) {
+            if(stopped || closed)return@synchronized false
+            paused=true;lock.notifyAll();true
+        }
         override fun stop()=synchronized(lock){stopped=true;queuedFrames=0;lock.notifyAll()}
         override fun close(){stop();closed=true}
     }
 }
+

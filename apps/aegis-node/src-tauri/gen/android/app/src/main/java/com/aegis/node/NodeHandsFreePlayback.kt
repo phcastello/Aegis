@@ -155,6 +155,7 @@ internal class HandsFreePlayback(
                     check(track.setNotificationMarkerPosition(frame) == AudioTrack.SUCCESS) { "audio_marker_failed" }
                 }
                 override fun play() { track.play() }
+                override fun pause(): Boolean { track.pause(); return true }
                 override fun stop() { try { track.pause(); track.flush(); track.stop() } catch (_: Exception) { } }
                 override fun close() {
                     if (!closed.compareAndSet(false, true)) return
@@ -172,3 +173,4 @@ internal class HandsFreePlayback(
     }
     }
 }
+

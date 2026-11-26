@@ -1,6 +1,6 @@
 //! Windows multimedia's shared PCM devices perform conversion to the requested
 //! sample rate. Buffers stay pinned until the driver returns their headers.
-use crate::windows_barge_in_signal::RenderReference;
+use crate::windows_barge_in_signal::{RenderCursor, RenderReference};
 use crate::windows_voice_signal::{PlaybackSpectrum, BLOCK, SPECTRUM_BANDS, SPEECH_RATE};
 use std::{
     cell::UnsafeCell,
@@ -244,6 +244,146 @@ fn playback_position(handle: HWAVEOUT) -> Option<u64> {
     }
 }
 
+/// Control belongs to one voice turn. Only the Output owner attaches the
+/// device; any clone may request pause/resume before or during playback.
+/// All raw-handle access via the control shares the detach lock.
+#[derive(Clone, Default)]
+pub(crate) struct PlaybackPause(Arc<Mutex<PauseState>>);
+
+#[derive(Default)]
+struct PauseState {
+    handle: Option<usize>,
+    retired: bool,
+    paused_at: Option<Instant>,
+    paused_frames: Option<u64>,
+    paused_total: Duration,
+    committed_frames: u64,
+}
+
+impl PauseState {
+    fn paused_duration(&self, now: Instant) -> Duration {
+        self.paused_total
+            + self
+                .paused_at
+                .map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
+    }
+
+    fn raw_handle(&self) -> Option<HWAVEOUT> {
+        self.handle.map(|raw| HWAVEOUT(raw as *mut _))
+    }
+
+    fn cursor(&self) -> Option<RenderCursor> {
+        let frames = if self.paused_at.is_some() {
+            self.paused_frames?
+        } else {
+            playback_position(self.raw_handle()?)?
+        };
+        (frames <= self.committed_frames).then_some(RenderCursor {
+            frames,
+            paused_at: self.paused_at,
+        })
+    }
+}
+
+impl PlaybackPause {
+    /// Freeze the real WinMM cursor, without reset or audio buffer changes.
+    /// Before the output exists, arm the pause so no PCM starts playing.
+    pub fn pause(&self) -> Result<(), &'static str> {
+        let mut state = self.0.lock().map_err(|_| "audio_error")?;
+        if state.retired {
+            return Err("cancelled");
+        }
+        if state.paused_at.is_some() {
+            return Ok(());
+        }
+        state.paused_frames = if let Some(handle) = state.raw_handle() {
+            if unsafe { waveOutPause(handle) } != 0 {
+                return Err("audio_error");
+            }
+            playback_position(handle).filter(|&frames| frames <= state.committed_frames)
+        } else {
+            Some(0)
+        };
+        state.paused_at = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Resume precisely the same queued PCM, including a partially played
+    /// buffer. An old controller can never resume a newly opened device.
+    pub fn resume(&self) -> Result<(), &'static str> {
+        let mut state = self.0.lock().map_err(|_| "audio_error")?;
+        if state.retired {
+            return Err("cancelled");
+        }
+        let Some(at) = state.paused_at else {
+            return Ok(());
+        };
+        if let Some(handle) = state.raw_handle() {
+            if unsafe { waveOutRestart(handle) } != 0 {
+                return Err("audio_error");
+            }
+        }
+        state.paused_total += at.elapsed();
+        state.paused_at = None;
+        state.paused_frames = None;
+        Ok(())
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.0
+            .lock()
+            .map(|state| !state.retired && state.paused_at.is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn paused_frames(&self) -> Option<u64> {
+        let state = self.0.lock().ok()?;
+        (!state.retired && state.paused_at.is_some())
+            .then_some(state.paused_frames)
+            .flatten()
+    }
+
+    fn cursor(&self) -> Option<RenderCursor> {
+        self.0.lock().ok()?.cursor()
+    }
+
+    fn attach(&self, handle: HWAVEOUT) -> Result<(), &'static str> {
+        let mut state = self.0.lock().map_err(|_| "audio_error")?;
+        if state.retired || state.handle.is_some() {
+            return Err("audio_error");
+        }
+        if state.paused_at.is_some() && unsafe { waveOutPause(handle) } != 0 {
+            return Err("audio_error");
+        }
+        state.handle = Some(handle.0 as usize);
+        Ok(())
+    }
+
+    fn retire(&self) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        state.handle = None;
+        state.retired = true;
+        state.paused_at = None;
+        state.paused_frames = None;
+    }
+
+    fn wait_clock(&self, now: Instant) -> Result<(Instant, Duration), &'static str> {
+        let state = self.0.lock().map_err(|_| "audio_error")?;
+        Ok((now, state.paused_duration(now)))
+    }
+
+    fn active_elapsed(
+        &self,
+        start: (Instant, Duration),
+        now: Instant,
+    ) -> Result<Duration, &'static str> {
+        let state = self.0.lock().map_err(|_| "audio_error")?;
+        Ok(now
+            .saturating_duration_since(start.0)
+            .saturating_sub(state.paused_duration(now).saturating_sub(start.1)))
+    }
+}
+
 /// TTS can continue playing its existing buffers while the HTTP worker awaits
 /// the next chunk. Observe the device cursor on a bounded, playback-only thread
 /// instead of reporting samples as they arrive from the response.
@@ -255,7 +395,7 @@ struct SpectrumObservation {
 }
 impl SpectrumObservation {
     fn start(
-        handle: HWAVEOUT,
+        control: PlaybackPause,
         visible: impl Fn() -> bool + Send + Sync + 'static,
         publish: impl Fn([f32; SPECTRUM_BANDS]) + Send + 'static,
     ) -> Option<Self> {
@@ -265,14 +405,11 @@ impl SpectrumObservation {
         let observed = timeline.clone();
         let display = visible.clone();
         let stopped = stop.clone();
-        // The raw handle stays valid until Drop joins this observer, before
-        // resetting or closing the output device. No PCM or driver callback
-        // state crosses the UI boundary.
-        let raw_handle = handle.0 as usize;
+        // The cursor query uses the per-turn lock and never sees a handle
+        // already detached by its owner.
         let worker = thread::Builder::new()
             .name("AegisSpectrum".into())
             .spawn(move || {
-                let handle = HWAVEOUT(raw_handle as *mut _);
                 let quiet = [0.0; SPECTRUM_BANDS];
                 let mut previous = None;
                 let mut last_movement = Instant::now();
@@ -286,21 +423,25 @@ impl SpectrumObservation {
                         thread::park_timeout(Duration::from_millis(160));
                         continue;
                     }
-                    let levels = if let Some(position) = playback_position(handle) {
-                        if previous != Some(position) {
-                            previous = Some(position);
-                            last_movement = Instant::now();
+                    let levels = match control.cursor() {
+                        Some(cursor) if cursor.paused_at.is_none() => {
+                            if previous != Some(cursor.frames) {
+                                previous = Some(cursor.frames);
+                                last_movement = Instant::now();
+                            }
+                            if last_movement.elapsed() >= Duration::from_millis(100) {
+                                quiet
+                            } else {
+                                observed
+                                    .lock()
+                                    .map(|mut timeline| timeline.at(cursor.frames))
+                                    .unwrap_or(quiet)
+                            }
                         }
-                        if last_movement.elapsed() >= Duration::from_millis(100) {
+                        _ => {
+                            previous = None;
                             quiet
-                        } else {
-                            observed
-                                .lock()
-                                .map(|mut timeline| timeline.at(position))
-                                .unwrap_or(quiet)
                         }
-                    } else {
-                        quiet
                     };
                     if !stopped.load(Ordering::Acquire) {
                         publish(levels);
@@ -335,10 +476,14 @@ pub(crate) struct Output {
     deadline: Instant,
     spectrum: Option<SpectrumObservation>,
     reference: Option<(RenderReference, u64)>,
-    committed_frames: u64,
+    control: PlaybackPause,
 }
 impl Output {
     pub fn open() -> Result<Self, &'static str> {
+        Self::open_with_pause(PlaybackPause::default())
+    }
+
+    pub fn open_with_pause(control: PlaybackPause) -> Result<Self, &'static str> {
         let event = Event::new()?;
         let mut handle = HWAVEOUT::default();
         if unsafe {
@@ -354,6 +499,10 @@ impl Output {
         {
             return Err("speaker_unavailable");
         }
+        if let Err(error) = control.attach(handle) {
+            unsafe { waveOutClose(handle) };
+            return Err(error);
+        }
         Ok(Self {
             handle,
             event,
@@ -361,20 +510,23 @@ impl Output {
             deadline: Instant::now() + Duration::from_secs(300),
             spectrum: None,
             reference: None,
-            committed_frames: 0,
+            control,
         })
     }
     /// Exact audio actually submitted to the device, independent of UI
     /// visibility. The reference removes its query before the handle closes.
     pub fn observe_reference(&mut self, reference: RenderReference) {
         if self.reference.is_none() {
-            let raw = self.handle.0 as usize;
-            let epoch = reference.begin(move || playback_position(HWAVEOUT(raw as *mut _)));
+            let control = self.control.clone();
+            let epoch = reference.begin_observed(move || control.cursor());
             self.reference = Some((reference, epoch));
         }
     }
     pub fn played_frames(&self) -> Option<u64> {
-        playback_position(self.handle).filter(|&position| position <= self.committed_frames)
+        self.control.cursor().map(|cursor| cursor.frames)
+    }
+    pub fn pause_control(&self) -> PlaybackPause {
+        self.control.clone()
     }
     pub fn observe_spectrum(
         &mut self,
@@ -383,21 +535,43 @@ impl Output {
     ) {
         // A visualization failure must never prevent the actual reply.
         if self.spectrum.is_none() {
-            self.spectrum = SpectrumObservation::start(self.handle, visible, publish);
+            self.spectrum = SpectrumObservation::start(self.control.clone(), visible, publish);
         }
     }
     fn reclaim(&mut self, cancel: &CancellationToken) -> Result<(), &'static str> {
-        let deadline = self.deadline.min(Instant::now() + Duration::from_secs(3));
+        let start = self.control.wait_clock(Instant::now())?;
         let buf = self.buffers.front().ok_or("audio_error")?;
         while !buf.done() {
-            self.event.wait(cancel, deadline)?;
+            if cancel.is_cancelled() {
+                return Err("cancelled");
+            }
+            if self.control.active_elapsed(start, Instant::now())? >= Duration::from_secs(3) {
+                return Err("device_unavailable");
+            }
+            self.event.wait(cancel, self.deadline)?;
         }
         let hdr = self.buffers.front_mut().unwrap().header.get();
+        let _control = self.control.0.lock().map_err(|_| "audio_error")?;
         if unsafe { waveOutUnprepareHeader(self.handle, hdr, HEADER) } != 0 {
             return Err("audio_error");
         }
         self.buffers.pop_front();
         Ok(())
+    }
+
+    fn wait_playing(&self, cancel: &CancellationToken) -> Result<(), &'static str> {
+        loop {
+            if cancel.is_cancelled() {
+                return Err("cancelled");
+            }
+            if Instant::now() >= self.deadline {
+                return Err("device_unavailable");
+            }
+            if !self.control.is_paused() {
+                return Ok(());
+            }
+            self.event.wait(cancel, self.deadline)?;
+        }
     }
     pub fn write(
         &mut self,
@@ -411,22 +585,32 @@ impl Output {
             while self.buffers.len() >= 4 {
                 self.reclaim(cancel)?;
             }
-            if cancel.is_cancelled() {
-                return Err("cancelled");
+            // The lock orders pause/restart with each submission. The owner
+            // retains all four queued buffers and waits before making new ones.
+            loop {
+                self.wait_playing(cancel)?;
+                let mut state = self.control.0.lock().map_err(|_| "audio_error")?;
+                if state.paused_at.is_some() {
+                    continue;
+                }
+                if cancel.is_cancelled() {
+                    return Err("cancelled");
+                }
+                let buf = Buffer::new(chunk.to_vec().into_boxed_slice());
+                if unsafe { waveOutPrepareHeader(self.handle, buf.header.get(), HEADER) } != 0 {
+                    return Err("audio_error");
+                }
+                self.buffers.push_back(buf);
+                let hdr = self.buffers.back_mut().unwrap().header.get();
+                if cancel.is_cancelled() {
+                    return Err("cancelled");
+                }
+                if unsafe { waveOutWrite(self.handle, hdr, HEADER) } != 0 {
+                    return Err("audio_error");
+                }
+                state.committed_frames += chunk.len() as u64;
+                break;
             }
-            let buf = Buffer::new(chunk.to_vec().into_boxed_slice());
-            if unsafe { waveOutPrepareHeader(self.handle, buf.header.get(), HEADER) } != 0 {
-                return Err("audio_error");
-            }
-            self.buffers.push_back(buf);
-            let hdr = self.buffers.back_mut().unwrap().header.get();
-            if cancel.is_cancelled() {
-                return Err("cancelled");
-            }
-            if unsafe { waveOutWrite(self.handle, hdr, HEADER) } != 0 {
-                return Err("audio_error");
-            }
-            self.committed_frames += chunk.len() as u64;
             if let Some((reference, epoch)) = &self.reference {
                 reference.submit(*epoch, chunk);
             }
@@ -440,7 +624,7 @@ impl Output {
         while !self.buffers.is_empty() {
             self.reclaim(cancel)?;
         }
-        Ok(())
+        self.wait_playing(cancel)
     }
 }
 impl Drop for Output {
@@ -453,6 +637,7 @@ impl Drop for Output {
         if let Some((reference, epoch)) = self.reference.take() {
             reference.end(epoch);
         }
+        self.control.retire();
         unsafe { waveOutReset(self.handle) };
         for buf in self.buffers.drain(..) {
             if unsafe { waveOutUnprepareHeader(self.handle, buf.header.get(), HEADER) } != 0 {
@@ -480,6 +665,119 @@ pub fn cue(cancel: &CancellationToken) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_pause_is_idempotent_and_retired_controller_cannot_restart() {
+        let control = PlaybackPause::default();
+        let clone = control.clone();
+        assert!(!control.is_paused());
+        clone.pause().unwrap();
+        control.pause().unwrap();
+        assert!(control.is_paused());
+        assert_eq!(clone.paused_frames(), Some(0));
+        clone.resume().unwrap();
+        control.resume().unwrap();
+        assert!(!control.is_paused());
+        assert_eq!(clone.paused_frames(), None);
+        control.retire();
+        assert_eq!(clone.pause(), Err("cancelled"));
+        assert_eq!(clone.resume(), Err("cancelled"));
+    }
+
+    #[test]
+    fn progress_wait_excludes_pauses_without_changing_wall_time() {
+        let control = PlaybackPause::default();
+        let start = Instant::now();
+        let before = control.wait_clock(start).unwrap();
+        {
+            let mut state = control.0.lock().unwrap();
+            state.paused_at = Some(start + Duration::from_secs(1));
+        }
+        assert_eq!(
+            control
+                .active_elapsed(before, start + Duration::from_secs(9))
+                .unwrap(),
+            Duration::from_secs(1)
+        );
+        {
+            let mut state = control.0.lock().unwrap();
+            state.paused_total = Duration::from_secs(8);
+            state.paused_at = None;
+        }
+        assert_eq!(
+            control
+                .active_elapsed(before, start + Duration::from_secs(10))
+                .unwrap(),
+            Duration::from_secs(2)
+        );
+        let later = control.wait_clock(start + Duration::from_secs(11)).unwrap();
+        {
+            let mut state = control.0.lock().unwrap();
+            state.paused_at = Some(start + Duration::from_secs(12));
+        }
+        assert_eq!(
+            control
+                .active_elapsed(later, start + Duration::from_secs(20))
+                .unwrap(),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed Windows playback device and a readable PCM cursor"]
+    fn pending_pause_blocks_output_and_restart_drains_original_buffers() {
+        let cancel = CancellationToken::new();
+        let control = PlaybackPause::default();
+        control.pause().unwrap();
+        let mut output = Output::open_with_pause(control.clone()).unwrap();
+        let resume = control.clone();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                assert_eq!(resume.paused_frames(), Some(0));
+                resume.resume().unwrap();
+            });
+            output.write(&[0; 2400 * 4], &cancel).unwrap();
+        });
+        control.pause().unwrap();
+        let position = control.paused_frames().expect("readable paused cursor");
+        assert!(position <= 2400 * 4);
+        thread::sleep(Duration::from_millis(130));
+        assert_eq!(output.played_frames(), Some(position));
+        assert_eq!(output.buffers.len(), 4);
+        let resume = control.clone();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                resume.resume().unwrap();
+            });
+            output.finish(&cancel).unwrap();
+        });
+        assert!(output.buffers.is_empty());
+        assert_eq!(output.played_frames(), Some(2400 * 4));
+        drop(output);
+        assert_eq!(control.resume(), Err("cancelled"));
+    }
+
+    #[test]
+    #[ignore = "requires an installed Windows playback device"]
+    fn cancel_while_paused_releases_the_same_output_and_revokes_resume() {
+        let cancel = CancellationToken::new();
+        let control = PlaybackPause::default();
+        let mut output = Output::open_with_pause(control.clone()).unwrap();
+        output.write(&[0; 2400 * 4], &cancel).unwrap();
+        control.pause().unwrap();
+        let stop = cancel.clone();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                stop.cancel();
+            });
+            assert_eq!(output.finish(&cancel), Err("cancelled"));
+        });
+        drop(output);
+        assert_eq!(control.resume(), Err("cancelled"));
+    }
 
     // Explicit bench invocation only. Discard two 20 ms blocks in memory and
     // play digital silence. No network requests, recording files or metrics.

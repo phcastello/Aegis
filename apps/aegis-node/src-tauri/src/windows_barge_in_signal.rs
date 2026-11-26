@@ -21,7 +21,13 @@ const PREROLL: usize = 15; // 300 ms before the earliest qualifying speech.
 const ECHO_HISTORY: usize = RATE * 6 / 5;
 const MATCH_SAMPLES: usize = BLOCK * 2;
 
-type Cursor = Box<dyn Fn() -> Option<u64> + Send + Sync>;
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RenderCursor {
+    pub frames: u64,
+    pub paused_at: Option<Instant>,
+}
+
+type Cursor = Box<dyn Fn() -> Option<RenderCursor> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub(crate) struct RenderReference(Arc<Mutex<Timeline>>);
@@ -33,6 +39,7 @@ struct Timeline {
     pcm: VecDeque<i16>,
     submitted: u64,
     last_head: Option<(u64, Instant)>,
+    paused_head: Option<u64>,
     stopped: Option<(u64, Instant)>,
     failed_stop: Option<Instant>,
     last_capture_end: Option<i64>,
@@ -51,7 +58,20 @@ impl RenderReference {
     /// Register a cursor query whose handle remains valid until `end` returns.
     /// Calls to the query happen only under this mutex; `end` removes it before
     /// the owner can close the handle. Epochs reject writes from an old output.
-    pub fn begin(&self, cursor: impl Fn() -> Option<u64> + Send + Sync + 'static) -> u64 {
+    #[cfg(test)]
+    fn begin(&self, cursor: impl Fn() -> Option<u64> + Send + Sync + 'static) -> u64 {
+        self.begin_observed(move || {
+            cursor().map(|frames| RenderCursor {
+                frames,
+                paused_at: None,
+            })
+        })
+    }
+
+    pub fn begin_observed(
+        &self,
+        cursor: impl Fn() -> Option<RenderCursor> + Send + Sync + 'static,
+    ) -> u64 {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let epoch = state.epoch.wrapping_add(1);
         *state = Timeline {
@@ -76,7 +96,9 @@ impl RenderReference {
             || state.last_head.is_some_and(|(head, at)| {
                 head == old_end && at.elapsed() >= Duration::from_millis(20)
             });
-        if had_gap {
+        // A paused device may still have queued PCM after its frozen head.
+        // Its later resume must not be re-anchored at the end of that queue.
+        if had_gap && state.paused_head.is_none() {
             state.segment_start = old_end;
             state.last_capture_end = None;
             state.last_head = None;
@@ -94,7 +116,9 @@ impl RenderReference {
         }
         let now = Instant::now();
         let result = state.cursor.take().and_then(|query| query());
-        state.stopped = result.filter(|p| *p <= state.submitted).map(|p| (p, now));
+        state.stopped = result
+            .filter(|cursor| cursor.frames <= state.submitted)
+            .map(|cursor| (cursor.frames, cursor.paused_at.unwrap_or(now)));
         if state.stopped.is_none() && state.submitted != 0 {
             state.failed_stop = Some(now);
         }
@@ -112,30 +136,63 @@ impl RenderReference {
             if state.submitted == 0 {
                 return ReferenceFrame::Quiet(epoch);
             }
-            let Some(head) = cursor().filter(|p| *p <= state.submitted) else {
+            let Some(cursor) = cursor().filter(|reading| reading.frames <= state.submitted) else {
                 return ReferenceFrame::Unavailable(epoch);
             };
-            if state.segment_start > 0 && head == state.segment_start && head < state.submitted {
-                return ReferenceFrame::Known(epoch, [0; BLOCK]);
-            }
+            let head = cursor.frames;
             if state.last_head.is_some_and(|(old, _)| head < old) {
                 return ReferenceFrame::Unavailable(epoch);
             }
-            if state.last_head.is_none_or(|(old, _)| old != head) {
-                state.last_head = Some((head, now));
-            }
-            // Once the queue is consumed, real time contains silence, not a
-            // repeated copy of its last frame. Unknown/stalled active heads
-            // cannot be substituted with a guessed render frame.
-            let elapsed = state
-                .last_head
-                .map_or(Duration::ZERO, |(_, at)| now.saturating_duration_since(at));
-            if head == state.submitted {
-                (head, head.saturating_add(duration_samples(elapsed)))
-            } else if head == 0 || elapsed >= Duration::from_millis(40) {
-                return ReferenceFrame::Unavailable(epoch);
+            if let Some(paused_at) = cursor.paused_at {
+                // A known intentionally paused cursor advances in wall-clock
+                // silence, just like a stopped render tail. Physical head stays
+                // frozen, so queued future PCM is never considered heard.
+                if state.paused_head != Some(head) {
+                    // Another pause can arrive between capture samples. If
+                    // playback advanced meanwhile, its previous frozen head
+                    // is still the start of the current physical segment.
+                    if let Some(frozen_head) = state.paused_head {
+                        state.segment_start = frozen_head;
+                        state.last_capture_end = None;
+                    }
+                    let at = state
+                        .last_head
+                        .filter(|(old, _)| *old == head && head == state.submitted)
+                        .map_or(paused_at, |(_, at)| at.min(paused_at));
+                    state.last_head = Some((head, at));
+                    state.paused_head = Some(head);
+                }
+                let at = state.last_head.map_or(paused_at, |(_, at)| at);
+                (
+                    head,
+                    head.saturating_add(duration_samples(now.saturating_duration_since(at))),
+                )
             } else {
-                (head, head)
+                if let Some(frozen_head) = state.paused_head.take() {
+                    state.segment_start = frozen_head;
+                    state.last_capture_end = None;
+                    state.last_head = None;
+                }
+                if state.segment_start > 0 && head == state.segment_start && head < state.submitted
+                {
+                    return ReferenceFrame::Known(epoch, [0; BLOCK]);
+                }
+                if state.last_head.is_none_or(|(old, _)| old != head) {
+                    state.last_head = Some((head, now));
+                }
+                // Once the queue is consumed, real time contains silence, not a
+                // repeated copy of its last frame. Unknown/stalled active heads
+                // cannot be substituted with a guessed render frame.
+                let elapsed = state
+                    .last_head
+                    .map_or(Duration::ZERO, |(_, at)| now.saturating_duration_since(at));
+                if head == state.submitted {
+                    (head, head.saturating_add(duration_samples(elapsed)))
+                } else if head == 0 || elapsed >= Duration::from_millis(40) {
+                    return ReferenceFrame::Unavailable(epoch);
+                } else {
+                    (head, head)
+                }
             }
         } else if let Some((head, at)) = state.stopped {
             let elapsed = now.saturating_duration_since(at);
@@ -782,6 +839,60 @@ impl BargeInSignal {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn paused_reference_reports_real_silence_and_resumes_queued_pcm() {
+        let now = Instant::now();
+        let reading = Arc::new(Mutex::new(RenderCursor {
+            frames: 480,
+            paused_at: None,
+        }));
+        let cursor = reading.clone();
+        let reference = RenderReference::default();
+        let epoch = reference.begin_observed(move || Some(*cursor.lock().unwrap()));
+        let mut pcm = vec![1000; 480];
+        pcm.extend([2000; 480]);
+        pcm.extend([3000; 480]);
+        reference.submit(epoch, &pcm);
+        assert!(
+            matches!(reference.frame_at(0, now), ReferenceFrame::Known(_, frame) if frame == [1000; BLOCK])
+        );
+
+        reading.lock().unwrap().paused_at = Some(now);
+        assert!(
+            matches!(reference.frame_at(0, now + Duration::from_millis(20)),
+            ReferenceFrame::Known(_, frame) if frame == [0; BLOCK])
+        );
+        assert!(matches!(
+            reference.frame_at(1, now + Duration::from_millis(40)),
+            ReferenceFrame::Unavailable(_)
+        ));
+        assert!(
+            matches!(reference.frame_at(1, now + Duration::from_millis(60)),
+            ReferenceFrame::Known(_, frame) if frame == [0; BLOCK])
+        );
+        assert!(
+            matches!(reference.frame_at(0, now + Duration::from_secs(1)),
+            ReferenceFrame::Known(_, frame) if frame == [0; BLOCK])
+        );
+
+        // Appending before the first resumed capture must not skip the queued
+        // 2000/3000 samples, even though wall-clock silence passed their indices.
+        *reading.lock().unwrap() = RenderCursor {
+            frames: 960,
+            paused_at: None,
+        };
+        reference.submit(epoch, &[4000; 480]);
+        assert!(
+            matches!(reference.frame_at(0, now + Duration::from_millis(1020)),
+            ReferenceFrame::Known(_, frame) if frame == [2000; BLOCK])
+        );
+        reading.lock().unwrap().frames = 1440;
+        assert!(
+            matches!(reference.frame_at(0, now + Duration::from_millis(1040)),
+            ReferenceFrame::Known(_, frame) if frame == [3000; BLOCK])
+        );
+    }
 
     #[test]
     fn timeline_only_references_played_pcm_and_queued_capture_age() {
