@@ -27,8 +27,9 @@ const copyError = ref(false);
 const sourcesId = useId();
 const sourcesOpen = ref(false);
 const sourceLinkError = ref(false);
+const showMessageActions = computed(() => !props.message.pending && !props.message.streaming && !props.message.interrupted);
 const sources = computed(() => props.message.role === 'assistant' && !props.message.pending &&
-  !props.message.streaming && !props.message.interrupted && props.message.webResearch
+  !props.message.streaming && props.message.webResearch
   ? prepareWebResearch(props.message.content, props.message.webResearch).sources : []);
 const sourceSites = computed(() => topResearchSites(mergeResearchSites(new Map(),
   sources.value.map(source => ({ url: source.url, count: 1 })))));
@@ -77,8 +78,8 @@ async function copy(): Promise<void> {
           :web-research="message.streaming ? null : message.webResearch" />
         <span v-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>
       </div>
-      <div v-if="!message.pending && !message.streaming && !message.interrupted" class="message-actions">
-        <template v-if="message.role === 'assistant'">
+      <div v-if="showMessageActions || sources.length" class="message-actions">
+        <template v-if="showMessageActions && message.role === 'assistant'">
           <button class="message-action" aria-label="Marcar resposta como boa" @click="emit('feedback', message, 'good')"><svg viewBox="0 0 24 24"><path d="M7 10v10M4 10h3v10H4zM7 20h11l2-7a2 2 0 0 0-2-2h-3l1-4a3 3 0 0 0-3-3l-5 6Z" /></svg></button>
           <button class="message-action" aria-label="Marcar resposta como ruim" @click="emit('feedback', message, 'bad')"><svg viewBox="0 0 24 24"><path d="M7 14V4M4 4h3v10H4zM7 4h11l2 7a2 2 0 0 1-2 2h-3l1 4a3 3 0 0 1-3 3l-5-6Z" /></svg></button>
           <button class="message-action" :aria-label="isPlaying ? 'Interromper reprodução' : 'Ouvir resposta'" @click="isPlaying ? emit('stopPlayback') : emit('replay', message)">
@@ -86,14 +87,14 @@ async function copy(): Promise<void> {
             <svg v-else viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6l-5 4H4Zm12-1a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /></svg>
           </button>
         </template>
-        <button class="message-action" :aria-label="copied ? 'Mensagem copiada' : 'Copiar mensagem'" @click="copy"><svg v-if="copied" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg><svg v-else viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
+        <button v-if="showMessageActions" class="message-action" :aria-label="copied ? 'Mensagem copiada' : 'Copiar mensagem'" @click="copy"><svg v-if="copied" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg><svg v-else viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
         <button v-if="sources.length" type="button" class="message-action message-action--sources"
           :aria-label="sourcesLabel" :title="sourcesLabel" :aria-expanded="sourcesOpen" :aria-controls="sourcesId"
           @click="sourcesOpen = !sourcesOpen">
           <WebSourceStack v-if="sourceSites.length" :sites="sourceSites" compact />
           <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 6 0l4-4a4 4 0 0 0-6-6l-2 2m2 4a4 4 0 0 0-6 0l-4 4a4 4 0 0 0 6 6l2-2"/></svg>
         </button>
-        <span v-if="copyError" class="message-action-error" role="status">Não foi possível copiar.</span>
+        <span v-if="showMessageActions && copyError" class="message-action-error" role="status">Não foi possível copiar.</span>
       </div>
       <div v-if="sources.length" :id="sourcesId" class="message-research-sources" :hidden="!sourcesOpen">
         <ul v-if="sourcesOpen">

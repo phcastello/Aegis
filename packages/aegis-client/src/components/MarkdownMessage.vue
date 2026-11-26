@@ -359,16 +359,6 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
       <p v-if="citationPreview.source.snippet">{{ citationPreview.source.snippet }}</p>
     </div>
   </Teleport>
-  <div v-if="renderedResearch.unplacedCitations.length" class="web-research-list"
-    @click="followLink" @auxclick="followLink">
-    <span>Fontes citadas</span>
-    <ul>
-      <li v-for="source in renderedResearch.unplacedCitations" :key="source.url">
-        <a class="web-research-link" :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title }}</a>
-        <small>{{ source.host }}</small>
-      </li>
-    </ul>
-  </div>
   <p v-if="linkError" role="status">{{ linkError }}</p>
 </template>
 
@@ -479,15 +469,4 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   font-size: .88em;
 }
 .web-citation-preview p { margin: .4rem 0 0; color: var(--muted); }
-.web-research-list {
-  margin-top: .7rem;
-  width: 100%;
-  color: var(--muted);
-  font-size: .85rem;
-  overflow-wrap: anywhere;
-}
-.web-research-list ul { margin: .4rem 0 0; padding-left: 1.25rem; }
-.web-research-list li { margin-top: .3rem; }
-.web-research-list a { color: var(--accent-strong); text-decoration: underline; }
-.web-research-list small { display: block; font-size: .82em; }
 </style>

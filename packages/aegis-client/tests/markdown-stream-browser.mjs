@@ -186,7 +186,7 @@ try {
   assert.equal(await touchDetails.getAttribute('aria-expanded'), 'false');
   await touch.close();
 
-  assert.equal(await page.locator('details.web-research-list').count(), 0,
+  assert.equal(await page.getByText('Fontes citadas', { exact: true }).count(), 0,
     'the full list belongs to the response action bar, not the Markdown body');
 
   await page.evaluate(() => {
@@ -201,7 +201,7 @@ try {
   assert.doesNotMatch(await page.locator('.markdown-message').textContent(), /Referência/);
 
   await page.evaluate(() => window.updateMarkdown('Sem metadados.'));
-  assert.equal(await page.locator('.web-research-list').count(), 0);
+  assert.equal(await page.getByText('Fontes citadas', { exact: true }).count(), 0);
   assert.equal(await citations.count(), 0);
   const metrics = () => page.locator('.markdown-message').evaluate(el => ({ width: el.clientWidth, height: el.clientHeight,
     scrollHeight: el.scrollHeight, scrollWidth: el.scrollWidth,

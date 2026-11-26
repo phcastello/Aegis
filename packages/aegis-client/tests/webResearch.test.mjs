@@ -14,7 +14,7 @@ test('older messages preserve exactly the original Markdown rendering', () => {
     const result = renderWebResearchMarkdown(markdown, content, research);
     assert.equal(result.html, markdown.render(content));
     assert.deepEqual(result.sources, []);
-    assert.deepEqual(result.unplacedCitations, []);
+    assert.deepEqual(result.inlineCitations, []);
   }
 });
 
@@ -31,7 +31,6 @@ test('plain text gets multiple clickable sources at their actual UTF-16 boundary
   assert.match(result.html, /class="web-citation__label">Example<\/span>/);
   assert.equal(result.sources.length, 2);
   assert.equal(result.sources[0].kind, 'opened');
-  assert.deepEqual(result.unplacedCitations, []);
   assert.match(result.html, /🎵 A primeira afirmação/);
 });
 
@@ -68,12 +67,13 @@ test('invalid URLs and indices cannot create links, and safely escaped titles ar
   assert.match(result.html, /&lt;script&gt;/);
 });
 
-test('unmapped source spans and provider citations without offsets remain visible as fallback links', () => {
+test('unmapped source spans and provider citations without offsets remain available in the sources disclosure', () => {
   const content = '```text\nUm trecho.\n```';
   const research = { sources: [{ url: url2, kind: 'citation' }], citations: [citation(url1, content, 'Um trecho.')] };
   const result = renderWebResearchMarkdown(markdown, content, research);
   assert.equal(result.html, markdown.render(content));
-  assert.deepEqual(result.unplacedCitations.map(source => source.url).sort(), [url1, url2].sort());
+  assert.deepEqual(result.inlineCitations, []);
+  assert.deepEqual(result.sources.map(source => source.url).sort(), [url1, url2].sort());
   assert.equal(prepareWebResearch(content, { sources: [{ url: url2, kind: 'consulted' }, { url: url2, kind: 'opened' }], citations: [] }).sources[0].kind, 'opened');
 });
 
@@ -112,7 +112,6 @@ test('only whole parenthesized links with cited URLs become badges, without dupl
   assert.doesNotMatch(result.html, /Uma fonte|\(<span class="web-citation-group"/);
   assert.match(result.html, /\(observação\) \(<a href="https:\/\/unrelated\.test\/">interno<\/a>\)/);
   assert.match(result.html, /\(mais <a href="https:\/\/example\.test\/one">contexto<\/a>\)/);
-  assert.deepEqual(result.unplacedCitations, []);
   assert.match(content, /\(\[Uma fonte\]/, 'Stored answer text does not change');
 });
 
@@ -124,7 +123,6 @@ test('evidenced parenthesized links can be rendered even when sources have no of
   assert.deepEqual(result.inlineCitations.map(source => source.url), [url1]);
   assert.match(result.html, /Uma afirmação <span class="web-citation-group"/);
   assert.match(result.html, /outra \( <a href="https:\/\/example\.test\/two">Referência<\/a> \)\./);
-  assert.deepEqual(result.unplacedCitations, []);
 });
 
 test('Agência Brasil badges delegate icon discovery to Aegis and retain the short site name', () => {

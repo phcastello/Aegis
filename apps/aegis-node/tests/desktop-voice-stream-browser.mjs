@@ -284,16 +284,29 @@ try {
   await select('Beta');
   assert.equal(await researchActivity('Pesquisa em segundo plano').count(), 0);
   const firstJob = [...researchJobs.values()][0];
-  append(a, uuid(91), 'Resultado independente da conversa aberta.');
-  data.get(a).messages.at(-1).webResearch = { sources: [finalSources[0]], citations: [] };
+  const backgroundAnswer = 'Resultado independente da conversa aberta.';
+  const unplacedSource = { url: 'https://prefeitura.pbh.gov.br/transporte/relatorio.pdf', title: 'Transporte :: RESULTADOS',
+    kind: 'opened', cited: true };
+  append(a, uuid(91), backgroundAnswer);
+  data.get(a).messages.at(-1).webResearch = { sources: [unplacedSource], citations: [] };
   firstJob.state = 'completed'; firstJob.resultMessageId = uuid(91); firstJob.updatedAt = new Date().toISOString();
   await sync(a);
   assert.equal(await title(), 'Beta', 'research cannot reclaim navigation');
-  await select('Alfa'); await exact('Resultado independente da conversa aberta.').waitFor();
-  const backgroundSource = page.getByRole('button', { name: 'Fontes da pesquisa (1 link)' });
+  await select('Alfa'); await exact(backgroundAnswer).waitFor();
+  const backgroundResult = page.locator('article.message-row--assistant').filter({ hasText: backgroundAnswer });
+  const backgroundSource = backgroundResult.getByRole('button', { name: 'Fontes da pesquisa (1 link)' });
+  await backgroundSource.waitFor();
+  assert.equal(await backgroundResult.getByText('Fontes citadas', { exact: true }).count(), 0);
+  assert.equal(await backgroundResult.getByRole('link', { name: unplacedSource.title }).count(), 0);
   await backgroundSource.click();
   assert.equal(await backgroundSource.getAttribute('aria-expanded'), 'true');
   assert.equal(await sourceAction.getAttribute('aria-expanded'), 'false');
+  const sourceWithoutOffsets = backgroundResult.getByRole('link', { name: unplacedSource.title });
+  assert.equal(await sourceWithoutOffsets.count(), 1);
+  assert.equal(await sourceWithoutOffsets.getAttribute('href'), unplacedSource.url);
+  await sourceWithoutOffsets.click();
+  await page.waitForFunction(url => window.fixtureCommands.some(command =>
+    command.command === 'plugin:opener|open_url' && command.url === url), unplacedSource.url);
   await backgroundSource.click();
   const delegatedVoiceTurn = uuid(95), delegatedVoiceUser = uuid(96), delegatedVoiceAssistant = uuid(97);
   const delegatedVoiceIntent = 'Vou comparar os horários das fontes e salvar o resultado aqui.';
@@ -353,11 +366,21 @@ try {
   await emit(stream, segment(cutTurn, a, cutId, 0, cutText));
   await waitPartial(cutMarker, cutText);
   append(a, cutId, cutText);
+  // A persisted response can arrive through sync after the local turn was cut.
+  data.get(a).messages.at(-1).webResearch = { sources: [unplacedSource], citations: [] };
   await emit(stream, event('interrupted', cutTurn, a, cutId));
   await emit(stream, segment(cutTurn, a, cutId, 1, 'NÃO DEVE APARECER DEPOIS DO CORTE'));
   await sync(a); await exact(cutText).waitFor({ timeout: 5000 });
   assert.equal(await marker(cutMarker).count(), 1);
   assert.equal(await page.getByText('NÃO DEVE APARECER DEPOIS DO CORTE').count(), 0);
+  const cutResult = page.locator('article.message-row--assistant').filter({ hasText: cutMarker });
+  const cutSources = cutResult.getByRole('button', { name: 'Fontes da pesquisa (1 link)' });
+  await cutSources.waitFor();
+  assert.equal(await cutResult.locator('.assistant-activity--interrupted').count(), 1);
+  assert.equal(await cutResult.locator('.message-actions button').count(), 1);
+  assert.equal(await cutResult.getByText('Fontes citadas', { exact: true }).count(), 0);
+  await cutSources.click();
+  assert.equal(await cutResult.getByRole('link', { name: unplacedSource.title }).getAttribute('href'), unplacedSource.url);
   const priorRows = await assistant.count();
   await emit(stream, event('ignored', uuid(40)));
   await emit(stream, segment(uuid(40), a, uuid(41), 0, 'ATIVAÇÃO INDEVIDA NÃO CONFIRMADA'));

@@ -93,13 +93,12 @@ type MarkdownToken = ReturnType<MarkdownIt['parse']>[number];
  * parsed tokens instead of interpolating URLs into untrusted Markdown or HTML.
  * A plain-text inline block can be split exactly at a citation boundary. For
  * formatted blocks, attach the link to that same inline block without breaking
- * emphasis, links, tables or code. Non-inline ranges stay in the visible source
- * summary. The original answer is never changed. */
+ * emphasis, links, tables or code. Sources without a safe inline position
+ * remain available in the response's sources action. The original answer is never changed. */
 export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string, research?: WebResearch | null) {
   const prepared = prepareWebResearch(content, research);
   const inlineCitations: ResearchLink[] = [];
-  if (!prepared.cited.length) return { html: markdown.render(content), sources: prepared.sources,
-    unplacedCitations: prepared.cited, inlineCitations };
+  if (!prepared.cited.length) return { html: markdown.render(content), sources: prepared.sources, inlineCitations };
   const env = {};
   const tokens = markdown.parse(content, env);
   const lineOffsets = [0];
@@ -208,13 +207,11 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
     return replaced;
   }
 
-  const placed = new Set<string>();
   for (const block of blocks) {
     const children = block.children!;
     // Existing answers may spell out a source as an entire parenthesized link.
     // Replace that rendering only when native evidence cites the exact URL.
     const replaced = replaceParenthesizedCitations(children);
-    for (const url of replaced) placed.add(url);
     const citations = (assigned.get(block) ?? []).filter(citation => !replaced.has(citation.url));
     if (!citations.length) continue;
     const offset = sourceOffset(block);
@@ -235,7 +232,6 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
           if (token.type === 'text' && localEnd > cursor) replacement.push(textToken(token.content.slice(cursor, localEnd)));
           replacement.push(...badge(citation));
           cursor = localEnd;
-          placed.add(citation.url);
         }
         if (token.type === 'text' && cursor < token.content.length) replacement.push(textToken(token.content.slice(cursor)));
         sourceCursor = end;
@@ -245,10 +241,8 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
       // At most one marker per source when exact offsets cannot be mapped.
       for (const citation of new Map(citations.map(citation => [citation.url, citation])).values()) {
         children.push(...badge(citation));
-        placed.add(citation.url);
       }
     }
   }
-  return { html: markdown.renderer.render(tokens, markdown.options, env), sources: prepared.sources, inlineCitations,
-    unplacedCitations: prepared.cited.filter(citation => !placed.has(citation.url)) };
+  return { html: markdown.renderer.render(tokens, markdown.options, env), sources: prepared.sources, inlineCitations };
 }

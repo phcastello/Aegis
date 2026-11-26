@@ -10,7 +10,7 @@ A configuração `AEGIS_WEB_SEARCH_ENABLED=true` disponibiliza a pesquisa. `AEGI
 
 Chat digitado, entrada manual de voz e hands-free seguem a decisão do modelo. Uma resposta trivial continua em uma única chamada. Para uma consulta rápida, `request_web_search` libera a busca nativa na rodada seguinte. No hands-free, o modelo decide se a fala foi dirigida à Aegis antes de qualquer pesquisa. Uma fala descartada não cria mensagem nem trabalho.
 
-Nas consultas diretas do hands-free, a resposta final vem como texto natural anotado pelo provedor, depois é adaptada aos segmentos de voz existentes. Isso evita atribuir a posições em argumentos de função as citações que pertencem a `output_text`. A apresentação do resultado usa as referências válidas para o texto realmente exibido. Se os índices não puderem ser associados com segurança, as fontes ficam acessíveis separadamente.
+Nas consultas diretas do hands-free, a resposta final vem como texto natural anotado pelo provedor, depois é adaptada aos segmentos de voz existentes. Isso evita atribuir a posições em argumentos de função as citações que pertencem a `output_text`. A apresentação do resultado usa as referências válidas para o texto realmente exibido. Se os índices não puderem ser associados com segurança, a fonte fica disponível na lista aberta pela pilha de ícones no fim da barra de ações.
 
 ## Progresso, fontes e persistência
 
