@@ -203,7 +203,7 @@ public sealed class ToolLoopTests
         var model = new FakeModelClient([first, second, Reply("Resultado")]);
         using var metrics = new AegisMetrics();
         var loop = new AegisToolLoop(model, new AegisToolRegistry([new FakeTool()]), NullLogger<AegisToolLoop>.Instance,
-            metrics, new WebSearchOptions());
+            metrics, new WebSearchOptions { MaxCallsPerTurn = 3 });
         var request = new ModelRequest("identity", "Pesquise.");
         var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input);
         if (streaming)
@@ -259,7 +259,7 @@ public sealed class ToolLoopTests
         }
 
         Assert.Equal(1, acceptances);
-        Assert.Equal(new[] { 0, 3 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
+        Assert.Equal(new[] { 0, 20 }, model.Requests.Select(round => round.NativeWebSearchCallLimit));
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "hands_free_ignore");
         Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "request_web_search");
         Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name is "request_web_search" or "hands_free_ignore" or "hands_free_reply" or "hands_free_reply_segments");
@@ -314,7 +314,7 @@ public sealed class ToolLoopTests
         var loop = new AegisToolLoop(model, new AegisToolRegistry([]), NullLogger<AegisToolLoop>.Instance,
             metrics, new WebSearchOptions());
         var chunks = await CollectAsync(loop);
-        Assert.Equal(3, Assert.Single(model.Requests).NativeWebSearchCallLimit);
+        Assert.Equal(20, Assert.Single(model.Requests).NativeWebSearchCallLimit);
         Assert.Equal("Brasília", string.Concat(chunks.Where(chunk => !chunk.IsDone).Select(chunk => chunk.Content)));
         Assert.DoesNotContain(chunks, chunk => chunk.ToolStatus is not null);
     }
