@@ -65,9 +65,15 @@ try {
   assert.equal(await citations.nth(1).getAttribute('href'), 'https://example.test/second');
   assert.equal((await page.locator('.markdown-message').textContent()).trim(), 'A primeira informação.[1] A segunda informação.[2]');
   const sourceList = page.locator('details.web-research-list');
+  const sourceSummary = sourceList.locator('summary');
+  assert.equal(await sourceSummary.textContent(), 'Fontes da pesquisa (2 links)');
   assert.equal(await sourceList.getAttribute('open'), null);
-  await sourceList.locator('summary').click();
+  await sourceSummary.click();
   assert.equal(await sourceList.locator('a').count(), 2);
+  await page.evaluate(() => window.updateMarkdown('Uma fonte.', {
+    sources: [{ url: 'https://example.test/only', kind: 'consulted' }], citations: []
+  }));
+  assert.equal(await sourceSummary.textContent(), 'Fontes da pesquisa (1 link)');
   await page.evaluate(() => window.updateMarkdown('Sem metadados.'));
   assert.equal(await sourceList.count(), 0);
   assert.equal(await citations.count(), 0);

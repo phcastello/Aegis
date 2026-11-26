@@ -209,7 +209,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   </div>
   <details v-if="renderedResearch.sources.length" class="web-research-list"
     @click="followLink" @auxclick="followLink">
-    <summary>Fontes da pesquisa ({{ renderedResearch.sources.length }})</summary>
+    <summary>Fontes da pesquisa ({{ renderedResearch.sources.length }} {{ renderedResearch.sources.length === 1 ? 'link' : 'links' }})</summary>
     <ul>
       <li v-for="source in renderedResearch.sources" :key="source.url">
         <a class="web-research-link" :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title }}</a>
