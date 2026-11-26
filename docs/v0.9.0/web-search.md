@@ -36,7 +36,9 @@ reduzida de acordo com a preferência do dispositivo. [Animações de lista no V
 
 Na resposta, as citações mostram o site. Passar o mouse, usar foco de teclado ou
 acionar os detalhes pelo toque mostra uma prévia com a informação de fonte
-disponível. A página original pode ser aberta pela própria citação.
+disponível. A página original pode ser aberta pela própria citação. A pilha de
+favicons no início da barra de ações de cada resposta abre a lista completa de
+fontes validadas daquela resposta.
 
 ## Validação e etapas seguintes
 

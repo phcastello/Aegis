@@ -118,7 +118,7 @@ try {
       invoke: async (command, args) => {
         if (command === 'plugin:event|listen') { const id = ++sequence; listeners.set(id, { name: args.event, callback: args.handler }); return id; }
         if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return; }
-        window.fixtureCommands.push({ command, operation: args?.operation ?? args?.request?.operation });
+        window.fixtureCommands.push({ command, operation: args?.operation ?? args?.request?.operation, url: args?.url });
         if (command === 'runtime_info') return { platform: 'windows', backendUrl: origin, version: '0.8.0', processSessionId: 'desktop-voice-stream-test' };
         if (command === 'node_status') return { state: 'unpaired', node: null };
         if (command === 'node_transport_status') return { transportState: 'online', conversationChanges: true };
@@ -213,10 +213,39 @@ try {
   assert.equal(await researchActivity(researchMessage).count(), 0);
   await select('Alfa'); await researchActivity(researchMessage).waitFor();
   append(a, researchId, researchText);
-  data.get(a).messages.at(-1).webResearch = { sources: [{ url: 'https://example.test/', title: 'Fonte persistida', kind: 'consulted' }], citations: [] };
+  const finalSources = [
+    { url: 'https://www.norte.test/a?versao=final', title: 'Fonte persistida', kind: 'opened' },
+    { url: 'https://norte.test/b', title: 'Segunda página do mesmo site', kind: 'consulted' },
+    { url: 'https://leste.test/a', title: 'Leste', kind: 'consulted' },
+    { url: 'https://atlas.test/a', title: 'Atlas', kind: 'consulted' },
+    { url: 'https://trilha.test/a', title: 'Trilha', kind: 'consulted' },
+    { url: 'javascript:alert(1)', title: 'URL inválida', kind: 'consulted' }
+  ];
+  data.get(a).messages.at(-1).webResearch = { sources: finalSources, citations: [] };
   await emit(stream, event('done', researchTurn, a, researchId)); await sync(a);
   await exact(researchText).waitFor();
-  await page.locator('.web-research-list summary').filter({hasText:'Fontes da pesquisa'}).waitFor();
+  const result = page.locator('article.message-row--assistant').filter({ hasText: researchText });
+  const sourceAction = result.getByRole('button', { name: 'Fontes da pesquisa (5 links)' });
+  await sourceAction.waitFor();
+  assert.equal(await result.locator('.message-actions > button').first().getAttribute('aria-controls'),
+    await sourceAction.getAttribute('aria-controls'));
+  assert.equal(await result.locator('details').count(), 0);
+  assert.doesNotMatch(await result.locator('.message-actions').innerText(), /Fontes da pesquisa/, 'the old disclosure title is visually replaced');
+  assert.deepEqual(await sourceAction.locator('[data-site]').evaluateAll(nodes => nodes.map(node => node.dataset.site)),
+    ['norte.test', 'leste.test', 'atlas.test']);
+  const sourcePanel = result.locator('.message-research-sources');
+  assert.equal(await sourceAction.getAttribute('aria-expanded'), 'false');
+  assert.equal(await sourcePanel.isVisible(), false);
+  await sourceAction.press('Space');
+  assert.equal(await sourceAction.getAttribute('aria-expanded'), 'true');
+  assert.equal(await sourcePanel.getByRole('link').count(), 5);
+  const firstSource = sourcePanel.getByRole('link', { name: 'Fonte persistida' });
+  assert.equal(await firstSource.getAttribute('href'), finalSources[0].url);
+  await firstSource.click();
+  await page.waitForFunction(url => window.fixtureCommands.some(command =>
+    command.command === 'plugin:opener|open_url' && command.url === url), finalSources[0].url);
+  await sourceAction.press('Enter');
+  assert.equal(await sourcePanel.isVisible(), false);
   await researchActivity(researchMessage).waitFor({ state: 'hidden' });
   await researchStatus(researchTurn, a, 'started', 'STATUS DEPOIS DO TÉRMINO');
   await page.waitForTimeout(100);
@@ -232,10 +261,16 @@ try {
   assert.equal(await researchActivity('Pesquisa em segundo plano').count(), 0);
   const firstJob = [...researchJobs.values()][0];
   append(a, uuid(91), 'Resultado independente da conversa aberta.');
+  data.get(a).messages.at(-1).webResearch = { sources: [finalSources[0]], citations: [] };
   firstJob.state = 'completed'; firstJob.resultMessageId = uuid(91); firstJob.updatedAt = new Date().toISOString();
   await sync(a);
   assert.equal(await title(), 'Beta', 'research cannot reclaim navigation');
   await select('Alfa'); await exact('Resultado independente da conversa aberta.').waitFor();
+  const backgroundSource = page.getByRole('button', { name: 'Fontes da pesquisa (1 link)' });
+  await backgroundSource.click();
+  assert.equal(await backgroundSource.getAttribute('aria-expanded'), 'true');
+  assert.equal(await sourceAction.getAttribute('aria-expanded'), 'false');
+  await backgroundSource.click();
   await composer.fill('Cancele esta pesquisa.');
   await page.getByRole('button', { name: 'Pesquisar em segundo plano' }).click();
   await researchActivity('Pesquisa em segundo plano').waitFor();

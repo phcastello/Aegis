@@ -356,16 +356,6 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
       </li>
     </ul>
   </div>
-  <details v-if="renderedResearch.sources.length" class="web-research-list"
-    @click="followLink" @auxclick="followLink">
-    <summary>Fontes da pesquisa ({{ renderedResearch.sources.length }} {{ renderedResearch.sources.length === 1 ? 'link' : 'links' }})</summary>
-    <ul>
-      <li v-for="source in renderedResearch.sources" :key="source.url">
-        <a class="web-research-link" :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title }}</a>
-        <small>{{ source.host }}{{ source.kind === 'opened' ? ' · aberta' : '' }}</small>
-      </li>
-    </ul>
-  </details>
   <p v-if="linkError" role="status">{{ linkError }}</p>
 </template>
 
@@ -485,11 +475,6 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   color: var(--muted);
   font-size: .85rem;
   overflow-wrap: anywhere;
-}
-.web-research-list summary { cursor: pointer; }
-.web-research-list summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
 }
 .web-research-list ul { margin: .4rem 0 0; padding-left: 1.25rem; }
 .web-research-list li { margin-top: .3rem; }

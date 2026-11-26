@@ -129,12 +129,8 @@ try {
   assert.equal(await touchDetails.getAttribute('aria-expanded'), 'false');
   await touch.close();
 
-  const sourceList = page.locator('details.web-research-list');
-  const sourceSummary = sourceList.locator('summary');
-  assert.equal(await sourceSummary.textContent(), 'Fontes da pesquisa (2 links)');
-  assert.equal(await sourceList.getAttribute('open'), null);
-  await sourceSummary.click();
-  assert.equal(await sourceList.locator('a').count(), 2);
+  assert.equal(await page.locator('details.web-research-list').count(), 0,
+    'the full list belongs to the response action bar, not the Markdown body');
 
   await page.evaluate(() => {
     const sourceUrl = 'https://reuters.com/first?article=1';
@@ -147,12 +143,8 @@ try {
   assert.match(await page.locator('.markdown-message').textContent(), /A informação\. Reuters \(parentético normal\)/);
   assert.doesNotMatch(await page.locator('.markdown-message').textContent(), /Referência/);
 
-  await page.evaluate(() => window.updateMarkdown('Uma fonte.', {
-    sources: [{ url: 'https://example.test/only', kind: 'consulted' }], citations: []
-  }));
-  assert.equal(await sourceSummary.textContent(), 'Fontes da pesquisa (1 link)');
   await page.evaluate(() => window.updateMarkdown('Sem metadados.'));
-  assert.equal(await sourceList.count(), 0);
+  assert.equal(await page.locator('.web-research-list').count(), 0);
   assert.equal(await citations.count(), 0);
   const metrics = () => page.locator('.markdown-message').evaluate(el => ({ width: el.clientWidth, height: el.clientHeight,
     scrollHeight: el.scrollHeight, scrollWidth: el.scrollWidth,
