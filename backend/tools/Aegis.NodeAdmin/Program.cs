@@ -2,10 +2,12 @@ using Aegis.Application.Nodes;
 using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
+using System.Text.Json;
 
 // This executable has no HTTP listener. Access requires local server/DB administration.
-if (args.Length == 0 || args[0] is not ("pairing-code" or "enable" or "cleanup" or "migrate"))
-{ Console.Error.WriteLine("Usage: Aegis.NodeAdmin pairing-code | enable <NodeId> | cleanup | migrate"); return 2; }
+if (args.Length == 0 || args[0] is not ("pairing-code" or "enable" or "cleanup" or "migrate" or "web-search-usage"))
+{ Console.Error.WriteLine("Usage: Aegis.NodeAdmin pairing-code | enable <NodeId> | cleanup | migrate | web-search-usage --from <UTC> --to <UTC>"); return 2; }
 var connection = Environment.GetEnvironmentVariable("ConnectionStrings__AegisDatabase") ?? Environment.GetEnvironmentVariable("AEGIS_DB_CONNECTION_STRING");
 if (string.IsNullOrWhiteSpace(connection)) { Console.Error.WriteLine("Configure the local administrative database connection."); return 2; }
 await using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseNpgsql(connection).Options);
@@ -21,9 +23,18 @@ try
         case "enable" when args.Length == 2 && Guid.TryParse(args[1], out var id):
             await registry.SetEnabledAsync(null, id, true); Console.WriteLine("Node enabled."); break;
         case "cleanup": await registry.CleanupAsync(); Console.WriteLine("Expired pairing material removed."); break;
+        case "web-search-usage" when args.Length == 5 && args[1] == "--from" && args[3] == "--to" &&
+            TryUtc(args[2], out var from) && TryUtc(args[4], out var to) && from < to:
+            var report = await WebSearchUsageReport.ReadAsync(db, from, to);
+            Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            break;
         default: Console.Error.WriteLine("Invalid arguments."); return 2;
     }
     return 0;
 }
 catch (NodeException error) { Console.Error.WriteLine(error.Message); return 1; }
 catch { Console.Error.WriteLine("Local Node administration failed. Check database reachability and migration state."); return 1; }
+
+static bool TryUtc(string value, out DateTimeOffset timestamp) =>
+    DateTimeOffset.TryParseExact(value, ["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"],
+        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out timestamp);

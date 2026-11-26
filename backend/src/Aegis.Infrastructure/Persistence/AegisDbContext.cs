@@ -100,6 +100,8 @@ public sealed class AegisDbContext(
 
     public DbSet<LlmRequestAudit> LlmRequestAudits => Set<LlmRequestAudit>();
 
+    public DbSet<WebSearchUsageEntry> WebSearchUsage => Set<WebSearchUsageEntry>();
+
     public DbSet<EmailAccountConnection> EmailAccountConnections => Set<EmailAccountConnection>();
 
     public DbSet<PendingCalendarAction> PendingCalendarActions => Set<PendingCalendarAction>();
@@ -658,6 +660,19 @@ public sealed class AegisDbContext(
             entity.HasIndex(feedback => feedback.ConversationId);
             entity.HasIndex(feedback => feedback.Rating);
             entity.HasIndex(feedback => feedback.CreatedAt);
+        });
+
+        modelBuilder.Entity<WebSearchUsageEntry>(entity =>
+        {
+            entity.ToTable("web_search_usage");
+            entity.HasKey(item => item.CallId);
+            entity.Property(item => item.CallId).HasMaxLength(200);
+            entity.Property(item => item.ResponseId).HasMaxLength(200);
+            entity.Property(item => item.ActionType).HasMaxLength(30).IsRequired();
+            entity.Property(item => item.Status).HasMaxLength(30).IsRequired();
+            entity.Property(item => item.FirstObservedAt).IsRequired();
+            entity.Property(item => item.LastObservedAt).IsRequired();
+            entity.HasIndex(item => item.FirstObservedAt);
         });
 
         modelBuilder.Entity<LlmRequestAudit>(entity =>
