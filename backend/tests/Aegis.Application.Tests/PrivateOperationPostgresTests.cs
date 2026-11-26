@@ -1,3 +1,4 @@
+using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -141,6 +142,39 @@ public sealed class PrivateOperationPostgresTests
         Assert.Equal(7, await restarted.WebSearchUsage.CountAsync());
         await restarted.Database.MigrateAsync();
         Assert.Equal(5, (await WebSearchUsageReport.ReadAsync(restarted, boundary, end)).Total);
+    });
+
+    [OperationFact]
+    public Task ResearchJobMigrationsAndConcurrentReplayPreserveSingleCanonicalRequest() => WithSchema(async create =>
+    {
+        await using (var initial = create())
+        {
+            await initial.GetService<IMigrator>().MigrateAsync("20261126180000_AddWebSearchUsage");
+            Assert.Contains("20261126202048_AddBackgroundResearchJobs", await initial.Database.GetPendingMigrationsAsync());
+            await initial.Database.MigrateAsync();
+        }
+
+        var request = new CreateResearchJobRequest(Guid.NewGuid(), null, "Synthetic background research");
+        async Task<ResearchJobSnapshot> Start()
+        {
+            await using var db = create();
+            return await new ResearchJobStore(db, TimeProvider.System).CreateAsync(request, CancellationToken.None);
+        }
+        var snapshots = await Task.WhenAll(Start(), Start());
+        Assert.Equal(snapshots[0].Id, snapshots[1].Id);
+        Assert.Equal(snapshots[0].ConversationId, snapshots[1].ConversationId);
+        Assert.Equal(snapshots[0].UserMessageId, snapshots[1].UserMessageId);
+
+        await using var restarted = create();
+        await restarted.Database.MigrateAsync();
+        Assert.Empty(await restarted.Database.GetPendingMigrationsAsync());
+        Assert.Equal(1, await restarted.ResearchJobs.CountAsync());
+        Assert.Equal(1, await restarted.ChatMessages.CountAsync());
+        Assert.Equal(1, await restarted.Conversations.CountAsync());
+        var store = new ResearchJobStore(restarted, TimeProvider.System);
+        Assert.Equal("queued", (await store.GetAsync(request.JobId, CancellationToken.None))!.State);
+        Assert.Equal("cancelled", (await store.CancelAsync(request.JobId, CancellationToken.None))!.State);
+        Assert.Equal("cancelled", Assert.Single(await store.ListAsync(snapshots[0].ConversationId, CancellationToken.None)).State);
     });
 
 }

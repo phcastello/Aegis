@@ -53,6 +53,8 @@ public static class DependencyInjection
         if (webSearch.MaxSearchActionsPerTurn is < 1 or > 20)
             throw new InvalidOperationException("Invalid web search action budget.");
         services.AddSingleton(webSearch);
+        services.AddScoped<ResearchJobStore>();
+        services.AddHostedService<ResearchWorker>();
         services.AddSingleton<IWebSearchUsageRecorder, WebSearchUsageRecorder>();
 
         services.Configure<OpenAIOptions>(options =>

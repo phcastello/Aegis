@@ -2110,6 +2110,65 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("reminder_series", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.ResearchJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DeadlineAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Phase")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid?>("ResultMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourcesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserMessageId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ResultMessageId");
+
+                    b.HasIndex("UserMessageId");
+
+                    b.HasIndex("ConversationId", "CreatedAt");
+
+                    b.HasIndex("State", "CreatedAt");
+
+                    b.HasIndex("State", "DeadlineAt");
+
+                    b.ToTable("research_jobs", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.SharedReminderIncident", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2678,6 +2737,26 @@ namespace Aegis.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("SourceConversationId")
                         .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ResearchJob", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("ResultMessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Aegis.Domain.Entities.ChatMessage", null)
+                        .WithMany()
+                        .HasForeignKey("UserMessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.SharedReminderIncident", b =>

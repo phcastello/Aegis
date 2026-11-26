@@ -39,6 +39,7 @@ public sealed class AegisDbContext(
             {
                 Conversation conversation => conversation.Id,
                 ChatMessage message => message.ConversationId,
+                ResearchJob research => research.ConversationId,
                 _ => Guid.Empty
             })
             .Where(id => id != Guid.Empty).Distinct().ToArray();
@@ -95,6 +96,7 @@ public sealed class AegisDbContext(
     public DbSet<Conversation> Conversations => Set<Conversation>();
 
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ResearchJob> ResearchJobs => Set<ResearchJob>();
 
     public DbSet<MessageFeedback> MessageFeedback => Set<MessageFeedback>();
 
@@ -660,6 +662,24 @@ public sealed class AegisDbContext(
             entity.HasIndex(feedback => feedback.ConversationId);
             entity.HasIndex(feedback => feedback.Rating);
             entity.HasIndex(feedback => feedback.CreatedAt);
+        });
+
+        modelBuilder.Entity<ResearchJob>(entity =>
+        {
+            entity.ToTable("research_jobs");
+            entity.HasKey(job => job.Id);
+            entity.Property(job => job.Id).ValueGeneratedNever();
+            entity.Property(job => job.State).HasMaxLength(20).IsRequired();
+            entity.Property(job => job.Phase).HasMaxLength(20);
+            entity.Property(job => job.ErrorCode).HasMaxLength(40);
+            entity.Property(job => job.SourcesJson).HasColumnType("jsonb").IsRequired();
+            entity.Property(job => job.Revision).IsConcurrencyToken();
+            entity.HasIndex(job => new { job.State, job.CreatedAt });
+            entity.HasIndex(job => new { job.State, job.DeadlineAt });
+            entity.HasIndex(job => new { job.ConversationId, job.CreatedAt });
+            entity.HasOne<Conversation>().WithMany().HasForeignKey(job => job.ConversationId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<ChatMessage>().WithMany().HasForeignKey(job => job.UserMessageId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<ChatMessage>().WithMany().HasForeignKey(job => job.ResultMessageId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<WebSearchUsageEntry>(entity =>
