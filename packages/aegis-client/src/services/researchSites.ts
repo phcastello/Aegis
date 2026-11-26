@@ -1,4 +1,5 @@
 import type { WebResearchSourceCount } from '../types/chat';
+import { clientEnvironment } from './clientEnvironment';
 
 export interface ResearchSite { host: string; name: string }
 
@@ -10,11 +11,6 @@ const siteNames: Readonly<Record<string, string>> = {
   'reuters.com': 'Reuters',
   'gov.br': 'Gov.br',
   'agenciabrasil.ebc.com.br': 'Agência Brasil'
-};
-
-const siteIconPaths: Readonly<Record<string, string>> = {
-  // The canonical page declares this theme icon. The root icon is a 1×1 pixel.
-  'agenciabrasil.ebc.com.br': '/sites/default/themes/agenciabrasil_v3/favicon.ico'
 };
 
 // Prefer evidence for unfamiliar sites. If a provider supplies only a URL, use the shorter brand label.
@@ -51,8 +47,7 @@ export function researchFavicon(host: string): string | undefined {
   const site = researchSite(host);
   if (!site || (host !== site.host && host !== 'www.' + site.host) ||
     /(?:^|\.)(?:local|localhost|test|example|invalid|onion|internal|arpa)$/.test(site.host)) return undefined;
-  const path = Object.prototype.hasOwnProperty.call(siteIconPaths, site.host) ? siteIconPaths[site.host] : '/favicon.ico';
-  return 'https://' + site.host + path;
+  return clientEnvironment().apiBaseUrl + '/api/chat/research-favicon?host=' + encodeURIComponent(site.host);
 }
 
 export function isUsableResearchFavicon(image: Pick<HTMLImageElement, 'complete' | 'naturalWidth' | 'naturalHeight'>): boolean {

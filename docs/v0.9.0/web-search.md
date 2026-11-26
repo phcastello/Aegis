@@ -29,15 +29,22 @@ provedor. [Modo em segundo plano do provedor](https://developers.openai.com/api/
 
 Os apps mostram até três sites em círculos sobrepostos, em ordem de frequência nos
 resultados observados. Novos ícones entram na pilha conforme chegam fontes do
-provedor. Antes da primeira fonte aparece um indicador de busca. O favicon é
-solicitado pela aplicação no site da fonte, sem enviar o endereço da conversa no
-Referer. Se o site não fornecer o ícone, a inicial ocupa seu lugar. A animação é
-reduzida de acordo com a preferência do dispositivo. [Animações de lista no Vue](https://vuejs.org/guide/built-ins/transition-group.html)
+provedor. Antes da primeira fonte aparece um indicador de busca. O backend da
+Aegis procura o favicon nas declarações da página inicial pública do site e usa
+o caminho convencional como alternativa. Imagens ausentes, inválidas ou de um
+pixel deixam a inicial visível. A animação é reduzida de acordo com a preferência
+do dispositivo. [Declarações de ícone no HTML](https://html.spec.whatwg.org/multipage/links.html#rel-icon) · [Animações de lista no Vue](https://vuejs.org/guide/built-ins/transition-group.html)
+
+O cliente pede o favicon à própria API da Aegis. A descoberta aceita ICO, PNG,
+WebP, JPEG e GIF com dimensões entre 2 e 512 pixels. A API consulta destinos
+públicos e valida cada redirecionamento. Cada descoberta tem até cinco segundos
+e nove requisições. Os ícones encontrados ficam em cache por 12 horas, e as
+ausências por 15 minutos.
 
 Na resposta, as citações mostram o site. Passar o mouse, usar foco de teclado ou
 acionar os detalhes pelo toque mostra uma prévia com a informação de fonte
 disponível. A página original pode ser aberta pela própria citação. A pilha de
-favicons no início da barra de ações de cada resposta abre a lista completa de
+favicons no fim da barra de ações de cada resposta abre a lista completa de
 fontes validadas daquela resposta.
 
 ## Validação e etapas seguintes

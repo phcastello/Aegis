@@ -227,7 +227,7 @@ try {
   const result = page.locator('article.message-row--assistant').filter({ hasText: researchText });
   const sourceAction = result.getByRole('button', { name: 'Fontes da pesquisa (5 links)' });
   await sourceAction.waitFor();
-  assert.equal(await result.locator('.message-actions > button').first().getAttribute('aria-controls'),
+  assert.equal(await result.locator('.message-actions > button').last().getAttribute('aria-controls'),
     await sourceAction.getAttribute('aria-controls'));
   assert.equal(await result.locator('details').count(), 0);
   assert.doesNotMatch(await result.locator('.message-actions').innerText(), /Fontes da pesquisa/, 'the old disclosure title is visually replaced');

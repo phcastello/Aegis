@@ -375,9 +375,8 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   vertical-align: middle;
   white-space: nowrap;
   font-size: .79em;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.35;
-  border: 1px solid var(--line-strong);
   border-radius: var(--radius-inline);
   background: var(--surface-soft);
 }
@@ -388,9 +387,10 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   gap: .36em;
   padding: .25em .52em;
   border-radius: inherit;
-  color: var(--accent-strong);
+  color: var(--muted);
   text-decoration: none;
 }
+.markdown-message :deep(.web-citation:hover) { color: var(--text); }
 .markdown-message :deep(.web-citation-group:hover),
 .markdown-message :deep(.web-citation-group:focus-within) { background: var(--surface-raised); }
 .markdown-message :deep(.web-citation:focus-visible),
@@ -411,9 +411,7 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   place-items: center;
   flex: 0 0 1.2em;
   block-size: 1.2em;
-  border-radius: 4px;
-  background: var(--surface-raised);
-  color: var(--accent-strong);
+  color: var(--muted);
 }
 .markdown-message :deep(.web-citation__icon::before) { content: attr(data-monogram); font-size: .83em; }
 .markdown-message :deep(.web-citation__favicon) {
@@ -432,9 +430,8 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   flex: 0 0 26px;
   min-block-size: 26px;
   padding: 0;
-  border-inline-start: 1px solid var(--line-strong);
   border-radius: 0 var(--radius-inline) var(--radius-inline) 0;
-  color: var(--accent-strong);
+  color: var(--muted);
   background: transparent;
   cursor: pointer;
 }
@@ -443,9 +440,8 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
   place-items: center;
   inline-size: 1.15em;
   block-size: 1.15em;
-  border: 1px solid currentColor;
-  border-radius: 50%;
   font-size: .88em;
+  font-weight: 650;
 }
 .markdown-message :deep(.web-citation__details span::before) { content: 'i'; }
 @media (any-pointer: coarse), (hover: none) {

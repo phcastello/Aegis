@@ -47,22 +47,23 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const iconRequests = [];
-  await page.route('https://reuters.com/favicon.ico?fixture=1', route => {
+  const iconRoute = host => '/api/chat/research-favicon?host=' + host;
+  const validIcon = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGMwnNROEmIY1TCqYfhqAAAap0oQAz0fdAAAAABJRU5ErkJggg==', 'base64');
+  await page.context().route(url => url.pathname === '/api/chat/research-favicon', route => {
     iconRequests.push(route.request());
-    return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="purple"/></svg>' });
+    const host = new URL(route.request().url()).searchParams.get('host');
+    if (host === 'agenciabrasil.ebc.com.br' || host === 'reuters.com')
+      return route.fulfill({ status: 200, contentType: 'image/png', body: validIcon });
+    if (host === 'pixel.example.org')
+      return route.fulfill({ status: 200, contentType: 'image/gif',
+        body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') });
+    return route.fulfill({ status: 404 });
   });
-  await page.route('https://bbc.com/favicon.ico', route => route.fulfill({ status: 404 }));
   await page.context().route('https://reuters.com/first?article=1', route => route.fulfill({ status: 200, body: 'Source' }));
   await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
   await page.waitForFunction(() => typeof window.updateMarkdown === 'function');
   const agencyUrl = 'https://www.agenciabrasil.ebc.com.br/noticia';
-  const agencyIcon = 'https://agenciabrasil.ebc.com.br/sites/default/themes/agenciabrasil_v3/favicon.ico';
-  const agencyIconRequests = [];
-  await page.context().route(agencyIcon + '?fixture=1', route => {
-    agencyIconRequests.push(route.request());
-    return route.fulfill({ status: 200, contentType: 'image/svg+xml',
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="green"/></svg>' });
-  });
+  const agencyIcon = iconRoute('agenciabrasil.ebc.com.br');
   await page.evaluate(url => window.updateMarkdown('Informação pública.', {
     sources: [{ url, kind: 'opened', title: 'Uma notícia', siteName: 'Agência Brasil | Últimas notícias do Brasil e do mundo' }],
     citations: [{ url, startIndex: 0, endIndex: 'Informação pública.'.length }]
@@ -71,8 +72,6 @@ try {
   const agencyImage = agencyBadge.locator('img');
   assert.equal(await agencyImage.getAttribute('src'), agencyIcon);
   assert.equal(await agencyImage.getAttribute('referrerpolicy'), 'no-referrer');
-  // Chromium may bypass request routing for the exact favicon.ico URL.
-  await agencyImage.evaluate(icon => { icon.src += '?fixture=1'; });
   await agencyBadge.locator('.web-citation__icon--ready').waitFor();
   assert.equal(await agencyBadge.textContent(), 'Agência Brasil');
   const agencyLabel = await agencyBadge.locator('.web-citation__label').evaluate(label => {
@@ -81,26 +80,23 @@ try {
     const text = range.getBoundingClientRect();
     const bounds = label.getBoundingClientRect();
     const css = getComputedStyle(label);
+    const chip = getComputedStyle(label.closest('.web-citation-group'));
     return { textTop: text.top, textBottom: text.bottom, top: bounds.top, bottom: bounds.bottom,
-      lineHeight: parseFloat(css.lineHeight), fontSize: parseFloat(css.fontSize) };
+      lineHeight: parseFloat(css.lineHeight), fontSize: parseFloat(css.fontSize), border: chip.borderTopWidth };
   });
   assert.ok(agencyLabel.lineHeight >= 1.3 * agencyLabel.fontSize);
+  assert.equal(agencyLabel.border, '0px');
   assert.ok(agencyLabel.textTop >= agencyLabel.top - 1 && agencyLabel.textBottom <= agencyLabel.bottom + 1,
     'The label keeps glyph descenders inside its clipping box');
   await agencyBadge.hover();
   const agencyPreview = page.getByRole('tooltip');
   const agencyPreviewImage = agencyPreview.locator('img');
   assert.equal(await agencyPreviewImage.getAttribute('src'), agencyIcon);
-  await agencyPreviewImage.evaluate(icon => { icon.src += '?fixture=1'; });
   await agencyPreview.locator('.web-source-icon--ready').waitFor();
-  assert.ok(agencyIconRequests.length > 0 && agencyIconRequests.every(request => !request.headers().referer));
+  assert.ok(iconRequests.some(request => request.url().endsWith(agencyIcon)));
   await page.keyboard.press('Escape');
   await agencyPreview.waitFor({ state: 'hidden' });
 
-  await page.context().route('https://pixel.example.org/favicon.ico?fixture=1', route => route.fulfill({
-    status: 200, contentType: 'image/gif',
-    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
-  }));
   await page.evaluate(() => {
     const url = 'https://pixel.example.org/article';
     return window.updateMarkdown('Referência pública.', {
@@ -110,7 +106,7 @@ try {
   });
   const placeholderBadge = page.getByRole('link', { name: 'Fonte: Portal · Um artigo' });
   const placeholderIcon = placeholderBadge.locator('img');
-  await placeholderIcon.evaluate(icon => { icon.src += '?fixture=1'; });
+  assert.equal(await placeholderIcon.getAttribute('src'), iconRoute('pixel.example.org'));
   await page.waitForFunction(() =>
     document.querySelector('.web-citation__favicon')?.naturalWidth === 1);
   assert.equal(await placeholderBadge.locator('.web-citation__icon--ready').count(), 0,
@@ -142,10 +138,8 @@ try {
     return copy.textContent.trim();
   }), sourcedText);
   const successfulIcon = citations.first().locator('img');
-  assert.equal(await successfulIcon.getAttribute('src'), 'https://reuters.com/favicon.ico');
+  assert.equal(await successfulIcon.getAttribute('src'), iconRoute('reuters.com'));
   assert.equal(await successfulIcon.getAttribute('referrerpolicy'), 'no-referrer');
-  // Chromium routes the exact /favicon.ico path outside the page interceptor.
-  await successfulIcon.evaluate(icon => { icon.src += '?fixture=1'; });
   await citations.first().locator('.web-citation__icon--ready').waitFor();
   assert.ok(iconRequests.length > 0 && iconRequests.every(request => !request.headers().referer));
   assert.equal(await citations.nth(1).locator('[data-monogram="B"]').count(), 1);
@@ -176,7 +170,7 @@ try {
   await sourceWindow.close();
 
   const touch = await browser.newPage({ viewport: { width: 360, height: 700 }, hasTouch: true, isMobile: true });
-  await touch.route('https://**/favicon.ico', route => route.abort());
+  await touch.route(url => url.pathname === '/api/chat/research-favicon', route => route.abort());
   await touch.goto(`http://127.0.0.1:${vite.httpServer.address().port}/markdown-stream-fixture`);
   await touch.waitForFunction(() => typeof window.updateMarkdown === 'function');
   await touch.evaluate(({ content, research }) => window.updateMarkdown(content, research), sourcedMessage);

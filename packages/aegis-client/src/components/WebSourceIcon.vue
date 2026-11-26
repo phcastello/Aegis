@@ -17,7 +17,7 @@ watch(imageElement, updateIcon, { flush: 'post' });
 
 <template>
   <span class="web-source-icon" :class="{ 'web-source-icon--ready': ready }" :data-monogram="initial" aria-hidden="true">
-    <img v-if="icon" :key="icon" ref="imageElement" :src="icon" alt="" referrerpolicy="no-referrer" decoding="async"
+    <img v-if="icon" :key="icon" ref="imageElement" :src="icon" alt="" referrerpolicy="no-referrer" decoding="async" loading="lazy"
       @load="updateIcon" @error="updateIcon" />
   </span>
 </template>

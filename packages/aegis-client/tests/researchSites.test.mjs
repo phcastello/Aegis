@@ -4,19 +4,20 @@ import { loadTypeScript } from './loadTypeScript.mjs';
 
 const { isUsableResearchFavicon, researchFavicon, researchSite } = await loadTypeScript('../src/services/researchSites.ts');
 const canonicalHost = 'agenciabrasil.ebc.com.br';
-const canonicalIcon = 'https://agenciabrasil.ebc.com.br/sites/default/themes/agenciabrasil_v3/favicon.ico';
+const iconRoute = '/api/chat/research-favicon?host=';
 
-test('known site assets match canonical and www host only', () => {
+test('all public site icons use the same Aegis endpoint and canonical host query', () => {
   assert.deepEqual(researchSite(canonicalHost), { host: canonicalHost, name: 'Agência Brasil' });
   assert.deepEqual(researchSite(`https://www.${canonicalHost}/noticia`), researchSite(canonicalHost));
-  assert.equal(researchFavicon(canonicalHost), canonicalIcon);
-  assert.equal(researchFavicon(`www.${canonicalHost}`), canonicalIcon);
+  assert.equal(researchFavicon(canonicalHost), iconRoute + canonicalHost);
+  assert.equal(researchFavicon(`www.${canonicalHost}`), iconRoute + canonicalHost);
 
   const forged = `${canonicalHost}.example.org`;
   assert.equal(researchSite(forged).name, 'Example');
-  assert.equal(researchFavicon(forged), `https://${forged}/favicon.ico`);
+  assert.equal(researchFavicon(forged), iconRoute + forged);
   assert.equal(researchFavicon(`${canonicalHost}@example.org`), undefined);
   assert.equal(researchFavicon('example.test'), undefined);
+  assert.equal(researchFavicon('127.0.0.1'), undefined);
 });
 
 test('unknown sites get a compact label and retain the actual domain for their icon', () => {

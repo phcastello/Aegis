@@ -148,6 +148,7 @@ export function renderWebResearchMarkdown(markdown: MarkdownIt, content: string,
       iconImage.attrSet('src', favicon!);
       iconImage.attrSet('referrerpolicy', 'no-referrer');
       iconImage.attrSet('loading', 'lazy');
+      iconImage.attrSet('loading', 'lazy');
     }
     const details = elementTokens('button', { class: 'web-citation__details', type: 'button',
       'aria-label': `Prévia da fonte ${citation.siteName}`, 'aria-expanded': 'false' });

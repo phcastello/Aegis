@@ -97,7 +97,7 @@ test('source preview keeps evidence text optional and derives a referrer-free ic
   assert.equal(result.inlineCitations[0].snippet, 'Um trecho real. Segunda frase.');
   assert.equal(result.inlineCitations[1].snippet, undefined);
   assert.match(result.html, /href="https:\/\/www\.reuters\.com\/world\/article\?exact=1"/);
-  assert.match(result.html, /<img src="https:\/\/reuters\.com\/favicon\.ico"[^>]*referrerpolicy="no-referrer"/);
+  assert.match(result.html, /<img src="\/api\/chat\/research-favicon\?host=reuters\.com"[^>]*referrerpolicy="no-referrer"/);
   assert.doesNotMatch(result.html, /example\.test\/favicon\.ico/);
 });
 
@@ -127,7 +127,7 @@ test('evidenced parenthesized links can be rendered even when sources have no of
   assert.deepEqual(result.unplacedCitations, []);
 });
 
-test('Agência Brasil badges use the stable official icon and short site name for exact host aliases', () => {
+test('Agência Brasil badges delegate icon discovery to Aegis and retain the short site name', () => {
   const content = 'Uma informação consultada.';
   const url = 'https://www.agenciabrasil.ebc.com.br/noticia/uma-informacao';
   const result = renderWebResearchMarkdown(markdown, content, {
@@ -136,6 +136,6 @@ test('Agência Brasil badges use the stable official icon and short site name fo
   });
   assert.equal(result.inlineCitations[0].siteName, 'Agência Brasil');
   assert.match(result.html, /href="https:\/\/www\.agenciabrasil\.ebc\.com\.br\/noticia\/uma-informacao"/);
-  assert.match(result.html, /src="https:\/\/agenciabrasil\.ebc\.com\.br\/sites\/default\/themes\/agenciabrasil_v3\/favicon\.ico"/);
+  assert.match(result.html, /src="\/api\/chat\/research-favicon\?host=agenciabrasil\.ebc\.com\.br"/);
   assert.match(result.html, /class="web-citation__label">Agência Brasil<\/span>/);
 });

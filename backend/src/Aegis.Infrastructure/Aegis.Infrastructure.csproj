@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aegis.Application\Aegis.Application.csproj" />
     <ProjectReference Include="..\Aegis.Domain\Aegis.Domain.csproj" />
+    <InternalsVisibleTo Include="Aegis.Application.Tests" />
   </ItemGroup>
 
   <ItemGroup>
