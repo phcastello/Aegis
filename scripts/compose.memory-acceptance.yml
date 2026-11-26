@@ -33,7 +33,7 @@ services:
       ASPNETCORE_URLS: http://+:8090
       ConnectionStrings__AegisDatabase: Host=postgres;Port=5432;Database=aegis_memory_v060_${AEGIS_MEMORY_EVAL_RUN_ID:?};Username=aegis_eval;Password=${AEGIS_MEMORY_EVAL_DB_PASSWORD:?}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?}
-      AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-6-luna}
+      AEGIS_CHAT_MODEL: ${AEGIS_CHAT_MODEL:-gpt-6.1-terra}
       AEGIS_MEMORY_EXTRACTION_MODEL: ${AEGIS_MEMORY_EXTRACTION_MODEL:-gpt-6-luna}
       AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT: ${AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT:-low}
       AEGIS_MEMORY_EMBEDDING_MODEL: text-embedding-3-large

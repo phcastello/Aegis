@@ -42,7 +42,7 @@ public sealed class PromptPayloadTests
 
         using var payload = JsonDocument.Parse(handler.Body!);
         var root = payload.RootElement;
-        Assert.Equal("gpt-6-luna", root.GetProperty("model").GetString());
+        Assert.Equal("gpt-6.1-terra", root.GetProperty("model").GetString());
         Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
         Assert.Equal("low", root.GetProperty("reasoning").GetProperty("effort").GetString());
         var input = root.GetProperty("input");

@@ -83,7 +83,7 @@ def main():
     if not key:
         print("NOT READY: OPENAI_API_KEY unavailable")
         return 2
-    intent.MODEL = setting("AEGIS_CHAT_MODEL", "gpt-6-luna")
+    intent.MODEL = setting("AEGIS_CHAT_MODEL", "gpt-6.1-terra")
     tools = intent.load_tools(None)
     passed = 0
     for trial in range(args.trials):

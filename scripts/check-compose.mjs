@@ -32,6 +32,23 @@ try {
     assert.ok(!Object.keys(configuration.services['aegis-api'].environment).some(key => key.includes('WEB_PUSH')));
   }
   assert.deepEqual(development.volumes, privateMode.volumes);
+  const modelKeys = ['AEGIS_CHAT_MODEL', 'AEGIS_CHAT_REASONING_EFFORT',
+    'AEGIS_TITLE_MODEL', 'AEGIS_TITLE_REASONING_EFFORT',
+    'AEGIS_MEMORY_EXTRACTION_MODEL', 'AEGIS_MEMORY_EXTRACTION_REASONING_EFFORT',
+    'AEGIS_MEMORY_EMBEDDING_MODEL'];
+  const modelDefaults = ['gpt-6.1-terra', 'low', 'gpt-6-luna', 'none',
+    'gpt-6-luna', 'low', 'text-embedding-3-large'];
+  const defaultsFixture = join(temporary, 'model-defaults.env');
+  const withoutModels = example.split('\n').filter(line =>
+    !modelKeys.some(key => line.startsWith(key + '='))).join('\n');
+  await writeFile(defaultsFixture, withoutModels);
+  for (const configuration of [development, privateMode, config(false, defaultsFixture), config(true, defaultsFixture)]) {
+    assert.deepEqual(modelKeys.map(key => configuration.services['aegis-api'].environment[key]), modelDefaults);
+  }
+  const overrideFixture = join(temporary, 'model-override.env');
+  await writeFile(overrideFixture, withoutModels + '\nAEGIS_CHAT_MODEL=gpt-6-luna\nAEGIS_CHAT_REASONING_EFFORT=medium\nAEGIS_TITLE_MODEL=gpt-5-nano\nAEGIS_TITLE_REASONING_EFFORT=minimal\n');
+  const overrides = config(true, overrideFixture).services['aegis-api'].environment;
+  assert.deepEqual(modelKeys.slice(0, 4).map(key => overrides[key]), ['gpt-6-luna', 'medium', 'gpt-5-nano', 'minimal']);
   const privateFixture = join(temporary, 'private-ip.env');
   await writeFile(privateFixture, example.replace('AEGIS_HTTP_BIND_ADDRESS=127.0.0.1', 'AEGIS_HTTP_BIND_ADDRESS=192.0.2.25'));
   const privateAddress = config(true, privateFixture);
