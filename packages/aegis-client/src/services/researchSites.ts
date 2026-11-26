@@ -17,7 +17,22 @@ const siteIconPaths: Readonly<Record<string, string>> = {
   'agenciabrasil.ebc.com.br': '/sites/default/themes/agenciabrasil_v3/favicon.ico'
 };
 
-export function researchSite(value: string): ResearchSite | null {
+// Prefer evidence for unfamiliar sites. If a provider supplies only a URL, use the shorter brand label.
+function displaySiteName(host: string, reportedName?: string): string {
+  if (Object.prototype.hasOwnProperty.call(siteNames, host)) return siteNames[host];
+  if (reportedName && !/^(?:https?:\/\/|www\.)|^[a-z0-9.-]+\.[a-z]{2,}$/i.test(reportedName))
+    return reportedName;
+  const labels = host.split('.');
+  const suffix = labels[labels.length - 1];
+  const base = labels[labels.length - 2];
+  const secondLevel = suffix.length === 2 && /^(ac|co|com|edu|gov|net|org)$/.test(base);
+  const brand = secondLevel && labels.length > 2 ? labels[labels.length - 3] : base;
+  if (brand.startsWith('xn--')) return brand;
+  return brand.split('-').filter(Boolean)
+    .map(part => part[0].toLocaleUpperCase('pt-BR') + part.slice(1)).join(' ');
+}
+
+export function researchSite(value: string, reportedName?: string): ResearchSite | null {
   if (!value || /[\s\\]/.test(value)) return null;
   try {
     const url = new URL(value.includes('://') ? value : 'https://' + value);
@@ -26,7 +41,7 @@ export function researchSite(value: string): ResearchSite | null {
     if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host)) return null;
     // The visual group should represent the site, even for different Wikipedia languages.
     if (host.endsWith('.wikipedia.org')) host = 'wikipedia.org';
-    return { host, name: Object.prototype.hasOwnProperty.call(siteNames, host) ? siteNames[host] : host };
+    return { host, name: displaySiteName(host, reportedName) };
   } catch {
     return null;
   }

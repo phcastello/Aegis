@@ -13,10 +13,18 @@ test('known site assets match canonical and www host only', () => {
   assert.equal(researchFavicon(`www.${canonicalHost}`), canonicalIcon);
 
   const forged = `${canonicalHost}.example.org`;
-  assert.equal(researchSite(forged).name, forged);
+  assert.equal(researchSite(forged).name, 'Example');
   assert.equal(researchFavicon(forged), `https://${forged}/favicon.ico`);
   assert.equal(researchFavicon(`${canonicalHost}@example.org`), undefined);
   assert.equal(researchFavicon('example.test'), undefined);
+});
+
+test('unknown sites get a compact label and retain the actual domain for their icon', () => {
+  const url = 'https://noticias.portal-ciencia.com.br/artigo?edicao=2026';
+  assert.deepEqual(researchSite(url), { host: 'noticias.portal-ciencia.com.br', name: 'Portal Ciencia' });
+  assert.equal(researchSite(url, 'Portal Ciência').name, 'Portal Ciência');
+  assert.equal(researchSite(url, url).name, 'Portal Ciencia');
+  assert.equal(researchSite(url, 'noticias.portal-ciencia.com.br').name, 'Portal Ciencia');
 });
 
 test('pending, broken and one-pixel icons do not replace the monogram', () => {

@@ -26,11 +26,11 @@ function researchLink(value: unknown): ResearchLink | null {
   try {
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return null;
-    const site = researchSite(parsed.href) ?? { host: parsed.hostname, name: parsed.hostname };
+    const site = researchSite(parsed.href, evidenceText(siteName, 80)) ?? { host: parsed.hostname, name: 'Fonte' };
     return {
       url: parsed.href,
       host: site.host,
-      siteName: site.name !== site.host ? site.name : evidenceText(siteName, 80) || site.name,
+      siteName: site.name,
       title: evidenceText(title, 300) || (parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname)).slice(0, 300),
       snippet: evidenceText(snippet, 400) || undefined
     };

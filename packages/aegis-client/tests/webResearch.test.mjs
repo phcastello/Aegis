@@ -26,9 +26,9 @@ test('plain text gets multiple clickable sources at their actual UTF-16 boundary
   assert.match(result.html, /primeira afirmação\.<span class="web-citation-group" data-citation-index="0"><a href="https:\/\/example\.test\/one"[^>]*>.*?<\/button><\/span> A segunda/);
   assert.match(result.html, /segunda afirmação\.<span class="web-citation-group" data-citation-index="1"><a href="https:\/\/example\.test\/two"[^>]*>.*?<\/button><\/span> A terceira/);
   assert.deepEqual(result.inlineCitations.map(({ url, siteName, title }) => [url, siteName, title]),
-    [[url1, 'Portal A', 'Fonte A'], [url2, 'example.test', 'example.test/two']]);
+    [[url1, 'Portal A', 'Fonte A'], [url2, 'Example', 'example.test/two']]);
   assert.match(result.html, /class="web-citation__label">Portal A<\/span>/);
-  assert.match(result.html, /class="web-citation__label">example\.test<\/span>/);
+  assert.match(result.html, /class="web-citation__label">Example<\/span>/);
   assert.equal(result.sources.length, 2);
   assert.equal(result.sources[0].kind, 'opened');
   assert.deepEqual(result.unplacedCitations, []);
