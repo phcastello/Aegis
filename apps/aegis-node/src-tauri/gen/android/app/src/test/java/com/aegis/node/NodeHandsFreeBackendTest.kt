@@ -536,7 +536,7 @@ class NodeHandsFreeBackendTest {
   @Test fun multipartChatAndPcmKeepOneExplicitVoiceDestination() {
     Fixture().use { fixture ->
       val stages = mutableListOf<String>()
-      val backend = fixture.backend { stage, _ -> stages.add(stage) }
+      val backend = fixture.backend(onStage = { stage, _ -> stages.add(stage) })
       val result = backend.runTurn(wav(), session, conversation)
       assertEquals(conversation, result.conversationId)
       assertTrue(result.playedAudio)
@@ -568,7 +568,7 @@ class NodeHandsFreeBackendTest {
     for (text in listOf("", "  ", "Aegis.", "AÉGIS,", "aéjis!", "égis")) {
       Fixture(transcript = text).use { fixture ->
         val stages = mutableListOf<String>()
-        val result = fixture.backend { stage, _ -> stages.add(stage) }.runTurn(wav(), session, null)
+        val result = fixture.backend(onStage = { stage, _ -> stages.add(stage) }).runTurn(wav(), session, null)
         assertNull(result.conversationId)
         assertFalse(result.playedAudio)
         assertEquals(0,lastSink.bytes.size())
@@ -768,7 +768,7 @@ class NodeHandsFreeBackendTest {
         output.write(expected,offset,expected.size-offset);output.flush()
       })
     }).use {fixture->
-      val backend=fixture.backend{stage,duration->stages.add(stage);durations[stage]=duration;if(stage=="tts_first_audio")firstDelivered.countDown()}
+      val backend=fixture.backend(onStage={stage,duration->stages.add(stage);durations[stage]=duration;if(stage=="tts_first_audio")firstDelivered.countDown()})
       val sink=HandsFreeStreamingPcmSink({device})
       val executor=Executors.newSingleThreadExecutor()
       try {
@@ -893,7 +893,7 @@ class NodeHandsFreeBackendTest {
         override fun finish(){error("simulated_playback_failure")}
       }
       val stages=mutableListOf<String>()
-      val result=runCatching{fixture.backend{stage,_->stages.add(stage)}.execute(wav(),session,null,failedOutput)}
+      val result=runCatching{fixture.backend(onStage={stage,_->stages.add(stage)}).execute(wav(),session,null,failedOutput)}
       assertTrue(result.isFailure)
       assertArrayEquals(byteArrayOf(1,2,3,4),recorded.bytes.toByteArray())
       assertTrue(recorded.aborted);assertTrue(recorded.closed);assertFalse(recorded.finished)
