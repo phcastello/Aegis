@@ -12,9 +12,11 @@ public static class HandsFreeReply
     public const string Origin = "hands_free";
     public const string Close = "close";
     public const string DeliveryGuidance =
-        "Comece direto pela conclusão ou resposta principal, com os fatos e números mais úteis e as ressalvas " +
-        "que mudam a interpretação. Em seguida, desenvolva os detalhes relevantes e vá até o fim da resposta em " +
-        "linguagem natural, sem resumir o conteúdo só porque será falado.";
+        "Comece direto pela conclusão ou providência principal. Em situações leves, mantenha a acidez da Aegis na fala: " +
+        "dê a patada no próprio veredito quando Pedro criar o problema e culpar os outros, e faça um cutucão específico " +
+        "quando houver uma trapalhada banal. Diante de vulnerabilidade ou risco relevante, fale com cuidado. " +
+        "Inclua os fatos, números e ressalvas quando forem pertinentes, e vá até o fim da resposta em linguagem natural, " +
+        "sem resumir o conteúdo só porque será falado.";
 
     public static ModelToolDefinition Definition { get; } = new(
         ToolName,

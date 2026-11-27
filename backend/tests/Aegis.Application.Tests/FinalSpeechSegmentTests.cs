@@ -126,7 +126,11 @@ public sealed class FinalSpeechSegmentTests
         Assert.Equal("Ora, tudo certo. Quer conferir mais alguma coisa?", persisted.Content);
         Assert.Contains("complete", persisted.MetadataJson);
         Assert.Single(await fixture.Db.ChatMessages.Where(x => x.Role == "assistant").ToListAsync());
-        Assert.Single(fixture.Model.Requests);
+        var modelRequest = Assert.Single(fixture.Model.Requests);
+        Assert.Contains(modelRequest.Request.InputItems!, item =>
+            item.GetProperty("role").GetString() == "developer" &&
+            item.GetProperty("content").ValueKind == JsonValueKind.String &&
+            item.GetProperty("content").GetString()!.Contains(HandsFreeReply.DeliveryGuidance, StringComparison.Ordinal));
         Assert.False(fixture.Voice.TryCompleteTurnWithoutSpeech(first.TurnId.Value));
         await using var lastPcm = await fixture.Voice.StartSegmentSpeechAsync(new(second.TurnId!.Value, Guid.NewGuid(), persisted.Id, second.SegmentId!.Value, 1));
         fixture.Voice.CompleteSpeech(lastPcm.SpeechRequestId);
