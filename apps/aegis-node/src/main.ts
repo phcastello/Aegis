@@ -17,6 +17,7 @@ async function start(): Promise<void> {
   configureClient({ apiBaseUrl: runtime.backendUrl, externalLinks: 'system', openExternalUrl: openUrl, processSessionId: runtime.processSessionId, dismissKeyboard: () => invoke<void>('node_hide_keyboard'),
     voiceMeterProfile: runtime.platform === 'android' ? 'mobile' : 'desktop',
     isForeground: runtime.platform === 'android' ? () => invoke<boolean>('node_read_visibility') : undefined,
+    takeSharedAttachments: runtime.platform === 'android' ? () => invoke('node_take_shared_attachments') : undefined,
     nativeSpeech: runtime.platform === 'android' ? nativeSpeech : undefined,
     acquireAudio: ['android', 'windows'].includes(runtime.platform) ? acquireNativeAudio : undefined });
   createApp(App, { runtime }).mount('#app');

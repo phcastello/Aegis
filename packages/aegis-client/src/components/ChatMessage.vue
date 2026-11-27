@@ -6,6 +6,7 @@ import WebSourceStack from './WebSourceStack.vue';
 import { mergeResearchSites, topResearchSites, type ResearchSite } from '../services/researchSites';
 import { prepareWebResearch } from '../services/webResearchPresentation';
 import { clientEnvironment, openClientLink } from '../services/clientEnvironment';
+import { attachmentSize } from '../services/chatAttachments';
 import MemoryActivityDisclosure from './MemoryActivityDisclosure.vue';
 import type { FeedbackRating, LocalChatMessage } from '../types/chat';
 
@@ -27,6 +28,19 @@ const copyError = ref(false);
 const sourcesId = useId();
 const sourcesOpen = ref(false);
 const sourceLinkError = ref(false);
+const attachmentError = ref(false);
+function attachmentUrl(id: string): string | undefined {
+  const messageId = props.message.serverId ?? props.message.id;
+  if (messageId.startsWith('local-') || id.startsWith('local-')) return;
+  return `${clientEnvironment().apiBaseUrl}/api/chat/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(id)}`;
+}
+async function openAttachment(event: MouseEvent, id: string): Promise<void> {
+  const url = attachmentUrl(id);
+  if (!url || clientEnvironment().externalLinks !== 'system') return;
+  event.preventDefault();
+  try { await openClientLink(url); attachmentError.value = false; }
+  catch { attachmentError.value = true; }
+}
 const showMessageActions = computed(() => !props.message.pending && !props.message.streaming && !props.message.interrupted);
 const sources = computed(() => props.message.role === 'assistant' && !props.message.pending &&
   !props.message.streaming && props.message.webResearch
@@ -73,7 +87,17 @@ async function copy(): Promise<void> {
       <MemoryActivityDisclosure v-if="message.role === 'assistant' && message.memoryActivity?.sections.length"
         :activity="message.memoryActivity" />
       <div v-if="message.role === 'user' || message.content.trim() || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
-        <p v-if="message.role === 'user'">{{ message.content }}</p>
+        <template v-if="message.role === 'user'">
+          <ul v-if="message.attachments?.length" class="attachment-list" aria-label="Arquivos anexados">
+            <li v-for="file in message.attachments" :key="file.id" class="attachment-chip">
+              <a v-if="attachmentUrl(file.id)" class="attachment-name" :href="attachmentUrl(file.id)" :download="file.fileName"
+                @click="openAttachment($event, file.id)">{{ file.fileName }}</a>
+              <span v-else class="attachment-name">{{ file.fileName }}</span><small>{{ attachmentSize(file.sizeBytes) }}</small>
+            </li>
+          </ul>
+          <span v-if="attachmentError" role="status">Não foi possível abrir o anexo.</span>
+          <p v-if="message.content">{{ message.content }}</p>
+        </template>
         <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming"
           :web-research="message.streaming ? null : message.webResearch" />
         <span v-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>

@@ -35,11 +35,25 @@ export interface WebResearchSourceCount {
   count: number;
 }
 
+export interface ChatAttachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
+export interface AttachmentInput {
+  fileName: string;
+  contentType: string;
+  dataBase64: string;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
   role: ChatRole;
   content: string;
+  attachments?: ChatAttachment[];
   createdAt: string;
   model?: string | null;
   webResearch?: WebResearch | null;
@@ -78,6 +92,7 @@ export interface SendMessageRequest {
   turnId?: string;
   conversationId?: string | null;
   content: string;
+  attachments?: AttachmentInput[];
 }
 
 export interface SendMessageResponse {

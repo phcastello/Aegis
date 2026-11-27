@@ -3,14 +3,15 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { dismissKeyboard } from '../services/navigation';
 import { autoSpeak, setAutoSpeakPreference } from '../services/voicePreference';
 import VoiceInputSettings from './VoiceInputSettings.vue';
-export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | 'audio' | 'about';
+export type SettingsSection = 'devices' | 'reminders' | 'places' | 'updates' | 'audio' | 'personality' | 'about';
 const props = defineProps<{ section: SettingsSection | null; dirty?: boolean }>();
 const emit = defineEmits<{ close: []; navigate: [section: SettingsSection]; discard: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const pending = ref<SettingsSection | 'close' | { proceed: () => void; cancel: () => void } | null>(null);
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'devices', label: 'Dispositivos' }, { id: 'reminders', label: 'Lembretes' },
-  { id: 'places', label: 'Lugares' }, { id: 'audio', label: 'Áudio e voz' }, { id: 'updates', label: 'Atualizações' }, { id: 'about', label: 'Sobre' }
+  { id: 'places', label: 'Lugares' }, { id: 'audio', label: 'Áudio e voz' }, { id: 'personality', label: 'Personalidade' },
+  { id: 'updates', label: 'Atualizações' }, { id: 'about', label: 'Sobre' }
 ];
 let previousFocus: HTMLElement | null = null;
 let confirmationFocus: HTMLElement | null = null;

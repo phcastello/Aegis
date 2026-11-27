@@ -40,7 +40,12 @@ class MainActivity : TauriActivity() {
   }
   override fun onNewIntent(intent:android.content.Intent) {
     super.onNewIntent(intent)
+    receiveShare(intent)
     openReminder(intent)
+  }
+  private fun receiveShare(intent: android.content.Intent?) {
+    if (SharedChatAttachments.accept(intent))
+      currentWebView?.post { currentWebView?.evaluateJavascript("window.dispatchEvent(new Event('aegis-shared-attachments'))", null) }
   }
   private fun openReminder(intent:android.content.Intent?) {
     intent?.getStringExtra("conversationId")?.let { id ->
@@ -65,6 +70,7 @@ class MainActivity : TauriActivity() {
     NodeNativeNotifications.initialize(this)
     onBackPressedDispatcher.addCallback(this,settingsBack)
     NodeUpdates.cleanup(this)
+    receiveShare(intent)
     openReminder(intent)
   }
 

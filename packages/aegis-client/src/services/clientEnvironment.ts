@@ -1,8 +1,11 @@
+import type { AttachmentInput } from '../types/chat';
+
 export interface ClientEnvironment {
   apiBaseUrl: string;
   processSessionId?: string;
   voiceMeterProfile?: 'desktop' | 'mobile';
   dismissKeyboard?: () => Promise<void>;
+  takeSharedAttachments?: () => Promise<{ files: AttachmentInput[]; error?: string }>;
   // Native hosts can distinguish Activity/window visibility from WebView input
   // focus, which Android deliberately clears when dismissing the keyboard.
   isForeground?: () => Promise<boolean>;

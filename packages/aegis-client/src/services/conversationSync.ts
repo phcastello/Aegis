@@ -76,7 +76,9 @@ export function mergeConversationMessages(local: LocalChatMessage[], incoming: C
       .find(position => position !== undefined && position > lowerBound);
     const upperBound = nextAnchor ?? incoming.length;
     const candidate = incoming.findIndex((message, position) => position > lowerBound && position < upperBound &&
-      message.role === 'user' && message.content === user.content && !acceptedUsers.has(message.id));
+      message.role === 'user' && message.content === user.content && !acceptedUsers.has(message.id) &&
+      (message.attachments?.length ?? 0) === (user.attachments?.length ?? 0) &&
+      (user.attachments ?? []).every((file, i) => file.fileName === message.attachments![i].fileName && file.sizeBytes === message.attachments![i].sizeBytes));
     if (candidate >= 0) { acceptedUsers.set(incoming[candidate].id, user); lowerBound = candidate; }
   }
   const merged = incoming.map(message => {

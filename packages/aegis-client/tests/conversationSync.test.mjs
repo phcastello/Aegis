@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadTypeScript } from './loadTypeScript.mjs';
 const { ConversationSyncQueue, mergeConversationMessages } = await loadTypeScript('../src/services/conversationSync.ts');
+test('file-only turns from two devices retain their own attachment IDs', () => {
+  const file = { id: 'local-file', fileName: 'aula.zip', sizeBytes: 81 };
+  const local = { id: 'local-user', role: 'user', content: '', attachments: [file] };
+  const remote = [{ ...local, id: 'other-user', attachments: [{ ...file, fileName: 'viagem.zip', id: 'other-file' }] },
+    { ...local, id: 'server-user', attachments: [{ ...file, id: 'server-file' }] }];
+  const merged = mergeConversationMessages([local], remote);
+  assert.equal(merged[1], local);
+  assert.equal(local.serverId, 'server-user');
+  assert.equal(local.attachments[0].id, 'server-file');
+});
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 test('coalesces duplicates and discards an out-of-order snapshot before retrying the newest invalidation', async () => {
   const old=deferred(), fresh=deferred(), applied=[]; let reads=0;

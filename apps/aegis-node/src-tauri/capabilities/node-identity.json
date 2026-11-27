@@ -29,6 +29,7 @@
     "allow-node-remove",
     "allow-node-reminders",
     "allow-node-places",
+    "allow-node-custom-instructions",
     "allow-node-location",
     "allow-node-geofences",
     "allow-node-settings-open",

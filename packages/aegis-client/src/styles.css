@@ -1147,6 +1147,30 @@ button:disabled {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  margin: 0 0 6px;
+  list-style: none;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  font-size: .86rem;
+}
+.attachment-name { overflow-wrap: anywhere; }
+.attachment-chip small { white-space: nowrap; color: var(--muted); }
+.attachment-chip button { padding: 3px 6px; background: transparent; color: var(--text); cursor: pointer; }
+.attachment-chip a { color: var(--accent-strong); }
+
 .composer-field:focus-within {
   border-color: rgba(157, 177, 230, 0.5);
   box-shadow: 0 0 0 3px rgba(145, 169, 238, 0.08);
@@ -1214,6 +1238,7 @@ button:disabled {
   transition: filter 150ms ease, transform 150ms ease, opacity 150ms ease;
 }
 
+.attachment-button,
 .record-button,
 .record-discard-button {
   width: 42px;
@@ -1232,12 +1257,14 @@ button:disabled {
   transition: color 150ms ease, background 150ms ease, transform 150ms ease;
 }
 
+.attachment-button:hover,
 .record-button:hover:not(:disabled),
 .record-discard-button:hover {
   color: #e0e7ff;
   background: rgba(145, 169, 238, 0.12);
 }
 
+.attachment-button:focus-visible,
 .record-button:focus-visible,
 .record-discard-button:focus-visible {
   outline: 2px solid #a9baf0;
@@ -1249,6 +1276,7 @@ button:disabled {
   opacity: 0.42;
 }
 
+.attachment-button svg,
 .record-button svg,
 .record-discard-button svg {
   width: 20px;

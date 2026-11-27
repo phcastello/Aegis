@@ -28,7 +28,9 @@ try {
       const prompts = [], acceptedPrompts = [];
       const conversationId = 'synthetic-voice-conversation';
       const conversation = () => ({ id: conversationId, title: 'Voz sintética', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: acceptedPrompts.length * 2,
-        messages: acceptedPrompts.flatMap((content, index) => [{ id: `user-${index}`, conversationId, role: 'user', content, createdAt: new Date().toISOString() }, { id: `assistant-${index}`, conversationId, role: 'assistant', content: 'Resposta sintética.', createdAt: new Date().toISOString() }]) });
+        messages: acceptedPrompts.flatMap((request, index) => [{ id: `user-${index}`, conversationId, role: 'user', content: request.content,
+          attachments: request.attachments?.map((file, i) => ({ id: `file-${index}-${i}`, fileName: file.fileName, contentType: file.contentType, sizeBytes: Buffer.from(file.dataBase64, 'base64').length })),
+          createdAt: new Date().toISOString() }, { id: `assistant-${index}`, conversationId, role: 'assistant', content: 'Resposta sintética.', createdAt: new Date().toISOString() }]) });
       await context.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
         let body;
@@ -44,7 +46,7 @@ try {
         else if (path === '/api/chat/messages/stream') {
           const request = route.request().postDataJSON(); prompts.push(request);
           if (sendFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha sintética antes da aceitação.' }) });
-          acceptedPrompts.push(request.content);
+          acceptedPrompts.push(request);
           const lines = [
             { type: 'conversation', turnId: request.turnId, conversationId },
             { type: 'token', turnId: request.turnId, content: 'Resposta sintética.' },
@@ -205,11 +207,15 @@ try {
         await page.getByRole('button', { name: 'Descartar gravação', exact: true }).click();
 
         await page.locator('.composer textarea').fill('Antes');
+        const fileBytes = Buffer.from('Laboratório 42');
+        await page.locator('input[type=file]').setInputFiles({ name: 'aula.txt', mimeType: 'text/plain', buffer: fileBytes });
         await page.locator('.composer textarea').evaluate(input => input.setSelectionRange(input.value.length, input.value.length));
         await record.click(); await page.waitForTimeout(250);
         await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
         await page.getByText('Resposta sintética.', { exact: true }).waitFor();
         assert.deepEqual(prompts.map(prompt => prompt.content), ['Antes Texto sintético'], 'send uses the normal textual turn with prior draft');
+        assert.deepEqual(prompts[0].attachments, [{ fileName: 'aula.txt', contentType: 'text/plain', dataBase64: fileBytes.toString('base64') }],
+          'the spoken question and original document reach the same turn');
         assert.equal(await page.locator('.composer textarea').inputValue(), '');
         assert.equal(uploads, 2);
 

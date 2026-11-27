@@ -3,6 +3,29 @@ use crate::node_commands::NodeRuntime;
 use crate::node_domain_routes::route;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct InstructionSettings {
+    text: String,
+    revision: uuid::Uuid,
+}
+
+#[tauri::command]
+pub async fn node_custom_instructions(
+    runtime: tauri::State<'_, NodeRuntime>,
+    settings: Option<InstructionSettings>,
+) -> Result<Value, String> {
+    let path = "/settings/custom-instructions".to_owned();
+    if let Some(settings) = settings {
+        if settings.text.encode_utf16().count() > 2000 || settings.text.contains('\0') {
+            return Err("Informe instruções válidas de até 2.000 caracteres.".into());
+        }
+        runtime.domain_call(reqwest::Method::PUT, path, json!(settings)).await
+    } else {
+        runtime.domain_call(reqwest::Method::GET, path, Value::Null).await
+    }
+}
+
 async fn call(
     runtime: &NodeRuntime,
     domain: &str,
@@ -233,6 +256,26 @@ pub async fn node_read_visibility(app: AppHandle) -> Result<bool, String> {
     {
         let _ = app;
         Err("Consulta disponível somente no Android.".into())
+    }
+}
+
+#[tauri::command]
+pub async fn node_take_shared_attachments(app: AppHandle) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app
+            .try_state::<crate::native_notifications::AndroidBridge>()
+            .ok_or("Compartilhamento indisponível.")?;
+        return bridge
+            .0
+            .run_mobile_plugin_async("takeSharedAttachments", ())
+            .await
+            .map_err(|_| "Não foi possível receber os arquivos compartilhados.".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(json!({"files":[]}))
     }
 }
 

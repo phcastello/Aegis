@@ -27,6 +27,23 @@ A caracterização por traços tem como referência a
 descrição do trabalho da Anthropic sobre disposições que se manifestam em
 situações variadas. [Prompt de identidade](../../backend/src/Aegis.Api/Prompts/aegis_identity.md) · [Claude's character](https://www.anthropic.com/research/claude-character)
 
+## Instruções personalizadas
+
+Em **Configurações → Personalidade**, Pedro pode salvar até 2.000 caracteres
+de preferências de tom, idioma ou formato. Para apagá-las, use **Limpar campo**
+e **Salvar**. Windows e Android usam o mesmo registro no servidor. Somente um
+dispositivo pareado e habilitado pode consultar ou editar esse registro. Cada novo
+turno de chat ou de voz e cada execução de pesquisa ou Python em segundo plano
+lê a preferência atual. Um pedido específico na conversa tem prioridade. Se
+os dois dispositivos editarem ao mesmo tempo, o aplicativo mostra a versão
+salva antes de permitir que Pedro a substitua.
+
+O texto entra no contexto do modelo como mensagem de usuário, antes do pedido.
+A trilha de auditoria substitui essa entrada por um marcador. O histórico
+preserva as mensagens já produzidas. A opção por uma preferência única e
+editável, aplicada às próximas respostas inclusive em conversas existentes,
+segue o comportamento documentado nas [instruções personalizadas do ChatGPT](https://help.openai.com/en/articles/8096356-chatgpt-custom-instructions).
+
 ## Avaliação
 
 Compare o prompt anterior e o novo com o modelo configurado, os mesmos

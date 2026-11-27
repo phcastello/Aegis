@@ -345,12 +345,14 @@ pub fn run() {
             node_commands::node_remove,
             node_domains::node_reminders,
             node_domains::node_places,
+            node_domains::node_custom_instructions,
             node_domains::node_location,
             node_domains::node_geofences,
             node_domains::node_settings_open,
             node_domains::node_hide_keyboard,
             node_domains::node_read_visibility,
             node_domains::node_consume_reminder_open,
+            node_domains::node_take_shared_attachments,
             install_android_update
         ])
         .build(context)

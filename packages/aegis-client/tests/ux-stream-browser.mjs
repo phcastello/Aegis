@@ -18,6 +18,8 @@ const a = '10000000-0000-4000-8000-000000000001';
 const b = '20000000-0000-4000-8000-000000000002';
 const created = '30000000-0000-4000-8000-000000000003';
 const date = '2026-10-01T12:00:00Z';
+// A ZIP archive containing aula/sala.txt with the text "Sala 517".
+const zipBase64 = 'UEsDBBQAAAAAAAAAIQA511y0CAAAAAgAAAANAAAAYXVsYS9zYWxhLnR4dFNhbGEgNTE3UEsBAhQAFAAAAAAAAAAhADnXXLQIAAAACAAAAA0AAAAAAAAAAAAAAIABAAAAAGF1bGEvc2FsYS50eHRQSwUGAAAAAAEAAQA7AAAAMwAAAAAA';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(condition, label) {
   for (let attempt = 0; attempt < 150; attempt++) { if (condition()) return; await delay(20); }
@@ -88,7 +90,9 @@ function createFixture(viteOrigin) {
         event(event) { if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify({ turnId: body.turnId, ...event }) + '\n'); },
         accept() {
           if (!data.has(id)) data.set(id, { id, title: 'Nova conversa', createdAt: date, updatedAt: date, messages: [], read: 0 });
-          data.get(id).messages.push({ id: `${body.turnId}-user`, conversationId: id, role: 'user', content: body.content, createdAt: date });
+          const attachments = body.attachments?.map((file, index) => ({ id: `attachment-${index}`, fileName: file.fileName,
+            contentType: file.contentType, sizeBytes: Buffer.from(file.dataBase64, 'base64').length }));
+          data.get(id).messages.push({ id: `${body.turnId}-user`, conversationId: id, role: 'user', content: body.content, attachments, createdAt: date });
           this.accepted = true; this.event({ type: 'conversation', conversationId: id });
         },
         token(content) { this.content += content; this.event({ type: 'token', content }); },
@@ -147,6 +151,9 @@ try {
         if (command === 'node_action_state') return { pendingActions: 0 };
         if (command === 'node_notification_settings') return { granted: false, pushConfigured: false };
         if (command === 'node_consume_reminder_open') return { reminderId: null, conversationId: null };
+        if (command === 'node_take_shared_attachments') {
+          const files = window.shareInbox ?? []; window.shareInbox = []; return { files };
+        }
         if (command === 'check_android_update' || command === 'plugin:updater|check') return null;
         if (command === 'check_backend') return { status: 'connected' };
         return;
@@ -322,17 +329,32 @@ try {
       await select('Alfa');
       await page.locator('.composer').getByText('Falha de rede na conversa de origem.', { exact: true }).waitFor();
       equal(await composer().inputValue(), '', 'an accepted prompt is never restored for automatic duplication');
+      if (platform === 'android') {
+        await page.evaluate(dataBase64 => {
+          window.shareInbox = [{ fileName: 'aula.zip', contentType: 'application/zip', dataBase64 }];
+          window.dispatchEvent(new Event('aegis-shared-attachments'));
+        }, zipBase64);
+      } else {
+        await page.locator('input[type=file]').setInputFiles({ name: 'aula.zip', mimeType: 'application/zip', buffer: Buffer.from(zipBase64, 'base64') });
+      }
+      await page.getByRole('button', { name: 'Remover aula.zip' }).waitFor();
+      equal(await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).isEnabled(), true, 'a file-only turn can be sent');
       fixture.failNext = true; await send('Texto recuperável antes da aceitação');
       const failedRequest = fixture.requests.at(-1);
+      equal(failedRequest.attachments[0].dataBase64, zipBase64, 'ZIP bytes survive the file picker/Android share and encoding');
       await page.locator('.composer').getByText('Falha de envio antes da aceitação.', { exact: true }).waitFor();
       equal(await composer().inputValue(), 'Texto recuperável antes da aceitação', 'pre-acceptance failure preserves the recoverable prompt');
       await select('Beta'); await select('Alfa');
       equal(await composer().inputValue(), 'Texto recuperável antes da aceitação', 'recoverable prompt remains associated with its conversation');
       const retried = await send('Texto recuperável antes da aceitação');
       equal(retried.request.turnId, failedRequest.turnId, 'manual retry preserves the existing idempotency key');
+      assert.deepEqual(retried.request.attachments, failedRequest.attachments);
       retried.accept(); retried.token('Resposta da tentativa manual. '); retried.done(); await settled();
       equal(await composer().inputValue(), '', 'accepted retry consumes the recovered prompt');
       equal(await page.locator('.messages').getByText('Texto recuperável antes da aceitação', { exact: true }).count(), 1, 'manual retry adds one accepted prompt');
+      const original = page.locator('.messages').getByRole('link', { name: 'aula.zip' });
+      await original.waitFor();
+      ok((await original.getAttribute('href')).endsWith(`/api/chat/messages/${retried.request.turnId}-user/attachments/attachment-0`), 'reconciled history opens the original ZIP on its user message');
       await composer().fill('');
 
       const explicit = await send('Interrupção explícita'); explicit.accept(); explicit.token('Resposta a interromper. ');

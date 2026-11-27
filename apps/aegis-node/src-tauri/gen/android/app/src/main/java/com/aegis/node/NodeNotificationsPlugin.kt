@@ -159,6 +159,11 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
     invoke.resolve(JSObject(NodeHandsFree.state(activity)))
   }catch(_:Exception){invoke.reject("Não foi possível exportar o ZIP. Escolha outro destino.")}}
  }
+ @Command fun takeSharedAttachments(invoke:Invoke) {
+   handsFreeIo.execute {
+     invoke.resolve(JSObject(SharedChatAttachments.take(activity).toString()))
+   }
+ }
  companion object {private val handsFreeIo=java.util.concurrent.Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeFiles").apply{isDaemon=true}}}
 
 }

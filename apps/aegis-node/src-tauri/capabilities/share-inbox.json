@@ -1,0 +1,7 @@
+{
+  "identifier": "android-share-inbox",
+  "description": "Receive only files explicitly shared with the local Android app.",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": ["allow-node-take-shared-attachments"]
+}

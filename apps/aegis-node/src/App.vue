@@ -7,6 +7,7 @@ import ChatView from '@aegis/client/views/ChatView.vue';
 import SettingsShell, { type SettingsSection } from '@aegis/client/components/SettingsShell.vue';
 import SettingsTrigger from '@aegis/client/components/SettingsTrigger.vue';
 import AegisMark from '@aegis/client/components/AegisMark.vue';
+import PersonalitySettings from './components/PersonalitySettings.vue';
 import { getReleaseIdentity } from '@aegis/client/services/releaseIdentity';
 import { openClientLink } from '@aegis/client/services/clientEnvironment';
 import UpdateNotice from './components/UpdateNotice.vue';
@@ -129,6 +130,11 @@ function conversationRecovery(): void {
 }
 function nativeBack() { if (shell.value?.dismissPending()) return; if (section.value === 'reminders' && remindersPanel.value?.requestBack()) return; if (section.value === 'places' && placesPanel.value?.requestBack()) return; if (section.value) shell.value?.requestClose(); }
 function consumeNativeDestination() { void invoke('node_consume_reminder_open').catch(() => undefined); }
+function revealSharedDraft() {
+  if (section.value && shell.value) void shell.value.requestNavigation(close);
+}
+onMounted(() => window.addEventListener('aegis-show-shared-draft', revealSharedDraft));
+onUnmounted(() => window.removeEventListener('aegis-show-shared-draft', revealSharedDraft));
 const remindersNavigation = ref(0);
 const pendingDestinations = new Set<string>();
 let lastDestination: { key: string; at: number } | null = null;
@@ -176,6 +182,7 @@ onUnmounted(() => { window.removeEventListener('aegis-navigation-layer', syncNav
   <SettingsShell ref="shell" :section="section" :dirty="dirty" @navigate="navigate" @close="close" @discard="dirty = false">
     <template #native-audio><HandsFreeSettings v-if="(runtime.platform === 'android' || runtime.platform === 'windows') && section === 'audio'" :platform="runtime.platform" /></template>
     <NodesPanel v-if="section === 'devices'" :platform="runtime.platform" @dirty="dirty = $event" />
+    <PersonalitySettings v-else-if="section === 'personality'" @dirty="dirty = $event" />
     <RemindersPanel v-else-if="section === 'reminders'" ref="remindersPanel" :key="remindersNavigation" :platform="runtime.platform" :focused-reminder-id="focusedReminderId" @dirty="dirty = $event" />
     <PlacesPanel v-else-if="section === 'places'" ref="placesPanel" :platform="runtime.platform" @dirty="dirty = $event" />
     <section v-else-if="section === 'updates'"><h2>Atualizações</h2><p class="settings-muted">Versão instalada: {{ runtime.version }}. O download e a instalação precisam de sua ação.</p><UpdateNotice :updates="updates" :work-active="activity" /><div class="settings-actions"><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">{{ updates.state.value === 'checking' ? 'Verificando…' : 'Verificar atualizações' }}</button></div><p v-if="updates.checkedMessage.value" role="status">{{ updates.checkedMessage.value }}</p><p v-if="updates.checkedAt.value" class="settings-muted">Última consulta: {{ new Date(updates.checkedAt.value).toLocaleString('pt-BR') }}<span v-if="updates.diagnostic.value"> · Código: {{ updates.diagnostic.value.code }}</span></p><details class="update-recovery"><summary>Recuperar este Node</summary><p>Uma atualização de recuperação publicada aparece acima e pode ser instalada pelo mesmo fluxo, preservando os dados deste Node.</p><button :disabled="updates.state.value === 'checking' || updates.state.value === 'installing'" @click="updates.start(true)">Buscar atualização de recuperação</button><p>Para restaurar uma versão histórica, o proprietário precisa reconstruir e aprovar uma nova distribuição de recuperação. Não instale um pacote antigo por cima da versão atual.</p><button @click="openRecoveryPublication">Abrir publicação de recuperação</button><p v-if="recoveryLinkError" role="alert">{{ recoveryLinkError }}</p><p class="settings-muted">Se a Aegis não iniciar, instale por cima o instalador oficial da recuperação publicada, sem desinstalar ou apagar os dados. Consulte o procedimento de recuperação na documentação de distribuição.</p></details><details v-if="runtime.platform === 'android'"><summary>Downloads antigos do navegador</summary><p>APKs baixados anteriormente pelo navegador continuam na pasta Downloads. Você pode removê-los uma vez pelo gerenciador de arquivos do Android. A Aegis não procura nem apaga arquivos pessoais nessa pasta.</p></details></section>

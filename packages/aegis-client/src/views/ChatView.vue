@@ -14,6 +14,7 @@ import ConversationMenu from '../components/ConversationMenu.vue';
 import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
+import { attachmentSize, checkAttachmentLimits, encodeAttachment, sharedAttachmentFile } from '../services/chatAttachments';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
 import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeVoiceToolStatus } from '../services/streamTextPresentation';
@@ -60,6 +61,7 @@ type ConversationContext = {
   id: string | null;
   messages: LocalChatMessage[];
   draft: string;
+  files: File[];
   title: string | null;
   createdAt: string | null;
   error: string | null;
@@ -73,10 +75,10 @@ type ConversationContext = {
   toolState: 'started' | 'completed' | 'failed' | null;
   researchActive: boolean;
   researchSites: Map<string, number>;
-  retry: { turnId: string; content: string; conversationId: string | null } | null;
+  retry: { turnId: string; content: string; files: File[]; conversationId: string | null } | null;
 };
 function createConversationContext(id: string | null = null): ConversationContext {
-  return reactive({ id, messages: [], draft: '', title: null, createdAt: null, error: null,
+  return reactive({ id, messages: [], draft: '', files: [], title: null, createdAt: null, error: null,
     loaded: false, remoteUpdatedAt: null, remoteMessageCount: null, revision: 0, following: true, scrollTop: null, retry: null, toolMessage: null, toolState: null,
     researchActive: false, researchSites: new Map<string, number>() });
 }
@@ -86,7 +88,8 @@ let newConversation = createConversationContext();
 const initialId = initialConversationId(localStorage, clientEnvironment().processSessionId);
 const selected = ref(initialId ? createConversationContext(initialId) : newConversation);
 const unsentConversations = ref<ConversationContext[]>([]);
-const unsentConversation = computed(() => unsentConversations.value.find(owner => owner !== selected.value && owner.draft.trim()) ?? null);
+const hasDraft = (owner: ConversationContext): boolean => Boolean(owner.draft.trim() || owner.files.length);
+const unsentConversation = computed(() => unsentConversations.value.find(owner => owner !== selected.value && hasDraft(owner)) ?? null);
 if (initialId) contexts.set(initialId, selected.value);
 const messages = computed(() => selected.value.messages);
 const conversationId = computed(() => selected.value.id);
@@ -114,6 +117,7 @@ let stopObservingGoogle: (() => void) | null = null;
 const messagesContainer = ref<HTMLElement | null>(null);
 const messagesContent = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
+const filePicker = ref<HTMLInputElement | null>(null);
 const isComposerScrollable = ref(false);
 const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
@@ -284,7 +288,7 @@ function proactiveForeground(): void { void syncProactiveMessages(); void markVi
 watch(() => [conversationId.value, messages.value.length, isSidebarOpen.value, isRestoring.value], async () => { await nextTick(); observeProactiveMessages(); proactiveVisibilityChanged(); });
 
 const deletingSelectedConversation = computed(() => isDeletingConversation.value && deleteTarget.value?.id === conversationId.value);
-const canSend = computed(() => draft.value.trim().length > 0 && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
+const canSend = computed(() => hasDraft(selected.value) && !selectedHasActiveTurn.value && !isRestoring.value && !deletingSelectedConversation.value && !transcription.isBusy.value && emailConnectionState.value !== 'pending');
 const showErrorMessage = computed(() => !!errorMessage.value && ![
   emailConnectionState.value === 'failed' ? emailConnectionMessage.value : null,
   transcription.errorMessage.value,
@@ -645,12 +649,67 @@ function createLocalMessageId(): string {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function createLocalUserMessage(content: string): LocalChatMessage {
+function stageFiles(owner: ConversationContext, files: File[]): void {
+  if (!files.length) return;
+  try {
+    checkAttachmentLimits([...owner.files, ...files]);
+    owner.files.push(...files);
+    owner.error = null;
+  } catch (error) { owner.error = error instanceof Error ? error.message : 'Não foi possível anexar os arquivos.'; }
+}
+
+function selectFiles(event: Event): void {
+  const input = event.target as HTMLInputElement;
+  stageFiles(selected.value, Array.from(input.files ?? []));
+  input.value = '';
+}
+
+function pasteFiles(event: ClipboardEvent): void {
+  const files = Array.from(event.clipboardData?.files ?? []);
+  if (!files.length) return;
+  event.preventDefault();
+  stageFiles(selected.value, files);
+}
+
+function dragFiles(event: DragEvent): void {
+  if (!event.dataTransfer?.types.includes('Files')) return;
+  event.preventDefault();
+  if (event.type === 'drop') stageFiles(selected.value, Array.from(event.dataTransfer.files));
+}
+
+let receivingShare = false;
+let shareRequested = false;
+async function receiveSharedFiles(): Promise<void> {
+  const take = clientEnvironment().takeSharedAttachments;
+  if (!take || disposed) return;
+  shareRequested = true;
+  if (receivingShare || isRestoring.value) return;
+  receivingShare = true;
+  try {
+    while (shareRequested && !disposed) {
+      shareRequested = false;
+      const owner = selected.value;
+      try {
+        const result = await take();
+        if (disposed || !result) return;
+        stageFiles(owner, result.files.map(sharedAttachmentFile));
+        if (result.error) owner.error = result.error;
+        if (selected.value === owner && (result.files.length || result.error)) {
+          closeSidebarDrawer();
+          window.dispatchEvent(new Event('aegis-show-shared-draft'));
+        }
+      } catch { if (!disposed) owner.error = 'Não foi possível ler o compartilhamento. Compartilhe o arquivo novamente.'; }
+    }
+  } finally { receivingShare = false; }
+}
+
+function createLocalUserMessage(content: string, files: File[]): LocalChatMessage {
   return reactive({
     id: createLocalMessageId(),
     conversationId: conversationId.value ?? 'pending',
     role: 'user',
     content,
+    attachments: files.map(file => ({ id: createLocalMessageId(), fileName: file.name, contentType: file.type, sizeBytes: file.size })),
     createdAt: new Date().toISOString(),
     model: null,
     pending: true
@@ -895,9 +954,10 @@ function applyRemoteConversationDeletion(id: string): void {
   contexts.delete(id);
   conversations.value = conversations.value.filter(row => row.id !== id);
   let recovery: ConversationContext | undefined;
-  if (owner?.draft.trim()) {
+  if (owner && hasDraft(owner)) {
     recovery = createConversationContext();
     recovery.draft = owner.draft;
+    recovery.files = owner.files;
     unsentConversations.value = [...unsentConversations.value.filter(context => context !== owner), recovery];
   }
   if (conversationId.value === id) {
@@ -1261,6 +1321,8 @@ function associateTurnConversation(turn: ActiveTurn, id: string, titleSource?: s
 async function handleSubmit(): Promise<void> {
   if (!canSend.value) return;
   const owner = selected.value;
+  try { checkAttachmentLimits(owner.files); }
+  catch (error) { owner.error = (error as Error).message; return; }
   if (activeTurns.size >= MAX_CONCURRENT_TURNS) {
     owner.error = 'Já há três conversas respondendo. Aguarde uma terminar para enviar.';
     return;
@@ -1268,13 +1330,15 @@ async function handleSubmit(): Promise<void> {
   stopPlayback();
   owner.revision++;
   const content = owner.draft.trim();
+  const files = owner.files.slice();
   unsentConversations.value = unsentConversations.value.filter(context => context !== owner);
   cancelMemoryActivityPolling();
   cancelRecording();
-  const retry = owner.retry?.content === content ? owner.retry : null;
+  const retry = owner.retry?.content === content && owner.retry.files.length === files.length &&
+    files.every((file, index) => file === owner.retry!.files[index]) ? owner.retry : null;
   const turnId = retry?.turnId ?? crypto.randomUUID();
   const requestConversationId = retry ? retry.conversationId : owner.id;
-  const localMessage = createLocalUserMessage(content);
+  const localMessage = createLocalUserMessage(content, files);
   const assistantMessage = createLocalAssistantMessage();
   const controller = new AbortController();
   const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller, accepted: false, status: 'thinking' });
@@ -1282,7 +1346,8 @@ async function handleSubmit(): Promise<void> {
   // Consume the submitted draft, including the unsaved-conversation slot.
   if (newConversation === owner) newConversation = createConversationContext();
   owner.draft = '';
-  owner.retry = { turnId, content, conversationId: requestConversationId };
+  owner.files = [];
+  owner.retry = { turnId, content, files, conversationId: requestConversationId };
   resizeComposer();
   owner.error = null;
   clearToolStatus();
@@ -1294,7 +1359,9 @@ async function handleSubmit(): Promise<void> {
   const owns = (): boolean => activeTurns.get(turnId) === turn && !controller.signal.aborted;
 
   try {
-    await sendMessageStream({ turnId, conversationId: requestConversationId, content }, {
+    const attachments = files.length ? await Promise.all(files.map(encodeAttachment)) : undefined;
+    if (!owns()) return;
+    await sendMessageStream({ turnId, conversationId: requestConversationId, content, attachments }, {
       onConversation: (eventTurnId, id) => {
         if (!owns() || eventTurnId !== turnId) return;
         associateTurnConversation(turn, id);
@@ -1324,6 +1391,7 @@ async function handleSubmit(): Promise<void> {
         assistantMessage.pending = false;
         completePresentation(presentation);
         activeTurns.delete(turnId);
+        if (files.length) conversationChanged(id, false);
         void refreshResearchJobs(id, true);
         if (owner.toolState === 'completed' || owner.toolState === 'failed') {
           showToolStatus(owner.toolMessage ?? '', owner.toolState, owner, owner.researchActive);
@@ -1354,6 +1422,7 @@ async function handleSubmit(): Promise<void> {
       // No acceptance acknowledgement: retain the prompt for a manual retry,
       // with the same turn ID. Never automatically resend a possibly accepted turn.
       owner.draft = owner.draft ? `${content}\n${owner.draft}` : content;
+      owner.files = [...files, ...owner.files];
       owner.messages = owner.messages.filter(message => message !== localMessage && message !== assistantMessage);
       if (!owner.id && !unsentConversations.value.includes(owner)) unsentConversations.value.push(owner);
       if (selected.value === owner) resizeComposer();
@@ -1612,6 +1681,7 @@ function navigateNativeVoiceConversation(id: string | null): void {
 watch(nativeComposerActive, active => { if (!active) resizeComposer(); });
 watch(() => props.nativeVoiceActive, active => { if (!active) clearNativeVoiceStreams(true); });
 watch(isRestoring, restoring => {
+  if (!restoring && shareRequested) void receiveSharedFiles();
   if (!restoring && explicitDestination) { const id = explicitDestination; explicitDestination = null; void openConversation(id); }
 });
 defineExpose({ openConversation: navigateToConversation, navigateNativeVoiceConversation, acceptNativeVoiceStream, conversationChanged, reconcileConversations, resetConversationChanges });
@@ -1670,13 +1740,15 @@ onMounted(() => {
   };
 
   void loadConversationHistory(true);
-  void restoreConversation();
+  window.addEventListener('aegis-shared-attachments', receiveSharedFiles);
+  void restoreConversation().finally(receiveSharedFiles);
   void voice.refreshStatus();
   void transcription.refreshStatus();
   void checkServerHealth();
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('aegis-shared-attachments', receiveSharedFiles);
   document.removeEventListener('visibilitychange', flushPresentationOnHidden);
   for (const p of textPresentations.values()) clearTimeout(p.timer);
   textPresentations.clear(); nativeVoiceTurns.clear(); closedNativeVoiceTurns.clear();
@@ -1762,7 +1834,7 @@ onBeforeUnmount(() => {
         @retry-history="loadConversationHistory(true)"
       ><template #global-navigation><slot name="global-navigation" /></template></ConversationSidebar>
 
-      <section class="chat-panel" aria-label="Conversa com a Aegis">
+      <section class="chat-panel" aria-label="Conversa com a Aegis" @dragover="dragFiles" @drop="dragFiles">
       <header class="chat-header">
         <div class="conversation-heading">
           <span>{{ conversationId ? 'Conversa ativa' : 'Nova conversa' }}</span>
@@ -1835,6 +1907,12 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="!nativeComposerActive && (selectedHasActiveTurn ? stopActiveTurn() : handleSubmit())">
+        <ul v-if="selected.files.length" class="attachment-list" aria-label="Anexos da mensagem">
+          <li v-for="(file, index) in selected.files" :key="index" class="attachment-chip">
+            <span class="attachment-name">{{ file.name }}</span><small>{{ attachmentSize(file.size) }}</small>
+            <button type="button" :aria-label="`Remover ${file.name}`" @click="selected.files.splice(index, 1)">×</button>
+          </li>
+        </ul>
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
           Uma mensagem não pôde ser enviada.
           <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
@@ -1846,6 +1924,10 @@ onBeforeUnmount(() => {
         <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
           @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
         <div v-else class="composer-field">
+          <input ref="filePicker" type="file" multiple hidden aria-label="Selecionar arquivos" @change="selectFiles" />
+          <button type="button" class="attachment-button" title="Anexar arquivo" aria-label="Anexar arquivo" @click="filePicker?.click()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 7-7a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9m-6 13 8-8" /></svg>
+          </button>
           <textarea
             v-model="draft"
             rows="1"
@@ -1854,6 +1936,7 @@ onBeforeUnmount(() => {
             :class="{ 'composer-input--scrollable': isComposerScrollable }"
             ref="composerInput"
             @input="resizeComposer"
+            @paste="pasteFiles"
             @keydown="handleKeydown"
           ></textarea>
 
