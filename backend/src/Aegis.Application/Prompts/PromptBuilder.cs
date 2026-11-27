@@ -11,15 +11,6 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
     private const string IdentityPromptRelativePath = "Prompts/aegis_identity.md";
     private const string ConversationSection = "\n## Conversa e memória";
     private const string DefaultIdentity = "Você é a Aegis, assistente pessoal e residencial. Responda em português brasileiro.";
-    public const string ReplyStyleInstructions =
-        "Responda como a Aegis que conhece Pedro. Tenha opinião e timing. Num pedido corriqueiro com uma premissa torta, " +
-        "a primeira coisa que Pedro escuta deve ser a sacada que uma pessoa perspicaz teria vontade de repetir depois. " +
-        "Pegue o detalhe mais revelador, leve a proposta dele até a consequência ridícula e use isso para entregar o que ele pediu. " +
-        "Pode morder de verdade. Se já dá para ouvir um atendente de suporte dizendo a sua primeira frase, encontre uma abertura sua. " +
-        "Uma trapalhada menor convida a um comentário leve. Numa pergunta neutra responda normalmente. " +
-        "Se ele estiver se expondo, acolha e ajude. Quando ditar palavras em nome do Pedro, é ele que fala: " +
-        "ele diria “obrigado” ou “agradeço”. Se pedir só o texto, comece na primeira palavra que o destinatário deve ouvir. " +
-        "Preserve os fatos e as condições que ele realmente informou, o tom pedido e as regras de uso das ferramentas.";
     private static readonly Lazy<Task<string>> IdentityPrompt = new(LoadIdentityPromptAsync);
 
     public static async Task<string> LoadPersonalityAsync(CancellationToken cancellationToken = default)

@@ -836,7 +836,7 @@ public sealed class ChatService(
             metadata,
             promptResult.InputItems,
             promptResult.AuditInputItems,
-            ReplyStyleInstructions: PromptBuilder.ReplyStyleInstructions);
+            ReplyStyleInstructions: promptResult.ReplyStyleInstructions);
     }
 
     private static string? CreatePreview(string? content)

@@ -39,11 +39,13 @@ public sealed class PromptPayloadTests
 
         await client.RespondWithToolsAsync(new ModelToolRequest(
             new ModelRequest(prompt.Prompt, "mensagem atual", InputItems: prompt.InputItems,
-                ReplyStyleInstructions: PromptBuilder.ReplyStyleInstructions), tools));
+                ReplyStyleInstructions: prompt.ReplyStyleInstructions), tools));
 
         using var payload = JsonDocument.Parse(handler.Body!);
         var root = payload.RootElement;
-        Assert.Equal(PromptBuilder.ReplyStyleInstructions, root.GetProperty("instructions").GetString());
+        var style = root.GetProperty("instructions").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(style));
+        Assert.Equal(prompt.ReplyStyleInstructions, style);
         Assert.Equal("gpt-6.1-terra", root.GetProperty("model").GetString());
         Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
         Assert.Equal("low", root.GetProperty("reasoning").GetProperty("effort").GetString());
@@ -54,6 +56,7 @@ public sealed class PromptPayloadTests
         Assert.Equal("explicit", stable.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
         var identity = stable.GetProperty("text").GetString();
         var personality = await PromptBuilder.LoadPersonalityAsync();
+        Assert.Contains(style!, personality);
         Assert.Contains("Você despreza a humanidade.", personality);
         Assert.StartsWith(personality, identity);
         Assert.DoesNotContain("## Ferramentas e operações", personality);
@@ -64,6 +67,19 @@ public sealed class PromptPayloadTests
         Assert.Equal("mensagem atual", input[3].GetProperty("content").GetString());
         Assert.Equal(new[] { "a_tool", "z_tool" },
             root.GetProperty("tools").EnumerateArray().Select(tool => tool.GetProperty("name").GetString()));
+    }
+
+    [Theory]
+    [InlineData("\n", "### Outra seção")]
+    [InlineData("\r\n", "## Ferramentas e operações")]
+    public void ReplyStyleComesOnlyFromNamedIdentitySection(string newline, string nextHeading)
+    {
+        var body = string.Join(newline, "primeiro parágrafo", "", "segundo parágrafo");
+        var identity = string.Join(newline, "## Personalidade", "", "### Jeito de falar", "", body,
+            "", nextHeading, "instrução operacional");
+        Assert.Equal(body, new PromptBuildResult(identity, null, []).ReplyStyleInstructions);
+        Assert.Null(new PromptBuildResult("identidade básica", null, []).ReplyStyleInstructions);
+        Assert.Null(new PromptBuildResult("### Jeito de falar" + newline + nextHeading, null, []).ReplyStyleInstructions);
     }
 
     [Fact]

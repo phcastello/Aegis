@@ -4,7 +4,6 @@ using System.Text.Json;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
-using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Aegis.Infrastructure.Models;
@@ -28,7 +27,8 @@ public sealed class OpenAiStreamingToolTests
             NullLogger<AegisToolLoop>.Instance, metrics);
         var chunks = new List<ModelStreamChunk>();
 
-        var request = new ModelRequest("prompt", "use a ferramenta", ReplyStyleInstructions: PromptBuilder.ReplyStyleInstructions);
+        const string style = "instrução de estilo da conversa";
+        var request = new ModelRequest("prompt", "use a ferramenta", ReplyStyleInstructions: style);
         await foreach (var chunk in loop.StreamAsync(request,
             new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "use a ferramenta"))) chunks.Add(chunk);
 
@@ -40,7 +40,7 @@ public sealed class OpenAiStreamingToolTests
         Assert.All(handler.Requests, body =>
         {
             using var payload = JsonDocument.Parse(body);
-            Assert.Equal(PromptBuilder.ReplyStyleInstructions, payload.RootElement.GetProperty("instructions").GetString());
+            Assert.Equal(style, payload.RootElement.GetProperty("instructions").GetString());
         });
     }
 
