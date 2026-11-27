@@ -106,7 +106,7 @@ public sealed class ChatService(
                 userMessage.Id,
                 assistantMessage.Id,
                 completion.AuditData));
-            StageResearch(userMessage, completion.DelegatedResearchBrief);
+            StageResearch(userMessage, completion.DelegatedResearchBrief, isPython: completion.DelegatePython);
 
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
@@ -188,7 +188,8 @@ public sealed class ChatService(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
                 request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments,
                 defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null,
-                AllowResearchDelegation: researchQueue is not null), turnToken);
+                AllowResearchDelegation: researchQueue is not null,
+                AllowPythonDelegation: researchQueue is not null), turnToken);
 
         var content = new StringBuilder();
         ChatMessage? segmentedMessage = null;
@@ -280,7 +281,7 @@ public sealed class ChatService(
                 segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
             var researchVoiceSession = request.IsHandsFree && request.VoiceSegments ? request.VoiceSessionId : null;
-            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession);
+            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession, chunk.DelegatePython);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -702,7 +703,8 @@ public sealed class ChatService(
             request,
             new ToolExecutionContext(conversationId, userMessageId, userContent,
                 clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments,
-                acceptVoiceTurn, AllowResearchDelegation: researchQueue is not null), cancellationToken);
+                acceptVoiceTurn, AllowResearchDelegation: researchQueue is not null,
+                AllowPythonDelegation: researchQueue is not null), cancellationToken);
 
         return new ModelCompletionResponse(
             response.Content,
@@ -713,14 +715,15 @@ public sealed class ChatService(
             response.AuditData,
             response.VoiceContinuation,
             response.Ignored,
-            response.DelegatedResearchBrief);
+            response.DelegatedResearchBrief,
+            response.DelegatePython);
     }
 
-    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null)
+    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null, bool isPython = false)
     {
         if (brief is null) return;
         (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível."))
-            .Stage(userMessage, brief, voiceSessionId);
+            .Stage(userMessage, brief, voiceSessionId, isPython);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(

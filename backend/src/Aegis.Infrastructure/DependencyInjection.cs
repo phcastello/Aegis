@@ -8,11 +8,13 @@ using Aegis.Infrastructure.Calendar;
 using Aegis.Application.Email;
 using Aegis.Application.Prompts;
 using Aegis.Application.Models;
+using Aegis.Application.Tools;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Email;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Aegis.Infrastructure.Titles;
+using Aegis.Infrastructure.Tools;
 using Aegis.Infrastructure.Voice;
 using Aegis.Infrastructure.Voice.Transcription;
 using Aegis.Application.Memory;
@@ -53,6 +55,9 @@ public static class DependencyInjection
         if (webSearch.MaxSearchActionsPerTurn is < 1 or > 20)
             throw new InvalidOperationException("Invalid web search action budget.");
         services.AddSingleton(webSearch);
+        services.AddSingleton<IPythonScriptRunner, WasmPythonScriptRunner>();
+        services.AddScoped<PythonScriptTool>();
+        services.AddScoped<IAegisTool>(provider => provider.GetRequiredService<PythonScriptTool>());
         services.AddSingleton<ResearchFaviconDiscovery>();
         services.AddScoped<ResearchJobStore>();
         services.AddScoped<IResearchDelegationQueue>(provider => provider.GetRequiredService<ResearchJobStore>());

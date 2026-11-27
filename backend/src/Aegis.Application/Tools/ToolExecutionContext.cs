@@ -8,4 +8,5 @@ public sealed record ToolExecutionContext(
     Guid? VoiceSessionId = null,
     bool VoiceSegments = false,
     Func<CancellationToken, Task>? AcceptVoiceTurn = null,
-    bool AllowResearchDelegation = false);
+    bool AllowResearchDelegation = false,
+    bool AllowPythonDelegation = false);

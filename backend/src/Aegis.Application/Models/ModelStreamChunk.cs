@@ -15,4 +15,5 @@ public sealed record ModelStreamChunk(
     string? FinalSpeechSegment = null,
     bool Ignored = false,
     IReadOnlyList<WebResearchSourceCount>? WebResearchSources = null,
-    string? DelegatedResearchBrief = null);
+    string? DelegatedResearchBrief = null,
+    bool DelegatePython = false);

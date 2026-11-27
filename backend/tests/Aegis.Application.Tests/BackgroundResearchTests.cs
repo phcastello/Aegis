@@ -3,6 +3,7 @@ using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
@@ -241,7 +242,78 @@ public sealed class BackgroundResearchTests
         Assert.Equal(1, await db.ChatMessages.CountAsync());
     }
 
-    private static ServiceProvider Services(ResearchModel model, ConversationChanges changes)
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PythonJobRequiresAnActualScriptResultAndUsesItsOwnVoiceSession(bool runScript)
+    {
+        const string request = "Gere um inteiro aleatório entre -10 e 42, inclusive.";
+        const string brief = "Use o intervalo inteiro indicado; explique também a inclusão dos limites.";
+        var runner = new ScriptRunner();
+        var model = new ScriptModel(runScript);
+        await using var services = Services(model, new ConversationChanges(), runner, webEnabled: false);
+        var sessionId = Guid.NewGuid();
+        Guid jobId;
+        Guid conversationId;
+        Guid webJobId;
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ResearchJobStore>();
+            var webJob = await store.CreateAsync(new(Guid.NewGuid(), null, "A web ficou desativada."), CancellationToken.None);
+            webJobId = webJob.Id;
+            var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+            var conversation = new Conversation(Conversation.DefaultTitle);
+            var origin = conversation.AddMessage(ChatRoles.User, request);
+            db.Conversations.Add(conversation);
+            db.ChatMessages.Add(origin);
+            await db.SaveChangesAsync();
+            store.Stage(origin, brief, sessionId, isPython: true);
+            await db.SaveChangesAsync();
+            jobId = origin.Id;
+            conversationId = origin.ConversationId;
+            Assert.Equal("python", (await store.GetAsync(jobId, CancellationToken.None))?.Kind);
+            Assert.Null((await store.GetVoiceResultAsync(jobId, sessionId, CancellationToken.None))?.Text);
+            await Assert.ThrowsAsync<ResearchJobConflictException>(() =>
+                store.CreateAsync(new(jobId, conversationId, request), CancellationToken.None));
+        }
+
+        Assert.True(await Worker(services).ProcessNextAsync(CancellationToken.None));
+        Assert.Equal(runScript ? 1 : 0, runner.Runs);
+        Assert.Contains(request, model.JobInput);
+        Assert.Contains(brief, model.JobInput);
+        Assert.NotNull(model.Instructions);
+        Assert.Contains("Comece direto pela conclusão", model.Instructions);
+
+        await using var finalScope = services.CreateAsyncScope();
+        var finalStore = finalScope.ServiceProvider.GetRequiredService<ResearchJobStore>();
+        var dbAfter = finalScope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        Assert.Equal(ResearchJob.Queued, (await finalStore.GetAsync(webJobId, CancellationToken.None))!.State);
+        var final = Assert.Single(await finalStore.ListAsync(conversationId, CancellationToken.None));
+        Assert.Equal("python", final.Kind);
+        Assert.Empty(final.Sources);
+        Assert.Null(await finalStore.GetVoiceResultAsync(jobId, Guid.NewGuid(), CancellationToken.None));
+        var result = await finalStore.GetVoiceResultAsync(jobId, sessionId, CancellationToken.None);
+        if (runScript)
+        {
+            Assert.Equal(ResearchJob.Completed, final.State);
+            Assert.Equal("O inteiro sorteado foi 42. Os dois limites foram incluídos.", result!.Text);
+            Assert.Equal(result.Text, (await dbAfter.ChatMessages.SingleAsync(message => message.Id == final.ResultMessageId)).Content);
+            var audit = await dbAfter.LlmRequestAudits.SingleAsync();
+            Assert.Equal("{\"type\":\"background_python\"}", audit.RequestPayloadJson);
+            Assert.Null(audit.ResponseBody);
+        }
+        else
+        {
+            Assert.Equal(ResearchJob.Failed, final.State);
+            Assert.Equal("python_incomplete", final.ErrorCode);
+            Assert.Null(final.ResultMessageId);
+            Assert.Equal("Tive um problema e não consegui concluir a tarefa.", result!.Text);
+            Assert.Equal(0, await dbAfter.ChatMessages.CountAsync(message => message.Role == ChatRoles.Assistant));
+        }
+    }
+
+    private static ServiceProvider Services(IAegisModelClient model, ConversationChanges changes,
+        IPythonScriptRunner? script = null, bool webEnabled = true)
     {
         var dbName = Guid.NewGuid().ToString();
         var services = new ServiceCollection();
@@ -250,7 +322,8 @@ public sealed class BackgroundResearchTests
         services.AddSingleton<IConversationChangePublisher>(changes);
         services.AddSingleton<IAegisModelClient>(model);
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton(new WebSearchOptions());
+        services.AddSingleton(new WebSearchOptions { Enabled = webEnabled });
+        if (script is not null) services.AddSingleton(script);
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<ResearchJobStore>();
         services.AddScoped<IResearchDelegationQueue>(provider => provider.GetRequiredService<ResearchJobStore>());
@@ -301,6 +374,61 @@ public sealed class BackgroundResearchTests
             var audit = new LlmRequestAuditData("fake", "research", true, 1, "{}", 200, null, null, null);
             yield return new(null, true, [], document.RootElement.EnumerateArray().Select(item => item.Clone()).ToArray(),
                 Provider: "fake", Model: "research", AuditData: audit);
+        }
+    }
+
+    private sealed class ScriptModel(bool runScript) : IAegisModelClient
+    {
+        private const string Code = "import secrets\nprint(secrets.randbelow(53) - 10)";
+        public string? JobInput { get; private set; }
+        public string? Instructions { get; private set; }
+
+        public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Assert.Equal("run_python", Assert.Single(request.Tools).Name);
+            Assert.Null(request.NativeSearchActionBudget);
+            JobInput = request.Request.Input;
+            Instructions = request.Request.Instructions;
+            Assert.Contains(request.AuditInputItems!, item => item.GetRawText().Contains("[python_tool_brief_redacted]"));
+            var audit = new LlmRequestAuditData("fake", "script", true, 1, JobInput, 200, Code, null, null);
+            var output = request.InputItems?.SingleOrDefault(item => item.TryGetProperty("type", out var type) &&
+                type.GetString() == "function_call_output");
+            if (runScript && output is null or { ValueKind: JsonValueKind.Undefined })
+            {
+                var args = JsonSerializer.SerializeToElement(new { code = Code, input = (string?)null });
+                yield return new(null, true, [new("python_1", "run_python", args)], [],
+                    Provider: "fake", Model: "script", AuditData: audit);
+                yield break;
+            }
+
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            if (runScript)
+            {
+                using var toolResponse = JsonDocument.Parse(output!.Value.GetProperty("output").GetString()!);
+                var number = toolResponse.RootElement.GetProperty("stdout").GetString()!.Trim();
+                yield return new($"O inteiro sorteado foi {number}. Os dois limites foram incluídos.", false, [], []);
+            }
+            else yield return new("O inteiro sorteado foi 17.", false, [], []);
+            yield return new(null, true, [], [], Provider: "fake", Model: "script", AuditData: audit);
+        }
+    }
+
+    private sealed class ScriptRunner : IPythonScriptRunner
+    {
+        public bool IsAvailable => true;
+        public int Runs { get; private set; }
+
+        public Task<PythonScriptResult> RunAsync(string code, string? input, CancellationToken cancellationToken)
+        {
+            Assert.Contains("secrets.randbelow(53)", code);
+            Assert.Null(input);
+            Runs++;
+            return Task.FromResult(new PythonScriptResult(true, "42\n", ""));
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
 using Aegis.Application.Tools;
@@ -114,6 +115,43 @@ public sealed class OpenAiStreamingToolTests
         Assert.Equal(1, accepted);
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await stream.MoveNextAsync());
         Assert.Equal(1, accepted);
+    }
+
+
+
+    [Fact]
+    public async Task FailedPythonToolStreamRedactsPartialCodeFromAudit()
+    {
+        using var http = new HttpClient(new FailedPythonStreamHandler()) { BaseAddress = new Uri("https://api.openai.com/") };
+        using var metrics = new AegisMetrics();
+        var model = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var failure = await Assert.ThrowsAsync<LlmRequestException>(async () =>
+        {
+            await foreach (var _ in model.RespondWithToolsStreamAsync(new(new("identidade", "Calcule."), [], 1))) { }
+        });
+
+        Assert.Equal("[python_tool_response_redacted]", failure.AuditData.ResponseBody);
+        Assert.DoesNotContain("PRIVATE_SCRIPT", JsonSerializer.Serialize(failure.AuditData));
+    }
+
+    private sealed class FailedPythonStreamHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            const string body = """
+                data: {"type":"response.output_item.added","item":{"type":"function_call","id":"s1","name": "run_python"}}
+
+                data: {"type":"response.function_call_arguments.delta","item_id":"s1","delta":"PRIVATE_SCRIPT"}
+
+                data: {"type":"error"}
+
+                """;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body + "\n", Encoding.UTF8, "text/event-stream")
+            });
+        }
     }
 
     private sealed class SegmentsHandler(bool changeFinal, bool lateIgnore = false) : HttpMessageHandler

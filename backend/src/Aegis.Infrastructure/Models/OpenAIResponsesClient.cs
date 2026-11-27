@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Aegis.Infrastructure.Models;
 
@@ -23,6 +24,8 @@ public sealed class OpenAIResponsesClient(
     private const string Provider = "openai";
     private const string FriendlyFailureMessage = "Tive um problema para responder agora. Tenta de novo em alguns segundos.";
     private const string FinalAnswerPhase = "final_answer";
+    private static readonly Regex PythonToolResponse = new(
+        @"""name""\s*:\s*""(?:run_python|delegate_python)""", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -832,7 +835,8 @@ public sealed class OpenAIResponsesClient(
             requestPayloadJson,
             httpStatusCode,
             SafeAuditResponse(requestPayloadJson, responseBody),
-            IsMemoryAudit(requestPayloadJson) ? "model_request_failed" : exception.Message,
+            IsMemoryAudit(requestPayloadJson) || IsPythonAudit(requestPayloadJson, responseBody)
+                ? "model_request_failed" : exception.Message,
             exception.GetType().FullName);
 
         return new LlmRequestException(FriendlyFailureMessage, auditData, exception);
@@ -843,8 +847,16 @@ public sealed class OpenAIResponsesClient(
         payload.Contains("[memory_tool_output_redacted]", StringComparison.Ordinal) ||
         payload.Contains("[memory_tool_arguments_redacted]", StringComparison.Ordinal);
 
-    private static string? SafeAuditResponse(string payload, string? response) =>
-        payload.Contains("[reminder_intervention_context_redacted]", StringComparison.Ordinal) && response is not null
-            ? "[reminder_intervention_response_redacted]"
-            : IsMemoryAudit(payload) && response is not null ? "[memory_response_redacted]" : response;
+    private static bool IsPythonAudit(string payload, string? response) =>
+        payload.Contains("[python_tool_", StringComparison.Ordinal) ||
+        (response is not null && PythonToolResponse.IsMatch(response));
+
+    private static string? SafeAuditResponse(string payload, string? response)
+    {
+        if (response is null) return null;
+        if (IsPythonAudit(payload, response)) return "[python_tool_response_redacted]";
+        if (payload.Contains("[reminder_intervention_context_redacted]", StringComparison.Ordinal))
+            return "[reminder_intervention_response_redacted]";
+        return IsMemoryAudit(payload) ? "[memory_response_redacted]" : response;
+    }
 }

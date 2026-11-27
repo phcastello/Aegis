@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
 using Aegis.Application.Tools;
+using Aegis.Infrastructure.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -465,6 +467,187 @@ public sealed class ToolLoopTests
         Assert.DoesNotContain(chunks, chunk => chunk.ToolStatus is not null);
     }
 
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RandomDrawUsesTheRunnerResultAndRedactsScriptAudit(bool streaming)
+    {
+        const string code = "import secrets\nprint(secrets.randbelow(30 - 20 + 1) + 20)  # PRIVATE_SCRIPT";
+        const string output = "27\nPRIVATE_OUTPUT";
+        const string userRequest = "Sorteie um inteiro entre 20 e 30.";
+        var args = JsonSerializer.SerializeToElement(new { code, input = (string?)null });
+        var call = new ModelToolCall("draw", PythonScriptTool.ToolName, args);
+        var originalOutput = JsonSerializer.SerializeToElement(new { type = "function_call", name = call.Name,
+            call_id = call.Id, arguments = args.GetRawText() });
+        var model = new FakeModelClient([Done([call]) with
+        {
+            OutputItems = [originalOutput],
+            AuditData = new LlmRequestAuditData("fake", "fake", true, 1, "{}", 200, originalOutput.GetRawText(), null, null)
+        }, Reply("27")]);
+        var runner = new FakePythonRunner(output);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new PythonScriptTool(runner)]),
+            NullLogger<AegisToolLoop>.Instance, metrics);
+        var request = new ModelRequest("identity", userRequest);
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), userRequest, AllowPythonDelegation: true);
+
+        LlmRequestAuditData? audit;
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.Equal("27", string.Concat(chunks.Select(chunk => chunk.Content)));
+            Assert.Contains(chunks, chunk => chunk.ToolStatus is { Category: "python", State: "completed" });
+            audit = chunks[^1].AuditData;
+        }
+        else
+        {
+            var final = await loop.RunAsync(request, context);
+            Assert.Equal("27", final.Content);
+            audit = final.AuditData;
+        }
+
+        Assert.Equal((code, (string?)null), Assert.Single(runner.Calls));
+        Assert.Contains("secrets.randbelow", JsonSerializer.Serialize(model.Requests[0].InputItems));
+        Assert.Contains(model.Requests[0].Tools, tool => tool.Name == "delegate_python");
+        Assert.DoesNotContain(model.Requests[1].Tools, tool => tool.Name == "delegate_python");
+        var continuation = model.Requests[1].InputItems!;
+        var returned = Assert.Single(continuation, item => item.TryGetProperty("output", out _));
+        using var result = JsonDocument.Parse(returned.GetProperty("output").GetString()!);
+        Assert.Equal(output, result.RootElement.GetProperty("stdout").GetString());
+        var auditItems = JsonSerializer.Serialize(model.Requests[1].AuditInputItems);
+        Assert.DoesNotContain("PRIVATE_SCRIPT", auditItems);
+        Assert.DoesNotContain("PRIVATE_OUTPUT", auditItems);
+        Assert.Contains("[python_tool_output_redacted]", auditItems);
+        Assert.DoesNotContain("PRIVATE_", JsonSerializer.Serialize(audit));
+        Assert.Contains("[python_tool_response_redacted]", audit!.ResponseBody);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandsFreeDelegatesWithSpokenIntentBeforeRunningPython(bool streaming)
+    {
+        const string intent = "Vou conferir as diferenças entre as listas.";
+        const string brief = "Compare as listas e conte repetições em cada uma.";
+        var model = new FakeModelClient([Done([new("work", "delegate_python",
+            JsonSerializer.SerializeToElement(new { intent, brief }))])]);
+        var runner = new FakePythonRunner("");
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new PythonScriptTool(runner)]),
+            NullLogger<AegisToolLoop>.Instance, metrics);
+        var accepted = 0;
+        var request = new ModelRequest("identity", brief);
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), request.Input,
+            Origin: "hands_free", VoiceSegments: true, AcceptVoiceTurn: _ => { accepted++; return Task.CompletedTask; },
+            AllowPythonDelegation: true);
+        if (streaming)
+        {
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.Equal(intent, chunks[0].FinalSpeechSegment);
+            Assert.Null(chunks[0].DelegatedResearchBrief);
+            Assert.True(chunks[1].IsDone);
+            Assert.Equal(brief, chunks[1].DelegatedResearchBrief);
+            Assert.True(chunks[1].DelegatePython);
+        }
+        else
+        {
+            var final = await loop.RunAsync(request, context);
+            Assert.Equal(intent, final.Content);
+            Assert.Equal(brief, final.DelegatedResearchBrief);
+            Assert.True(final.DelegatePython);
+        }
+
+        Assert.Empty(runner.Calls);
+        Assert.Equal(1, accepted);
+        var round = Assert.Single(model.Requests);
+        Assert.Null(round.NativeSearchActionBudget);
+        Assert.Contains(round.Tools, tool => tool.Name == "delegate_python");
+    }
+
+    [Fact]
+    public async Task UnavailablePythonRunnerExposesNeitherTool()
+    {
+        var model = new FakeModelClient([Reply("Resposta")]);
+        var runner = new FakePythonRunner("", isAvailable: false);
+        using var metrics = new AegisMetrics();
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new PythonScriptTool(runner)]),
+            NullLogger<AegisToolLoop>.Instance, metrics);
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "pedido", AllowPythonDelegation: true);
+        await loop.RunAsync(new ModelRequest("identity", "pedido"), context);
+
+        Assert.DoesNotContain(Assert.Single(model.Requests).Tools, tool => tool.Name is "run_python" or "delegate_python");
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task PythonToolForwardsArbitraryTextAndRejectsOversizeUtf8BeforeExecution()
+    {
+        var runner = new FakePythonRunner("ok");
+        var tool = new PythonScriptTool(runner);
+        const string code = "import sys\nprint(sys.stdin.read())";
+        const string input = "{\"nome\":\"João\",\"lista\":[1,2]}\n\ttexto livre ";
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "dados");
+        var result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { code, input }), context);
+        Assert.True(result.Success);
+        Assert.Equal((code, input), Assert.Single(runner.Calls));
+
+        var oversize = new string('ç', PythonScriptTool.MaximumInputBytes / 2 + 1);
+        result = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { code, input = oversize }), context);
+        Assert.False(result.Success);
+        Assert.Equal("invalid_tool_arguments", result.ErrorCode);
+        Assert.Single(runner.Calls);
+    }
+
+
+    [PackagedPythonFact]
+    public async Task PackagedPythonDrawGivesValidBoundsAndExactValueToChat()
+    {
+        var runner = new WasmPythonScriptRunner();
+        Assert.True(runner.IsAvailable);
+        using var metrics = new AegisMetrics();
+        foreach (var (lower, upper) in new[] { (-47, -47), (91, 91), (-47, 91) })
+        {
+            var userRequest = $"Sorteie um inteiro entre {lower} e {upper}.";
+            var code = FormattableString.Invariant(
+                $"import secrets\na = {lower}\nb = {upper}\nprint(secrets.randbelow(b - a + 1) + a)");
+            var args = JsonSerializer.SerializeToElement(new { code, input = (string?)null });
+            var call = new ModelToolCall("draw", PythonScriptTool.ToolName, args);
+            int? drawn = null;
+            var model = new FakeModelClient([Done([call])], round =>
+            {
+                var output = Assert.Single(round.InputItems!, item => item.TryGetProperty("output", out _));
+                using var result = JsonDocument.Parse(output.GetProperty("output").GetString()!);
+                Assert.True(result.RootElement.GetProperty("success").GetBoolean());
+                var number = result.RootElement.GetProperty("stdout").GetString()!.Trim();
+                drawn = int.Parse(number, CultureInfo.InvariantCulture);
+                return Reply(number);
+            });
+            var loop = new AegisToolLoop(model, new AegisToolRegistry([new PythonScriptTool(runner)]),
+                NullLogger<AegisToolLoop>.Instance, metrics);
+            var request = new ModelRequest("identity", userRequest);
+            var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), userRequest, AllowPythonDelegation: true);
+            var chunks = new List<ModelStreamChunk>();
+            await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
+            Assert.NotNull(drawn);
+            Assert.InRange(drawn.Value, lower, upper);
+            Assert.Equal(drawn.Value.ToString(CultureInfo.InvariantCulture), string.Concat(chunks.Select(chunk => chunk.Content)));
+            Assert.Contains(chunks, chunk => chunk.ToolStatus is { Category: "python", State: "completed" });
+            Assert.Null(chunks[^1].DelegatedResearchBrief);
+        }
+    }
+
+    private sealed class PackagedPythonFactAttribute : FactAttribute
+    {
+        public PackagedPythonFactAttribute()
+        {
+            if (Environment.GetEnvironmentVariable("AEGIS_PYTHON_TEST_PACKAGED") is not "1")
+                Skip = "Requires the packaged Python runtime and AEGIS_PYTHON_TEST_PACKAGED=1.";
+        }
+    }
+
     private static JsonElement SearchItem(string id, string actionType = "search") => JsonSerializer.SerializeToElement(new
     {
         id,
@@ -529,10 +712,15 @@ public sealed class ToolLoopTests
         new(null, true, calls, [], Provider: "fake", Model: "fake", Purpose: ModelPurpose.Chat,
             AuditData: new LlmRequestAuditData("fake", "fake", true, 1, "{}", 200, "{}", null, null));
 
-    private sealed class FakeModelClient(IReadOnlyList<ModelToolStreamChunk> responses) : IAegisModelClient
+    private sealed class FakeModelClient(IReadOnlyList<ModelToolStreamChunk> responses,
+        Func<ModelToolRequest, ModelToolStreamChunk>? finalReply = null) : IAegisModelClient
     {
         public int StreamCalls { get; private set; }
         private int responseCalls;
+
+        private ModelToolStreamChunk Next(ModelToolRequest request) =>
+            responseCalls < responses.Count || finalReply is null
+                ? responses[responseCalls++] : finalReply(request);
         public List<ModelToolRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(
@@ -540,7 +728,7 @@ public sealed class ToolLoopTests
         {
             Requests.Add(request with { InputItems = request.InputItems?.ToList() });
             StreamCalls++;
-            var response = responses[responseCalls++];
+            var response = Next(request);
             if (response.ToolStatus is { } status)
                 yield return new ModelToolStreamChunk(null, false, [], [], ToolStatus: status);
             if (!string.IsNullOrEmpty(response.Content))
@@ -552,10 +740,22 @@ public sealed class ToolLoopTests
         public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request with { InputItems = request.InputItems?.ToList() ?? request.Request.InputItems?.ToList() });
-            var response = responses[responseCalls++];
+            var response = Next(request);
             return Task.FromResult(new ModelToolResponse(response.Content ?? "", response.Provider!, response.Model!,
                 response.Purpose!.Value, response.ToolCalls, response.OutputItems, response.ResponseId,
                 response.MetadataJson, response.AuditData!));
+        }
+    }
+
+
+    private sealed class FakePythonRunner(string output, bool isAvailable = true) : IPythonScriptRunner
+    {
+        public bool IsAvailable => isAvailable;
+        public List<(string Code, string? Input)> Calls { get; } = [];
+        public Task<PythonScriptResult> RunAsync(string code, string? input, CancellationToken cancellationToken)
+        {
+            Calls.Add((code, input));
+            return Task.FromResult(new PythonScriptResult(true, output, ""));
         }
     }
 

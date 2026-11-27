@@ -21,19 +21,20 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
     private static readonly TimeSpan JobTimeout = TimeSpan.FromMinutes(3);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string DelegationKey = "researchDelegation";
+    private const string PythonDelegationKey = "pythonDelegation";
 
-    public void Stage(ChatMessage userMessage, string brief, Guid? voiceSessionId = null)
+    public void Stage(ChatMessage userMessage, string brief, Guid? voiceSessionId = null, bool isPython = false)
     {
         if (userMessage.Role != ChatRoles.User || db.Entry(userMessage).State != EntityState.Unchanged ||
             string.IsNullOrWhiteSpace(brief) || brief.Length > IResearchDelegationQueue.MaximumBriefLength)
-            throw new ArgumentException("Informe uma mensagem aceita e uma tarefa de pesquisa válida.");
+            throw new ArgumentException("Informe uma mensagem aceita e uma tarefa válida.");
 
         var previous = userMessage.MetadataJson is { } json ? JsonNode.Parse(json) : null;
         var metadata = previous as JsonObject ?? new JsonObject();
         if (previous is not null && previous is not JsonObject) metadata["previousMetadata"] = previous;
         var delegation = new JsonObject { ["version"] = 1, ["brief"] = brief.Trim() };
         if (voiceSessionId is { } session && session != Guid.Empty) delegation["voiceSessionId"] = JsonValue.Create(session);
-        metadata[DelegationKey] = delegation;
+        metadata[isPython ? PythonDelegationKey : DelegationKey] = delegation;
         userMessage.AttachAuditData(userMessage.Model, userMessage.PromptSnapshot, userMessage.RuntimeContextSnapshot,
             metadata.ToJsonString(JsonOptions));
         db.ResearchJobs.Add(new ResearchJob(userMessage.Id, userMessage.ConversationId, userMessage.Id, clock.GetUtcNow()));
@@ -79,9 +80,10 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         var job = await VisibleJobs().AsNoTracking().SingleOrDefaultAsync(item => item.Id == request.JobId, ct);
         if (job is null) return null;
 
-        var priorContent = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
-            .Select(message => message.Content).SingleAsync(ct);
-        if ((request.ConversationId is { } id && id != job.ConversationId) || priorContent != content)
+        var prior = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
+            .Select(message => new { message.Content, message.MetadataJson }).SingleAsync(ct);
+        if ((request.ConversationId is { } id && id != job.ConversationId) || prior.Content != content ||
+            job.Id == job.UserMessageId && ReadDelegation(prior.MetadataJson).IsPython)
             throw new ResearchJobConflictException();
         return Snapshot(job);
     }
@@ -89,7 +91,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
     public async Task<ResearchJobSnapshot?> GetAsync(Guid id, CancellationToken ct)
     {
         var job = await VisibleJobs().AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, ct);
-        return job is null ? null : Snapshot(job);
+        return job is null ? null : Snapshot(job, await ReadMetadataAsync(job, ct));
     }
 
     public async Task<ResearchVoiceResult?> GetVoiceResultAsync(Guid id, Guid voiceSessionId, CancellationToken ct)
@@ -102,9 +104,13 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
                 message.ConversationId == job.ConversationId && message.Role == ChatRoles.User
             select new { job.State, job.ConversationId, job.ResultMessageId, message.MetadataJson })
             .SingleOrDefaultAsync(ct);
-        if (result is null || ReadDelegation(result.MetadataJson).VoiceSessionId != voiceSessionId) return null;
+        if (result is null) return null;
+        var delegation = ReadDelegation(result.MetadataJson);
+        if (delegation.VoiceSessionId != voiceSessionId) return null;
         if (result.State == ResearchJob.Failed)
-            return new(result.ConversationId, "Tive um problema e não consegui concluir a pesquisa.");
+            return new(result.ConversationId, delegation.IsPython
+                ? "Tive um problema e não consegui concluir a tarefa."
+                : "Tive um problema e não consegui concluir a pesquisa.");
         if (result.State is ResearchJob.Queued or ResearchJob.Running)
             return new(result.ConversationId, null);
 
@@ -121,7 +127,10 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
             .OrderByDescending(job => job.State == ResearchJob.Queued || job.State == ResearchJob.Running)
             .ThenByDescending(job => job.CreatedAt).ThenByDescending(job => job.Id)
             .Take(MaximumRecentJobs).ToListAsync(ct);
-        return jobs.Select(Snapshot).ToArray();
+        var delegated = jobs.Where(job => job.Id == job.UserMessageId).Select(job => job.UserMessageId).ToArray();
+        var metadata = await db.ChatMessages.AsNoTracking().Where(message => delegated.Contains(message.Id))
+            .ToDictionaryAsync(message => message.Id, message => message.MetadataJson, ct);
+        return jobs.Select(job => Snapshot(job, metadata.GetValueOrDefault(job.UserMessageId))).ToArray();
     }
 
     public async Task<ResearchJobSnapshot?> CancelAsync(Guid id, CancellationToken ct)
@@ -130,16 +139,26 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         {
             var job = await VisibleJobs().SingleOrDefaultAsync(item => item.Id == id, ct);
             if (job is null) return null;
-            if (job.State is not (ResearchJob.Queued or ResearchJob.Running)) return Snapshot(job);
+            var metadata = await ReadMetadataAsync(job, ct);
+            if (job.State is not (ResearchJob.Queued or ResearchJob.Running)) return Snapshot(job, metadata);
             job.Cancel(clock.GetUtcNow());
-            if (await SaveTransitionAsync(ct)) return Snapshot(job);
+            if (await SaveTransitionAsync(ct)) return Snapshot(job, metadata);
         }
     }
 
-    internal async Task<ResearchJobInput?> ClaimAsync(CancellationToken ct)
+    internal async Task<ResearchJobInput?> ClaimAsync(CancellationToken ct, bool allowWeb = true, bool allowPython = false)
     {
+        if (!allowWeb && !allowPython) return null;
         await ExpireStaleJobsAsync(ct);
-        var job = await VisibleJobs().Where(item => item.State == ResearchJob.Queued)
+        var pending = VisibleJobs().Where(item => item.State == ResearchJob.Queued);
+        if (allowWeb != allowPython)
+        {
+            var stagedPython = PythonJobMessageIds();
+            pending = allowPython
+                ? pending.Where(item => item.Id == item.UserMessageId && stagedPython.Contains(item.UserMessageId))
+                : pending.Where(item => item.Id != item.UserMessageId || !stagedPython.Contains(item.UserMessageId));
+        }
+        var job = await pending
             .OrderBy(item => item.CreatedAt).ThenBy(item => item.Id).FirstOrDefaultAsync(ct);
         if (job is null) return null;
         var message = await db.ChatMessages.Where(message => message.Id == job.UserMessageId)
@@ -154,18 +173,34 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         }
         job.Start(clock.GetUtcNow(), JobTimeout);
         return await SaveTransitionAsync(ct)
-            ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId, content, job.DeadlineAt!.Value,
-                delegation.VoiceSessionId.HasValue)
+            ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId,
+                delegation.IsPython ? $"Pedido original do usuário\n{message.Content}\n\nContexto da tarefa\n{content}" : content,
+                job.DeadlineAt!.Value, delegation.VoiceSessionId.HasValue, delegation.IsPython)
             : null;
     }
 
-    private static (string? Brief, Guid? VoiceSessionId) ReadDelegation(string? metadata)
+    private IQueryable<Guid> PythonJobMessageIds()
+    {
+        var messages = db.ChatMessages.Where(message => message.MetadataJson != null);
+        var python = db.Database.IsNpgsql()
+            ? messages.Where(message => EF.Functions.JsonExists(message.MetadataJson!, PythonDelegationKey))
+            : messages.Where(message => message.MetadataJson!.Contains("\"" + PythonDelegationKey + "\":"));
+        return python.Select(message => message.Id);
+    }
+
+    private Task<string?> ReadMetadataAsync(ResearchJob job, CancellationToken ct) => job.Id != job.UserMessageId
+        ? Task.FromResult<string?>(null)
+        : db.ChatMessages.AsNoTracking().Where(message => message.Id == job.UserMessageId)
+            .Select(message => message.MetadataJson).SingleOrDefaultAsync(ct);
+
+    private static (string? Brief, Guid? VoiceSessionId, bool IsPython) ReadDelegation(string? metadata)
     {
         if (metadata is null) return default;
         using var document = JsonDocument.Parse(metadata);
         var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty(DelegationKey, out var delegation) || delegation.ValueKind != JsonValueKind.Object ||
+        if (root.ValueKind != JsonValueKind.Object) return default;
+        var isPython = root.TryGetProperty(PythonDelegationKey, out var delegation);
+        if ((!isPython && !root.TryGetProperty(DelegationKey, out delegation)) || delegation.ValueKind != JsonValueKind.Object ||
             !delegation.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) || versionNumber != 1 ||
             !delegation.TryGetProperty("brief", out var brief) || brief.ValueKind != JsonValueKind.String)
@@ -176,7 +211,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         Guid? session = delegation.TryGetProperty("voiceSessionId", out var voiceSessionId) &&
             voiceSessionId.ValueKind == JsonValueKind.String && voiceSessionId.TryGetGuid(out var parsed) && parsed != Guid.Empty
                 ? parsed : null;
-        return (text, session);
+        return (text, session, isPython);
     }
 
     internal Task<bool> IsRunningAsync(Guid id, CancellationToken ct) =>
@@ -237,7 +272,8 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         foreach (var job in expired)
         {
             // Do not replay an interrupted provider request with unknown billing.
-            job.Fail("research_interrupted", now);
+            var delegation = ReadDelegation(await ReadMetadataAsync(job, ct));
+            job.Fail(delegation.IsPython ? "python_interrupted" : "research_interrupted", now);
             if (!await SaveTransitionAsync(ct)) return;
         }
     }
@@ -259,9 +295,10 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         }
     }
 
-    private static ResearchJobSnapshot Snapshot(ResearchJob job) => new(
+    private static ResearchJobSnapshot Snapshot(ResearchJob job, string? metadata = null) => new(
         job.Id, job.ConversationId, job.UserMessageId, job.State, job.Phase, job.CreatedAt, job.UpdatedAt,
-        job.ResultMessageId, job.ErrorCode, JsonSerializer.Deserialize<WebResearchSourceCount[]>(job.SourcesJson, JsonOptions) ?? []);
+        job.ResultMessageId, job.ErrorCode, JsonSerializer.Deserialize<WebResearchSourceCount[]>(job.SourcesJson, JsonOptions) ?? [],
+        ReadDelegation(metadata).IsPython ? "python" : null);
 }
 
 public sealed class ResearchJobConflictException : Exception { }

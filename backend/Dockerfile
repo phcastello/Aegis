@@ -1,3 +1,19 @@
+FROM debian:bookworm-slim AS python-wasi-build
+ARG TARGETARCH
+WORKDIR /src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates curl git python3 xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+COPY script-runtime/build.sh ./build.sh
+RUN sh ./build.sh "$TARGETARCH"
+
+FROM python-wasi-build AS python-runtime
+COPY script-runtime/launcher.c script-runtime/test_runtime.py ./
+RUN mkdir -p /opt/aegis-python/stdlib/lib-dynload \
+    && cc -O2 -Wall -Wextra -Werror -I/opt/wasmtime-c-api/include \
+    -L/opt/aegis-python -Wl,-rpath,'$ORIGIN' -o /opt/aegis-python/runner launcher.c -lwasmtime \
+    && python3 test_runtime.py
+
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
@@ -21,6 +37,7 @@ WORKDIR /app
 
 COPY --from=build /app/publish .
 COPY --from=build /app/node-admin ./node-admin
+COPY --from=python-runtime /opt/aegis-python /opt/aegis-python
 
 EXPOSE 8090
 

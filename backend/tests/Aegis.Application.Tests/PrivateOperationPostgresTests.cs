@@ -1,3 +1,5 @@
+using Aegis.Domain;
+using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
@@ -175,6 +177,49 @@ public sealed class PrivateOperationPostgresTests
         Assert.Equal("queued", (await store.GetAsync(request.JobId, CancellationToken.None))!.State);
         Assert.Equal("cancelled", (await store.CancelAsync(request.JobId, CancellationToken.None))!.State);
         Assert.Equal("cancelled", Assert.Single(await store.ListAsync(snapshots[0].ConversationId, CancellationToken.None)).State);
+    });
+
+    [OperationFact]
+    public Task BackgroundJobClaimsRespectTheEnabledToolWithoutASeparateSchema() => WithSchema(async create =>
+    {
+        const string original = "Analise {\"values\":[5,2,9]}.";
+        Guid pythonId;
+        Guid webId;
+        await using (var setup = create())
+        {
+            await setup.Database.MigrateAsync();
+            var store = new ResearchJobStore(setup, TimeProvider.System);
+            webId = (await store.CreateAsync(new(Guid.NewGuid(), null, "Consulte uma fonte oficial."), CancellationToken.None)).Id;
+            var conversation = new Conversation(Conversation.DefaultTitle);
+            var message = conversation.AddMessage(ChatRoles.User, original);
+            setup.Conversations.Add(conversation);
+            setup.ChatMessages.Add(message);
+            await setup.SaveChangesAsync();
+            store.Stage(message, "Calcule a mediana.", isPython: true);
+            await setup.SaveChangesAsync();
+            pythonId = message.Id;
+        }
+
+        await using (var db = create())
+        {
+            var store = new ResearchJobStore(db, TimeProvider.System);
+            var python = await store.ClaimAsync(CancellationToken.None, allowWeb: false, allowPython: true);
+            Assert.Equal(pythonId, python!.JobId);
+            Assert.True(python.IsPython);
+            Assert.Contains(original, python.Content);
+            Assert.Null(await store.ClaimAsync(CancellationToken.None, allowWeb: false, allowPython: true));
+            Assert.Equal(ResearchJob.Queued, (await store.GetAsync(webId, CancellationToken.None))!.State);
+        }
+
+        await using (var db = create())
+        {
+            var store = new ResearchJobStore(db, TimeProvider.System);
+            var web = await store.ClaimAsync(CancellationToken.None, allowWeb: true, allowPython: false);
+            Assert.Equal(webId, web!.JobId);
+            Assert.False(web.IsPython);
+            Assert.Equal("python", (await store.GetAsync(pythonId, CancellationToken.None))!.Kind);
+            Assert.Empty(await db.Database.GetPendingMigrationsAsync());
+        }
     });
 
 }

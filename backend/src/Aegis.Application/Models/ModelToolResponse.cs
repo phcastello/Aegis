@@ -15,4 +15,5 @@ public sealed record ModelToolResponse(
     LlmRequestAuditData AuditData,
     string? VoiceContinuation = null,
     bool Ignored = false,
-    string? DelegatedResearchBrief = null);
+    string? DelegatedResearchBrief = null,
+    bool DelegatePython = false);
