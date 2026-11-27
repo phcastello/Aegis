@@ -1,7 +1,7 @@
 import { clientEnvironment, type SharedAttachment } from './clientEnvironment';
 import { requestJson } from './aegisApi';
 
-export const MAX_ATTACHMENT_COUNT = 4;
+export const MAX_ATTACHMENT_COUNT = 20;
 export const MAX_ATTACHMENT_BYTES = 512 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const UPLOAD_LIFETIME = 24 * 60 * 60 * 1000;
@@ -28,7 +28,7 @@ export function sharedAttachmentFile(file: SharedAttachment): DraftAttachment {
 }
 
 export function checkAttachmentLimits(files: readonly DraftAttachment[]): void {
-  if (files.length > MAX_ATTACHMENT_COUNT) throw new Error('Anexe até quatro arquivos por mensagem.');
+  if (files.length > MAX_ATTACHMENT_COUNT) throw new Error(`Anexe até ${MAX_ATTACHMENT_COUNT} arquivos por mensagem.`);
   for (const file of files) {
     if (!Number.isSafeInteger(file.size) || file.size < 1) throw new Error(`O arquivo ${file.name} está vazio ou não pôde ser lido.`);
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} excede 512 MiB por arquivo.`);

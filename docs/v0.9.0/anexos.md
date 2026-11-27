@@ -1,7 +1,10 @@
 # Anexos no chat
 
-O botão **+** à esquerda do campo de mensagem aceita até quatro arquivos de **512 MiB cada** no Android e no Windows. Uma mensagem pode levar até 2 GiB de anexos. Você pode digitar ou ditar a pergunta. No Android também pode compartilhar um arquivo de outro app para a Aegis e acrescentar a pergunta antes de enviar. O histórico permite baixar o original. Para voltar a ele em uma conversa longa, mencione o nome do arquivo.
+O botão **+** à esquerda do campo de mensagem aceita até **20 arquivos por mensagem**, com até **512 MiB por arquivo** no Android e no Windows. Os anexos podem somar **10 GiB**. Imagens, planilhas e ZIPs têm o mesmo limite de tamanho. Você pode digitar ou ditar a pergunta. No Android também pode compartilhar vários arquivos de outro app para a Aegis e acrescentar a pergunta antes de enviar. O histórico permite baixar o original. Para voltar a ele em uma conversa longa, mencione o nome do arquivo.
 [Compartilhamento no Android](https://developer.android.com/develop/ui/compose/sharing/receive)
+
+A contagem segue o limite publicado para o ChatGPT na web. A OpenAI informa 512 MB por arquivo, com tetos menores para imagens (20 MB) e planilhas (cerca de 50 MB). A documentação não especifica um limite total em bytes para uma mensagem. Os 10 GiB da Aegis correspondem a 20 × 512 MiB.
+[Notas de versão do ChatGPT, 13 de fevereiro de 2026](https://help.openai.com/pt-br/articles/6825453-chatgpt-release-notes) · [Limites de upload do ChatGPT](https://help.openai.com/pt-br/articles/8555545-uploading-files-and-audio-to-chatgpt)
 
 Antes de enviar, confira os anexos na faixa acima do texto. As imagens aparecem em miniatura. Documentos, ZIPs e formatos de imagem que o dispositivo não consegue exibir recebem um cartão com o nome do arquivo. Use o × para remover um anexo. Se faltar espaço na tela, deslize a faixa para ver os demais.
 

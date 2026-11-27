@@ -36,7 +36,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal object SharedChatAttachments {
-    private const val MAX_FILES = 4
+    private const val MAX_FILES = 20
+    private const val TOO_MANY = "Anexe até $MAX_FILES arquivos por mensagem."
     private const val MAX_BYTES = 512L * 1024 * 1024
     private const val MAX_CHUNK = 4 * 1024 * 1024
     private const val THUMBNAIL_EDGE = 256
@@ -69,16 +70,16 @@ internal object SharedChatAttachments {
             else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
             val uris = streams.ifEmpty {
                 val clips = intent.clipData ?: return@ifEmpty emptyList()
-                require(clips.itemCount <= MAX_FILES)
+                require(clips.itemCount <= MAX_FILES) { TOO_MANY }
                 (0 until clips.itemCount).mapNotNull { clips.getItemAt(it).uri }
             }
             require(uris.isNotEmpty()) { "Compartilhe um arquivo para anexá-lo à mensagem." }
-            require(pending.size + uris.size <= MAX_FILES) { "Anexe até quatro arquivos por mensagem." }
+            require(uris.size <= MAX_FILES - pending.size) { TOO_MANY }
             require(uris.all { it.scheme == "content" && !it.authority.isNullOrEmpty() })
             pending = pending + uris
         } catch (error: Exception) {
             pendingError = when (error.message) {
-                "Anexe até quatro arquivos por mensagem.", "Compartilhe um arquivo para anexá-lo à mensagem." -> error.message
+                TOO_MANY, "Compartilhe um arquivo para anexá-lo à mensagem." -> error.message
                 else -> "Não foi possível receber os arquivos compartilhados."
             }
         }

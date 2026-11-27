@@ -476,7 +476,43 @@ try {
       ok((await original.getAttribute('href')).endsWith(`/api/chat/messages/${retried.request.turnId}-user/attachments/attachment-0`), 'reconciled history opens the original ZIP on its user message');
       await composer().fill('');
 
+      if (platform === 'android') {
+        // ACTION_SEND_MULTIPLE passes file handles and 64-bit sizes, not the file bytes.
+        await page.evaluate(() => {
+          window.shareInbox = Array.from({ length: 20 }, (_, n) => ({
+            handle: crypto.randomUUID(), fileName: `volume-${n}.bin`, contentType: 'application/octet-stream',
+            sizeBytes: 512 * 1024 * 1024,
+          }));
+          window.dispatchEvent(new Event('aegis-shared-attachments'));
+        });
+        const shares = page.getByRole('list', { name: 'Anexos da mensagem' });
+        await shares.getByRole('button', { name: 'Remover volume-19.bin' }).waitFor();
+        equal(await shares.getByRole('listitem').count(), 20, 'Android stages 10 GiB of shared files without size overflow');
+        while (await shares.count()) await shares.getByRole('button').last().click();
+      }
+
       if (width === 1440) {
+        const names = Array.from({ length: 18 }, (_, n) => `nota-${n}.txt`);
+        await page.locator('.composer input[type=file]').setInputFiles(names.map(name => ({
+          name, mimeType: 'text/plain', buffer: Buffer.from(name),
+        })));
+        await page.evaluate(() => {
+          const paste = new DataTransfer(), drop = new DataTransfer();
+          paste.items.add(new File(['colado'], 'colado.txt', { type: 'text/plain' }));
+          drop.items.add(new File(['arrastado'], 'arrastado.csv', { type: 'text/csv' }));
+          document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: paste, bubbles: true }));
+          document.querySelector('.chat-panel').dispatchEvent(new DragEvent('drop', { dataTransfer: drop, bubbles: true }));
+        });
+        const previews = page.getByRole('list', { name: 'Anexos da mensagem' });
+        equal(await previews.getByRole('listitem').count(), 20, 'file picker, clipboard and drag-and-drop share the same allowance');
+        await page.locator('.composer input[type=file]').setInputFiles({ name: 'extra.txt', mimeType: 'text/plain', buffer: Buffer.from('extra') });
+        await page.getByText('Anexe até 20 arquivos por mensagem.').waitFor();
+        equal(await previews.getByRole('listitem').count(), 20, 'a rejected 21st file preserves the rest of the draft');
+        const batch = await send('Leia os vinte anexos.');
+        const uploaded = batch.request.attachmentUploadIds.map(id => fixture.uploads.get(id));
+        assert.deepEqual(uploaded.map(file => file.fileName), [...names, 'colado.txt', 'arrastado.csv'], 'all twenty original files were uploaded in order');
+        batch.accept(); batch.token('Vinte arquivos recebidos. '); batch.done(); await settled();
+
         const directory = mkdtempSync(join(tmpdir(), 'aegis-upload-boundary-'));
         const fileName = 'limite.bin', path = join(directory, fileName), limit = 512 * 1024 * 1024;
         const resize = size => { const fd = openSync(path, 'w'); try { ftruncateSync(fd, size); } finally { closeSync(fd); } };
@@ -499,7 +535,7 @@ try {
           equal(await page.locator('.messages .attachment-name').filter({ hasText: 'limite.bin' }).count(), 0, 'stopping an upload removes its pending message');
           await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).click();
           const limitAt = Date.now() + 120000;
-          while (fixture.current?.request.attachmentUploadIds?.[0] === retried.request.attachmentUploadIds[0] && Date.now() < limitAt)
+          while (fixture.current?.request.attachmentUploadIds?.[0] !== sessionId && Date.now() < limitAt)
             await delay(100);
           const limitTurn = fixture.current, received = fixture.uploads.get(limitTurn.request.attachmentUploadIds[0]);
           equal(limitTurn.request.attachmentUploadIds[0], sessionId, 'stopped uploads resume in their original session');
