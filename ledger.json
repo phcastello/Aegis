@@ -2020,8 +2020,8 @@
     }
   ],
   "recommended": {
-    "version": "0.9.0-unstable.10",
-    "versionCode": 9000010,
-    "sha256": "0fcb8a232f224e00d1ac3db360bceb96df283cb330d1738fc79e65c05f741ab2"
+    "version": "0.9.0-unstable.11",
+    "versionCode": 9000011,
+    "sha256": "3d51b1dbdaceee62ab301281c4a24a9ac113d40b59942e0fff9d8df98e14ddca"
   }
 }
