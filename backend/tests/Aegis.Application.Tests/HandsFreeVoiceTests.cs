@@ -156,6 +156,7 @@ public sealed class HandsFreeVoiceTests
         Assert.DoesNotContain(messages, message => message.Content.Contains("continuation"));
         Assert.All(model.Requests, request =>
         {
+            Assert.Equal(PromptBuilder.ReplyStyleInstructions, request.Request.ReplyStyleInstructions);
             Assert.Equal("hands_free", request.Request.Metadata!["origin"]);
             Assert.Equal(session.ToString("D"), request.Request.Metadata["voice_session_id"]);
             var context = Assert.Single(request.Request.InputItems!, item =>

@@ -38,10 +38,12 @@ public sealed class PromptPayloadTests
         };
 
         await client.RespondWithToolsAsync(new ModelToolRequest(
-            new ModelRequest(prompt.Prompt, "mensagem atual", InputItems: prompt.InputItems), tools));
+            new ModelRequest(prompt.Prompt, "mensagem atual", InputItems: prompt.InputItems,
+                ReplyStyleInstructions: PromptBuilder.ReplyStyleInstructions), tools));
 
         using var payload = JsonDocument.Parse(handler.Body!);
         var root = payload.RootElement;
+        Assert.Equal(PromptBuilder.ReplyStyleInstructions, root.GetProperty("instructions").GetString());
         Assert.Equal("gpt-6.1-terra", root.GetProperty("model").GetString());
         Assert.Equal("implicit", root.GetProperty("prompt_cache_options").GetProperty("mode").GetString());
         Assert.Equal("low", root.GetProperty("reasoning").GetProperty("effort").GetString());
@@ -96,6 +98,7 @@ public sealed class PromptPayloadTests
             metrics, NullLogger<OpenAIResponsesClient>.Instance);
         await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest("", "oi"), []));
         using var payload = JsonDocument.Parse(handler.Body!);
+        Assert.False(payload.RootElement.TryGetProperty("instructions", out _));
         Assert.Equal("low", payload.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
     }
 

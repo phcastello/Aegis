@@ -570,6 +570,7 @@ public sealed class OpenAIResponsesClient(
         {
             model,
             input,
+            instructions = request.ReplyStyleInstructions,
             reasoning = new { effort = openAIOptions.ChatReasoningEffort },
             prompt_cache_options = new { mode = "implicit" },
             stream,

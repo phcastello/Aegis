@@ -73,7 +73,8 @@ public sealed class AssistantRefinementTests
             while (await iterator.MoveNextAsync()) { }
         }
         else await chat.SendMessageAsync(request);
-        var messages = loop.Request!.InputItems!.Where(x => x.GetProperty("role").GetString() is "user" or "assistant").ToArray();
+        Assert.Equal(PromptBuilder.ReplyStyleInstructions, loop.Request!.ReplyStyleInstructions);
+        var messages = loop.Request.InputItems!.Where(x => x.GetProperty("role").GetString() is "user" or "assistant").ToArray();
         Assert.Equal(history.Length + 1, messages.Length);
         Assert.Equal(history.Select(x => x.Content).Append(current), messages.Select(x => x.GetProperty("content").GetString()));
         Assert.Single(messages, x => x.GetProperty("content").GetString() == current);

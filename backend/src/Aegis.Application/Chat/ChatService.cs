@@ -835,7 +835,8 @@ public sealed class ChatService(
             ModelPurpose.Chat,
             metadata,
             promptResult.InputItems,
-            promptResult.AuditInputItems);
+            promptResult.AuditInputItems,
+            ReplyStyleInstructions: PromptBuilder.ReplyStyleInstructions);
     }
 
     private static string? CreatePreview(string? content)

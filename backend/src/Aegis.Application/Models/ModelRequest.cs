@@ -8,4 +8,5 @@ public sealed record ModelRequest(
     ModelPurpose Purpose = ModelPurpose.Chat,
     IReadOnlyDictionary<string, string>? Metadata = null,
     IReadOnlyList<JsonElement>? InputItems = null,
-    IReadOnlyList<JsonElement>? AuditInputItems = null);
+    IReadOnlyList<JsonElement>? AuditInputItems = null,
+    string? ReplyStyleInstructions = null);

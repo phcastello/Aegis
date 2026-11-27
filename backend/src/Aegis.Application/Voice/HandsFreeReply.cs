@@ -13,9 +13,8 @@ public static class HandsFreeReply
     public const string Close = "close";
     public const string DeliveryGuidance =
         "Comece direto pela conclusão ou providência principal. Use a mesma personalidade e o mesmo critério de humor do chat. " +
-        "Se fizer uma observação irônica, encaixe-a no veredito ou na dica. Encerre a fala quando a ajuda estiver completa. " +
-        "Ao ditar uma mensagem para outra pessoa, deixe claro onde ela começa. Em uma mensagem de reparação, fale pelo Pedro " +
-        "com o destinatário e mantenha a sua provocação fora do texto ditado. " +
+        "Abra com a frase que você diria ao Pedro em voz alta. Um resultado, uma observação incisiva ou as próprias palavras " +
+        "que ele pediu podem ser a resposta principal. Se ele pediu só o texto, comece diretamente pelo que ele vai ditar. " +
         "Inclua os fatos, números e ressalvas quando forem pertinentes, e vá até o fim da resposta em linguagem natural, " +
         "sem resumir o conteúdo só porque será falado.";
 

@@ -27,6 +27,7 @@ public sealed class MemoryExtractionClientTests
         Assert.False(root.GetProperty("store").GetBoolean());
         Assert.Equal("fake_extractor", root.GetProperty("model").GetString());
         Assert.False(root.TryGetProperty("tools", out _));
+        Assert.False(root.TryGetProperty("instructions", out _));
         var format = root.GetProperty("text").GetProperty("format");
         Assert.Equal("json_schema", format.GetProperty("type").GetString());
         Assert.True(format.GetProperty("strict").GetBoolean());
