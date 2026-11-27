@@ -41,7 +41,8 @@ public sealed partial class ChatAttachmentContent
     private static async Task<ChatAttachmentContent> PrepareInlineAsync(Guid messageId, IReadOnlyList<ChatAttachmentRequest>? uploads, CancellationToken ct)
     {
         if (uploads is null or { Count: 0 }) return new();
-        if (uploads.Count > ChatUploadLimits.MaxFiles) throw new ArgumentException("Envie no máximo quatro arquivos por mensagem.");
+        if (uploads.Count > ChatUploadLimits.MaxFiles)
+            throw new ArgumentException($"Envie no máximo {ChatUploadLimits.MaxFiles} arquivos por mensagem.");
         var files = new List<ChatAttachment>();
         var content = new ChatAttachmentContent { Files = files };
         var remaining = LegacyInlineRequestBytes;

@@ -132,13 +132,15 @@ public sealed class AegisDbContext(
     public async Task<List<ChatAttachment>> ResolveChatUploadsAsync(Guid messageId, IReadOnlyList<Guid> uploadIds, CancellationToken ct)
     {
         if (uploadIds.Count > ChatUploadLimits.MaxFiles || uploadIds.Distinct().Count() != uploadIds.Count)
-            throw new ArgumentException("Selecione até quatro arquivos diferentes por mensagem.");
+            throw new ArgumentException($"Selecione até {ChatUploadLimits.MaxFiles} arquivos diferentes por mensagem.");
         var ids = uploadIds.ToArray();
         var now = DateTimeOffset.UtcNow;
         // Track the original null AttachmentId. The normal message SaveChanges then
         // claims every upload atomically, and competing claims roll back in full.
         var uploads = await ChatUploads.Where(u => ids.Contains(u.Id) && u.AttachmentId == null && u.ExpiresAt > now)
             .ToDictionaryAsync(u => u.Id, ct);
+        if (uploads.Values.Sum(upload => (long)upload.SizeBytes) > ChatUploadLimits.MaxMessageBytes)
+            throw new ArgumentException("Os anexos excedem 10 GiB por mensagem.");
         var received = await ChatUploadChunks.Where(c => ids.Contains(c.UploadId)).GroupBy(c => c.UploadId)
             .Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Id, g => g.Count, ct);
         var files = new List<ChatAttachment>(ids.Length);

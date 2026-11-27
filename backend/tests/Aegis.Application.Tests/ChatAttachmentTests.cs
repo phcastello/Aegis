@@ -30,6 +30,16 @@ public sealed class ChatAttachmentTests
         new(name, "application/octet-stream", Convert.ToBase64String(bytes));
 
     [Fact]
+    public void InlineMessagesShareTheTwentyFileLimitAndKeepTheLegacyJsonSizeLimit()
+    {
+        var files = Enumerable.Range(1, 20).Select(i => Upload($"item-{i}.txt", [(byte)'A'])).ToArray();
+        Assert.Equal(20, ChatAttachmentContent.Prepare(Guid.NewGuid(), files).Files.Count);
+        Assert.Throws<ArgumentException>(() => ChatAttachmentContent.Prepare(Guid.NewGuid(), [.. files, Upload("extra.txt", [1])]));
+        var large = Upload("grande.bin", new byte[8 * 1024 * 1024 + 1]);
+        Assert.Throws<ArgumentException>(() => ChatAttachmentContent.Prepare(Guid.NewGuid(), [large]));
+    }
+
+    [Fact]
     public async Task ZipContentsReachModelAndReopenWithOriginalBytesAndMessageOwnership()
     {
         using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>()

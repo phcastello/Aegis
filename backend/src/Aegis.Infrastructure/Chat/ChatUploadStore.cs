@@ -10,6 +10,8 @@ public sealed class ChatUploadCapacityException() : Exception("Os envios em anda
 
 public sealed class ChatUploadStore(AegisDbContext db)
 {
+    private const long MaxPendingBytes = 2 * ChatUploadLimits.MaxMessageBytes;
+
     public async Task<UploadedChatFile> CreateAsync(string name, string? contentType, int size, CancellationToken ct)
     {
         name = name.Trim();
@@ -29,7 +31,7 @@ public sealed class ChatUploadStore(AegisDbContext db)
         var reserved = await db.ChatUploads.Where(u => u.AttachmentId == null)
             .GroupBy(_ => 1).Select(g => new { Count = g.Count(), Bytes = g.Sum(u => (long)u.SizeBytes) })
             .SingleOrDefaultAsync(ct);
-        if (reserved is not null && (reserved.Count >= 256 || reserved.Bytes + size > 4L * 1024 * 1024 * 1024))
+        if (reserved is not null && (reserved.Count >= 256 || reserved.Bytes + size > MaxPendingBytes))
             throw new ChatUploadCapacityException();
         var upload = new UploadedChatFile(name, mime, size, now.AddDays(1));
         db.ChatUploads.Add(upload);

@@ -4,6 +4,9 @@ using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
+using Aegis.Application.Tools;
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -105,6 +108,45 @@ public sealed class PrivateOperationPostgresTests
     });
 
     [OperationFact]
+    public Task TwentyUploadsCanBeClaimedAndTheLastFileCanBeReadAfterReopening() => WithSchema(async create =>
+    {
+        await using var db = create();
+        await db.Database.MigrateAsync();
+        var store = new ChatUploadStore(db);
+        var ids = new List<Guid>();
+        const string marker = "ultima-referencia-20";
+        for (int i = 1; i <= 20; i++)
+        {
+            var data = i == 1 ? Encoding.UTF8.GetBytes(new string('A', 100_000))
+                : Encoding.UTF8.GetBytes(i == 20 ? marker : i.ToString());
+            var upload = await store.CreateAsync($"anexo-{i}.txt", null, data.Length, default);
+            using var chunk = new MemoryStream(data);
+            Assert.Equal(ChunkWriteResult.Saved, await store.WriteChunkAsync(upload.Id, 0, chunk, data.Length, default));
+            ids.Add(upload.Id);
+        }
+
+        var conversation = new Conversation();
+        var message = conversation.AddMessage("user", "Consulte meus arquivos");
+        await Assert.ThrowsAsync<ArgumentException>(() => db.ResolveChatUploadsAsync(message.Id, [.. ids, Guid.NewGuid()], default));
+        await Assert.ThrowsAsync<ArgumentException>(() => db.ResolveChatUploadsAsync(message.Id, [ids[0], ids[0]], default));
+        var attachments = await ChatAttachmentContent.PrepareAsync(db, message.Id, null, ids, default);
+        Assert.DoesNotContain(marker, attachments.UserInput(message.Content).GetRawText());
+        db.AddConversation(conversation);
+        db.AddChatAttachments(attachments.Files);
+        await db.SaveChangesAsync();
+
+        await using var reopened = create();
+        var index = await reopened.GetAttachmentIndexAsync(conversation.Id, default);
+        Assert.Equal(Enumerable.Range(1, 20).Select(i => $"anexo-{i}.txt"), index[message.Id].Select(file => file.FileName));
+        var history = await reopened.GetConversationWithMessagesAsync(conversation.Id);
+        const string question = "O que diz anexo-20.txt?";
+        var files = await ChatAttachmentContent.ForFollowUpAsync(reopened, conversation.Id, history!.Messages, question, default);
+        var context = new ToolExecutionContext(conversation.Id, message.Id, question, AttachmentReader: files);
+        var read = await new AttachmentReadTool().ExecuteAsync(JsonSerializer.SerializeToElement(new { action = "read", id = 20 }), context);
+        Assert.Equal(marker, JsonSerializer.Deserialize<JsonElement>(read.Content).GetProperty("text").GetString());
+    });
+
+    [OperationFact]
     public Task PendingReservationsAreBoundedAtomicallyAndDiscardFreesCapacity() => WithSchema(async create =>
     {
         await using var initial = create();
@@ -119,8 +161,13 @@ public sealed class PrivateOperationPostgresTests
             }
             catch (ChatUploadCapacityException) { return null; }
         }
-        var attempts = await Task.WhenAll(Enumerable.Range(0, 9).Select(_ => Reserve()));
-        Assert.Equal(8, attempts.Count(id => id.HasValue));
+        Assert.Equal(10L * 1024 * 1024 * 1024, ChatUploadLimits.MaxMessageBytes);
+        await Assert.ThrowsAsync<ArgumentException>(() => new ChatUploadStore(initial)
+            .CreateAsync("muito-grande.zip", null, ChatUploadLimits.MaxFileBytes + 1, default));
+        // Two complete 10 GiB batches fit. Race for the final 512 MiB of capacity.
+        for (int i = 0; i < 39; i++) Assert.NotNull(await Reserve());
+        var attempts = await Task.WhenAll(Reserve(), Reserve());
+        Assert.Single(attempts.Where(id => id.HasValue));
         var released = attempts.First(id => id.HasValue)!.Value;
         Assert.Equal(1, await new ChatUploadStore(initial).DiscardAsync(released, default));
         Assert.NotNull(await Reserve());
