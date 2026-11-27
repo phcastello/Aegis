@@ -12,11 +12,8 @@ public static class HandsFreeReply
     public const string Origin = "hands_free";
     public const string Close = "close";
     public const string DeliveryGuidance =
-        "Comece direto pela conclusão ou providência principal. Use a mesma personalidade e o mesmo critério de humor do chat. " +
-        "Abra com a frase que você diria ao Pedro em voz alta. Um resultado, uma observação incisiva ou as próprias palavras " +
-        "que ele pediu podem ser a resposta principal. Se ele pediu só o texto, comece diretamente pelo que ele vai ditar. " +
-        "Inclua os fatos, números e ressalvas quando forem pertinentes, e vá até o fim da resposta em linguagem natural, " +
-        "sem resumir o conteúdo só porque será falado.";
+        "Comece direto pela conclusão ou providência principal quando houver uma. Se Pedro pediu apenas um texto para ditar, " +
+        "fale só o texto pedido. Mesmo em voz, vá até o fim da resposta, com os fatos, números e ressalvas pertinentes.";
 
     public static ModelToolDefinition Definition { get; } = new(
         ToolName,

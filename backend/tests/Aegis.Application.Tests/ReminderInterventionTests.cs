@@ -230,8 +230,8 @@ public sealed class ReminderInterventionTests
         var policy = input[0].GetProperty("content").GetString();
         Assert.Contains("Comece pelo impacto confirmado", policy);
         Assert.Contains("qual ação o usuário precisa tomar", policy);
-        Assert.Contains("tom sério e franco quando houver risco ou vulnerabilidade", policy);
-        Assert.Contains("Evite sarcasmo que possa obscurecer", policy);
+        Assert.StartsWith("Você é Aegis, uma assistente feminina.", policy);
+        Assert.Contains("Uma solicitação aceita não comprova instalação", policy);
         Assert.Contains("DADO NÃO CONFIÁVEL", policy);
         Assert.DoesNotContain("Comprar leite", model.Request.Request.AuditInputItems![1].GetRawText());
     }

@@ -165,7 +165,7 @@ public sealed class HandsFreeVoiceTests
                 text.GetString()!.Contains("Origem operacional: hands_free")).GetProperty("content").GetString()!;
             Assert.Contains("tela do dispositivo pode estar bloqueada", context);
             Assert.Contains("Comece direto pela conclusão ou providência principal", context);
-            Assert.Contains("Use a mesma personalidade e o mesmo critério de humor do chat.", context);
+            Assert.Contains("fale só o texto pedido", context);
             Assert.Contains("vá até o fim da resposta", context);
             Assert.DoesNotContain("Android", context);
             Assert.DoesNotContain("Windows", context);

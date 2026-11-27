@@ -35,8 +35,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
         " O pedido veio por voz e a resposta completa será falada. " + HandsFreeReply.DeliveryGuidance;
 
     private const string WebVoiceIntroduction =
-        " Inclua as citações nativas no texto e deixe que atribuam " +
-        "as informações às fontes. Evite aberturas genéricas, listas só de referências e instruções para abrir o aplicativo.";
+        " Inclua as citações nativas no texto. Evite listas só de referências e instruções para abrir o aplicativo.";
 
     private static readonly JsonElement RedactedPythonInput = JsonSerializer.SerializeToElement(new
     {
