@@ -197,9 +197,13 @@ impl VoiceChatStreamEvent {
             ..Self::new("web_research_sources", turn_id, Some(conversation_id), None)
         })
     }
-    fn web_search(turn_id: Uuid, conversation_id: Uuid, event: &Value) -> Option<Self> {
-        if event["category"] != "web_search"
-            || !matches!(
+    fn tool_status(turn_id: Uuid, conversation_id: Uuid, event: &Value) -> Option<Self> {
+        let category = match event["category"].as_str() {
+            Some("web_search") => "web_search",
+            Some("python") => "python",
+            _ => return None,
+        };
+        if !matches!(
                 event["state"].as_str(),
                 Some("started" | "completed" | "failed")
             )
@@ -217,7 +221,7 @@ impl VoiceChatStreamEvent {
         }
         Some(Self {
             tool_status: Some(VoiceToolStatus {
-                category: "web_search",
+                category,
                 state: event["state"].as_str()?.to_owned(),
                 message: message.to_owned(),
             }),
@@ -1053,11 +1057,11 @@ impl Backend {
                         }
                     }
                     "tool_status" => {
-                        // A requested destination alone does not establish acceptance. Search
+                        // A requested destination alone does not establish acceptance. Tool
                         // status is a transient observer, never a persistence or audio boundary.
                         if accepted {
                             if let Some(status) = conversation
-                                .and_then(|id| VoiceChatStreamEvent::web_search(turn, id, &event))
+                                .and_then(|id| VoiceChatStreamEvent::tool_status(turn, id, &event))
                             {
                                 on_stream(status);
                             }

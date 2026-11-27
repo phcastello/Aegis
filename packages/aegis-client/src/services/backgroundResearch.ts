@@ -6,7 +6,8 @@ export interface ResearchJob {
   conversationId: string;
   userMessageId: string;
   state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  phase: 'queued' | 'searching' | 'finishing' | 'finished' | null;
+  phase: 'queued' | 'searching' | 'executing' | 'finishing' | 'finished' | null;
+  kind?: 'python' | null;
   createdAt: string;
   updatedAt: string;
   sources: WebResearchSourceCount[];

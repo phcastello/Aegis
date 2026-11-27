@@ -370,7 +370,7 @@ class NodeHandsFreeBackendTest {
     }
   }
 
-  @Test fun searchStatusPublishesOnlyAfterAcceptanceAndClearsAtTerminal() {
+  @Test fun toolStatusPublishesOnlyAfterAcceptanceAndClearsAtTerminal() {
     val projected=CopyOnWriteArrayList<JSONObject>()
     Fixture(respond={request,normal->
       when(request.path) {
@@ -380,7 +380,8 @@ class NodeHandsFreeBackendTest {
           val turn = payload.getString("turnId")
           fun status(state:String,category:String="web_search",destination:String?=null)=JSONObject()
             .put("type","tool_status").put("turnId",turn).put("category",category)
-            .put("state",state).put("message","Pesquisando na web…").apply{destination?.let{put("conversationId",it)}}
+            .put("state",state).put("message",if(category=="python") "Executando Python…" else "Pesquisando na web…")
+            .apply{destination?.let{put("conversationId",it)}}
           fun sources(destination: String) = JSONObject().put("type", "web_research_sources")
             .put("turnId", turn).put("conversationId", destination)
             .put("sources", JSONArray()
@@ -391,7 +392,8 @@ class NodeHandsFreeBackendTest {
           Reply(bytes=((listOf(status("started").toString(), sources(conversation).toString(), rows.first(),
             status("started").toString(),status("arbitrary").toString(),status("started","memory").toString(),
             status("started",destination=UUID.randomUUID().toString()).toString(),
-            sources(UUID.randomUUID().toString()).toString(), sources(conversation).toString(), status("completed").toString())+
+            sources(UUID.randomUUID().toString()).toString(), sources(conversation).toString(), status("completed").toString(),
+            status("started","python").toString())+
             rows.drop(1)).joinToString("\n")+"\n").toByteArray())
         }
         "/api/voice/speech/segments" -> segmentPcmReply()
@@ -401,13 +403,14 @@ class NodeHandsFreeBackendTest {
       val result=fixture.backend(onVoiceSearchProgress={_,event->projected.add(event)})
         .execute(wav(),session,conversation,RecordingSink(),null,incremental=true)
       assertTrue(result.playedAudio)
-      assertEquals(listOf("conversation","tool_status","web_research_sources","tool_status","done"),projected.map{it.getString("type")})
+      assertEquals(listOf("conversation","tool_status","web_research_sources","tool_status","tool_status","done"),projected.map{it.getString("type")})
       assertEquals("started",projected[1].getJSONObject("toolStatus").getString("state"))
       val sources = projected[2].getJSONArray("sources")
       assertEquals(1, sources.length())
       assertEquals("https://example.org/source", sources.getJSONObject(0).getString("url"))
       assertEquals(2, sources.getJSONObject(0).getInt("count"))
       assertEquals("completed",projected[3].getJSONObject("toolStatus").getString("state"))
+      assertEquals("python",projected[4].getJSONObject("toolStatus").getString("category"))
       assertEquals(message,projected.last().getString("assistantMessageId"))
       assertTrue(projected.all{it.getString("conversationId")==conversation})
       assertEquals(1,projected.map{it.getString("turnId")}.distinct().size)

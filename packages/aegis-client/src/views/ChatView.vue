@@ -16,7 +16,7 @@ import RenameConversationDialog from '../components/RenameConversationDialog.vue
 import { clientEnvironment } from '../services/clientEnvironment';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
-import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeResearchStatus } from '../services/streamTextPresentation';
+import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeVoiceToolStatus } from '../services/streamTextPresentation';
 import { dismissKeyboard, hasNavigationLayer, navigationLayer } from '../services/navigation';
 import { isMessageEndVisible } from '../services/proactiveVisibility';
 import FeedbackDialog from '../components/FeedbackDialog.vue';
@@ -734,7 +734,7 @@ type NativeVoiceTurn = {
   researchSites: Map<string, number>;
 };
 const nativeVoiceTurns = new Map<string, NativeVoiceTurn>();
-const nativeResearch = ref<{ turnId: string; conversationId: string; status: NativeResearchStatus; sites: ReturnType<typeof topResearchSites> } | null>(null);
+const nativeResearch = ref<{ turnId: string; conversationId: string; status: NativeVoiceToolStatus; sites: ReturnType<typeof topResearchSites> } | null>(null);
 const selectedNativeResearch = computed(() => nativeResearch.value?.conversationId === selected.value.id ? nativeResearch.value : null);
 let nativeResearchTimer: ReturnType<typeof setTimeout> | undefined;
 const closedNativeVoiceTurns = new Set<string>();
@@ -746,7 +746,7 @@ function finishNativeVoiceTurn(turnId: string, interrupted = false, reconcile = 
   const turn = nativeVoiceTurns.get(turnId);
   if (nativeResearch.value?.turnId === turnId) {
     clearTimeout(nativeResearchTimer);
-    if (!interrupted && turn?.generationDone && nativeResearch.value.sites.length &&
+    if (!interrupted && turn?.generationDone && nativeResearch.value.status.category === 'web_search' && nativeResearch.value.sites.length &&
       nativeResearch.value.status.state !== 'failed') {
       nativeResearch.value = { ...nativeResearch.value, status: { category: 'web_search', state: 'completed', message: 'Pesquisa concluída.' } };
       nativeResearchTimer = setTimeout(() => {
@@ -1824,9 +1824,10 @@ onBeforeUnmount(() => {
 
         <div v-if="selectedNativeResearch" class="message-row message-row--assistant">
           <div class="message-stack">
-            <WebResearchActivity :sites="selectedNativeResearch.sites"
+            <WebResearchActivity v-if="selectedNativeResearch.status.category === 'web_search'" :sites="selectedNativeResearch.sites"
               :state="selectedNativeResearch.status.state === 'started' ? 'working' : selectedNativeResearch.status.state"
               :label="selectedNativeResearch.status.message" />
+            <span v-else class="background-turn-notice" role="status">{{ selectedNativeResearch.status.message }}</span>
           </div>
         </div>
         <div class="messages-end"></div>

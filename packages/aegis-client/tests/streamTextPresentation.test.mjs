@@ -50,12 +50,16 @@ test('reject invalid event shapes and accept no-conversation terminal ignored/ca
   assert.equal(parseNativeVoiceStreamEvent({type:'done',turnId,conversationId:null,assistantMessageId:null}), null);
 });
 
-test('native web search status verifies accepted turn shape without establishing speech segments', () => {
+test('native web search and Python status verify accepted turn shape without establishing speech segments', () => {
   const progress = { type: 'tool_status', turnId, conversationId, assistantMessageId: null,
     toolStatus: { category: 'web_search', state: 'started', message: 'Pesquisando na web…' } };
   const parsed = parseNativeVoiceStreamEvent(progress);
   assert.equal(parsed.type, 'tool_status');
   assert.equal(parsed.toolStatus.message, progress.toolStatus.message);
+  const script = parseNativeVoiceStreamEvent({ ...progress,
+    toolStatus: { category: 'python', state: 'started', message: 'Executando Python…' } });
+  assert.equal(script.toolStatus.category, 'python');
+  assert.equal(script.toolStatus.message, 'Executando Python…');
   const stream = new NativeVoiceSegments(turnId, conversationId);
   assert.ok(stream.matches(parsed));
   assert.equal(stream.append(parsed), null);

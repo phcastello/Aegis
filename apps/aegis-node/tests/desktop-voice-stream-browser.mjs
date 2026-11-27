@@ -322,6 +322,29 @@ try {
   await exact('Pesquisa cancelada.').waitFor();
   assert.equal([...researchJobs.values()].at(-1).state, 'cancelled');
 
+  const pythonTurn = uuid(301), pythonUser = uuid(302), pythonAssistant = uuid(303), pythonResult = uuid(304);
+  const pythonIntent = 'Vou simular as partidas e reunir as probabilidades.';
+  const pythonReply = 'A simulação estimou 38% de chance de vitória.';
+  append(a, pythonUser, 'Simule dez mil partidas.', 'user');
+  await accepted(pythonTurn, a);
+  await emit(stream, event('tool_status', pythonTurn, a, null, {
+    toolStatus: { category: 'python', state: 'started', message: 'Executando Python…' } }));
+  await exact('Executando Python…').waitFor();
+  append(a, pythonAssistant, pythonIntent);
+  const scriptJob = enqueueResearch(pythonTurn, a, pythonUser);
+  Object.assign(scriptJob, { kind: 'python', phase: 'executing' });
+  await emit(stream, segment(pythonTurn, a, pythonAssistant, 0, pythonIntent));
+  await emit(stream, event('done', pythonTurn, a, pythonAssistant));
+  await exact('Executando Python em segundo plano').waitFor();
+  await page.getByRole('button', { name: 'Cancelar execução em Python' }).waitFor();
+  assert.equal(await researchActivity('Pesquisa em segundo plano').count(), 0);
+  append(a, pythonResult, pythonReply);
+  Object.assign(scriptJob, { state: 'completed', phase: 'finished', resultMessageId: pythonResult,
+    updatedAt: new Date().toISOString() });
+  await sync(a);
+  await exact(pythonReply).waitFor();
+  await exact('Executando Python em segundo plano').waitFor({ state: 'hidden' });
+
   // Two committed segments arrive in a single IPC burst. Model completion is
   // independent of the speaking state, and must not snap the pending text.
   const turn = uuid(20), mid = uuid(21), marker1 = 'Fluxo nativo';

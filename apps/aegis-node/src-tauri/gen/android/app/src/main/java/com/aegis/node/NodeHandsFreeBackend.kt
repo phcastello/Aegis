@@ -575,14 +575,15 @@ class NodeHandsFreeBackend internal constructor(
             "tool_status" -> {
               // A pinned destination is not acceptance; speculative or unrelated status stays private.
               val destination=persistedDestination
+              val category=event.opt("category")
               val state=event.opt("state")
               val statusMessage=event.opt("message")
-              if(accepted && !stopped.get() && destination!=null && event.opt("category")=="web_search" &&
+              if(accepted && !stopped.get() && destination!=null && (category=="web_search" || category=="python") &&
                 (event.isNull("conversationId") || event.opt("conversationId")==destination) &&
                 state is String && state in listOf("started","completed","failed") && statusMessage is String &&
                 statusMessage.isNotBlank() && statusMessage.length<=256 && statusMessage.none{it.isISOControl()}) {
                 reportSearchPresentation(destination, presentation("tool_status",destination).put("toolStatus",
-                  JSONObject().put("category","web_search").put("state",state).put("message",statusMessage)))
+                  JSONObject().put("category",category).put("state",state).put("message",statusMessage)))
               }
             }
             "web_research_sources" -> {

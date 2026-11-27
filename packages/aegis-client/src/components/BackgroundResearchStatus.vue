@@ -7,9 +7,18 @@ import { parseWebResearchSourceCounts } from '../services/streamTextPresentation
 
 const props = defineProps<{ job?: ResearchJob; cancelling: ReadonlySet<string> }>();
 const emit = defineEmits<{ cancel: [job: ResearchJob] }>();
+const isPython = computed(() => props.job?.kind === 'python');
 const sites = computed(() => topResearchSites(mergeResearchSites(new Map(), parseWebResearchSourceCounts(props.job?.sources, 128))));
 const statusLabel = computed(() => {
   const job = props.job;
+  if (isPython.value) {
+    if (job?.state === 'completed') return 'Execução em Python concluída';
+    if (job?.state === 'failed') return 'A execução em Python foi interrompida.';
+    if (job?.state === 'cancelled') return 'Execução em Python cancelada.';
+    if (job?.phase === 'queued') return 'Execução em Python na fila';
+    if (job?.phase === 'finishing') return 'Preparando a resposta';
+    return 'Executando Python em segundo plano';
+  }
   if (job?.state === 'completed') return 'Pesquisa concluída';
   if (job?.state === 'failed') return 'Pesquisa interrompida';
   if (job?.phase === 'queued') return 'Pesquisa na fila';
@@ -21,12 +30,16 @@ const statusLabel = computed(() => {
 <template>
   <div v-if="job" class="message-row message-row--assistant">
     <div class="research-job">
-      <WebResearchActivity v-if="job.state !== 'cancelled'" :sites="sites" :label="statusLabel"
-        :state="job.state === 'failed' ? 'failed' : job.state === 'completed' ? 'completed' : 'working'" />
-      <span v-if="job.state === 'failed'" role="status">A pesquisa foi interrompida.</span>
-      <span v-else-if="job.state === 'cancelled'" role="status">Pesquisa cancelada.</span>
-      <button v-else-if="isResearchPending(job)" type="button" class="research-job__cancel"
-        :disabled="cancelling.has(job.id)" aria-label="Cancelar pesquisa em segundo plano"
+      <span v-if="isPython" role="status">{{ statusLabel }}</span>
+      <template v-else>
+        <WebResearchActivity v-if="job.state !== 'cancelled'" :sites="sites" :label="statusLabel"
+          :state="job.state === 'failed' ? 'failed' : job.state === 'completed' ? 'completed' : 'working'" />
+        <span v-if="job.state === 'failed'" role="status">A pesquisa foi interrompida.</span>
+        <span v-else-if="job.state === 'cancelled'" role="status">Pesquisa cancelada.</span>
+      </template>
+      <button v-if="isResearchPending(job)" type="button" class="research-job__cancel"
+        :disabled="cancelling.has(job.id)"
+        :aria-label="isPython ? 'Cancelar execução em Python' : 'Cancelar pesquisa em segundo plano'"
         @click="emit('cancel', job)">Cancelar</button>
     </div>
   </div>
