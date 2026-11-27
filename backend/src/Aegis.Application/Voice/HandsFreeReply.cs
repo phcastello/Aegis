@@ -43,7 +43,8 @@ public static class HandsFreeReply
              request.TurnId is null || request.TurnId == Guid.Empty ||
              interruption.TurnId == request.TurnId || interruption.PreviousContent?.Length > 16384))
             throw new ArgumentException("A interrupção da geração por voz é inválida.");
-        var content = request.Content.Trim();
+        var content = request.Content?.Trim() ?? "";
+        if (content.Length == 0 && request.Attachments is { Count: > 0 }) content = "Analise os arquivos anexados.";
         if (!request.IsHandsFree) return content;
         if (request.VoiceSessionId is null || request.VoiceSessionId == Guid.Empty)
             throw new ArgumentException("Uma sessão de voz válida é necessária.");

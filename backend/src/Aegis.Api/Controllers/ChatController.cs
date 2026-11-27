@@ -1,4 +1,5 @@
 using Aegis.Application.Chat;
+using Aegis.Application.Common;
 using Aegis.Application.Llm;
 using Aegis.Application.Memory;
 using Aegis.Application.Observability;
@@ -22,11 +23,12 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
     };
 
     [HttpPost("messages")]
+    [RequestSizeLimit(12 * 1024 * 1024)]
     public async Task<ActionResult<SendMessageResponse>> SendMessage(
         [FromBody] SendMessageRequest? request,
         CancellationToken cancellationToken)
     {
-        if (request is null || string.IsNullOrWhiteSpace(request.Content))
+        if (request is null || !request.HasMessage)
         {
             return BadRequest(new { error = "Message content cannot be empty." });
         }
@@ -61,11 +63,12 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
     }
 
     [HttpPost("messages/stream")]
+    [RequestSizeLimit(12 * 1024 * 1024)]
     public async Task StreamMessage(
         [FromBody] SendMessageRequest? request,
         CancellationToken cancellationToken)
     {
-        if (request is null || string.IsNullOrWhiteSpace(request.Content) || request.TurnId is not { } turnId || turnId == Guid.Empty)
+        if (request is null || !request.HasMessage || request.TurnId is not { } turnId || turnId == Guid.Empty)
         {
             Response.StatusCode = StatusCodes.Status400BadRequest;
             await Response.WriteAsJsonAsync(
@@ -121,6 +124,10 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             logger.LogWarning(exception, "Chat stream model request failed.");
             await WriteStreamErrorAsync(exception.Message, "model_unavailable", StatusCodes.Status502BadGateway, cancellationToken);
         }
+        catch (ArgumentException exception) when (request.Attachments is { Count: > 0 } && !Response.HasStarted)
+        {
+            await WriteStreamErrorAsync(exception.Message, "invalid_attachment", StatusCodes.Status400BadRequest, cancellationToken);
+        }
         catch (Exception exception)
         {
             logger.LogError(exception, "Unexpected chat stream failure.");
@@ -165,6 +172,17 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
     {
         var snapshot = await chatService.GetMemoryActivityAsync(assistantMessageId, cancellationToken);
         return snapshot is null ? NotFound() : Ok(snapshot);
+    }
+
+    [HttpGet("messages/{messageId:guid}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> GetAttachment(Guid messageId, Guid attachmentId,
+        [FromServices] IAegisDbContext database, CancellationToken cancellationToken)
+    {
+        var file = await database.GetAttachmentAsync(messageId, attachmentId, cancellationToken);
+        if (file is null) return NotFound();
+        Response.Headers.CacheControl = "private, no-store";
+        Response.Headers.XContentTypeOptions = "nosniff";
+        return File(file.Data, file.ContentType, file.FileName);
     }
 
     [HttpGet("conversations")]

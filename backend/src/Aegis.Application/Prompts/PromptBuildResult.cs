@@ -23,6 +23,7 @@ public sealed partial record PromptBuildResult(
     }
 
     public IReadOnlyList<Guid> UsedMemoryIds { get; init; } = [];
+    public bool ContainsAttachments { get; init; }
     public IReadOnlyList<Guid> UsedObservedMemoryIds { get; init; } = [];
     public IReadOnlyList<Guid> UsedRelationIds { get; init; } = [];
 }

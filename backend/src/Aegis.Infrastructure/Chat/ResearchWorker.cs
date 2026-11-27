@@ -1,4 +1,5 @@
 using Aegis.Application.Llm;
+using Aegis.Application.Chat;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
 using Aegis.Application.Prompts;
@@ -59,6 +60,9 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
         using var jobCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, deadline.Token);
         using var monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var monitor = StopWhenCancelledAsync(job.JobId, jobCancellation, monitorCancellation.Token);
+        var containsAttachments = false;
+        LlmRequestAuditData JobAudit(LlmRequestAuditData audit) => job.IsPython ? PrivateScriptAudit(audit)
+            : containsAttachments ? ChatAttachmentContent.PrivateAudit(audit) : audit;
         try
         {
             // Each job gets only the capability needed to execute it.
@@ -68,12 +72,19 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
                 job.IsPython ? null : options);
             var personality = await PromptBuilder.LoadPersonalityAsync(jobCancellation.Token);
             var instructions = personality + "\n\n" + (job.IsPython ? PythonInstructions : WebInstructions);
+            var attachments = await store.GetDelegatedAttachmentsAsync(job, jobCancellation.Token);
+            containsAttachments = attachments.Files.Count > 0;
+            if (containsAttachments) instructions += "\n" + ChatAttachmentContent.Guidance +
+                " Ao comparar um anexo com fontes externas, pesquise somente informações públicas e faça a comparação no contexto privado.";
             if (job.IsHandsFree) instructions += VoiceIntroduction + (job.IsPython ? "" : WebVoiceIntroduction);
             var developerInput = JsonSerializer.SerializeToElement(new { role = "developer", content = instructions });
-            var userInput = JsonSerializer.SerializeToElement(new { role = "user", content = job.Content });
-            var request = new ModelRequest(instructions, job.Content,
-                InputItems: [developerInput, userInput],
-                AuditInputItems: job.IsPython ? [developerInput, RedactedPythonInput] : null);
+            var briefInput = JsonSerializer.SerializeToElement(new { role = "user", content = job.Content });
+            var userInput = containsAttachments ? attachments.UserInput(job.Content) : briefInput;
+            var input = new List<JsonElement> { developerInput, userInput };
+            var audit = new List<JsonElement> { developerInput, job.IsPython ? RedactedPythonInput : briefInput };
+            var preferences = await services.GetRequiredService<IOwnerInstructions>().ReadAsync(jobCancellation.Token);
+            OwnerInstructions.Include(input, audit, preferences.Text);
+            var request = new ModelRequest(instructions, job.Content, InputItems: input, AuditInputItems: audit);
             var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content);
             var content = new StringBuilder();
             var progress = new ResearchProgress(job.IsPython);
@@ -92,7 +103,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
                     break;
 
                 await store.CompleteAsync(job, new ResearchJobResult(content.ToString(), chunk.Model,
-                    chunk.MetadataJson, job.IsPython ? PrivateScriptAudit(chunk.AuditData) : chunk.AuditData),
+                    chunk.MetadataJson, JobAudit(chunk.AuditData)),
                     jobCancellation.Token);
                 return true;
             }
@@ -108,7 +119,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
         }
         catch (LlmRequestException e)
         {
-            await store.FailAsync(job.JobId, codePrefix + "_unavailable", job.IsPython ? PrivateScriptAudit(e.AuditData) : e.AuditData,
+            await store.FailAsync(job.JobId, codePrefix + "_unavailable", JobAudit(e.AuditData),
                 stoppingToken);
             logger.LogWarning("Background job provider unavailable for job {JobId}", job.JobId);
         }

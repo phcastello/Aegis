@@ -43,6 +43,11 @@ SAFE_MIGRATIONS = {
     # or definitions of previously deployed tables are changed.
     "20261126202048_AddBackgroundResearchJobs":
         "7cb9e393e04f6ba0de0af3c83aa2119e9e0f2e502981960134921ca3373e37f9",
+    # Reviewed Up creates attachment rows referencing existing messages, their
+    # unique position index, and a new preferences table with one empty row.
+    # Existing rows and table definitions are preserved.
+    "20261127152245_ChatAttachmentsAndOwnerPreferences":
+        "6595a88847b6363b3facbc4b587585dfd14ce57e0370d266aad26f807ea1f816",
 }
 
 

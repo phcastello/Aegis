@@ -326,6 +326,7 @@ public sealed class BackgroundResearchTests
     {
         const string original = "Pedido de origem desta conversa.";
         const string brief = "Contexto autorizado para o trabalho.";
+        const string preference = "Comece com uma unidade de medida por extenso.";
         var transport = new DelegatedJobTransport(isPython);
         using var http = new HttpClient(transport) { BaseAddress = new Uri("https://responses.test/") };
         using var metrics = new AegisMetrics();
@@ -340,6 +341,8 @@ public sealed class BackgroundResearchTests
             var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
             var conversation = new Conversation(Conversation.DefaultTitle);
             var origin = conversation.AddMessage(ChatRoles.User, original);
+            var settings = scope.ServiceProvider.GetRequiredService<IOwnerInstructions>();
+            await settings.UpdateAsync(preference, Guid.Empty, CancellationToken.None);
             db.Conversations.Add(conversation);
             db.ChatMessages.Add(origin);
             await db.SaveChangesAsync();
@@ -360,7 +363,8 @@ public sealed class BackgroundResearchTests
         Assert.Contains("Comece direto pela conclusão", instructions);
         Assert.Contains(isPython ? "Use run_python" : "Use a pesquisa nativa", instructions);
         Assert.Equal("user", input[1].GetProperty("role").GetString());
-        var userContent = input[1].GetProperty("content").GetString();
+        Assert.Contains(preference, input[1].GetProperty("content").GetString());
+        var userContent = input[2].GetProperty("content").GetString();
         Assert.Contains(brief, userContent);
         if (isPython) Assert.Contains(original, userContent);
         else Assert.DoesNotContain(original, userContent);
@@ -380,6 +384,38 @@ public sealed class BackgroundResearchTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DelegatedWorkerReceivesTheRightAttachmentEvenAfterAnotherTurn(bool isPython)
+    {
+        var transport = new DelegatedJobTransport(isPython);
+        using var http = new HttpClient(transport) { BaseAddress = new Uri("https://responses.test/") };
+        using var metrics = new AegisMetrics();
+        var model = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        await using var services = Services(model, new ConversationChanges(), new ScriptRunner());
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        var conversation = new Conversation(Conversation.DefaultTitle);
+        var now = DateTimeOffset.UtcNow;
+        var source = conversation.AddMessage(ChatRoles.User, "Olhe o arquivo.", now.AddMinutes(-2));
+        var jobMessage = conversation.AddMessage(ChatRoles.User, "Compare o total do anexo.", now.AddMinutes(-1));
+        var later = conversation.AddMessage(ChatRoles.User, "Agora outro assunto.", now);
+        db.Conversations.Add(conversation);
+        db.ChatAttachments.Add(new ChatAttachment(source.Id, 0, "pedido.csv", "text/csv", "custo,93742"u8.ToArray()));
+        db.ChatAttachments.Add(new ChatAttachment(later.Id, 0, "seguinte.txt", "text/plain", "subsequente"u8.ToArray()));
+        await db.SaveChangesAsync();
+        scope.ServiceProvider.GetRequiredService<ResearchJobStore>().Stage(jobMessage, "Compare com o valor público padrão.", isPython: isPython);
+        await db.SaveChangesAsync();
+        Assert.True(await Worker(services).ProcessNextAsync(default));
+        Assert.NotEmpty(transport.Payloads);
+        Assert.Contains("93742", transport.Payloads[0]);
+        Assert.DoesNotContain("subsequente", transport.Payloads[0]);
+        var audit = await db.LlmRequestAudits.SingleAsync();
+        Assert.DoesNotContain("93742", audit.RequestPayloadJson + audit.ResponseBody);
+    }
+
     private static ServiceProvider Services(IAegisModelClient model, ConversationChanges changes,
         IPythonScriptRunner? script = null, bool webEnabled = true)
     {
@@ -394,8 +430,12 @@ public sealed class BackgroundResearchTests
         if (script is not null) services.AddSingleton(script);
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<ResearchJobStore>();
+        services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
         services.AddScoped<IResearchDelegationQueue>(provider => provider.GetRequiredService<ResearchJobStore>());
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<AegisDbContext>().Database.EnsureCreated();
+        return provider;
     }
 
     private static ResearchWorker Worker(ServiceProvider services) => new(

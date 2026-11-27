@@ -43,7 +43,7 @@ public sealed class ChatService(
         SendMessageRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.Content))
+        if (!request.HasMessage)
         {
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
@@ -70,7 +70,7 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, pending.Attachments, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
 
         try
@@ -105,7 +105,7 @@ public sealed class ChatService(
                 conversation.Id,
                 userMessage.Id,
                 assistantMessage.Id,
-                completion.AuditData));
+                promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(completion.AuditData) : completion.AuditData));
             StageResearch(userMessage, completion.DelegatedResearchBrief, isPython: completion.DelegatePython);
 
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
@@ -131,7 +131,7 @@ public sealed class ChatService(
                 conversation.Id,
                 userMessage.Id,
                 null,
-                exception.AuditData));
+                promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(exception.AuditData) : exception.AuditData));
 
             await dbContext.SaveChangesAsync(CancellationToken.None);
             throw;
@@ -142,7 +142,7 @@ public sealed class ChatService(
         SendMessageRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.Content))
+        if (!request.HasMessage)
         {
             throw new ArgumentException("Message content cannot be empty.", nameof(request));
         }
@@ -181,7 +181,7 @@ public sealed class ChatService(
         var promptResult = await BuildPromptForTurnAsync(
             conversation.Messages.Where(message => message.Id != userMessage.Id)
                 .OrderBy(message => message.CreatedAt).ThenBy(message => message.Id).ToList(),
-            userContent, conversation.Id, request.IsHandsFree, userMessage, turnToken);
+            userContent, conversation.Id, request.IsHandsFree, userMessage, pending.Attachments, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
         var modelRequest = CreateModelRequest(promptResult, userContent, request);
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
@@ -279,7 +279,8 @@ public sealed class ChatService(
             assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
                 promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
-            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id, chunk.AuditData));
+            dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id,
+                promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(chunk.AuditData) : chunk.AuditData));
             var researchVoiceSession = request.IsHandsFree && request.VoiceSegments ? request.VoiceSessionId : null;
             StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession, chunk.DelegatePython);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
@@ -329,6 +330,7 @@ public sealed class ChatService(
         }
 
         var assistantIds = conversation.Messages.Where(x => x.Role == ChatRoles.Assistant).Select(x => x.Id).ToArray();
+        var attachments = await dbContext.GetAttachmentIndexAsync(conversationId, cancellationToken);
         var activities = activity is null
             ? new Dictionary<Guid, MemoryActivitySnapshot>()
             : await activity.LoadForAssistantMessagesAsync(assistantIds, cancellationToken);
@@ -341,7 +343,8 @@ public sealed class ChatService(
             conversation.Messages
                 .OrderBy(message => message.CreatedAt)
                 .ThenBy(message => message.Id)
-                .Select(message => MapMessage(message, activities.GetValueOrDefault(message.Id)))
+                .Select(message => MapMessage(message, activities.GetValueOrDefault(message.Id),
+                    attachments.Contains(message.Id) ? attachments[message.Id].ToArray() : null))
                 .ToList());
     }
 
@@ -485,11 +488,12 @@ public sealed class ChatService(
         var modelContent = interruptedContent is null ? userContent :
             $"{PriorSpeechLabel}{interruptedContent}{CurrentSpeechLabel}{userContent}";
         var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, content);
+        var attachments = ChatAttachmentContent.Prepare(userMessage.Id, request.Attachments);
         if (request.InterruptedGeneration is not null)
             VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
         else
             VoicePlaybackContext.Attach(userMessage, request, conversation.Messages);
-        return new PendingChatTurn(conversation, userMessage, modelContent, isNewConversation, playback, cancellationToken);
+        return new PendingChatTurn(conversation, userMessage, modelContent, attachments, isNewConversation, playback, cancellationToken);
     }
 
     private static string? RetainInterruptedContent(string? previous)
@@ -529,6 +533,7 @@ public sealed class ChatService(
         conversation.AddMessage(userMessage);
         turn.UserMessageId = userMessage.Id;
         dbContext.AddChatMessage(userMessage);
+        if (pending.Attachments.Files.Count > 0) dbContext.AddChatAttachments(pending.Attachments.Files);
         if (automaticMemory?.Enabled == true)
         {
             dbContext.AddMemoryExtractionJob(new MemoryExtractionJob(conversation.Id, userMessage.Id,
@@ -539,7 +544,7 @@ public sealed class ChatService(
     }
 
     private sealed class PendingChatTurn(Conversation conversation, ChatMessage userMessage, string modelContent,
-        bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
+        ChatAttachmentContent attachments, bool isNewConversation, VoicePlaybackInterruption? playback, CancellationToken cancellationToken) : IDisposable
     {
         private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         private CancellationTokenRegistration registration;
@@ -547,6 +552,7 @@ public sealed class ChatService(
         private VoiceGenerationReceipt? generationReceipt;
         public Conversation Conversation { get; } = conversation;
         public ChatMessage UserMessage { get; } = userMessage;
+        public ChatAttachmentContent Attachments { get; } = attachments;
         public string ModelContent { get; } = modelContent;
         public bool IsNewConversation { get; } = isNewConversation;
         public ActiveTurn? Turn { get; private set; }
@@ -588,6 +594,7 @@ public sealed class ChatService(
         Guid conversationId,
         bool handsFree,
         ChatMessage userMessage,
+        ChatAttachmentContent attachments,
         CancellationToken cancellationToken)
     {
         using var timing = TurnLatencyProfile.Measure("chat.prepare", metrics?.ChatPreparationSeconds);
@@ -625,6 +632,9 @@ public sealed class ChatService(
         var memoryContext = string.Join("\n", new[] { observedContext.Text, automaticContext.Text }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
         var prompt = await TurnLatencyProfile.MeasureAsync("context.prompt", () => promptBuilder.BuildPromptAsync(history, userContent, pendingState, cancellationToken, memoryContext));
+        if (attachments.Files.Count == 0)
+            attachments = await ChatAttachmentContent.ForFollowUpAsync(dbContext, conversationId, history, userContent, cancellationToken);
+        prompt = attachments.Apply(prompt, userContent);
         if (playbackContext is not null)
         {
             // Previously generated text and user speech remain data at user authority.
@@ -677,7 +687,8 @@ public sealed class ChatService(
         return snapshots.GetValueOrDefault(assistantMessageId);
     }
 
-    private static ChatMessageResponse MapMessage(ChatMessage message, MemoryActivitySnapshot? memoryActivity = null)
+    private static ChatMessageResponse MapMessage(ChatMessage message, MemoryActivitySnapshot? memoryActivity = null,
+        IReadOnlyList<ChatAttachmentResponse>? attachments = null)
     {
         return new ChatMessageResponse(
             message.Id,
@@ -687,7 +698,7 @@ public sealed class ChatService(
             message.CreatedAt,
             message.Model,
             memoryActivity, message.IsProactive, message.ProactiveSequence,
-            WebResearchMetadata.Read(message.MetadataJson, message.Content));
+            WebResearchMetadata.Read(message.MetadataJson, message.Content), attachments);
     }
 
     private async Task<ModelCompletionResponse> RunToolCompletionAsync(

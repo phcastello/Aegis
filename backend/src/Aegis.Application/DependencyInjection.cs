@@ -91,7 +91,7 @@ public static class DependencyInjection
         services.AddScoped<IAegisTool, EmailCancelPendingActionTool>();
         services.AddSingleton<IConversationTitleJobQueue, ConversationTitleJobQueue>();
         services.AddSingleton<IRuntimeContextProvider, RuntimeContextProvider>();
-        services.AddSingleton<IPromptBuilder, PromptBuilder>();
+        services.AddScoped<IPromptBuilder, PromptBuilder>();
 
         return services;
     }

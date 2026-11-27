@@ -188,6 +188,19 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         return python.Select(message => message.Id);
     }
 
+    internal async Task<ChatAttachmentContent> GetDelegatedAttachmentsAsync(ResearchJobInput job, CancellationToken ct)
+    {
+        var files = await db.GetMessageAttachmentsAsync(job.UserMessageId, ct);
+        if (files.Count > 0) return ChatAttachmentContent.FromStored(files);
+        var conversation = await db.GetConversationWithMessagesAsync(job.ConversationId, ct);
+        var original = conversation?.Messages.FirstOrDefault(m => m.Id == job.UserMessageId);
+        if (original is null) return new ChatAttachmentContent();
+        return await ChatAttachmentContent.ForFollowUpAsync(db, job.ConversationId,
+            conversation!.Messages.Where(m => m.CreatedAt < original.CreatedAt ||
+                m.CreatedAt == original.CreatedAt && m.Id.CompareTo(original.Id) < 0),
+            original.Content, ct);
+    }
+
     private Task<string?> ReadMetadataAsync(ResearchJob job, CancellationToken ct) => job.Id != job.UserMessageId
         ? Task.FromResult<string?>(null)
         : db.ChatMessages.AsNoTracking().Where(message => message.Id == job.UserMessageId)

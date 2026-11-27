@@ -6,7 +6,7 @@ using Aegis.Domain.Entities;
 
 namespace Aegis.Application.Prompts;
 
-public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider) : IPromptBuilder
+public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider, IOwnerInstructions? ownerInstructions = null) : IPromptBuilder
 {
     private const string IdentityPromptRelativePath = "Prompts/aegis_identity.md";
     private const string ConversationSection = "\n## Conversa e memória";
@@ -87,6 +87,8 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
             {
                 role = "user", content = "Dados de memória recuperada: [automatic_memory_context_redacted]"
             });
+        if (ownerInstructions is not null)
+            OwnerInstructions.Include(input, auditInput, (await ownerInstructions.ReadAsync(cancellationToken)).Text);
         return new PromptBuildResult(identity, dynamicContext, input, auditContext, auditInput);
     }
 

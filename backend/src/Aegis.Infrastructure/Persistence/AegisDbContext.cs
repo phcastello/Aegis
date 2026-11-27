@@ -82,6 +82,7 @@ public sealed class AegisDbContext(
 
     public DbSet<Reminder> Reminders => Set<Reminder>();
     public DbSet<MemoryRecord> MemoryRecords => Set<MemoryRecord>();
+    public DbSet<OwnerPreferences> OwnerPreferences => Set<OwnerPreferences>();
     public DbSet<MemoryEvidence> MemoryEvidences => Set<MemoryEvidence>();
     public DbSet<MemoryEntity> MemoryEntities => Set<MemoryEntity>();
     public DbSet<MemoryEntityAlias> MemoryEntityAliases => Set<MemoryEntityAlias>();
@@ -96,6 +97,27 @@ public sealed class AegisDbContext(
     public DbSet<Conversation> Conversations => Set<Conversation>();
 
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
+
+    public void AddChatAttachments(IReadOnlyList<ChatAttachment> attachments) => ChatAttachments.AddRange(attachments);
+
+    private IQueryable<ChatAttachment> VisibleAttachments =>
+        ChatAttachments.AsNoTracking().Where(a => a.Message.Conversation!.DeletedAt == null);
+
+    public async Task<ILookup<Guid, ChatAttachmentResponse>> GetAttachmentIndexAsync(Guid conversationId, CancellationToken ct)
+    {
+        var rows = await VisibleAttachments.Where(a => a.Message.ConversationId == conversationId)
+            .OrderBy(a => a.Position)
+            .Select(a => new { a.MessageId, Attachment = new ChatAttachmentResponse(a.Id, a.FileName, a.ContentType, a.SizeBytes) })
+            .ToListAsync(ct);
+        return rows.ToLookup(a => a.MessageId, a => a.Attachment);
+    }
+
+    public Task<List<ChatAttachment>> GetMessageAttachmentsAsync(Guid messageId, CancellationToken ct) =>
+        VisibleAttachments.Where(a => a.MessageId == messageId).OrderBy(a => a.Position).ToListAsync(ct);
+
+    public Task<ChatAttachment?> GetAttachmentAsync(Guid messageId, Guid attachmentId, CancellationToken ct) =>
+        VisibleAttachments.SingleOrDefaultAsync(a => a.Id == attachmentId && a.MessageId == messageId, ct);
     public DbSet<ResearchJob> ResearchJobs => Set<ResearchJob>();
 
     public DbSet<MessageFeedback> MessageFeedback => Set<MessageFeedback>();
@@ -490,6 +512,15 @@ public sealed class AegisDbContext(
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<OwnerPreferences>(entity =>
+        {
+            entity.ToTable("owner_preferences");
+            entity.HasKey(p => p.Id);
+            entity.Property(p => p.Id).ValueGeneratedNever();
+            entity.Property(p => p.CustomInstructions).HasMaxLength(Aegis.Domain.Entities.OwnerPreferences.MaximumInstructionsLength);
+            entity.Property(p => p.Revision).IsConcurrencyToken();
+            entity.HasData(new OwnerPreferences());
+        });
         modelBuilder.ConfigureMemory();
         modelBuilder.ConfigureNodes();
         Aegis.Infrastructure.Reminders.ReminderCompletionModelConfiguration.ConfigureReminderCompletion(modelBuilder);
@@ -621,6 +652,16 @@ public sealed class AegisDbContext(
 
             entity.Property(message => message.UpdatedAt)
                 .IsRequired();
+        });
+
+        modelBuilder.Entity<ChatAttachment>(entity =>
+        {
+            entity.ToTable("chat_attachments");
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.FileName).HasMaxLength(255);
+            entity.Property(a => a.ContentType).HasMaxLength(128);
+            entity.HasIndex(a => new { a.MessageId, a.Position }).IsUnique();
+            entity.HasOne(a => a.Message).WithMany().HasForeignKey(a => a.MessageId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<MessageFeedback>(entity =>

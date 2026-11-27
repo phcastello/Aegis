@@ -29,6 +29,14 @@ public interface IAegisDbContext
 
     void AddChatMessage(ChatMessage message);
 
+    void AddChatAttachments(IReadOnlyList<ChatAttachment> attachments);
+
+    Task<ILookup<Guid, ChatAttachmentResponse>> GetAttachmentIndexAsync(Guid conversationId, CancellationToken ct);
+
+    Task<List<ChatAttachment>> GetMessageAttachmentsAsync(Guid messageId, CancellationToken ct);
+
+    Task<ChatAttachment?> GetAttachmentAsync(Guid messageId, Guid attachmentId, CancellationToken ct);
+
     void AddMemoryExtractionJob(MemoryExtractionJob job);
 
     void AddMessageFeedback(MessageFeedback feedback);

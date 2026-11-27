@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aegis.Api.Controllers;
 using Aegis.Api.Nodes;
 using Aegis.Application.Nodes;
+using Aegis.Application.Prompts;
 using Aegis.Infrastructure.Nodes;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -21,6 +22,7 @@ public sealed class NodeApiTests
         var name = Guid.NewGuid().ToString(); var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(NodesController).Assembly);
         builder.Services.AddNodeApi(); builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
         builder.Services.AddDbContext<AegisDbContext>(o => o.UseInMemoryDatabase(name)); builder.Services.AddScoped<INodeRegistry, NodeRegistry>();
         var app = builder.Build(); app.UseAuthentication(); app.UseAuthorization(); app.UseRateLimiter(); app.MapControllers();
         app.MapGet("/existing-chat-boundary", (Microsoft.AspNetCore.Http.HttpContext context) => new { authenticated = context.User.Identity?.IsAuthenticated ?? false }); await app.StartAsync();
@@ -31,6 +33,32 @@ public sealed class NodeApiTests
     {
         var request = NodeIdentityTests.Request((await registry.CreateCodeAsync(null)).Code);
         var receipt = await registry.PairAsync(request); return (await registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)), receipt.Credential);
+    }
+
+    [Fact]
+    public async Task OnlyEnabledPairedNodesCanReadOrChangeOwnerInstructions()
+    {
+        var (app, client, registry) = await Host();
+        await using var lifetime = app;
+        await using var scope = app.Services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<AegisDbContext>().Database.EnsureCreatedAsync();
+        const string path = "/api/nodes/settings/custom-instructions";
+        var request = new InstructionSettings("Use unidades métricas.", Guid.Empty);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PutAsJsonAsync(path, request)).StatusCode);
+        var paired = await Pair(registry);
+        client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + paired.Secret);
+        var response = await client.PutAsJsonAsync(path, request);
+        response.EnsureSuccessStatusCode();
+        var saved = (await response.Content.ReadFromJsonAsync<OwnerInstructionsController.SaveResult>())!;
+        Assert.True(saved.Applied);
+        Assert.Equal(request.Text, (await client.GetFromJsonAsync<InstructionSettings>(path))?.Text);
+        var clear = await client.PutAsJsonAsync(path, new InstructionSettings("", saved.Settings.Revision));
+        clear.EnsureSuccessStatusCode();
+        Assert.True((await clear.Content.ReadFromJsonAsync<OwnerInstructionsController.SaveResult>())!.Applied);
+        await registry.SetEnabledAsync(null, paired.Node.Id, false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(path, request)).StatusCode);
     }
     private static void AssertNoVoiceTimings(HttpResponseMessage response)
     {

@@ -26,6 +26,10 @@ public sealed class SendMessageRequest
     public Guid? ResearchJobId { get; init; }
 
     public string Content { get; init; } = string.Empty;
+    public IReadOnlyList<ChatAttachmentRequest>? Attachments { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasMessage => !string.IsNullOrWhiteSpace(Content) || Attachments is { Count: > 0 };
 }
 
 /// <summary>A new utterance cut off a voice turn before any audio was played.

@@ -12,4 +12,4 @@ public sealed record ChatMessageResponse(
     string? Model,
     MemoryActivitySnapshot? MemoryActivity = null,
     bool IsProactive = false, long? ProactiveSequence = null,
-    WebResearchEvidence? WebResearch = null);
+    WebResearchEvidence? WebResearch = null, IReadOnlyList<ChatAttachmentResponse>? Attachments = null);

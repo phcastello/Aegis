@@ -44,6 +44,7 @@ public static class DependencyInjection
         services.AddScoped<Aegis.Application.Nodes.INodeTransportHistory, Aegis.Infrastructure.Nodes.NodeTransportHistory>();
         services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
+        services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
         services.AddDataProtection()
             .SetApplicationName("Aegis");
 
