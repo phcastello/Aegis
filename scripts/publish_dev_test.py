@@ -486,16 +486,70 @@ class PublicationTests(unittest.TestCase):
         host.network, host.disposable = None, []
         host.op = Path("fixture-only")
         host.pg = {"Image": "postgres-fixture"}
+        host.sql = lambda query: "1000000"
         commands = []
-        host.run = lambda args, **kw: commands.append(args) or ""
+        host.run = lambda args, **kw: commands.append(args) or ("db-id\n" if args[:2] == ["docker", "create"] else "")
         host.test_db()
         readiness = commands[-1]
         self.assertIn("pg_isready", readiness)
         self.assertEqual(readiness[readiness.index("-h") + 1], "127.0.0.1")
-        start = next(c for c in commands if c[:3] == ["docker", "run", "-d"])
-        self.assertIn("--tmpfs", start)
-        self.assertNotIn("-p", start)
-        self.assertNotIn("--publish", start)
+        create = next(c for c in commands if c[:2] == ["docker", "create"])
+        self.assertIn("--tmpfs", create)
+        self.assertNotIn("-p", create)
+        self.assertNotIn("--publish", create)
+        self.assertIn(["docker", "start", "db-id"], commands)
+        host.network = None
+        host.sql = lambda query: str(2 * 1024**3)
+        commands.clear()
+        host.test_db()
+        large_create = next(c for c in commands if c[:2] == ["docker", "create"])
+        self.assertEqual(large_create[large_create.index("--volume") + 1], "/var/lib/postgresql/data")
+        self.assertNotIn("--tmpfs", large_create)
+        self.assertNotIn("-p", large_create)
+
+    def test_failed_database_start_removes_its_container_and_anonymous_volume(self):
+        host = object.__new__(dev.PrivateHost)
+        host.network, host.disposable = None, []
+        host.op = Path("fixture-start-failure")
+        host.pg = {"Image": "postgres-fixture"}
+        host.sql = lambda query: str(2 * 1024**3)
+        commands = []
+
+        def run(args):
+            commands.append(args)
+            if args[:2] == ["docker", "create"]:
+                self.assertIn("--volume", args)
+                return "created-db-id\n"
+            if args[:2] == ["docker", "start"]:
+                raise dev.Blocked("container failed to start")
+            return ""
+
+        host.run = run
+        with self.assertRaisesRegex(dev.Blocked, "failed to start"):
+            try:
+                host.test_db()
+            finally:
+                host.cleanup()
+        self.assertEqual(commands[-3:], [["docker", "start", "created-db-id"],
+                                         ["docker", "rm", "-fv", "created-db-id"],
+                                         ["docker", "network", "rm", host.network]])
+
+    def test_cleanup_attempts_database_volume_and_network_even_if_api_removal_fails(self):
+        host = object.__new__(dev.PrivateHost)
+        host.network, host.disposable = "fixture-network", ["db-id", "api-id"]
+        commands = []
+
+        def run(args):
+            commands.append(args)
+            if args[-1] == "api-id":
+                raise dev.Blocked("failed to remove api")
+
+        host.run = run
+        with self.assertRaisesRegex(dev.Blocked, "failed to remove api"):
+            host.cleanup()
+        self.assertEqual(commands, [["docker", "rm", "-fv", "api-id"],
+                                    ["docker", "rm", "-fv", "db-id"],
+                                    ["docker", "network", "rm", "fixture-network"]])
 
     def test_worker_health_observes_real_polling_without_creating_reminders(self):
         with tempfile.TemporaryDirectory() as directory:

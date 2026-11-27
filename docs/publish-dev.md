@@ -49,6 +49,10 @@ rede descartável sem segredos nem portas publicadas. Só então o NodeAdmin
 migra a instalação real e a nova imagem inicia. Backup inválido ou migration
 incerta bloqueia a operação. Recuperação automática troca imagens compatíveis;
 restauração do banco exige procedimento administrativo próprio, em destino separado.
+O dump e sua verificação são processados em fluxo. Para bancos com mais de
+256 MiB, a restauração de ensaio usa um volume Docker anônimo em disco, removido
+com o container ao final. Até esse tamanho o ensaio usa tmpfs.
+
 Qdrant e Neo4j não são alterados nem reiniciados por publicação de imagens.
 
 Quando o diff afeta aplicativos, a operação escolhe a próxima `unstable.N` no

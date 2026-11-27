@@ -48,6 +48,10 @@ SAFE_MIGRATIONS = {
     # Existing rows and table definitions are preserved.
     "20261127152245_ChatAttachmentsAndOwnerPreferences":
         "6595a88847b6363b3facbc4b587585dfd14ce57e0370d266aad26f807ea1f816",
+    # Up adds upload metadata and binary chunks. Both indexes and foreign
+    # keys belong to new tables; existing attachments and their bytes stay intact.
+    "20261127155758_ChunkedChatUploads":
+        "94b646a46d0b4d07b95c75d31bc183eb89df45849c4c4e0c5b8714317ff676be",
 }
 
 
@@ -68,7 +72,11 @@ def save(path, value):
 
 
 def sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def scope(paths):
@@ -233,12 +241,12 @@ class PrivateHost:
         self.images = {}
         self.current = json.loads((state / "current.json").read_text()) if (state / "current.json").exists() else {}
 
-    def run(self, args, *, cwd=None, data=None, output=None, env=None):
+    def run(self, args, *, cwd=None, data=None, stdin=None, output=None, env=None):
         # Never display command output: Compose, pg tools and API errors can
         # contain credentials or personal data. All logs stay owner-only.
         with (self.op / "operations.private.log").open("ab") as log:
             result = subprocess.run(list(map(str, args)), cwd=cwd or self.root,
-                                    input=data, stdout=output or subprocess.PIPE,
+                                    input=data, stdin=stdin, stdout=output or subprocess.PIPE,
                                     stderr=log, env=env)
             if result.returncode:
                 if result.stdout:
@@ -420,17 +428,26 @@ class PrivateHost:
             self.images[component] = self.inspect(tag)["Id"]
         self.recovery_proved = not plan["pending"]
 
+    def start_disposable(self, args):
+        # Register the exact container (and its anonymous volumes) before start can fail.
+        container_id = self.run(["docker", "create", *args]).strip()
+        self.disposable.append(container_id)
+        self.run(["docker", "start", container_id])
+
     def test_db(self):
         if self.network:
             return
-        self.network = "aegis-publish-test-" + self.op.name.lower()
-        self.db = self.network + "-pg"
-        self.run(["docker", "network", "create", "--internal", self.network])
-        self.run(["docker", "run", "-d", "--name", self.db, "--network", self.network,
-                  "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=1g",
-                  "-e", "POSTGRES_USER=test", "-e", "POSTGRES_PASSWORD=disposable_only",
-                  "-e", "POSTGRES_DB=aegis_operation_test", self.pg["Image"]])
-        self.disposable.append(self.db)
+        network = "aegis-publish-test-" + self.op.name.lower()
+        self.db = network + "-pg"
+        # Large originals can outgrow a RAM-backed recovery database, including its WAL.
+        size = int(self.sql("SELECT pg_database_size(current_database());"))
+        storage = (["--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=1g"] if size <= 256 * 1024 * 1024
+                   else ["--volume", "/var/lib/postgresql/data"])
+        self.run(["docker", "network", "create", "--internal", network])
+        self.network = network
+        self.start_disposable(["--name", self.db, "--network", self.network, *storage,
+                               "-e", "POSTGRES_USER=test", "-e", "POSTGRES_PASSWORD=disposable_only",
+                               "-e", "POSTGRES_DB=aegis_operation_test", self.pg["Image"]])
         for _ in range(60):
             try:
                 # The entrypoint's temporary initializer accepts Unix sockets
@@ -490,8 +507,9 @@ class PrivateHost:
             if mount["Destination"] == "/run/aegis-fcm":
                 shutil.copytree(mount["Source"], backup / "fcm", dirs_exist_ok=True)
         self.run(["docker", "exec", self.db, "createdb", "-U", "test", "recovery"])
-        self.run(["docker", "exec", "-i", self.db, "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges", "-U", "test", "-d", "recovery"],
-                 data=(backup / "postgres.dump").read_bytes())
+        with (backup / "postgres.dump").open("rb") as dump:
+            self.run(["docker", "exec", "-i", self.db, "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges", "-U", "test", "-d", "recovery"],
+                     stdin=dump)
         require(self.inventory(rehearsal=True) == self.before, "Backup restore differs from production.")
         self.admin(self.images["backend"], rehearsal=True)
         self.admin(self.images["backend"], rehearsal=True)  # idempotence
@@ -511,12 +529,11 @@ class PrivateHost:
         name = self.network + "-previous-api"
         # Only the disposable restored database is reachable. No production
         # environment, FCM file, identity/keyring volume or published host port.
-        self.run(["docker", "run", "-d", "--name", name, "--network", self.network,
-                  "-e", "ASPNETCORE_ENVIRONMENT=Production", "-e", "ASPNETCORE_URLS=http://+:8090",
-                  "-e", "ConnectionStrings__AegisDatabase=Host=" + self.db + ";Database=recovery;Username=test;Password=disposable_only",
-                  "-e", "AEGIS_MEMORY_SEMANTIC_ENABLED=false", "-e", "AEGIS_MEMORY_GRAPH_ENABLED=false",
-                  "-e", "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED=false", "--entrypoint", "dotnet", self.api["Image"], "/app/Aegis.Api.dll"])
-        self.disposable.append(name)
+        self.start_disposable(["--name", name, "--network", self.network,
+                               "-e", "ASPNETCORE_ENVIRONMENT=Production", "-e", "ASPNETCORE_URLS=http://+:8090",
+                               "-e", "ConnectionStrings__AegisDatabase=Host=" + self.db + ";Database=recovery;Username=test;Password=disposable_only",
+                               "-e", "AEGIS_MEMORY_SEMANTIC_ENABLED=false", "-e", "AEGIS_MEMORY_GRAPH_ENABLED=false",
+                               "-e", "AEGIS_MEMORY_AUTOMATIC_WRITES_ENABLED=false", "--entrypoint", "dotnet", self.api["Image"], "/app/Aegis.Api.dll"])
         address = self.inspect(name)["NetworkSettings"]["Networks"][self.network]["IPAddress"]
         for attempt in range(45):
             try:
@@ -731,10 +748,17 @@ class PrivateHost:
             (self.state / "current.json").unlink()
 
     def cleanup(self):
-        for name in reversed(self.disposable):
-            self.run(["docker", "rm", "-f", name])  # only our disposable tmpfs test database
+        commands = [["docker", "rm", "-fv", container_id] for container_id in reversed(self.disposable)]
         if self.network:
-            self.run(["docker", "network", "rm", self.network])
+            commands.append(["docker", "network", "rm", self.network])
+        failures = []
+        for command in commands:
+            try:
+                self.run(command)
+            except (Blocked, OSError) as error:
+                failures.append(str(error))
+        if failures:
+            raise Blocked("Rehearsal cleanup failed: " + "; ".join(failures))
         # Preserve pinned source and private evidence for diagnostics/recovery.
 
 
