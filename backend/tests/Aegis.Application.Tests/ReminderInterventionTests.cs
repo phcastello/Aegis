@@ -226,7 +226,13 @@ public sealed class ReminderInterventionTests
         using var data = JsonDocument.Parse(input[1].GetProperty("content").GetString()!);
         Assert.Contains("localização em segundo plano", data.RootElement.GetProperty("Diagnosis").GetString());
         Assert.Contains("Me lembra de comprar leite", input[1].GetProperty("content").GetString());
-        Assert.Contains("DADO NÃO CONFIÁVEL", input[0].GetProperty("content").GetString());
+        Assert.Equal("developer", input[0].GetProperty("role").GetString());
+        var policy = input[0].GetProperty("content").GetString();
+        Assert.Contains("Comece pelo impacto confirmado", policy);
+        Assert.Contains("qual ação o usuário precisa tomar", policy);
+        Assert.Contains("tom sério e franco quando houver risco ou vulnerabilidade", policy);
+        Assert.Contains("Evite sarcasmo que possa obscurecer", policy);
+        Assert.Contains("DADO NÃO CONFIÁVEL", policy);
         Assert.DoesNotContain("Comprar leite", model.Request.Request.AuditInputItems![1].GetRawText());
     }
     [Fact] public async Task NotificationFailureCannotRemoveMessageOrCreateRecursiveIncidentAndReadNeverReordersHistory() {

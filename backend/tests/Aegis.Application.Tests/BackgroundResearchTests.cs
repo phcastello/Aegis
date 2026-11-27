@@ -3,18 +3,23 @@ using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
+using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using Xunit;
 
@@ -22,6 +27,8 @@ namespace Aegis.Application.Tests;
 
 public sealed class BackgroundResearchTests
 {
+    private const string ExampleScript = "import secrets\nprint(secrets.randbelow(53) - 10)";
+
     [Fact]
     public async Task CompletedResearchStreamsTheEntireAnswerToItsOriginatingVoiceSession()
     {
@@ -312,6 +319,67 @@ public sealed class BackgroundResearchTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DelegatedJobsSendSharedPersonalityAndTaskInstructionsInTheFirstProviderRequest(bool isPython)
+    {
+        const string original = "Pedido de origem desta conversa.";
+        const string brief = "Contexto autorizado para o trabalho.";
+        var transport = new DelegatedJobTransport(isPython);
+        using var http = new HttpClient(transport) { BaseAddress = new Uri("https://responses.test/") };
+        using var metrics = new AegisMetrics();
+        var model = new OpenAIResponsesClient(http, Options.Create(new OpenAIOptions { ApiKey = "fake" }),
+            metrics, NullLogger<OpenAIResponsesClient>.Instance);
+        var runner = new ScriptRunner();
+        await using var services = Services(model, new ConversationChanges(), runner);
+        var session = Guid.NewGuid();
+        Guid jobId;
+        await using (var scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+            var conversation = new Conversation(Conversation.DefaultTitle);
+            var origin = conversation.AddMessage(ChatRoles.User, original);
+            db.Conversations.Add(conversation);
+            db.ChatMessages.Add(origin);
+            await db.SaveChangesAsync();
+            scope.ServiceProvider.GetRequiredService<ResearchJobStore>().Stage(origin, brief, session, isPython);
+            await db.SaveChangesAsync();
+            jobId = origin.Id;
+        }
+
+        Assert.True(await Worker(services).ProcessNextAsync(CancellationToken.None));
+        Assert.Equal(isPython ? 2 : 1, transport.Payloads.Count);
+        Assert.Equal(isPython ? 1 : 0, runner.Runs);
+        using var first = JsonDocument.Parse(transport.Payloads[0]);
+        var input = first.RootElement.GetProperty("input");
+        Assert.Equal("developer", input[0].GetProperty("role").GetString());
+        var instructions = input[0].GetProperty("content").GetString();
+        var personality = await PromptBuilder.LoadPersonalityAsync();
+        Assert.StartsWith(personality + "\n\n", instructions);
+        Assert.Contains("Comece direto pela conclusão", instructions);
+        Assert.Contains(isPython ? "Use run_python" : "Use a pesquisa nativa", instructions);
+        Assert.Equal("user", input[1].GetProperty("role").GetString());
+        var userContent = input[1].GetProperty("content").GetString();
+        Assert.Contains(brief, userContent);
+        if (isPython) Assert.Contains(original, userContent);
+        else Assert.DoesNotContain(original, userContent);
+        var tool = Assert.Single(first.RootElement.GetProperty("tools").EnumerateArray());
+        Assert.Equal(isPython ? "function" : "web_search", tool.GetProperty("type").GetString());
+        if (isPython) Assert.Equal("run_python", tool.GetProperty("name").GetString());
+
+        await using var finalScope = services.CreateAsyncScope();
+        var state = await finalScope.ServiceProvider.GetRequiredService<ResearchJobStore>().GetAsync(jobId, CancellationToken.None);
+        Assert.Equal(ResearchJob.Completed, state?.State);
+        if (isPython)
+        {
+            var db = finalScope.ServiceProvider.GetRequiredService<AegisDbContext>();
+            var audit = await db.LlmRequestAudits.SingleAsync();
+            Assert.Equal("{\"type\":\"background_python\"}", audit.RequestPayloadJson);
+            Assert.Null(audit.ResponseBody);
+        }
+    }
+
     private static ServiceProvider Services(IAegisModelClient model, ConversationChanges changes,
         IPythonScriptRunner? script = null, bool webEnabled = true)
     {
@@ -379,7 +447,6 @@ public sealed class BackgroundResearchTests
 
     private sealed class ScriptModel(bool runScript) : IAegisModelClient
     {
-        private const string Code = "import secrets\nprint(secrets.randbelow(53) - 10)";
         public string? JobInput { get; private set; }
         public string? Instructions { get; private set; }
 
@@ -394,12 +461,12 @@ public sealed class BackgroundResearchTests
             JobInput = request.Request.Input;
             Instructions = request.Request.Instructions;
             Assert.Contains(request.AuditInputItems!, item => item.GetRawText().Contains("[python_tool_brief_redacted]"));
-            var audit = new LlmRequestAuditData("fake", "script", true, 1, JobInput, 200, Code, null, null);
+            var audit = new LlmRequestAuditData("fake", "script", true, 1, JobInput, 200, ExampleScript, null, null);
             var output = request.InputItems?.SingleOrDefault(item => item.TryGetProperty("type", out var type) &&
                 type.GetString() == "function_call_output");
             if (runScript && output is null or { ValueKind: JsonValueKind.Undefined })
             {
-                var args = JsonSerializer.SerializeToElement(new { code = Code, input = (string?)null });
+                var args = JsonSerializer.SerializeToElement(new { code = ExampleScript, input = (string?)null });
                 yield return new(null, true, [new("python_1", "run_python", args)], [],
                     Provider: "fake", Model: "script", AuditData: audit);
                 yield break;
@@ -415,6 +482,26 @@ public sealed class BackgroundResearchTests
             }
             else yield return new("O inteiro sorteado foi 17.", false, [], []);
             yield return new(null, true, [], [], Provider: "fake", Model: "script", AuditData: audit);
+        }
+    }
+
+    private sealed class DelegatedJobTransport(bool isPython) : HttpMessageHandler
+    {
+        public List<string> Payloads { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Payloads.Add(await request.Content!.ReadAsStringAsync(ct));
+            object item = isPython && Payloads.Count == 1
+                ? new { type = "function_call", call_id = "call_1", name = "run_python",
+                    arguments = JsonSerializer.Serialize(new { code = ExampleScript, input = (string?)null }) }
+                : new { type = "message", content = new[] { new { type = "output_text", text = "Resultado verificado." } } };
+            var response = new { type = "response.completed", response = new
+            {
+                id = "response_" + Payloads.Count, model = "test-model", output = new[] { item }
+            } };
+            var body = "data: " + JsonSerializer.Serialize(response) + "\n\ndata: [DONE]\n\n";
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
         }
     }
 

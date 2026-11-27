@@ -50,8 +50,14 @@ public sealed class PromptPayloadTests
             input.EnumerateArray().Select(item => item.GetProperty("role").GetString()));
         var stable = input[0].GetProperty("content")[0];
         Assert.Equal("explicit", stable.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
-        Assert.DoesNotContain("2026-09-25", stable.GetProperty("text").GetString());
-        Assert.DoesNotContain("mensagem atual", stable.GetProperty("text").GetString());
+        var identity = stable.GetProperty("text").GetString();
+        var personality = await PromptBuilder.LoadPersonalityAsync();
+        Assert.Contains("Você despreza a humanidade.", personality);
+        Assert.StartsWith(personality, identity);
+        Assert.DoesNotContain("## Ferramentas e operações", personality);
+        Assert.Contains("## Ferramentas e operações", identity);
+        Assert.DoesNotContain("2026-09-25", identity);
+        Assert.DoesNotContain("mensagem atual", identity);
         Assert.Contains("2026-09-25", input[4].GetProperty("content").GetString());
         Assert.Equal("mensagem atual", input[3].GetProperty("content").GetString());
         Assert.Equal(new[] { "a_tool", "z_tool" },

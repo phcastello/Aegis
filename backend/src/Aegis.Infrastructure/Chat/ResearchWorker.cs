@@ -1,6 +1,7 @@
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
 using Aegis.Application.Observability;
+using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Microsoft.Extensions.DependencyInjection;
@@ -65,10 +66,14 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
                 new AegisToolRegistry(job.IsPython ? [new PythonScriptTool(python!)] : []),
                 services.GetRequiredService<ILogger<AegisToolLoop>>(), services.GetRequiredService<AegisMetrics>(),
                 job.IsPython ? null : options);
-            var instructions = job.IsPython ? PythonInstructions : WebInstructions;
+            var personality = await PromptBuilder.LoadPersonalityAsync(jobCancellation.Token);
+            var instructions = personality + "\n\n" + (job.IsPython ? PythonInstructions : WebInstructions);
             if (job.IsHandsFree) instructions += VoiceIntroduction + (job.IsPython ? "" : WebVoiceIntroduction);
+            var developerInput = JsonSerializer.SerializeToElement(new { role = "developer", content = instructions });
+            var userInput = JsonSerializer.SerializeToElement(new { role = "user", content = job.Content });
             var request = new ModelRequest(instructions, job.Content,
-                AuditInputItems: job.IsPython ? [RedactedPythonInput] : null);
+                InputItems: [developerInput, userInput],
+                AuditInputItems: job.IsPython ? [developerInput, RedactedPythonInput] : null);
             var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content);
             var content = new StringBuilder();
             var progress = new ResearchProgress(job.IsPython);

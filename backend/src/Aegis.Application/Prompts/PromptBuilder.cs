@@ -9,7 +9,16 @@ namespace Aegis.Application.Prompts;
 public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider) : IPromptBuilder
 {
     private const string IdentityPromptRelativePath = "Prompts/aegis_identity.md";
+    private const string ConversationSection = "\n## Conversa e memória";
+    private const string DefaultIdentity = "Você é a Aegis, assistente pessoal e residencial. Responda em português brasileiro.";
     private static readonly Lazy<Task<string>> IdentityPrompt = new(LoadIdentityPromptAsync);
+
+    public static async Task<string> LoadPersonalityAsync(CancellationToken cancellationToken = default)
+    {
+        var identity = await IdentityPrompt.Value.WaitAsync(cancellationToken);
+        var end = identity.IndexOf(ConversationSection, StringComparison.Ordinal);
+        return end < 0 ? DefaultIdentity : identity[..end].Trim();
+    }
 
     public async Task<PromptBuildResult> BuildPromptAsync(
         IReadOnlyList<ChatMessage> recentHistory,
@@ -86,6 +95,6 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
         var path = Path.Combine(AppContext.BaseDirectory, IdentityPromptRelativePath);
         return File.Exists(path)
             ? await File.ReadAllTextAsync(path)
-            : "Você é a Aegis, assistente pessoal e residencial. Responda em português brasileiro.";
+            : DefaultIdentity;
     }
 }
