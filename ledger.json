@@ -1896,8 +1896,8 @@
     }
   ],
   "recommended": {
-    "version": "0.9.0-unstable.6",
-    "versionCode": 9000006,
-    "sha256": "fe26418f6670e940a71a871a3bd27611b98fc69d5608ba8b57fbfb018c3de4a6"
+    "version": "0.9.0-unstable.7",
+    "versionCode": 9000007,
+    "sha256": "5341f00a4a424a4b1ccf5617875c070c2f7eab88c48d82f1060f5f6fc94f3d5a"
   }
 }
