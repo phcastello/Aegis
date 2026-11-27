@@ -14,7 +14,7 @@ import ConversationMenu from '../components/ConversationMenu.vue';
 import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
-import { attachmentSize, checkAttachmentLimits, encodeAttachment, sharedAttachmentFile } from '../services/chatAttachments';
+import { attachmentSize, checkAttachmentLimits, pickedFile, releaseAttachment, sharedAttachmentFile, uploadAttachment, type DraftAttachment } from '../services/chatAttachments';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
 import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeVoiceToolStatus } from '../services/streamTextPresentation';
@@ -61,7 +61,7 @@ type ConversationContext = {
   id: string | null;
   messages: LocalChatMessage[];
   draft: string;
-  files: File[];
+  files: DraftAttachment[];
   title: string | null;
   createdAt: string | null;
   error: string | null;
@@ -75,7 +75,7 @@ type ConversationContext = {
   toolState: 'started' | 'completed' | 'failed' | null;
   researchActive: boolean;
   researchSites: Map<string, number>;
-  retry: { turnId: string; content: string; files: File[]; conversationId: string | null } | null;
+  retry: { turnId: string; content: string; files: DraftAttachment[]; conversationId: string | null } | null;
 };
 function createConversationContext(id: string | null = null): ConversationContext {
   return reactive({ id, messages: [], draft: '', files: [], title: null, createdAt: null, error: null,
@@ -156,7 +156,7 @@ let lastHealthCheck = 0;
 const MAX_CONCURRENT_TURNS = 3;
 type ActiveTurn = {
   id: string; owner: ConversationContext; user: LocalChatMessage; assistant: LocalChatMessage;
-  controller: AbortController; accepted: boolean; status: 'thinking' | 'responding';
+  controller: AbortController; accepted: boolean; uploading: boolean; status: 'thinking' | 'responding';
 };
 const activeTurns = shallowReactive(new Map<string, ActiveTurn>());
 const selectedTurn = computed(() => [...activeTurns.values()].find(turn => turn.owner === selected.value));
@@ -649,18 +649,21 @@ function createLocalMessageId(): string {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function stageFiles(owner: ConversationContext, files: File[]): void {
+function stageFiles(owner: ConversationContext, files: DraftAttachment[]): void {
   if (!files.length) return;
   try {
     checkAttachmentLimits([...owner.files, ...files]);
     owner.files.push(...files);
     owner.error = null;
-  } catch (error) { owner.error = error instanceof Error ? error.message : 'Não foi possível anexar os arquivos.'; }
+  } catch (error) {
+    files.forEach(file => releaseAttachment(file, true));
+    owner.error = error instanceof Error ? error.message : 'Não foi possível anexar os arquivos.';
+  }
 }
 
 function selectFiles(event: Event): void {
   const input = event.target as HTMLInputElement;
-  stageFiles(selected.value, Array.from(input.files ?? []));
+  stageFiles(selected.value, Array.from(input.files ?? [], pickedFile));
   input.value = '';
 }
 
@@ -668,13 +671,13 @@ function pasteFiles(event: ClipboardEvent): void {
   const files = Array.from(event.clipboardData?.files ?? []);
   if (!files.length) return;
   event.preventDefault();
-  stageFiles(selected.value, files);
+  stageFiles(selected.value, files.map(pickedFile));
 }
 
 function dragFiles(event: DragEvent): void {
   if (!event.dataTransfer?.types.includes('Files')) return;
   event.preventDefault();
-  if (event.type === 'drop') stageFiles(selected.value, Array.from(event.dataTransfer.files));
+  if (event.type === 'drop') stageFiles(selected.value, Array.from(event.dataTransfer.files, pickedFile));
 }
 
 let receivingShare = false;
@@ -691,7 +694,8 @@ async function receiveSharedFiles(): Promise<void> {
       const owner = selected.value;
       try {
         const result = await take();
-        if (disposed || !result) return;
+        if (!result) return;
+        if (disposed) { result.files.forEach(file => releaseAttachment(sharedAttachmentFile(file))); return; }
         stageFiles(owner, result.files.map(sharedAttachmentFile));
         if (result.error) owner.error = result.error;
         if (selected.value === owner && (result.files.length || result.error)) {
@@ -703,7 +707,7 @@ async function receiveSharedFiles(): Promise<void> {
   } finally { receivingShare = false; }
 }
 
-function createLocalUserMessage(content: string, files: File[]): LocalChatMessage {
+function createLocalUserMessage(content: string, files: DraftAttachment[]): LocalChatMessage {
   return reactive({
     id: createLocalMessageId(),
     conversationId: conversationId.value ?? 'pending',
@@ -1310,6 +1314,7 @@ function associateTurnConversation(turn: ActiveTurn, id: string, titleSource?: s
   turn.user.pending = false;
   turn.assistant.conversationId = id;
   turn.accepted = true;
+  owner.retry?.files.forEach(file => releaseAttachment(file));
   owner.retry = null;
   if (owner === selected.value) localStorage.setItem(STORAGE_KEY, id);
   const previous = conversations.value.find(c => c.id === id);
@@ -1341,7 +1346,7 @@ async function handleSubmit(): Promise<void> {
   const localMessage = createLocalUserMessage(content, files);
   const assistantMessage = createLocalAssistantMessage();
   const controller = new AbortController();
-  const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller, accepted: false, status: 'thinking' });
+  const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller, accepted: false, uploading: files.length > 0, status: 'thinking' });
   activeTurns.set(turnId, turn);
   // Consume the submitted draft, including the unsaved-conversation slot.
   if (newConversation === owner) newConversation = createConversationContext();
@@ -1359,9 +1364,17 @@ async function handleSubmit(): Promise<void> {
   const owns = (): boolean => activeTurns.get(turnId) === turn && !controller.signal.aborted;
 
   try {
-    const attachments = files.length ? await Promise.all(files.map(encodeAttachment)) : undefined;
+    const attachmentUploadIds: string[] = [];
+    for (const file of files) {
+      attachmentUploadIds.push(await uploadAttachment(file, controller.signal, bytes => {
+        if (owns()) owner.toolMessage = `Enviando ${file.name} · ${attachmentSize(bytes)} de ${attachmentSize(file.size)}`;
+      }));
+    }
     if (!owns()) return;
-    await sendMessageStream({ turnId, conversationId: requestConversationId, content, attachments }, {
+    turn.uploading = false;
+    clearToolStatus(owner);
+    await sendMessageStream({ turnId, conversationId: requestConversationId, content,
+      attachmentUploadIds: files.length ? attachmentUploadIds : undefined }, {
       onConversation: (eventTurnId, id) => {
         if (!owns() || eventTurnId !== turnId) return;
         associateTurnConversation(turn, id);
@@ -1449,6 +1462,22 @@ async function stopActiveTurn(reason = 'user_stop', turn = selectedTurn.value): 
   if (activeSpeechOwner === turn.owner) stopPlayback();
   const presentation = textPresentations.get(turn.assistant);
   if (presentation) settlePresentation(presentation, true);
+  if (turn.uploading && turn.owner.retry) {
+    const { files, content } = turn.owner.retry;
+    const owner = turn.owner;
+    owner.messages = owner.messages.filter(message => message !== turn.user && message !== turn.assistant);
+    if (reason === 'user_stop') {
+      owner.files = [...files, ...owner.files];
+      owner.draft = [content, owner.draft].filter(Boolean).join('\n');
+      owner.error = null;
+      if (!owner.id && !unsentConversations.value.includes(owner)) unsentConversations.value.push(owner);
+    } else {
+      files.forEach(file => releaseAttachment(file, true));
+      owner.retry = null;
+    }
+    return;
+  }
+  turn.owner.retry?.files.forEach(file => releaseAttachment(file));
   turn.assistant.pending = false;
   turn.assistant.streaming = false;
   turn.assistant.interrupted = true;
@@ -1606,6 +1635,7 @@ async function confirmDeleteConversation(): Promise<void> {
     deletedConversations.add(targetId);
     researchByConversation.delete(targetId);
     pendingResearchReads.get(targetId)?.controller.abort();
+    contexts.get(targetId)?.files.forEach(file => releaseAttachment(file, true));
     contexts.delete(targetId);
     conversations.value = conversations.value.filter((conversation) => conversation.id !== targetId);
   if (conversationId.value === targetId) {
@@ -1788,6 +1818,8 @@ onBeforeUnmount(() => {
   layoutObserver?.disconnect();
   if (streamScrollFrame !== null) cancelAnimationFrame(streamScrollFrame);
   for (const turn of [...activeTurns.values()]) void stopActiveTurn('view_unmounted', turn);
+  for (const context of new Set([selected.value, newConversation, ...unsentConversations.value, ...contexts.values()]))
+    context.files.forEach(file => releaseAttachment(file, true));
   stopPlayback();
   for (const timer of historyRefreshTimers.values()) window.clearTimeout(timer);
   historyRefreshTimers.clear();
@@ -1910,7 +1942,7 @@ onBeforeUnmount(() => {
         <ul v-if="selected.files.length" class="attachment-list" aria-label="Anexos da mensagem">
           <li v-for="(file, index) in selected.files" :key="index" class="attachment-chip">
             <span class="attachment-name">{{ file.name }}</span><small>{{ attachmentSize(file.size) }}</small>
-            <button type="button" :aria-label="`Remover ${file.name}`" @click="selected.files.splice(index, 1)">×</button>
+            <button type="button" :aria-label="`Remover ${file.name}`" @click="releaseAttachment(selected.files.splice(index, 1)[0]!, true)">×</button>
           </li>
         </ul>
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">

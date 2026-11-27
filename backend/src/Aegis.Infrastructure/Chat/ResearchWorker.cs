@@ -67,7 +67,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
         {
             // Each job gets only the capability needed to execute it.
             var loop = new AegisToolLoop(services.GetRequiredService<IAegisModelClient>(),
-                new AegisToolRegistry(job.IsPython ? [new PythonScriptTool(python!)] : []),
+                new AegisToolRegistry(job.IsPython ? [new PythonScriptTool(python!), new AttachmentReadTool()] : [new AttachmentReadTool()]),
                 services.GetRequiredService<ILogger<AegisToolLoop>>(), services.GetRequiredService<AegisMetrics>(),
                 job.IsPython ? null : options);
             var personality = await PromptBuilder.LoadPersonalityAsync(jobCancellation.Token);
@@ -85,7 +85,8 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
             var preferences = await services.GetRequiredService<IOwnerInstructions>().ReadAsync(jobCancellation.Token);
             OwnerInstructions.Include(input, audit, preferences.Text);
             var request = new ModelRequest(instructions, job.Content, InputItems: input, AuditInputItems: audit);
-            var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content);
+            var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content,
+                AttachmentReader: attachments.OffersReader ? attachments : null);
             var content = new StringBuilder();
             var progress = new ResearchProgress(job.IsPython);
 

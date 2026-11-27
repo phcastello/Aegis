@@ -27,9 +27,13 @@ public sealed class SendMessageRequest
 
     public string Content { get; init; } = string.Empty;
     public IReadOnlyList<ChatAttachmentRequest>? Attachments { get; init; }
+    public IReadOnlyList<Guid>? AttachmentUploadIds { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public bool HasMessage => !string.IsNullOrWhiteSpace(Content) || Attachments is { Count: > 0 };
+    public bool HasAttachments => Attachments is { Count: > 0 } || AttachmentUploadIds is { Count: > 0 };
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasMessage => !string.IsNullOrWhiteSpace(Content) || HasAttachments;
 }
 
 /// <summary>A new utterance cut off a voice turn before any audio was played.

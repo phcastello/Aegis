@@ -76,6 +76,7 @@ public static class DependencyInjection
         services.AddScoped<IEmailToolContextService, EmailToolContextService>();
         services.AddScoped<IAegisToolLoop, AegisToolLoop>();
         services.AddScoped<IAegisToolRegistry, AegisToolRegistry>();
+        services.AddScoped<IAegisTool, AttachmentReadTool>();
         services.AddScoped<IAegisTool, EmailGetStatusTool>();
         services.AddScoped<IAegisTool, EmailCreateConnectLinkTool>();
         services.AddScoped<IAegisTool, EmailSearchTool>();

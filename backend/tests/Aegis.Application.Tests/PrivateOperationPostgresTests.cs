@@ -1,4 +1,5 @@
 using Aegis.Domain;
+using Aegis.Application.Chat;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Models;
@@ -51,6 +52,78 @@ public sealed class PrivateOperationPostgresTests
         await restarted.Database.MigrateAsync();
         Assert.Equal(applied, await restarted.Database.GetAppliedMigrationsAsync());
         Assert.Empty(await restarted.Database.GetPendingMigrationsAsync());
+    });
+
+    [OperationFact]
+    public Task UploadChunksCanRetryAndSeekButOnlyOneMessageCanClaimThem() => WithSchema(async create =>
+    {
+        await using var first = create();
+        await first.Database.MigrateAsync();
+        var store = new ChatUploadStore(first);
+        var bytes = new byte[ChatUploadLimits.ChunkSize];
+        bytes[^1] = 31;
+        var upload = await store.CreateAsync("material.bin", null, bytes.Length + 1, default);
+        Task<ChunkWriteResult> Put(int index, byte[] data) =>
+            store.WriteChunkAsync(upload.Id, index, new MemoryStream(data), null, default);
+        Assert.Equal(ChunkWriteResult.WrongSize, await Put(1, [1, 2]));
+        Assert.Equal(ChunkWriteResult.Saved, await Put(1, [32]));
+        Assert.Equal(ChunkWriteResult.Conflict, await Put(1, [0]));
+        await Assert.ThrowsAsync<ArgumentException>(() => first.ResolveChatUploadsAsync(Guid.NewGuid(), [upload.Id], default));
+        Assert.Equal(ChunkWriteResult.Saved, await Put(0, bytes));
+        Assert.Equal(ChunkWriteResult.Saved, await Put(0, bytes));
+        Assert.Equal(2, await first.ChatUploadChunks.CountAsync());
+
+        var conversation = new Conversation();
+        var message = conversation.AddMessage("user", "material de teste");
+        var accepted = Assert.Single(await first.ResolveChatUploadsAsync(message.Id, [upload.Id], default));
+        await using var competing = create();
+        var secondConversation = new Conversation();
+        var secondMessage = secondConversation.AddMessage("user", "envio concorrente");
+        var competingFiles = await competing.ResolveChatUploadsAsync(secondMessage.Id, [upload.Id], default);
+        first.AddConversation(conversation);
+        first.AddChatAttachments([accepted]);
+        await first.SaveChangesAsync();
+        competing.AddConversation(secondConversation);
+        competing.AddChatAttachments(competingFiles);
+        await Assert.ThrowsAsync<ArgumentException>(() => competing.SaveChangesAsync());
+
+        await using var reopened = create();
+        Assert.False(await reopened.Conversations.AnyAsync(c => c.Id == secondConversation.Id));
+        var file = await reopened.GetAttachmentAsync(message.Id, accepted.Id, default);
+        Assert.NotNull(file);
+        await using var content = await reopened.OpenAttachmentContentAsync(file!, default);
+        Assert.Equal(bytes.Length + 1L, content.Length);
+        content.Seek(-2, SeekOrigin.End);
+        var end = new byte[2];
+        await content.ReadExactlyAsync(end);
+        Assert.Equal(new byte[] { 31, 32 }, end);
+        content.Seek(0, SeekOrigin.Begin);
+        Assert.Equal(0, content.ReadByte());
+        Assert.Equal(0, await new ChatUploadStore(reopened).DiscardAsync(upload.Id, default));
+        await reopened.ChatAttachments.Where(a => a.Id == accepted.Id).ExecuteDeleteAsync();
+        Assert.False(await reopened.ChatUploadChunks.AnyAsync());
+    });
+
+    [OperationFact]
+    public Task PendingReservationsAreBoundedAtomicallyAndDiscardFreesCapacity() => WithSchema(async create =>
+    {
+        await using var initial = create();
+        await initial.Database.MigrateAsync();
+        async Task<Guid?> Reserve()
+        {
+            await using var db = create();
+            try
+            {
+                var upload = await new ChatUploadStore(db).CreateAsync("arquivo.zip", "application/zip", ChatUploadLimits.MaxFileBytes, default);
+                return upload.Id;
+            }
+            catch (ChatUploadCapacityException) { return null; }
+        }
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 9).Select(_ => Reserve()));
+        Assert.Equal(8, attempts.Count(id => id.HasValue));
+        var released = attempts.First(id => id.HasValue)!.Value;
+        Assert.Equal(1, await new ChatUploadStore(initial).DiscardAsync(released, default));
+        Assert.NotNull(await Reserve());
     });
 
     [OperationFact]

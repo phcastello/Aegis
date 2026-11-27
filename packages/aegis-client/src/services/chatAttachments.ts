@@ -1,32 +1,96 @@
-import type { AttachmentInput } from '../types/chat';
+import { clientEnvironment, type SharedAttachment } from './clientEnvironment';
+import { requestJson } from './aegisApi';
 
 export const MAX_ATTACHMENT_COUNT = 4;
-export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_ATTACHMENT_BYTES = 512 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+const UPLOAD_LIFETIME = 24 * 60 * 60 * 1000;
 
-export function checkAttachmentLimits(files: readonly File[]): void {
+interface Upload { id: string; chunkSize: number; next: number; expiresAt: number }
+export interface DraftAttachment {
+  name: string;
+  size: number;
+  type: string;
+  source: File | string;
+  upload?: Upload;
+}
+
+export function pickedFile(source: File): DraftAttachment {
+  return { source, name: source.name, size: source.size, type: source.type || 'application/octet-stream' };
+}
+
+export function sharedAttachmentFile(file: SharedAttachment): DraftAttachment {
+  return { source: file.handle, name: file.fileName, size: file.sizeBytes, type: file.contentType };
+}
+
+export function checkAttachmentLimits(files: readonly DraftAttachment[]): void {
   if (files.length > MAX_ATTACHMENT_COUNT) throw new Error('Anexe até quatro arquivos por mensagem.');
-  if (files.some(file => !file.size)) throw new Error('O arquivo selecionado está vazio.');
-  if (files.reduce((sum, file) => sum + file.size, 0) > MAX_ATTACHMENT_BYTES)
-    throw new Error('Os anexos de uma mensagem podem somar até 8 MiB.');
+  for (const file of files) {
+    if (!Number.isSafeInteger(file.size) || file.size < 1) throw new Error(`O arquivo ${file.name} está vazio ou não pôde ser lido.`);
+    if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} excede 512 MiB por arquivo.`);
+  }
 }
 
-export function encodeAttachment(file: File): Promise<AttachmentInput> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result);
-      resolve({ fileName: file.name, contentType: file.type || 'application/octet-stream', dataBase64: url.slice(url.indexOf(',') + 1) });
-    };
-    reader.onerror = () => reject(new Error(`Não foi possível ler ${file.name}. Selecione o arquivo novamente.`));
-    reader.readAsDataURL(file);
+function ensureActive(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException('Envio interrompido.', 'AbortError');
+}
+
+const uploadPath = (id: string) => `/api/chat/uploads/${encodeURIComponent(id)}`;
+
+async function startUpload(file: DraftAttachment, signal: AbortSignal): Promise<Upload> {
+  const expiresAt = Date.now() + UPLOAD_LIFETIME;
+  const info = await requestJson<{ id: string; chunkSize: number; sizeBytes: number }>('/api/chat/uploads', {
+    method: 'POST', signal, redirect: 'error',
+    body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size })
   });
+  ensureActive(signal);
+  if (typeof info?.id !== 'string' || !info.id || info.sizeBytes !== file.size ||
+      !Number.isSafeInteger(info.chunkSize) || info.chunkSize < 1 || info.chunkSize > MAX_CHUNK_BYTES)
+    throw new Error('O servidor devolveu uma sessão de envio inválida.');
+  return { id: info.id, chunkSize: info.chunkSize, next: 0, expiresAt };
 }
 
-export function sharedAttachmentFile(input: AttachmentInput): File {
-  const binary = atob(input.dataBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new File([bytes], input.fileName, { type: input.contentType });
+async function putChunk(file: DraftAttachment, upload: Upload, signal: AbortSignal): Promise<number> {
+  const env = clientEnvironment();
+  if (typeof file.source === 'string') {
+    if (!env.uploadSharedChunk) throw new Error('Compartilhamento de arquivo indisponível.');
+    return env.uploadSharedChunk(file.source, upload.id, upload.next, upload.chunkSize, signal);
+  }
+  const offset = upload.next * upload.chunkSize;
+  const response = await fetch(`${env.apiBaseUrl}${uploadPath(upload.id)}/chunks/${upload.next}`, {
+    method: 'PUT', signal, redirect: 'error',
+    headers: { 'Content-Type': 'application/octet-stream' }, body: file.source.slice(offset, offset + upload.chunkSize)
+  });
+  return response.status;
+}
+
+export async function uploadAttachment(file: DraftAttachment, signal: AbortSignal, progress: (bytes: number) => void): Promise<string> {
+  ensureActive(signal);
+  if (!file.upload || Date.now() >= file.upload.expiresAt) file.upload = await startUpload(file, signal);
+  let upload = file.upload;
+  let renewed = false;
+  progress(Math.min(upload.next * upload.chunkSize, file.size));
+  while (upload.next * upload.chunkSize < file.size) {
+    ensureActive(signal);
+    const status = await putChunk(file, upload, signal);
+    ensureActive(signal);
+    if ((status === 404 || status === 410) && !renewed) {
+      file.upload = upload = await startUpload(file, signal);
+      renewed = true;
+      progress(0);
+      continue;
+    }
+    if (status !== 204) throw new Error(`Não foi possível enviar ${file.name} (HTTP ${status}). Tente novamente.`);
+    upload.next++;
+    progress(Math.min(upload.next * upload.chunkSize, file.size));
+  }
+  return upload.id;
+}
+
+export function releaseAttachment(file: DraftAttachment, discardUpload = false): void {
+  if (typeof file.source === 'string') void clientEnvironment().releaseSharedAttachment?.(file.source).catch(() => {});
+  if (discardUpload && file.upload)
+    void requestJson<void>(uploadPath(file.upload.id), { method: 'DELETE', redirect: 'error' }).catch(() => {});
 }
 
 export function attachmentSize(bytes: number): string {

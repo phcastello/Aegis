@@ -25,7 +25,15 @@ public sealed class AegisDbContext(
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         var changed = CaptureConversationChanges();
-        var count = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        int count;
+        try
+        {
+            count = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException error) when (error.Entries.Any(e => e.Entity is UploadedChatFile))
+        {
+            throw new ArgumentException("Este envio já foi utilizado ou expirou. Confira a conversa antes de enviar novamente.", error);
+        }
         if (count > 0) RecordConversationChanges(changed);
         return count;
     }
@@ -98,6 +106,8 @@ public sealed class AegisDbContext(
 
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
+    public DbSet<UploadedChatFile> ChatUploads => Set<UploadedChatFile>();
+    public DbSet<ChatUploadChunk> ChatUploadChunks => Set<ChatUploadChunk>();
 
     public void AddChatAttachments(IReadOnlyList<ChatAttachment> attachments) => ChatAttachments.AddRange(attachments);
 
@@ -114,10 +124,40 @@ public sealed class AegisDbContext(
     }
 
     public Task<List<ChatAttachment>> GetMessageAttachmentsAsync(Guid messageId, CancellationToken ct) =>
-        VisibleAttachments.Where(a => a.MessageId == messageId).OrderBy(a => a.Position).ToListAsync(ct);
+        VisibleAttachments.Include(a => a.Upload).Where(a => a.MessageId == messageId).OrderBy(a => a.Position).ToListAsync(ct);
 
     public Task<ChatAttachment?> GetAttachmentAsync(Guid messageId, Guid attachmentId, CancellationToken ct) =>
-        VisibleAttachments.SingleOrDefaultAsync(a => a.Id == attachmentId && a.MessageId == messageId, ct);
+        VisibleAttachments.Include(a => a.Upload).SingleOrDefaultAsync(a => a.Id == attachmentId && a.MessageId == messageId, ct);
+
+    public async Task<List<ChatAttachment>> ResolveChatUploadsAsync(Guid messageId, IReadOnlyList<Guid> uploadIds, CancellationToken ct)
+    {
+        if (uploadIds.Count > ChatUploadLimits.MaxFiles || uploadIds.Distinct().Count() != uploadIds.Count)
+            throw new ArgumentException("Selecione até quatro arquivos diferentes por mensagem.");
+        var ids = uploadIds.ToArray();
+        var now = DateTimeOffset.UtcNow;
+        // Track the original null AttachmentId. The normal message SaveChanges then
+        // claims every upload atomically, and competing claims roll back in full.
+        var uploads = await ChatUploads.Where(u => ids.Contains(u.Id) && u.AttachmentId == null && u.ExpiresAt > now)
+            .ToDictionaryAsync(u => u.Id, ct);
+        var received = await ChatUploadChunks.Where(c => ids.Contains(c.UploadId)).GroupBy(c => c.UploadId)
+            .Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Id, g => g.Count, ct);
+        var files = new List<ChatAttachment>(ids.Length);
+        foreach (var id in ids)
+        {
+            if (!uploads.TryGetValue(id, out var upload))
+                throw new ArgumentException("Um envio já foi utilizado ou expirou. Confira a conversa antes de enviar novamente.");
+            if (received.GetValueOrDefault(id) != ChatUploadLimits.ChunkCount(upload.SizeBytes))
+                throw new ArgumentException("O envio do arquivo ainda está incompleto.");
+            files.Add(new ChatAttachment(messageId, files.Count, upload));
+        }
+        return files;
+    }
+
+    public Task<Stream> OpenAttachmentContentAsync(ChatAttachment attachment, CancellationToken ct) =>
+        Task.FromResult<Stream>(attachment.Upload is { } upload
+            ? new ChatUploadStream(this, upload.Id, upload.SizeBytes, ct)
+            : new MemoryStream(attachment.Data, writable: false));
+
     public DbSet<ResearchJob> ResearchJobs => Set<ResearchJob>();
 
     public DbSet<MessageFeedback> MessageFeedback => Set<MessageFeedback>();
@@ -662,6 +702,25 @@ public sealed class AegisDbContext(
             entity.Property(a => a.ContentType).HasMaxLength(128);
             entity.HasIndex(a => new { a.MessageId, a.Position }).IsUnique();
             entity.HasOne(a => a.Message).WithMany().HasForeignKey(a => a.MessageId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UploadedChatFile>(entity =>
+        {
+            entity.ToTable("chat_uploads");
+            entity.HasKey(u => u.Id);
+            entity.Property(u => u.FileName).HasMaxLength(255);
+            entity.Property(u => u.ContentType).HasMaxLength(128);
+            entity.Property(u => u.AttachmentId).IsConcurrencyToken();
+            entity.HasIndex(u => u.ExpiresAt).HasFilter("\"AttachmentId\" IS NULL");
+            entity.HasOne<ChatAttachment>().WithOne(a => a.Upload)
+                .HasForeignKey<UploadedChatFile>(u => u.AttachmentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatUploadChunk>(entity =>
+        {
+            entity.ToTable("chat_upload_chunks");
+            entity.HasKey(c => new { c.UploadId, c.Position });
+            entity.HasOne<UploadedChatFile>().WithMany().HasForeignKey(c => c.UploadId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<MessageFeedback>(entity =>

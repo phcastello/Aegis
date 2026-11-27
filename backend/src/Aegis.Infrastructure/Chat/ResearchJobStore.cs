@@ -191,7 +191,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
     internal async Task<ChatAttachmentContent> GetDelegatedAttachmentsAsync(ResearchJobInput job, CancellationToken ct)
     {
         var files = await db.GetMessageAttachmentsAsync(job.UserMessageId, ct);
-        if (files.Count > 0) return ChatAttachmentContent.FromStored(files);
+        if (files.Count > 0) return await ChatAttachmentContent.FromStoredAsync(db, files, ct);
         var conversation = await db.GetConversationWithMessagesAsync(job.ConversationId, ct);
         var original = conversation?.Messages.FirstOrDefault(m => m.Id == job.UserMessageId);
         if (original is null) return new ChatAttachmentContent();

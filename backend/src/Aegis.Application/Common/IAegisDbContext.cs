@@ -37,6 +37,10 @@ public interface IAegisDbContext
 
     Task<ChatAttachment?> GetAttachmentAsync(Guid messageId, Guid attachmentId, CancellationToken ct);
 
+    Task<List<ChatAttachment>> ResolveChatUploadsAsync(Guid messageId, IReadOnlyList<Guid> uploadIds, CancellationToken ct);
+
+    Task<Stream> OpenAttachmentContentAsync(ChatAttachment attachment, CancellationToken ct);
+
     void AddMemoryExtractionJob(MemoryExtractionJob job);
 
     void AddMessageFeedback(MessageFeedback feedback);

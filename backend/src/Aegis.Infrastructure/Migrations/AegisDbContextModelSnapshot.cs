@@ -242,6 +242,23 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("chat_messages", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.ChatUploadChunk", b =>
+                {
+                    b.Property<Guid>("UploadId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("UploadId", "Position");
+
+                    b.ToTable("chat_upload_chunks", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.Conversation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2380,6 +2397,43 @@ namespace Aegis.Infrastructure.Migrations
                     b.ToTable("tool_context_entries", (string)null);
                 });
 
+            modelBuilder.Entity("Aegis.Domain.Entities.UploadedChatFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AttachmentId")
+                        .IsConcurrencyToken()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AttachmentId")
+                        .IsUnique();
+
+                    b.HasIndex("ExpiresAt")
+                        .HasFilter("\"AttachmentId\" IS NULL");
+
+                    b.ToTable("chat_uploads", (string)null);
+                });
+
             modelBuilder.Entity("Aegis.Domain.Entities.WebSearchUsageEntry", b =>
                 {
                     b.Property<string>("CallId")
@@ -2451,6 +2505,15 @@ namespace Aegis.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Conversation");
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ChatUploadChunk", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.UploadedChatFile", null)
+                        .WithMany()
+                        .HasForeignKey("UploadId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.EmailActionAudit", b =>
@@ -2851,6 +2914,19 @@ namespace Aegis.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Conversation");
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.UploadedChatFile", b =>
+                {
+                    b.HasOne("Aegis.Domain.Entities.ChatAttachment", null)
+                        .WithOne("Upload")
+                        .HasForeignKey("Aegis.Domain.Entities.UploadedChatFile", "AttachmentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("Aegis.Domain.Entities.ChatAttachment", b =>
+                {
+                    b.Navigation("Upload");
                 });
 
             modelBuilder.Entity("Aegis.Domain.Entities.Conversation", b =>

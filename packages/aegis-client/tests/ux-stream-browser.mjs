@@ -6,7 +6,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer as createNetServer } from 'node:net';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -29,9 +30,10 @@ function createFixture(viteOrigin) {
   const initial = id => ({ id: `${id}-history`, conversationId: id, role: 'assistant', createdAt: date,
     content: `Histórico ${id === a ? 'Alfa' : 'Beta'}.\n\n` + Array.from({ length: 12 }, (_, i) => `Parágrafo ${i + 1}. Texto anterior para ler durante a geração.\n\n- Primeiro item\n- Segundo item\n\n\`\`\`js\nconst item${i} = ${i};\n\`\`\``).join('\n\n') });
   const data = new Map([a, b].map(id => [id, { id, title: id === a ? 'Alfa' : 'Beta', createdAt: date, updatedAt: date, messages: [initial(id)], read: 0 }]));
-  const streams = new Map();
+  const streams = new Map(), uploads = new Map();
   let newConversations = 0;
   const requests = [], cancellations = [], completions = [], deletions = [], speech = [];
+  let holdChunkIndex = null, heldChunk = null;
   let current, failNext = false, heldConversation = null, holdConversationId = null;
   const summary = row => ({ id: row.id, title: row.title, createdAt: row.createdAt, updatedAt: row.updatedAt, messageCount: row.messages.length,
     titleSource: row.titleSource ?? 'default', hasUnreadProactive: row.messages.some(m => (m.proactiveSequence ?? 0) > row.read) });
@@ -39,7 +41,7 @@ function createFixture(viteOrigin) {
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     if (req.method === 'OPTIONS') return json(res, null, 204);
     const url = new URL(req.url, 'http://localhost'), path = url.pathname;
     if (!path.startsWith('/api/')) {
@@ -47,8 +49,34 @@ function createFixture(viteOrigin) {
       for (const name of ['content-encoding', 'content-length', 'transfer-encoding']) delete headers[name];
       res.writeHead(response.status, headers); res.end(Buffer.from(await response.arrayBuffer())); return;
     }
+    if (path.startsWith('/api/chat/uploads/') && req.method === 'PUT') {
+      const [, , , , id, , index] = path.split('/');
+      const upload = uploads.get(id);
+      const parts = [];
+      for await (const part of req) parts.push(part);
+      const bytes = Buffer.concat(parts);
+      if (Number(index) === holdChunkIndex) {
+        holdChunkIndex = null;
+        await new Promise(resolve => { heldChunk = resolve; });
+        heldChunk = null;
+        return json(res, null, 503);
+      }
+      if (!upload || Number(index) !== upload.count ||
+          bytes.length !== Math.min(upload.chunkSize, upload.sizeBytes - upload.received))
+        return json(res, { error: 'Unexpected chunk.' }, 400);
+      upload.received += bytes.length;
+      upload.count++;
+      if (upload.sizeBytes < 1024) upload.parts.push(bytes);
+      return json(res, null, 204);
+    }
     let raw = ''; for await (const part of req) raw += part;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === '/api/chat/uploads') {
+      const id = crypto.randomUUID(), chunkSize = body.sizeBytes < 1024 ? 64 : 4 * 1024 * 1024;
+      uploads.set(id, { ...body, chunkSize, count: 0, received: 0, parts: [] });
+      return json(res, { id, chunkSize, sizeBytes: body.sizeBytes }, 201);
+    }
+    if (path.startsWith('/api/chat/uploads/') && req.method === 'DELETE') return json(res, null, 204);
     if (path === '/api/health') return json(res, { status: 'ok' });
     if (path === '/api/voice/status') return json(res, { enabled: false, available: false });
     if (path === '/api/voice/speech') { speech.push(body); return json(res, { error: 'Unexpected automatic speech.' }, 503); }
@@ -90,8 +118,11 @@ function createFixture(viteOrigin) {
         event(event) { if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify({ turnId: body.turnId, ...event }) + '\n'); },
         accept() {
           if (!data.has(id)) data.set(id, { id, title: 'Nova conversa', createdAt: date, updatedAt: date, messages: [], read: 0 });
-          const attachments = body.attachments?.map((file, index) => ({ id: `attachment-${index}`, fileName: file.fileName,
-            contentType: file.contentType, sizeBytes: Buffer.from(file.dataBase64, 'base64').length }));
+          const attachments = body.attachmentUploadIds?.map((uploadId, index) => {
+            const { fileName, contentType, sizeBytes, received } = uploads.get(uploadId);
+            assert.equal(received, sizeBytes);
+            return { id: `attachment-${index}`, fileName, contentType, sizeBytes };
+          });
           data.get(id).messages.push({ id: `${body.turnId}-user`, conversationId: id, role: 'user', content: body.content, attachments, createdAt: date });
           this.accepted = true; this.event({ type: 'conversation', conversationId: id });
         },
@@ -111,7 +142,9 @@ function createFixture(viteOrigin) {
     }
     return json(res, { error: `Unknown fixture path: ${path}` }, 404);
   });
-  return { server, data, requests, cancellations, completions, deletions, speech,
+  return { server, data, uploads, requests, cancellations, completions, deletions, speech,
+    holdChunk(index) { holdChunkIndex = index; },
+    get heldChunk() { return heldChunk; },
     holdConversation(id) { holdConversationId = id; },
     get heldConversation() { return heldConversation; },
     releaseConversation(failure = false) {
@@ -143,7 +176,7 @@ try {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => {
         if (window.fixtureCopyFailure) throw Error('Clipboard denied'); window.fixtureClipboard.push(text);
       } } });
-      window.__TAURI_INTERNALS__ = { invoke: async command => {
+      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
         if (command === 'runtime_info') return { platform, backendUrl: origin, version, processSessionId: 'ux-fixture' };
         if (command === 'node_read_visibility') return true;
         if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
@@ -153,6 +186,14 @@ try {
         if (command === 'node_consume_reminder_open') return { reminderId: null, conversationId: null };
         if (command === 'node_take_shared_attachments') {
           const files = window.shareInbox ?? []; window.shareInbox = []; return { files };
+        }
+        if (command === 'node_shared_attachment') {
+          if (args.operation !== 'upload') return {};
+          const offset = args.index * args.chunkSize;
+          const response = await fetch(`${origin}/api/chat/uploads/${args.uploadId}/chunks/${args.index}`, {
+            method: 'PUT', body: window.shareBytes.slice(offset, offset + args.chunkSize)
+          });
+          return { status: response.status };
         }
         if (command === 'check_android_update' || command === 'plugin:updater|check') return null;
         if (command === 'check_backend') return { status: 'connected' };
@@ -331,7 +372,8 @@ try {
       equal(await composer().inputValue(), '', 'an accepted prompt is never restored for automatic duplication');
       if (platform === 'android') {
         await page.evaluate(dataBase64 => {
-          window.shareInbox = [{ fileName: 'aula.zip', contentType: 'application/zip', dataBase64 }];
+          window.shareBytes = Uint8Array.from(atob(dataBase64), c => c.charCodeAt(0));
+          window.shareInbox = [{ handle: crypto.randomUUID(), fileName: 'aula.zip', contentType: 'application/zip', sizeBytes: window.shareBytes.length }];
           window.dispatchEvent(new Event('aegis-shared-attachments'));
         }, zipBase64);
       } else {
@@ -341,14 +383,19 @@ try {
       equal(await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).isEnabled(), true, 'a file-only turn can be sent');
       fixture.failNext = true; await send('Texto recuperável antes da aceitação');
       const failedRequest = fixture.requests.at(-1);
-      equal(failedRequest.attachments[0].dataBase64, zipBase64, 'ZIP bytes survive the file picker/Android share and encoding');
+      equal(failedRequest.attachments, undefined, 'no inline attachment bytes in the chat POST');
+      const uploadedZip = fixture.uploads.get(failedRequest.attachmentUploadIds[0]);
+      equal(Buffer.concat(uploadedZip.parts).toString('base64'), zipBase64, 'all ZIP chunks match the selected/shared original');
+      const uploadCount = fixture.uploads.size, chunkCount = uploadedZip.count;
       await page.locator('.composer').getByText('Falha de envio antes da aceitação.', { exact: true }).waitFor();
       equal(await composer().inputValue(), 'Texto recuperável antes da aceitação', 'pre-acceptance failure preserves the recoverable prompt');
       await select('Beta'); await select('Alfa');
       equal(await composer().inputValue(), 'Texto recuperável antes da aceitação', 'recoverable prompt remains associated with its conversation');
       const retried = await send('Texto recuperável antes da aceitação');
       equal(retried.request.turnId, failedRequest.turnId, 'manual retry preserves the existing idempotency key');
-      assert.deepEqual(retried.request.attachments, failedRequest.attachments);
+      assert.deepEqual(retried.request.attachmentUploadIds, failedRequest.attachmentUploadIds);
+      equal(fixture.uploads.size, uploadCount, 'a chat retry reuses the uploaded ZIP');
+      equal(uploadedZip.count, chunkCount, 'a chat retry does not resend acknowledged chunks');
       retried.accept(); retried.token('Resposta da tentativa manual. '); retried.done(); await settled();
       equal(await composer().inputValue(), '', 'accepted retry consumes the recovered prompt');
       equal(await page.locator('.messages').getByText('Texto recuperável antes da aceitação', { exact: true }).count(), 1, 'manual retry adds one accepted prompt');
@@ -356,6 +403,39 @@ try {
       await original.waitFor();
       ok((await original.getAttribute('href')).endsWith(`/api/chat/messages/${retried.request.turnId}-user/attachments/attachment-0`), 'reconciled history opens the original ZIP on its user message');
       await composer().fill('');
+
+      if (width === 1440) {
+        const directory = mkdtempSync(join(tmpdir(), 'aegis-upload-boundary-'));
+        const fileName = 'limite.bin', path = join(directory, fileName), limit = 512 * 1024 * 1024;
+        const resize = size => { const fd = openSync(path, 'w'); try { ftruncateSync(fd, size); } finally { closeSync(fd); } };
+        try {
+          resize(limit + 1);
+          await page.locator('input[type=file]').setInputFiles(path);
+          await page.getByText('limite.bin excede 512 MiB por arquivo.').waitFor();
+          fixture.holdChunk(1);
+          resize(limit);
+          await page.locator('input[type=file]').setInputFiles(path);
+          await page.getByRole('button', { name: 'Remover limite.bin' }).waitFor();
+          await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).click();
+          await page.waitForFunction(() => document.querySelector('.messages')?.textContent.includes('Enviando limite.bin'));
+          await until(() => fixture.heldChunk, 'the second chunk is in flight');
+          const [sessionId, partialUpload] = [...fixture.uploads.entries()].at(-1);
+          equal(partialUpload.count, 1, 'first chunk acknowledged before cancellation');
+          await page.getByRole('button', { name: 'Interromper geração', exact: true }).click();
+          await page.getByRole('button', { name: 'Remover limite.bin' }).waitFor();
+          fixture.heldChunk();
+          equal(await page.locator('.messages .attachment-name').filter({ hasText: 'limite.bin' }).count(), 0, 'stopping an upload removes its pending message');
+          await page.getByRole('button', { name: 'Enviar mensagem', exact: true }).click();
+          const limitAt = Date.now() + 120000;
+          while (fixture.current?.request.attachmentUploadIds?.[0] === retried.request.attachmentUploadIds[0] && Date.now() < limitAt)
+            await delay(100);
+          const limitTurn = fixture.current, received = fixture.uploads.get(limitTurn.request.attachmentUploadIds[0]);
+          equal(limitTurn.request.attachmentUploadIds[0], sessionId, 'stopped uploads resume in their original session');
+          equal(received.received, limit, 'browser uploads every byte of an exact 512 MiB file');
+          equal(received.count, 128, 'browser bounds transfers to 4 MiB per request');
+          limitTurn.accept(); limitTurn.token('Arquivo recebido. '); limitTurn.done(); await settled();
+        } finally { rmSync(directory, { recursive: true, force: true }); }
+      }
 
       const explicit = await send('Interrupção explícita'); explicit.accept(); explicit.token('Resposta a interromper. ');
       await select('Beta'); equal(fixture.cancellations.length, 0, 'navigation is not a stop request');

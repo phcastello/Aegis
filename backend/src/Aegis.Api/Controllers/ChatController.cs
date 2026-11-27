@@ -124,7 +124,7 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
             logger.LogWarning(exception, "Chat stream model request failed.");
             await WriteStreamErrorAsync(exception.Message, "model_unavailable", StatusCodes.Status502BadGateway, cancellationToken);
         }
-        catch (ArgumentException exception) when (request.Attachments is { Count: > 0 } && !Response.HasStarted)
+        catch (ArgumentException exception) when (request.HasAttachments && !Response.HasStarted)
         {
             await WriteStreamErrorAsync(exception.Message, "invalid_attachment", StatusCodes.Status400BadRequest, cancellationToken);
         }
@@ -182,7 +182,8 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
         if (file is null) return NotFound();
         Response.Headers.CacheControl = "private, no-store";
         Response.Headers.XContentTypeOptions = "nosniff";
-        return File(file.Data, file.ContentType, file.FileName);
+        var stream = await database.OpenAttachmentContentAsync(file, cancellationToken);
+        return File(stream, file.ContentType, file.FileName, enableRangeProcessing: true);
     }
 
     [HttpGet("conversations")]

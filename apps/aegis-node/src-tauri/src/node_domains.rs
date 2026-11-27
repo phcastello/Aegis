@@ -280,6 +280,59 @@ pub async fn node_take_shared_attachments(app: AppHandle) -> Result<Value, Strin
 }
 
 #[tauri::command]
+pub async fn node_shared_attachment(
+    app: AppHandle,
+    operation: String,
+    handle: uuid::Uuid,
+    request_id: Option<uuid::Uuid>,
+    upload_id: Option<uuid::Uuid>,
+    index: Option<u32>,
+    chunk_size: Option<u32>,
+) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let valid = match operation.as_str() {
+            "release" => true,
+            "cancel" => request_id.is_some(),
+            "upload" => {
+                request_id.is_some()
+                    && upload_id.is_some()
+                    && index.is_some()
+                    && matches!(chunk_size, Some(1..=4_194_304))
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err("Operação de anexo inválida.".into());
+        }
+        let origin = crate::config::configured_endpoint()?.base_url();
+        let bridge = app
+            .try_state::<crate::native_notifications::AndroidBridge>()
+            .ok_or("Compartilhamento indisponível.")?;
+        return bridge
+            .0
+            .run_mobile_plugin_async(
+                "sharedAttachment",
+                json!({
+                    "operation": operation, "handle": handle, "requestId": request_id,
+                    "uploadId": upload_id, "index": index, "chunkSize": chunk_size, "origin": origin
+                }),
+            )
+            .await
+            .map_err(|_| {
+                "Não foi possível enviar o arquivo compartilhado. Tente novamente.".into()
+            });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (
+            app, operation, handle, request_id, upload_id, index, chunk_size,
+        );
+        Err("Compartilhamento disponível somente no Android.".into())
+    }
+}
+
+#[tauri::command]
 pub async fn node_hide_keyboard(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "android")]
     crate::native_notifications::android_call(&app, "hideKeyboard", "{}".into())

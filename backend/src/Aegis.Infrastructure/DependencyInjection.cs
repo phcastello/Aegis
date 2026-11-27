@@ -45,6 +45,8 @@ public static class DependencyInjection
         services.AddScoped<Aegis.Application.Nodes.INodeRegistry, Aegis.Infrastructure.Nodes.NodeRegistry>();
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
         services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
+        services.AddScoped<ChatUploadStore>();
+        services.AddHostedService<ChatUploadCleanup>();
         services.AddDataProtection()
             .SetApplicationName("Aegis");
 

@@ -407,13 +407,14 @@ public sealed class AegisToolLoop(
 
     private List<ModelToolDefinition> DescribeAvailableTools(ToolExecutionContext context) =>
         toolRegistry.GetAvailableTools(context)
-            .Where(tool => tool is not PythonScriptTool { IsAvailable: false })
+            .Where(tool => tool is not PythonScriptTool { IsAvailable: false } &&
+                (tool is not AttachmentReadTool || context.AttachmentReader is { OffersReader: true }))
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
 
     private IAegisTool? FindRoundTool(ModelToolRequest round, string name) =>
-        name == PythonScriptTool.ToolName && !round.Tools.Any(tool => tool.Name == name)
+        (name is PythonScriptTool.ToolName or AttachmentReadTool.ToolName) && !round.Tools.Any(tool => tool.Name == name)
             ? null
             : toolRegistry.Find(name);
 
@@ -577,6 +578,7 @@ public sealed class AegisToolLoop(
 
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
+        AttachmentReadTool.ToolName => ("attachment", "Lendo anexo…", "Anexo consultado"),
         PythonScriptTool.ToolName => ("python", "Executando Python…", "Python executado"),
         "memory_remember" => ("memory", "Guardando memória…", "Memória guardada"),
         "memory_search" => ("memory", "Consultando memória…", "Memória consultada"),
@@ -681,7 +683,7 @@ public sealed class AegisToolLoop(
         { return IntegrationError("email_temporarily_unavailable", "Google está temporariamente indisponível. Tente mais tarde."); }
         catch (Exception exception)
         {
-            if (IsPythonTool(toolCall.Name))
+            if (IsPythonTool(toolCall.Name) || toolCall.Name == AttachmentReadTool.ToolName)
                 logger.LogWarning("Tool {ToolName} failed: {ErrorType}.", toolCall.Name, exception.GetType().Name);
             else
                 logger.LogWarning(exception, "Tool {ToolName} failed.", toolCall.Name);
@@ -752,15 +754,17 @@ public sealed class AegisToolLoop(
         name is PythonScriptTool.ToolName or ResearchDelegation.PythonToolName;
 
     private static bool IsPrivateTool(string name) =>
-        IsPythonTool(name) || name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
+        name == AttachmentReadTool.ToolName || IsPythonTool(name) || name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
         name.StartsWith("geographic_reminder_", StringComparison.Ordinal) || name.StartsWith("place_", StringComparison.Ordinal) ||
         name.StartsWith("location_", StringComparison.Ordinal);
 
     private static string AuditToolOutput(string name, string content) =>
+        name == AttachmentReadTool.ToolName ? "[attachment_tool_output_redacted]" :
         IsPythonTool(name) ? "[python_tool_output_redacted]" :
         IsPrivateTool(name) ? "[memory_tool_output_redacted]" : content;
 
     private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
+        calls.Any(call => call.Name == AttachmentReadTool.ToolName) ? "[attachment_tool_response_redacted]" :
         calls.Any(call => IsPythonTool(call.Name)) ? "[python_tool_response_redacted]" :
         calls.Any(call => IsPrivateTool(call.Name)) ? "[memory_response_redacted]" : body;
 

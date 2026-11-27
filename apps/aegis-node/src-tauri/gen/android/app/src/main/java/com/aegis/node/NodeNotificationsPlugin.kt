@@ -160,10 +160,37 @@ class NodeNotificationsPlugin(private val activity:Activity):Plugin(activity) {
   }catch(_:Exception){invoke.reject("Não foi possível exportar o ZIP. Escolha outro destino.")}}
  }
  @Command fun takeSharedAttachments(invoke:Invoke) {
-   handsFreeIo.execute {
+   sharedFilesIo.execute {
      invoke.resolve(JSObject(SharedChatAttachments.take(activity).toString()))
    }
  }
- companion object {private val handsFreeIo=java.util.concurrent.Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeFiles").apply{isDaemon=true}}}
+ @Command fun sharedAttachment(invoke:Invoke) {
+   val args=org.json.JSONObject(invoke.getArgs().toString())
+   if (args.getString("operation")=="cancel") {
+     SharedChatAttachments.cancel(args.getString("requestId"))
+     invoke.resolve(JSObject())
+     return
+   }
+   val requestId = if (args.getString("operation") == "upload") args.getString("requestId") else null
+   if (requestId != null) SharedChatAttachments.begin(requestId)
+   sharedFilesIo.execute {
+     try {
+       val response=JSObject()
+       when (args.getString("operation")) {
+         "upload" -> response.put("status", SharedChatAttachments.upload(args))
+         "release" -> SharedChatAttachments.release(args.getString("handle"))
+         else -> throw IllegalArgumentException()
+       }
+       invoke.resolve(response)
+     } catch (_: Exception) {
+       invoke.reject("Não foi possível enviar o arquivo compartilhado. Tente novamente.")
+     } finally {
+       if (requestId != null) SharedChatAttachments.finish(requestId)
+     }
+   }
+ }
+ companion object {
+   private val sharedFilesIo=java.util.concurrent.Executors.newFixedThreadPool(2){r->Thread(r,"AegisSharedFiles").apply{isDaemon=true}}
+   private val handsFreeIo=java.util.concurrent.Executors.newSingleThreadExecutor{r->Thread(r,"AegisHandsFreeFiles").apply{isDaemon=true}}}
 
 }

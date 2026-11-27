@@ -18,6 +18,17 @@ async function start(): Promise<void> {
     voiceMeterProfile: runtime.platform === 'android' ? 'mobile' : 'desktop',
     isForeground: runtime.platform === 'android' ? () => invoke<boolean>('node_read_visibility') : undefined,
     takeSharedAttachments: runtime.platform === 'android' ? () => invoke('node_take_shared_attachments') : undefined,
+    uploadSharedChunk: runtime.platform === 'android' ? async (handle, uploadId, index, chunkSize, signal) => {
+      const requestId = crypto.randomUUID();
+      const cancel = () => { void invoke('node_shared_attachment', { operation: 'cancel', handle, requestId }).catch(() => {}); };
+      if (signal.aborted) throw new DOMException('Envio interrompido.', 'AbortError');
+      signal.addEventListener('abort', cancel, { once: true });
+      try {
+        const result = await invoke<{ status: number }>('node_shared_attachment', { operation: 'upload', handle, uploadId, index, chunkSize, requestId });
+        return result.status;
+      } finally { signal.removeEventListener('abort', cancel); }
+    } : undefined,
+    releaseSharedAttachment: runtime.platform === 'android' ? handle => invoke('node_shared_attachment', { operation: 'release', handle }) : undefined,
     nativeSpeech: runtime.platform === 'android' ? nativeSpeech : undefined,
     acquireAudio: ['android', 'windows'].includes(runtime.platform) ? acquireNativeAudio : undefined });
   createApp(App, { runtime }).mount('#app');

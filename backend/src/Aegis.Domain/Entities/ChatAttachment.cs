@@ -15,6 +15,16 @@ public sealed class ChatAttachment
         SizeBytes = data.Length;
     }
 
+    public ChatAttachment(Guid messageId, int position, UploadedChatFile upload)
+        : this(messageId, position, upload.FileName, upload.ContentType, [])
+    {
+        SizeBytes = upload.SizeBytes;
+        Upload = upload;
+    }
+
+    public UploadedChatFile? Upload { get; private set; }
+    public void SetContentType(string contentType) => ContentType = contentType;
+
     public Guid Id { get; private set; }
     public Guid MessageId { get; private set; }
     public ChatMessage Message { get; private set; } = null!;

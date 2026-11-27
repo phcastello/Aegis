@@ -35,6 +35,11 @@ RUN dotnet publish tools/Aegis.NodeAdmin/Aegis.NodeAdmin.csproj -c Release -o /a
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
+# Render a bounded view of large attachments before sending them to the model.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils libvips-tools util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/publish .
 COPY --from=build /app/node-admin ./node-admin
 COPY --from=python-runtime /opt/aegis-python /opt/aegis-python

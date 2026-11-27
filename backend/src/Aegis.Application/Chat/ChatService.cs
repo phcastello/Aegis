@@ -77,7 +77,7 @@ public sealed class ChatService(
         {
             var modelRequest = CreateModelRequest(promptResult, userContent, request);
             var completion = await TurnLatencyProfile.MeasureAsync("chat.model_and_tools", () =>
-                RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, turnToken,
+                RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, promptResult.AttachmentReader, turnToken,
                     defer ? ct => AcceptTurnAsync(pending, request, effectiveTurnId, ct) : null));
             if (completion.Ignored)
             {
@@ -189,7 +189,7 @@ public sealed class ChatService(
                 request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments,
                 defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null,
                 AllowResearchDelegation: researchQueue is not null,
-                AllowPythonDelegation: researchQueue is not null), turnToken);
+                AllowPythonDelegation: researchQueue is not null, AttachmentReader: promptResult.AttachmentReader), turnToken);
 
         var content = new StringBuilder();
         ChatMessage? segmentedMessage = null;
@@ -488,7 +488,8 @@ public sealed class ChatService(
         var modelContent = interruptedContent is null ? userContent :
             $"{PriorSpeechLabel}{interruptedContent}{CurrentSpeechLabel}{userContent}";
         var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, content);
-        var attachments = ChatAttachmentContent.Prepare(userMessage.Id, request.Attachments);
+        var attachments = await ChatAttachmentContent.PrepareAsync(dbContext, userMessage.Id, request.Attachments,
+            request.AttachmentUploadIds, cancellationToken);
         if (request.InterruptedGeneration is not null)
             VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
         else
@@ -707,6 +708,7 @@ public sealed class ChatService(
         Guid userMessageId,
         string userContent,
         SendMessageRequest clientRequest,
+        ChatAttachmentContent? attachmentReader,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? acceptVoiceTurn = null)
     {
@@ -715,7 +717,7 @@ public sealed class ChatService(
             new ToolExecutionContext(conversationId, userMessageId, userContent,
                 clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments,
                 acceptVoiceTurn, AllowResearchDelegation: researchQueue is not null,
-                AllowPythonDelegation: researchQueue is not null), cancellationToken);
+                AllowPythonDelegation: researchQueue is not null, AttachmentReader: attachmentReader), cancellationToken);
 
         return new ModelCompletionResponse(
             response.Content,

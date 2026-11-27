@@ -353,6 +353,7 @@ pub fn run() {
             node_domains::node_read_visibility,
             node_domains::node_consume_reminder_open,
             node_domains::node_take_shared_attachments,
+            node_domains::node_shared_attachment,
             install_android_update
         ])
         .build(context)

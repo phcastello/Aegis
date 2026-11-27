@@ -9,4 +9,5 @@ public sealed record ToolExecutionContext(
     bool VoiceSegments = false,
     Func<CancellationToken, Task>? AcceptVoiceTurn = null,
     bool AllowResearchDelegation = false,
-    bool AllowPythonDelegation = false);
+    bool AllowPythonDelegation = false,
+    Aegis.Application.Chat.ChatAttachmentContent? AttachmentReader = null);

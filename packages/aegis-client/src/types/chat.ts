@@ -42,12 +42,6 @@ export interface ChatAttachment {
   sizeBytes: number;
 }
 
-export interface AttachmentInput {
-  fileName: string;
-  contentType: string;
-  dataBase64: string;
-}
-
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -92,7 +86,7 @@ export interface SendMessageRequest {
   turnId?: string;
   conversationId?: string | null;
   content: string;
-  attachments?: AttachmentInput[];
+  attachmentUploadIds?: string[];
 }
 
 export interface SendMessageResponse {

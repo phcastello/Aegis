@@ -25,11 +25,11 @@ try {
       if (process.env.TRANSCRIPTION_BROWSER_PLATFORM && process.env.TRANSCRIPTION_BROWSER_PLATFORM !== platform) continue;
       const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
       let uploads = 0, transcriptionText = 'Texto sintético', transcriptionFailure = false, sendFailure = false, transcriptionGate = null, deletionGate = null, deleted = false;
-      const prompts = [], acceptedPrompts = [];
+      const prompts = [], acceptedPrompts = [], documents = new Map();
       const conversationId = 'synthetic-voice-conversation';
       const conversation = () => ({ id: conversationId, title: 'Voz sintética', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: acceptedPrompts.length * 2,
         messages: acceptedPrompts.flatMap((request, index) => [{ id: `user-${index}`, conversationId, role: 'user', content: request.content,
-          attachments: request.attachments?.map((file, i) => ({ id: `file-${index}-${i}`, fileName: file.fileName, contentType: file.contentType, sizeBytes: Buffer.from(file.dataBase64, 'base64').length })),
+          attachments: request.attachmentUploadIds?.map((id, i) => ({ id: `file-${index}-${i}`, ...documents.get(id).meta })),
           createdAt: new Date().toISOString() }, { id: `assistant-${index}`, conversationId, role: 'assistant', content: 'Resposta sintética.', createdAt: new Date().toISOString() }]) });
       await context.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
@@ -42,6 +42,15 @@ try {
           if (transcriptionGate) await transcriptionGate;
           if (transcriptionFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha sintética de transcrição.' }) });
           body = { text: transcriptionText };
+        }
+        else if (path === '/api/chat/uploads') {
+          const meta = route.request().postDataJSON(), id = crypto.randomUUID();
+          documents.set(id, { meta });
+          body = { id, chunkSize: 4 * 1024 * 1024, sizeBytes: meta.sizeBytes };
+        }
+        else if (path.startsWith('/api/chat/uploads/') && route.request().method() === 'PUT') {
+          documents.get(path.split('/')[4]).bytes = route.request().postDataBuffer();
+          return route.fulfill({ status: 204 });
         }
         else if (path === '/api/chat/messages/stream') {
           const request = route.request().postDataJSON(); prompts.push(request);
@@ -214,8 +223,9 @@ try {
         await page.getByRole('button', { name: 'Parar, transcrever e enviar', exact: true }).click();
         await page.getByText('Resposta sintética.', { exact: true }).waitFor();
         assert.deepEqual(prompts.map(prompt => prompt.content), ['Antes Texto sintético'], 'send uses the normal textual turn with prior draft');
-        assert.deepEqual(prompts[0].attachments, [{ fileName: 'aula.txt', contentType: 'text/plain', dataBase64: fileBytes.toString('base64') }],
-          'the spoken question and original document reach the same turn');
+        const doc = documents.get(prompts[0].attachmentUploadIds[0]);
+        assert.deepEqual(doc.meta, { fileName: 'aula.txt', contentType: 'text/plain', sizeBytes: fileBytes.length });
+        assert.deepEqual(doc.bytes, fileBytes, 'the spoken question references its original binary upload');
         assert.equal(await page.locator('.composer textarea').inputValue(), '');
         assert.equal(uploads, 2);
 

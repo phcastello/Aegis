@@ -94,6 +94,7 @@ fn main() {
             "node_read_visibility",
             "node_consume_reminder_open",
             "node_take_shared_attachments",
+            "node_shared_attachment",
             "install_android_update",
         ]),
     ))

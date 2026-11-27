@@ -3,5 +3,5 @@
   "description": "Receive only files explicitly shared with the local Android app.",
   "windows": ["main"],
   "platforms": ["android"],
-  "permissions": ["allow-node-take-shared-attachments"]
+  "permissions": ["allow-node-take-shared-attachments", "allow-node-shared-attachment"]
 }
