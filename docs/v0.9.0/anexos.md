@@ -1,7 +1,12 @@
 # Anexos no chat
 
-O clipe do compositor aceita até quatro arquivos de **512 MiB cada** no Android e no Windows. Uma mensagem pode levar até 2 GiB de anexos. Você pode digitar ou ditar a pergunta. No Android também pode compartilhar um arquivo de outro app para a Aegis e acrescentar a pergunta antes de enviar. O histórico permite baixar o original. Para voltar a ele em uma conversa longa, mencione o nome do arquivo.
+O botão **+** à esquerda do campo de mensagem aceita até quatro arquivos de **512 MiB cada** no Android e no Windows. Uma mensagem pode levar até 2 GiB de anexos. Você pode digitar ou ditar a pergunta. No Android também pode compartilhar um arquivo de outro app para a Aegis e acrescentar a pergunta antes de enviar. O histórico permite baixar o original. Para voltar a ele em uma conversa longa, mencione o nome do arquivo.
 [Compartilhamento no Android](https://developer.android.com/develop/ui/compose/sharing/receive)
+
+Antes de enviar, confira os anexos na faixa acima do texto. As imagens aparecem em miniatura. Documentos, ZIPs e formatos de imagem que o dispositivo não consegue exibir recebem um cartão com o nome do arquivo. Use o × para remover um anexo. Se faltar espaço na tela, deslize a faixa para ver os demais.
+
+A prévia é local. O seletor, a colagem e o arraste usam uma URL temporária do arquivo, liberada quando o cartão sai da tela. Para fotos compartilhadas por outro aplicativo Android, a ponte nativa fornece uma miniatura reduzida, e o envio continua usando o original.
+[Miniaturas de arquivos locais na Web](https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications#example_using_object_urls_to_display_images) · [Decodificação de imagens no Android](https://developer.android.com/topic/performance/graphics/load-bitmap)
 
 ## Envio e armazenamento
 
