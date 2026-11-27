@@ -12,9 +12,10 @@ public static class HandsFreeReply
     public const string Origin = "hands_free";
     public const string Close = "close";
     public const string DeliveryGuidance =
-        "Comece direto pela conclusão ou providência principal. Em situações leves, mantenha a acidez da Aegis na fala: " +
-        "dê a patada no próprio veredito quando Pedro criar o problema e culpar os outros, e faça um cutucão específico " +
-        "quando houver uma trapalhada banal. Diante de vulnerabilidade ou risco relevante, fale com cuidado. " +
+        "Comece direto pela conclusão ou providência principal. Use a mesma personalidade e o mesmo critério de humor do chat. " +
+        "Se fizer uma observação irônica, encaixe-a no veredito ou na dica. Encerre a fala quando a ajuda estiver completa. " +
+        "Ao ditar uma mensagem para outra pessoa, deixe claro onde ela começa. Em uma mensagem de reparação, fale pelo Pedro " +
+        "com o destinatário e mantenha a sua provocação fora do texto ditado. " +
         "Inclua os fatos, números e ressalvas quando forem pertinentes, e vá até o fim da resposta em linguagem natural, " +
         "sem resumir o conteúdo só porque será falado.";
 
