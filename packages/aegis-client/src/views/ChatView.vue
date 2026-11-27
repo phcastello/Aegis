@@ -4,6 +4,7 @@ import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import RuriMascot from '../components/RuriMascot.vue';
 import ChatMessage from '../components/ChatMessage.vue';
+import AttachmentPreview from '../components/AttachmentPreview.vue';
 import BackgroundResearchStatus from '../components/BackgroundResearchStatus.vue';
 import WebResearchActivity from '../components/WebResearchActivity.vue';
 import { mergeResearchSites, topResearchSites } from '../services/researchSites';
@@ -1939,58 +1940,60 @@ onBeforeUnmount(() => {
       </div>
 
       <form class="composer" @submit.prevent="!nativeComposerActive && (selectedHasActiveTurn ? stopActiveTurn() : handleSubmit())">
-        <ul v-if="selected.files.length" class="attachment-list" aria-label="Anexos da mensagem">
-          <li v-for="(file, index) in selected.files" :key="index" class="attachment-chip">
-            <span class="attachment-name">{{ file.name }}</span><small>{{ attachmentSize(file.size) }}</small>
-            <button type="button" :aria-label="`Remover ${file.name}`" @click="releaseAttachment(selected.files.splice(index, 1)[0]!, true)">×</button>
-          </li>
-        </ul>
         <p v-if="unsentConversation && unsentConversation !== selected" class="background-turn-notice" role="status">
           Uma mensagem não pôde ser enviada.
           <button type="button" @click="recoverUnsentConversation">Recuperar mensagem</button>
         </p>
         <p v-if="emailConnectionMessage" class="email-connection-notice" :class="`email-connection-notice--${emailConnectionState}`" role="status">{{ emailConnectionMessage }}</p>
         <p v-if="showErrorMessage" class="composer-error" role="alert">{{ errorMessage }}</p>
-        <div v-show="nativeComposerActive"><slot name="native-voice-composer" /></div>
-        <template v-if="!nativeComposerActive">
-        <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
-          @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
-        <div v-else class="composer-field">
-          <input ref="filePicker" type="file" multiple hidden aria-label="Selecionar arquivos" @change="selectFiles" />
-          <button type="button" class="attachment-button" title="Anexar arquivo" aria-label="Anexar arquivo" @click="filePicker?.click()">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 7-7a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9m-6 13 8-8" /></svg>
-          </button>
-          <textarea
-            v-model="draft"
-            rows="1"
-            placeholder="Escreva para a Aegis..."
-            aria-label="Mensagem"
-            :class="{ 'composer-input--scrollable': isComposerScrollable }"
-            ref="composerInput"
-            @input="resizeComposer"
-            @paste="pasteFiles"
-            @keydown="handleKeydown"
-          ></textarea>
+        <div class="composer-box" :class="{ 'composer-box--with-files': selected.files.length }">
+          <ul v-if="selected.files.length" class="attachment-previews" aria-label="Anexos da mensagem">
+            <AttachmentPreview v-for="(file, index) in selected.files" :key="file.localId" :file="file"
+              @remove="releaseAttachment(selected.files.splice(index, 1)[0]!, true)" />
+          </ul>
+          <div v-show="nativeComposerActive"><slot name="native-voice-composer" /></div>
+          <template v-if="!nativeComposerActive">
+            <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
+              @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
+            <div v-else class="composer-field">
+              <input ref="filePicker" type="file" multiple hidden aria-label="Selecionar arquivos" @change="selectFiles" />
+              <button type="button" class="attachment-button" title="Anexar arquivo" aria-label="Anexar arquivo" @click="filePicker?.click()">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16" /></svg>
+              </button>
+              <textarea
+                v-model="draft"
+                rows="1"
+                placeholder="Escreva para a Aegis..."
+                aria-label="Mensagem"
+                :class="{ 'composer-input--scrollable': isComposerScrollable }"
+                ref="composerInput"
+                @input="resizeComposer"
+                @paste="pasteFiles"
+                @keydown="handleKeydown"
+              ></textarea>
 
-          <button
-            class="record-button"
-            type="button"
-            :disabled="!canStartRecording"
-            aria-label="Gravar mensagem de voz"
-            title="Gravar mensagem de voz"
-            @click="toggleRecording"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
-          </button>
+              <button
+                class="record-button"
+                type="button"
+                :disabled="!canStartRecording"
+                aria-label="Gravar mensagem de voz"
+                title="Gravar mensagem de voz"
+                @click="toggleRecording"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/></svg>
+              </button>
 
-          <button class="send-button" :class="{ 'send-button--stop': selectedHasActiveTurn }" type="submit" :disabled="(!selectedHasActiveTurn && !canSend) || isRestoring || emailConnectionState === 'pending'" :aria-label="selectedHasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
-            <svg v-if="selectedHasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
-            <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
-          </button>
+              <button class="send-button" :class="{ 'send-button--stop': selectedHasActiveTurn }" type="submit" :disabled="(!selectedHasActiveTurn && !canSend) || isRestoring || emailConnectionState === 'pending'" :aria-label="selectedHasActiveTurn ? 'Interromper geração' : 'Enviar mensagem'">
+                <svg v-if="selectedHasActiveTurn" viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="7.5" height="7.5" rx="1.2" /></svg>
+                <svg v-else viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16V4m0 0L5.8 8.2M10 4l4.2 4.2" /></svg>
+              </button>
+            </div>
+          </template>
         </div>
-        <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
-        <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
-        <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
+        <template v-if="!nativeComposerActive">
+          <p v-if="transcription.errorMessage.value" class="composer-error" role="status">{{ transcription.errorMessage.value }}</p>
+          <p v-if="voice.voiceMessage.value && !voice.voiceAvailable.value" class="composer-error" role="status">{{ voice.voiceMessage.value }}</p>
+          <span class="composer-hint">{{ transcription.isBusy.value ? 'Esc para cancelar' : 'Enter para enviar · Shift + Enter para nova linha' }}</span>
         </template>
       </form>
       </section>

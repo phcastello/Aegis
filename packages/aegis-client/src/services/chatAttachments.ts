@@ -7,20 +7,24 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const UPLOAD_LIFETIME = 24 * 60 * 60 * 1000;
 
 interface Upload { id: string; chunkSize: number; next: number; expiresAt: number }
+let nextDraftId = 0;
 export interface DraftAttachment {
+  localId: number;
   name: string;
   size: number;
   type: string;
   source: File | string;
+  previewUrl?: string;
   upload?: Upload;
 }
 
 export function pickedFile(source: File): DraftAttachment {
-  return { source, name: source.name, size: source.size, type: source.type || 'application/octet-stream' };
+  return { localId: ++nextDraftId, source, name: source.name, size: source.size, type: source.type || 'application/octet-stream' };
 }
 
 export function sharedAttachmentFile(file: SharedAttachment): DraftAttachment {
-  return { source: file.handle, name: file.fileName, size: file.sizeBytes, type: file.contentType };
+  const previewUrl = file.previewUrl?.startsWith('data:image/jpeg;base64,') ? file.previewUrl : undefined;
+  return { localId: ++nextDraftId, source: file.handle, name: file.fileName, size: file.sizeBytes, type: file.contentType, previewUrl };
 }
 
 export function checkAttachmentLimits(files: readonly DraftAttachment[]): void {

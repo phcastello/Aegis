@@ -156,6 +156,77 @@ function createFixture(viteOrigin) {
 let assertions = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); assertions++; };
 const ok = (value, message) => { assert.ok(value, message); assertions++; };
+async function checkAttachmentPreviews(page, platform, width) {
+  const add = page.getByRole('button', { name: 'Anexar arquivo', exact: true });
+  const list = page.getByRole('list', { name: 'Anexos da mensagem' });
+  const textarea = page.getByRole('textbox', { name: 'Mensagem', exact: true });
+  const [addBox, textBox] = await Promise.all([add.boundingBox(), textarea.boundingBox()]);
+  ok(addBox.x + addBox.width <= textBox.x + 1, 'add button appears to the left of the text field');
+  ok(await add.evaluate(button => {
+    if (button.textContent.trim() === '+') return true;
+    const svg = button.querySelector('svg');
+    if (!svg) return false;
+    const { x, y, width, height } = svg.viewBox.baseVal;
+    const strokes = [...svg.querySelectorAll('path, line, polyline')];
+    return [[.5, .3], [.5, .7], [.3, .5], [.7, .5]].every(([u, v]) =>
+      strokes.some(line => line.isPointInStroke(new DOMPoint(x + u * width, y + v * height))));
+  }), 'the attachment button draws the four arms of a plus');
+
+  const { png, jpeg } = await page.evaluate(() => {
+    const image = document.createElement('canvas'); image.width = 80; image.height = 48;
+    const brush = image.getContext('2d');
+    brush.fillStyle = '#6188b5'; brush.fillRect(0, 0, 80, 34);
+    brush.fillStyle = '#d7c487'; brush.fillRect(0, 34, 80, 14);
+    brush.fillStyle = '#fff8d0'; brush.fillRect(52, 10, 12, 12);
+    return { png: image.toDataURL('image/png').split(',')[1], jpeg: image.toDataURL('image/jpeg') };
+  });
+  const files = [
+    { name: 'paisagem.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') },
+    { name: 'roteiro-de-viagem.txt', mimeType: 'text/plain', buffer: Buffer.from('Roteiro da viagem') },
+    { name: 'aulas.zip', mimeType: 'application/zip', buffer: Buffer.from(zipBase64, 'base64') },
+  ];
+  const chooser = page.waitForEvent('filechooser'); await add.click();
+  await (await chooser).setFiles(files);
+  await list.waitFor();
+  equal(await list.getByRole('listitem').count(), 3, 'each file gets its own preview card');
+  const card = name => list.getByRole('listitem').filter({ has: page.getByRole('button', { name: `Remover ${name}`, exact: true }) });
+  const picture = card(files[0].name).locator('img'); await picture.waitFor();
+  ok(await picture.evaluate(async image => { await image.decode(); return image.naturalWidth > 1 && image.naturalHeight > 1; }), 'selected PNG has a decoded thumbnail');
+  for (const { name } of files.slice(1)) {
+    ok(await card(name).getByText(name, { exact: true }).isVisible(), `document card displays ${name}`);
+    equal(await card(name).locator('img').count(), 0, `document card for ${name} does not render an invalid image`);
+  }
+  const positions = await list.getByRole('listitem').evaluateAll(cards => cards.map(el => el.getBoundingClientRect().top));
+  ok(positions.every(top => Math.abs(top - positions[0]) <= 1), 'preview cards share a single horizontal row');
+  const listBox = await list.boundingBox(), fieldBox = await textarea.boundingBox();
+  ok(listBox.y + listBox.height <= fieldBox.y + 1, 'preview row is above the composer input');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'attachments do not widen the page on mobile or desktop');
+  if (process.env.UX_SCREENSHOT_DIR) {
+    mkdirSync(process.env.UX_SCREENSHOT_DIR, { recursive: true });
+    await page.locator('.composer').screenshot({ path: join(process.env.UX_SCREENSHOT_DIR, `${platform}-${width}-attachments.png`) });
+  }
+  await card(files[1].name).getByRole('button').click();
+  equal(await list.getByRole('listitem').count(), 2, 'removing a document keeps the image and ZIP');
+  ok(await picture.isVisible(), 'removing another attachment preserves the image thumbnail');
+  for (const name of [files[0].name, files[2].name]) await card(name).getByRole('button').click();
+  equal(await list.count(), 0, 'removing the last file collapses the preview row');
+
+  // Native shares contain only private file handles and a small thumbnail; a pasted file is a browser File.
+  const name = platform === 'android' ? 'foto-compartilhada.jpg' : 'foto-colada.png';
+  await page.evaluate(({ platform, png, jpeg, name }) => {
+    if (platform === 'android') {
+      window.shareInbox = [{ handle: crypto.randomUUID(), fileName: name, contentType: 'image/jpeg', sizeBytes: 6_000_000, previewUrl: jpeg }];
+      window.dispatchEvent(new Event('aegis-shared-attachments'));
+    } else {
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(atob(png), c => c.charCodeAt(0))], name, { type: 'image/png' }));
+      document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }));
+    }
+  }, { platform, png, jpeg, name });
+  const next = card(name).locator('img'); await next.waitFor();
+  ok(await next.evaluate(async image => { await image.decode(); return image.naturalWidth > 1; }), 'shared or pasted image also has a decoded thumbnail');
+  await card(name).getByRole('button').click();
+}
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 const errors = [];
 try {
@@ -230,6 +301,7 @@ try {
       await page.goto(origin); await composer().waitFor(); await page.locator('.history-item__main').first().waitFor();
       equal(await menu().count(), 0, 'initial new conversation hides the action menu');
       equal(await composer().evaluate(el => el === document.activeElement), false, 'native initialization never requests composer focus');
+      await checkAttachmentPreviews(page, platform, width);
       await fresh();
       await page.waitForFunction(() => document.querySelector('.composer textarea') === document.activeElement);
       equal(await menu().count(), 0, 'explicit new conversation still has no persisted menu');

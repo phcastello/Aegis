@@ -1,4 +1,4 @@
-export interface SharedAttachment { handle: string; fileName: string; contentType: string; sizeBytes: number }
+export interface SharedAttachment { handle: string; fileName: string; contentType: string; sizeBytes: number; previewUrl?: string }
 
 export interface ClientEnvironment {
   apiBaseUrl: string;

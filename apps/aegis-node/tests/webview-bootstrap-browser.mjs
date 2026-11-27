@@ -68,6 +68,22 @@ try {
         await page.locator('.app-shell').waitFor({state:'visible'});
         assert.equal(await page.evaluate(() => window.runtimeInfoCalls),1);
         assert.equal(await page.locator('#aegis-webview-unsupported').isVisible(),false);
+        await page.getByLabel('Selecionar arquivos').setInputFiles({
+          name: 'miniatura.png', mimeType: 'image/png',
+          buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGNQSuuAIAY4CwA9cAZhp60BYgAAAABJRU5ErkJggg==', 'base64')
+        });
+        const thumbnail = page.getByRole('img', { name: 'miniatura.png', exact: true });
+        await thumbnail.waitFor();
+        assert.deepEqual(await thumbnail.evaluate(async img => {
+          await img.decode(); return [img.naturalWidth, img.naturalHeight];
+        }), [3, 2], 'production CSP allows the selected image thumbnail');
+        await page.getByLabel('Selecionar arquivos').setInputFiles({
+          name: 'incompleta.png', mimeType: 'image/png', buffer: Buffer.from('invalid PNG')
+        });
+        const files = page.getByRole('list', { name: 'Anexos da mensagem' });
+        await files.getByText('incompleta.png', { exact: true }).waitFor();
+        await files.getByRole('button', { name: 'Remover incompleta.png' }).click();
+        assert.equal(await thumbnail.isVisible(), true, 'an unreadable image falls back to a removable file card');
       }
     } finally { await context.close(); }
   }

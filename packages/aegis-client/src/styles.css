@@ -1108,6 +1108,7 @@ button:disabled {
 
 .composer {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   padding: 14px var(--conversation-inset) 16px;
 }
@@ -1168,12 +1169,38 @@ button:disabled {
 }
 .attachment-name { overflow-wrap: anywhere; }
 .attachment-chip small { white-space: nowrap; color: var(--muted); }
-.attachment-chip button { padding: 3px 6px; background: transparent; color: var(--text); cursor: pointer; }
 .attachment-chip a { color: var(--accent-strong); }
 
 .composer-field:focus-within {
   border-color: rgba(157, 177, 230, 0.5);
   box-shadow: 0 0 0 3px rgba(145, 169, 238, 0.08);
+}
+
+.composer-box--with-files {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+}
+.composer-box--with-files:focus-within {
+  border-color: rgba(157, 177, 230, .5);
+  box-shadow: 0 0 0 3px rgba(145, 169, 238, .08);
+}
+.composer-box--with-files .composer-field {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.attachment-previews {
+  --preview-size: clamp(88px, 20vw, 112px);
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  list-style: none;
+  margin: 0;
+  padding: 12px 12px 2px;
 }
 
 .composer textarea {
