@@ -35,6 +35,8 @@ mod windows_voice_backend;
 mod windows_hands_free;
 #[cfg(all(feature = "native-runtime", windows))]
 mod windows_wakeword;
+#[cfg(all(feature = "native-runtime", windows))]
+mod windows_wake_dataset;
 #[cfg(any(test, all(feature = "native-runtime", windows)))]
 mod windows_voice_signal;
 #[cfg(any(test, all(feature = "native-runtime", windows)))]

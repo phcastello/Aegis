@@ -204,11 +204,10 @@ impl VoiceChatStreamEvent {
             _ => return None,
         };
         if !matches!(
-                event["state"].as_str(),
-                Some("started" | "completed" | "failed")
-            )
-            || (!event["conversationId"].is_null()
-                && parse_uuid(&event["conversationId"]).ok() != Some(conversation_id))
+            event["state"].as_str(),
+            Some("started" | "completed" | "failed")
+        ) || (!event["conversationId"].is_null()
+            && parse_uuid(&event["conversationId"]).ok() != Some(conversation_id))
         {
             return None;
         }
@@ -457,6 +456,24 @@ impl Backend {
             .header("Authorization", format!("AegisNode {}", self.credential))
             .header("Cache-Control", "no-store")
             .timeout(Duration::from_secs(seconds))
+    }
+    pub fn upload_wake_sample(&self, id: Uuid, body: String) -> Result<()> {
+        self.current()?;
+        let request = self
+            .client
+            .put(format!("{}/api/nodes/me/wake-samples/{id}", self.origin))
+            .header("Authorization", format!("AegisNode {}", self.credential))
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(20))
+            .body(body);
+        match self.send_response(request)?.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::BAD_REQUEST
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::CONFLICT
+            | StatusCode::PAYLOAD_TOO_LARGE => Err("sample_rejected"),
+            _ => Err("backend_unavailable"),
+        }
     }
     fn send(&self, request: RequestBuilder) -> Result<Response> {
         self.current()?;

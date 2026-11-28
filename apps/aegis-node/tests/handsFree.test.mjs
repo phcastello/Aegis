@@ -34,6 +34,20 @@ test('native and Tauri errors preserve only a sanitized known diagnostic', async
   assert(!handsFreeError(new Error(secret)).message.includes(secret));
 });
 
+test('private dataset sync has separate consent from local capture on both platforms', async () => {
+  const calls = [];
+  const settings = useHandsFreeSettings(async (operation, options) => {
+    calls.push([operation, options]);
+    return { ...initial, wakeSync: { enabled: options?.enabled ?? false, status: 'ready' } };
+  });
+  await settings.refresh();
+  await settings.run('collectionSync', true);
+  await settings.run('collectionSync', false);
+  assert.deepEqual(calls.slice(1), [['collectionSync', { enabled: true }], ['collectionSync', { enabled: false }]]);
+  mockIPC(() => ({ ...initial, wakeSync: { enabled: 'yes', status: 'ready' } }));
+  await assert.rejects(handsFree('state'), { code: 'invalid_response' });
+});
+
 test('invalid state payloads are rejected instead of becoming invented setup state', async () => {
   globalThis.window = {};
   for (const value of [null, {}, 'state', { ...initial, enabled: 'false' }, { ...initial, captureConfirmed: 'yes' }, { ...initial, message: 'x'.repeat(401) }]) {

@@ -16,6 +16,7 @@ export interface HandsFreeState {
   mediaReference?: HandsFreeMediaReference;
   batteryDiagnostics?: HandsFreeBatteryDiagnostics;
   collection?: { enabled: boolean; limitMiB: number; bytes: number; ready: boolean; status: string; skippedEvents: number };
+  wakeSync?: { enabled: boolean; status: 'ready' | 'waiting' | 'sent' | 'queue_full' | 'rejected' };
 }
 export type HandsFreeMediaReferenceStatus = 'unsupported' | 'off' | 'requesting' | 'starting' | 'waiting' | 'warming' | 'ready' | 'unavailable' | 'denied' | 'blocked' | 'stopped';
 export interface HandsFreeMediaReference {
@@ -243,6 +244,10 @@ function stateResponse(value: unknown): HandsFreeState {
         !mediaReferenceStatuses.includes(String(ref.status)) || (!ref.supported && ref.session))
       throw new HandsFreeError('invalid_response');
   }
+  if (row.wakeSync !== undefined && (!batteryRecord(row.wakeSync) ||
+      typeof row.wakeSync.enabled !== 'boolean' || !['ready', 'waiting', 'sent', 'queue_full', 'rejected'].includes(String(row.wakeSync.status)))) {
+    throw new HandsFreeError('invalid_response');
+  }
   if (row.collection !== undefined) {
     const c = row.collection as Record<string, unknown>;
     if (!c || typeof c !== 'object' || typeof c.enabled !== 'boolean' || typeof c.ready !== 'boolean' ||
@@ -257,7 +262,7 @@ async function invokeControl(args: Record<string, unknown>): Promise<unknown> {
   try { return await invoke<unknown>('node_hands_free', args); }
   catch (reason) { throw handsFreeError(reason); }
 }
-export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete' | 'batteryStart' | 'batteryFinish' | 'batteryExport' | 'batteryAutoStart' | 'batteryAutoValidate' | 'batteryAutoCancel' | 'mediaReferenceStart' | 'mediaReferenceStop';
+export type HandsFreeOperation = 'state' | 'configure' | 'permission' | 'assistant' | 'import' | 'export' | 'cancel' | 'collectionConfigure' | 'collectionDelete' | 'collectionSync' | 'batteryStart' | 'batteryFinish' | 'batteryExport' | 'batteryAutoStart' | 'batteryAutoValidate' | 'batteryAutoCancel' | 'mediaReferenceStart' | 'mediaReferenceStop';
 export interface HandsFreeOptions { enabled?: boolean; diagnostic?: boolean; collectionEnabled?: boolean; collectionLimitMiB?: number; batteryMode?: HandsFreeBatteryMode }
 export async function handsFree(operation: HandsFreeOperation, options?: HandsFreeOptions): Promise<HandsFreeState> {
   return stateResponse(await invokeControl({ operation, ...options }));

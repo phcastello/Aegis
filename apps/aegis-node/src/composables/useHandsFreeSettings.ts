@@ -45,7 +45,7 @@ export function useHandsFreeSettings(call: typeof handsFree = handsFree) {
   const refresh = () => request('state');
   async function run(operation: Exclude<HandsFreeOperation, 'state'>, enabled?: boolean, diagnostic?: boolean): Promise<void> {
     if (!canAct.value || !state.value || (batteryLocked.value && operation !== 'mediaReferenceStop')) return;
-    await request(operation, operation === 'configure' ? {
+    await request(operation, operation === 'collectionSync' ? { enabled } : operation === 'configure' ? {
       enabled: enabled ?? state.value.enabled,
       diagnostic: diagnostic ?? state.value.diagnostic
     } : undefined);

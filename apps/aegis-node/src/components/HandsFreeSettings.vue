@@ -55,7 +55,7 @@ onMounted(async () => {
 });
 let collectionRefresh: ReturnType<typeof setInterval> | undefined;
 function foreground() { if (document.visibilityState === 'visible') void refresh(); }
-onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.collection?.enabled || state.value?.mediaReference?.session || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
+onMounted(() => { void refresh(); document.addEventListener('visibilitychange', foreground); window.addEventListener('focus', foreground); collectionRefresh = setInterval(() => { if (document.visibilityState === 'visible' && (state.value?.wakeSync?.enabled || state.value?.collection?.enabled || state.value?.mediaReference?.session || state.value?.batteryDiagnostics?.active || automationLive.value)) void refresh(); }, 5000); });
 onBeforeUnmount(() => { mounted = false; stopVoiceEvents?.(); clearInterval(collectionRefresh); document.removeEventListener('visibilitychange', foreground); window.removeEventListener('focus', foreground); });
 </script>
 <template>
@@ -156,6 +156,12 @@ onBeforeUnmount(() => { mounted = false; stopVoiceEvents?.(); clearInterval(coll
             </article>
           </details>
         </template>
+      </fieldset>
+      <fieldset v-if="state.wakeSync" class="collection-settings">
+        <legend>Amostras da palavra de ativação</legend>
+        <p>Quando este dispositivo detectar “Aegis”, o servidor privado poderá receber um trecho do disparo e até 20 segundos do pedido. Falsos disparos podem incluir conversas próximas. Sem conexão, as amostras aguardam no dispositivo. Desativar a sincronização descarta os envios pendentes.</p>
+        <label class="audio-preference"><input type="checkbox" :checked="state.wakeSync.enabled" :disabled="!canConfigure" @change="run('collectionSync', ($event.target as HTMLInputElement).checked)" /> Sincronizar amostras com meu servidor</label>
+        <p v-if="state.wakeSync.enabled" role="status">{{ { ready: 'Aguardando uma ativação.', waiting: 'Há amostras aguardando envio.', sent: 'Último envio confirmado pelo servidor.', queue_full: 'Fila local cheia. Aguardando o envio das amostras guardadas.', rejected: 'Não foi possível guardar ou enviar uma amostra.' }[state.wakeSync.status] }}</p>
       </fieldset>
       <fieldset v-if="state.collection" class="collection-settings">
         <legend>Coleta local de ativações</legend>

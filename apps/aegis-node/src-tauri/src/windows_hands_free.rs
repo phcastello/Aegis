@@ -8,6 +8,7 @@ use crate::{
         ResearchSpeechStatus, Result, TurnInspection, TurnReport, VoiceTurnRequest,
     },
     windows_voice_signal::{Background, Capture, Endpoint, Waveform},
+    windows_wake_dataset::{Clip, PreRoll, Queue},
     windows_wakeword,
 };
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,7 @@ impl State {
 struct Shared {
     app: AppHandle,
     dir: PathBuf,
+    wake_queue: Arc<Queue>,
     state: Mutex<State>,
     changed: Condvar,
     window_handle: Arc<AtomicIsize>,
@@ -287,12 +289,14 @@ impl Shared {
     }
     fn view(&self) -> Value {
         let installed = windows_wakeword::installed(&self.dir);
+        let (sync_enabled, sync_status) = self.wake_queue.state();
         let state = self.state.lock().unwrap();
         json!({"enabled":state.settings.enabled,"diagnostic":state.settings.diagnostic,
             "assistantSelected":true,"permissionGranted":!matches!(state.status,"microphone_unavailable"|"microphone_disconnected"|"device_unavailable"),
             "captureConfirmed":matches!(state.status,"listening"|"capturing"|"processing"|"speaking"|"continuation"),
             "modelReady":installed,"modelName":installed.then_some("Aegis Open v2"),
-            "status":state.status,"message":message(state.status),"generation":state.generation})
+            "status":state.status,"message":message(state.status),"generation":state.generation,
+            "wakeSync":{"enabled":sync_enabled,"status":sync_status}})
     }
 }
 fn waveform_visible(window_handle: &AtomicIsize) -> bool {
@@ -313,6 +317,7 @@ impl WindowsHandsFree {
             .unwrap_or_default();
         let shared = Arc::new(Shared {
             app: app.clone(),
+            wake_queue: Queue::start(&dir, app.clone())?,
             dir,
             state: Mutex::new(State {
                 settings,
@@ -343,6 +348,7 @@ impl WindowsHandsFree {
         self.0.window_handle.store(handle, Ordering::Release);
     }
     pub fn shutdown(&self) {
+        self.0.wake_queue.stop();
         let mut s = self.0.state.lock().unwrap();
         s.exiting = true;
         s.clear_research();
@@ -361,6 +367,21 @@ impl WindowsHandsFree {
         let core = &self.0;
         match method {
             "state" => {}
+            "collectionSync" => {
+                let pairing = if enabled.ok_or("invalid_request")? {
+                    Some(
+                        Backend::open(
+                            &core.app,
+                            &reqwest::Client::new(),
+                            &CancellationToken::new(),
+                        )?
+                        .scope_key(),
+                    )
+                } else {
+                    None
+                };
+                core.wake_queue.configure(pairing)?;
+            }
             "configure" => {
                 let mut state = core.state.lock().unwrap();
                 if state.importing {
@@ -544,10 +565,12 @@ fn cycle(
     let mut detector = windows_wakeword::Detector::open(&shared.dir)?;
     let mut mic = Input::open()?;
     let mut history = Background::default();
+    let mut ring = PreRoll::default();
     shared.publish("listening");
     let confidence = loop {
         let samples = mic.read(cancel)?;
         history.push(&samples);
+        ring.push(shared.wake_queue.epoch(), &samples);
         if let Some(score) = detector.accept(&samples)? {
             break score;
         }
@@ -567,6 +590,7 @@ fn cycle(
                         Some(result.conversation),
                         levels,
                         Some(replacement),
+                        None,
                     );
                 }
             }
@@ -574,20 +598,52 @@ fn cycle(
         }
     };
     let detected = Instant::now() - Duration::from_millis(20 * mic.pending() as u64);
+    let session = Uuid::new_v4();
+    let backend = if !diagnostic || shared.wake_queue.epoch() % 2 == 1 {
+        Some(Backend::open(&shared.app, http, cancel))
+    } else {
+        None
+    };
+    let sample = backend
+        .as_ref()
+        .and_then(|value| value.as_ref().ok())
+        .and_then(|backend| {
+            shared.wake_queue.capture(
+                session,
+                backend.scope_key(),
+                &mut ring,
+                confidence,
+                diagnostic,
+            )
+        });
     if diagnostic {
         shared.publish("diagnostic_wake");
         return Ok(());
     }
-    let backend = Backend::open(&shared.app, http, cancel)?;
-    let session = Uuid::new_v4();
+    let backend = backend.ok_or("backend_unavailable")??;
     // The read-only manager request is asynchronous. Start it during the
     // election, not after it; only the winning node may inspect/pause media.
     let lookup_started = Instant::now();
     let lookup = MediaManager::RequestAsync().ok();
     let grant = backend.claim(session, detected, confidence, history.snr());
+    if let Some(sample) = &sample {
+        sample.update(json!({"disposition": match grant {
+            Ok(true) => "activated", Ok(false) => "election_lost", Err(_) => "unavailable",
+        }}));
+    }
     if !matches!(grant, Ok(true)) || cancel.is_cancelled() {
         if let Some(operation) = lookup {
             let _ = operation.Cancel();
+        }
+        if let Some(sample) = sample {
+            // Capture only what arrived during the election. Do not keep a losing
+            // device busy waiting for the winner's command.
+            let mut after = Vec::new();
+            for _ in 0..mic.pending().min(150) {
+                let Ok(block) = mic.read(cancel) else { break };
+                after.extend_from_slice(&block);
+            }
+            sample.add_command(&after);
         }
         grant?;
         return if cancel.is_cancelled() {
@@ -654,6 +710,7 @@ fn cycle(
         destination,
         CaptureLevels::from(&history),
         None,
+        sample,
     )
 }
 
@@ -680,6 +737,7 @@ fn converse(
     mut destination: Option<Uuid>,
     levels: CaptureLevels,
     first_replacement: Option<AcceptedInterruption>,
+    mut wake_sample: Option<Clip>,
 ) -> Result<()> {
     let announced = Mutex::new(destination);
     let scope = backend.scope_key();
@@ -708,12 +766,20 @@ fn converse(
                 shared.publish_waveform(&mut waveform, &block, status, generation, mic.pending());
                 match endpoint.push(&block) {
                     Capture::More => {}
-                    Capture::Empty => return Ok(()),
+                    Capture::Empty => {
+                        if let Some(sample) = wake_sample.take() {
+                            sample.update(json!({"commandDisposition":"no_speech"}));
+                        }
+                        return Ok(());
+                    }
                     Capture::Complete(audio) => break audio,
                 }
             }
         };
         first = false;
+        if let Some(sample) = &wake_sample {
+            sample.add_command(&samples);
+        }
         tail = None;
         shared.publish("processing");
         let monitored = monitor_turn(
@@ -729,6 +795,15 @@ fn converse(
             &announced,
         )?;
         let report = monitored.report;
+        if let Some(sample) = wake_sample.take() {
+            let outcome = match &report.result {
+                Ok(reply) if reply.ignored => "ignored",
+                Ok(_) if report.accepted => "accepted",
+                Err("cancelled") => "cancelled",
+                _ => "unknown",
+            };
+            sample.update(json!({"commandDisposition": outcome}));
+        }
         destination = report.conversation.or(destination);
         if let (Some(job), Some(conversation)) = (report.research_job, destination) {
             shared.watch_research(backend, session, conversation, job);

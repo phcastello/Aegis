@@ -26,7 +26,7 @@ use windows::{
 };
 
 const MODEL_FILE: &str = "aegis-open-v2.zip";
-const BUNDLE_DIGEST: &str = "3502c2bf98200daaec17b772f273942064ba3fd7431d62b21fdd77fb9f33c719";
+pub(crate) const BUNDLE_DIGEST: &str = "3502c2bf98200daaec17b772f273942064ba3fd7431d62b21fdd77fb9f33c719";
 const LIMIT: u64 = 4 * 1024 * 1024;
 const BLOCK: usize = 1280;
 

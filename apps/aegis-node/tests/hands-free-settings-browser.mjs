@@ -32,6 +32,7 @@ try {
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
     const initial = { enabled: false, diagnostic: false, assistantSelected: false, permissionGranted: false, modelReady: false, captureConfirmed: false, status: 'disabled', message: 'Escuta desligada.' };
     const windows = new URLSearchParams(location.search).has('windows');
+    initial.wakeSync = { enabled: false, status: 'ready' };
     if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; initial.generation = 0; }
     window.hfFixture = { fail: windows ? null : 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
     const callbacks = new Map();
@@ -68,6 +69,7 @@ try {
           if (f.fail) throw { code: f.fail, message: 'private exception must never be rendered' };
           if (windows && args.operation === 'import') Object.assign(f.initial, { modelReady: true, modelName: 'Aegis Open v2' });
           if (windows && args.operation === 'configure') Object.assign(f.initial, { enabled: args.enabled, diagnostic: args.diagnostic });
+          if (args.operation === 'collectionSync') f.initial.wakeSync = { enabled: args.enabled, status: 'ready' };
           if (args.operation === 'mediaReferenceStart') f.initial.mediaReference = f.mediaGrant
             ? { supported: true, session: true, status: 'ready' }
             : { supported: true, session: false, status: 'denied' };
@@ -153,6 +155,11 @@ try {
   await settings.getByRole('button', { name: 'Áudio e voz', exact: true }).click();
   await hf.getByText('Estado mais recente.', { exact: true }).waitFor();
   assert.equal(await hf.getByText('Resultado desmontado.', { exact: true }).count(), 0);
+  const sync = hf.getByRole('checkbox', { name: 'Sincronizar amostras com meu servidor', exact: true });
+  assert.equal(await sync.isChecked(), false);
+  await sync.check();
+  await hf.getByText('Aguardando uma ativação.', { exact: true }).waitFor();
+  await sync.uncheck();
   assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), false);
   // Consent is separate from ordinary hands-free; querying or a denied result
   // never retries projection authorization automatically.
@@ -658,6 +665,10 @@ try {
   await desktop.getByRole('button', { name: 'Configurações da Aegis', exact: true }).click();
   await desktop.getByRole('button', { name: 'Áudio e voz', exact: true }).click();
   const voice = desktop.locator('.hands-free-settings');
+  const desktopSync = voice.getByRole('checkbox', { name: 'Sincronizar amostras com meu servidor', exact: true });
+  await desktopSync.check();
+  await voice.getByText('Aguardando uma ativação.', { exact: true }).waitFor();
+  await desktopSync.uncheck();
   await voice.getByRole('button', { name: 'Importar modelo privado', exact: true }).click();
   await voice.getByText('Modelo instalado: Aegis Open v2', { exact: true }).waitFor();
   await voice.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).check();
