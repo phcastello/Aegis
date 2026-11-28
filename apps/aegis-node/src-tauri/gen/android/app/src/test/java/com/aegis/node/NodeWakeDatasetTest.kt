@@ -75,4 +75,25 @@ class NodeWakeDatasetTest {
         clip.append(ShortArray(55000), 0, 55000)
         assertEquals(44 + 2 * 55000, Base64.getDecoder().decode(clip.payload().getString("postWav")).size)
     }
+
+    @Test fun electionEpisodeReplacesOnlyTheCapturedWakeObservationsLocalGrouping() {
+        val local = "129edd9c-f203-409c-85fd-89a759341abe"
+        val episode = "e602008a-7283-43ae-97a0-ab3238c731c9"
+        for (origin in listOf("wake_word", "diagnostic")) {
+            val meta = JSONObject().put("groupId", local).put("origin", origin)
+            val clip = WakeDatasetClip("epoch", 12, shortArrayOf(11, 12), meta)
+            clip.append(shortArrayOf(31, 32), 0, 2)
+            val captured = clip.payload()
+            clip.groupWithEpisode(null)
+            assertEquals(local, clip.payload().getString("groupId"))
+            clip.groupWithEpisode(episode)
+            val resolved = clip.payload()
+            assertEquals(if (origin == "wake_word") episode else local, resolved.getString("groupId"))
+            assertEquals(1, resolved.getInt("schemaVersion"))
+            assertFalse(resolved.has("episodeId"))
+            assertEquals(captured.getString("sha256"), resolved.getString("sha256"))
+            assertEquals(captured.getString("postSha256"), resolved.getString("postSha256"))
+            clip.clear()
+        }
+    }
 }

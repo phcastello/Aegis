@@ -1610,6 +1610,13 @@ internal class HandsFreeRuntime(private val context:Context) {
         val diagnosticCaptures=mutableListOf<DiagnosticCapture>()
         val datasetClips = mutableListOf<WakeDatasetClip>()
         val datasetWindow = WakeDatasetConsentWindow()
+        fun closePendingVerification() {
+            val pending = pendingVerification ?: return
+            pending.close()
+            pendingVerification = null
+            val episodeId = pending.election?.episodeId ?: return
+            datasetClips.find { it.decision == pending.candidate.decisionSample }?.groupWithEpisode(episodeId)
+        }
         var diagnosticCancelGeneration=diagnosticCancelEpoch.get()
         var captureExit="capture_interrupted"
         var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
@@ -1679,14 +1686,17 @@ internal class HandsFreeRuntime(private val context:Context) {
                     val clip = clips.next()
                     if (clip.epoch != dataset.epoch) { clip.clear(); clips.remove(); continue }
                     clip.append(buffer, 0, count)
-                    if (clip.complete) { dataset.persist(clip); clips.remove() }
+                    // The PCM can be complete before a coordinator reply is observed.
+                    val waitingForClaim = clip.decision == wakeCandidate?.decisionSample ||
+                        clip.decision == pendingVerification?.candidate?.decisionSample
+                    if (clip.complete && !waitingForClaim) { dataset.persist(clip); clips.remove() }
                 }
                 val pendingDiagnostics=diagnosticCaptures.iterator()
                 val cancellationGeneration=diagnosticCancelEpoch.get()
                 val diagnosticCancelled=diagnosticCancelGeneration!=cancellationGeneration
                 diagnosticCancelGeneration=cancellationGeneration
                 if(diagnosticCancelled) {
-                    pendingVerification?.close();pendingVerification=null;wakeCandidate=null
+                    closePendingVerification();wakeCandidate=null
                 }
                 while(pendingDiagnostics.hasNext()) {
                     val item=pendingDiagnostics.next()
@@ -1830,6 +1840,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         if(outcome.status!=HandsFreePendingWakeVerification.Status.WAITING) {
                             datasetClips.find { it.decision == pending.candidate.decisionSample }?.let { clip ->
                                 clip.verifierScore(outcome.score.takeIf { wakeVerifier != null })
+                                clip.groupWithEpisode(pending.election?.episodeId)
                                 clip.disposition = when (outcome.status) {
                                     HandsFreePendingWakeVerification.Status.SUPPRESSED -> "election_lost"
                                     HandsFreePendingWakeVerification.Status.REJECTED -> "verifier_rejected"
@@ -1863,7 +1874,7 @@ internal class HandsFreeRuntime(private val context:Context) {
                         }
                     }
                 } else if(pendingVerification!=null || wakeCandidate!=null) {
-                    pendingVerification?.close();pendingVerification=null;wakeCandidate=null
+                    closePendingVerification();wakeCandidate=null
                 }
                 if(batteryStudy) {
                     // Suppress all activation side effects during the controlled comparison.
@@ -2025,6 +2036,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             throw error
         }finally {
             collection.finishCapture(captureEvent)
+            closePendingVerification()
             synchronized(lock) {
                 for (clip in datasetClips) {
                     val awaitCommand = clip.disposition == "activated" && capturedSuccessfully && !sessionCancelled
@@ -2042,7 +2054,6 @@ internal class HandsFreeRuntime(private val context:Context) {
                 realtime?.close();backend?.abortCapture()
                 synchronized(lock){finishEvent(if(sessionCancelled)if(endReason=="explicit_cancel")"cancelled" else "interrupted" else if(captureExit=="no_speech" || captureExit=="continuation_timeout")"empty" else "failed",endReason?:captureExit)}
             }
-            pendingVerification?.close()
             verificationExecutor?.shutdownNow()
             trace=null
             captureConfirmed=false;recorder=null

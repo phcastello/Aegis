@@ -9,6 +9,19 @@ Cada exemplo guarda o som ao redor do disparo, o trecho posterior disponível, a
 
 Uma detecção suprimida porque outro aparelho ganhou a eleição pode receber **correta** na primeira pergunta. O resultado observado da eleição e o tratamento do pedido ficam em campos separados. Nenhuma transcrição é necessária para o dataset. O revisor permite deixar cada pergunta sem resposta ou marcá-la como incerta.
 
+## Gravações do mesmo chamado
+
+A eleição associa um identificador ao episódio. Android e Windows que receberam
+uma decisão dessa eleição gravam o mesmo `groupId`, inclusive o aparelho
+suprimido. Cada gravação mantém seu áudio, ID e rótulos próprios. O acervo e a
+exportação conservam esse grupo, que deve ser a unidade de divisão entre treino
+e teste para avaliar com chamados que o modelo ainda não ouviu.
+[Validação com amostras agrupadas no scikit-learn](https://scikit-learn.org/stable/modules/cross_validation.html#cross-validation-iterators-for-grouped-data)
+
+Amostras com ID local, como as recolhidas offline, rejeitadas pelo verificador
+antes da eleição ou produzidas por uma versão anterior, mantêm o grupo de
+origem. A coleta usa a decisão da eleição para correlacionar aparelhos.
+
 ## Transporte e armazenamento
 
 O cliente guarda os envios pendentes em armazenamento privado, vinculados ao pareamento. O Android usa WorkManager com requisito de rede e retentativa exponencial. Uma confirmação HTTP 204 libera a cópia da fila. Perder a resposta depois de o servidor gravar a amostra é recuperável: o cliente pode repetir o mesmo PUT. Desligar a opção interrompe novas coletas e descarta envios pendentes daquela autorização. Amostras que o servidor já confirmou continuam no acervo privado.

@@ -1,7 +1,7 @@
 //! Opt-in queue for the private wake-word dataset. A clip belongs to the pairing
 //! that heard it. Release the SQLite lock before any network request.
 use crate::{
-    windows_voice_backend::{Backend, Result},
+    windows_voice_backend::{Backend, Result, WakeClaim},
     windows_voice_signal::{wav, RATE},
     windows_wakeword,
 };
@@ -322,17 +322,37 @@ impl Queue {
     }
 }
 impl Clip {
+    pub fn record_election(&self, claim: Result<WakeClaim>) {
+        let disposition = match claim {
+            Ok(WakeClaim { granted: true, .. }) => "activated",
+            Ok(_) => "election_lost",
+            Err(_) => "unavailable",
+        };
+        let mut change = json!({ "disposition": disposition });
+        if let Some(episode_id) = claim.ok().and_then(|reply| reply.episode_id) {
+            change["groupId"] = json!(episode_id);
+        }
+        // The UUID replaces another UUID of the same length. Only the
+        // disposition can grow the stored record.
+        self.patch(change.to_string(), disposition.len());
+    }
+
     pub fn update(&self, change: Value) {
+        let patch = change.to_string();
+        let maximum_growth = patch.len();
+        self.patch(patch, maximum_growth);
+    }
+
+    fn patch(&self, patch: String, maximum_growth: usize) {
         let mut data = self.queue.data.lock().unwrap();
         if self.queue.epoch() != self.epoch {
             return;
         }
         if let Some(db) = &data.db {
-            let patch = change.to_string();
             let result = db.execute(
                 "UPDATE clips SET body=json_patch(body, ?2), size=length(json_patch(body, ?2))
                 WHERE id=?1 AND ready=0 AND (SELECT coalesce(sum(size),0) FROM clips) + ?3 <= ?4",
-                params![self.id.to_string(), patch, patch.len(), QUEUE_BYTES],
+                params![self.id.to_string(), patch, maximum_growth, QUEUE_BYTES],
             );
             if !matches!(result, Ok(1)) {
                 data.status = "rejected";
@@ -371,7 +391,7 @@ impl Drop for Clip {
 mod tests {
     use super::*;
     #[test]
-    fn offline_loser_survives_restart_and_opt_out_discards_pending_audio() {
+    fn legacy_loser_survives_restart_and_opt_out_discards_pending_audio() {
         let dir = tempfile::tempdir().unwrap();
         let (queue, _) = Queue::new(dir.path());
         let mut ring = PreRoll::default();
@@ -408,11 +428,87 @@ mod tests {
         };
         let body: Value = serde_json::from_str(&read().unwrap()).unwrap();
         assert_eq!(body["disposition"], "election_lost");
+        assert_eq!(body["groupId"], json!(id));
         assert!(body.get("postWav").is_none());
         queue.configure(None).unwrap();
         assert!(read().is_none());
         assert_eq!(queue.state().pending_events, 0);
         queue.configure(Some([5; 32])).unwrap();
         assert!(queue.capture(id, [5; 32], &mut ring, 0.7, false).is_none());
+    }
+
+    #[test]
+    fn ready_samples_use_the_confirmed_group_and_keep_other_groups_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let (queue, _) = Queue::new(dir.path());
+        let scope = [5; 32];
+        queue.configure(Some(scope)).unwrap();
+        let mut ring = PreRoll::new(queue.epoch());
+        let captured = [2; 320];
+        ring.push(queue.epoch(), &captured);
+
+        let episode = Uuid::new_v4();
+        let cases = [
+            (
+                Some(Ok(WakeClaim {
+                    granted: true,
+                    episode_id: Some(episode),
+                })),
+                Some(episode),
+                "activated",
+            ),
+            (
+                Some(Ok(WakeClaim {
+                    granted: false,
+                    episode_id: Some(episode),
+                })),
+                Some(episode),
+                "election_lost",
+            ),
+            (
+                Some(Ok(WakeClaim {
+                    granted: false,
+                    episode_id: None,
+                })),
+                None,
+                "election_lost",
+            ),
+            (Some(Err("backend_unavailable")), None, "unavailable"),
+            (None, None, "candidate"),
+        ];
+        let expected = cases.map(|(claim, group, disposition)| {
+            let id = Uuid::new_v4();
+            let clip = queue
+                .capture(id, scope, &mut ring, 0.7, claim.is_none())
+                .unwrap();
+            if let Some(claim) = claim {
+                clip.record_election(claim);
+            }
+            (id, group.unwrap_or(id), disposition)
+        });
+        drop(queue);
+
+        let (restored, _) = Queue::new(dir.path());
+        assert_eq!(restored.state().pending_events, expected.len() as u32);
+        let mut data = restored.data.lock().unwrap();
+        let mut query = restored
+            .connection(&mut data)
+            .unwrap()
+            .prepare("SELECT body FROM clips WHERE ready=1 AND scope=?1 AND id=?2")
+            .unwrap();
+        let expected_wav = STANDARD.encode(wav(&captured));
+        for (id, group, disposition) in expected {
+            let body = query
+                .query_row(params![scope.as_slice(), id.to_string()], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap();
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["schemaVersion"], 1);
+            assert_eq!(body["groupId"], json!(group));
+            assert_eq!(body["disposition"], disposition);
+            assert_eq!(body["wav"], expected_wav);
+            assert!(body.get("episodeId").is_none());
+        }
     }
 }

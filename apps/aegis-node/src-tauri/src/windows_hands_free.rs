@@ -628,11 +628,9 @@ fn cycle(
     let lookup = MediaManager::RequestAsync().ok();
     let grant = backend.claim(session, detected, confidence, history.snr());
     if let Some(sample) = &sample {
-        sample.update(json!({"disposition": match grant {
-            Ok(true) => "activated", Ok(false) => "election_lost", Err(_) => "unavailable",
-        }}));
+        sample.record_election(grant);
     }
-    if !matches!(grant, Ok(true)) || cancel.is_cancelled() {
+    if !grant.is_ok_and(|claim| claim.granted) || cancel.is_cancelled() {
         if let Some(operation) = lookup {
             let _ = operation.Cancel();
         }

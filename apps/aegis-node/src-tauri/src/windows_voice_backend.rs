@@ -34,6 +34,12 @@ pub(crate) struct TurnReply {
 }
 pub(crate) type Result<T> = std::result::Result<T, &'static str>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WakeClaim {
+    pub granted: bool,
+    pub episode_id: Option<Uuid>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlaybackInterruption {
@@ -586,7 +592,7 @@ impl Backend {
         detected: Instant,
         confidence: f32,
         snr: Option<f64>,
-    ) -> Result<bool> {
+    ) -> Result<WakeClaim> {
         let mut payload = json!({"activationId":id,"confidence":confidence});
         if let Some(value) = snr {
             payload["snrDb"] = json!(value);
@@ -613,11 +619,16 @@ impl Backend {
         if parse_uuid(&response["activationId"])? != id {
             return Err("backend_response");
         }
-        match response["decision"].as_str() {
-            Some("granted") => Ok(true),
-            Some("suppressed") => Ok(false),
-            _ => Err("backend_response"),
-        }
+        let granted = match response["decision"].as_str() {
+            Some("granted") => true,
+            Some("suppressed") => false,
+            _ => return Err("backend_response"),
+        };
+        Ok(WakeClaim {
+            granted,
+            // Older servers and unconfirmed episodes may omit the ID.
+            episode_id: parse_uuid(&response["episodeId"]).ok(),
+        })
     }
     fn cleanup(&self, path: String) {
         let request = self

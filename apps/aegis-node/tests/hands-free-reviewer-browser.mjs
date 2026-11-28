@@ -48,26 +48,52 @@ with zipfile.ZipFile(sys.argv[1]) as z:
   assert.equal(await page.evaluate(() => {try {window.AegisReviewer.zip(new Array(65536).fill({name:'a',bytes:new Uint8Array()}));return false;}catch(error){return error.message.includes('65.535');}}),true);
   assert.equal(report.rows.every(row=>typeof row.labeledAt==='string'),true);
   assert.deepEqual(report.rows.map(row => row.commandLabel), ['not_directed', null]);
-  const node = '1d9ef396-f410-42d9-905e-d366ab6cd989', event = '808586f7-98ec-4ae2-8c9d-de16d3511f52';
+  const android = '1d9ef396-f410-42d9-905e-d366ab6cd989';
+  const windows = '2d9ef396-f410-42d9-905e-d366ab6cd989';
+  const androidEvent = '808586f7-98ec-4ae2-8c9d-de16d3511f52';
+  const windowsEvent = '908586f7-98ec-4ae2-8c9d-de16d3511f52';
+  const localEvent = 'a08586f7-98ec-4ae2-8c9d-de16d3511f52';
+  const episode = 'b08586f7-98ec-4ae2-8c9d-de16d3511f52';
   const volume = join(directory, 'volume'), exported = join(directory, 'central.zip'), review = join(directory, 'central');
   const python = process.platform === 'win32' ? 'python' : 'python3';
-  await mkdir(join(volume, node), { recursive: true });
-  await writeFile(join(volume, node, event + '.json'), JSON.stringify({
-    schemaVersion: 1, activatedAt: events[0].activatedAt, groupId: event, origin: 'wake_word',
-    disposition: 'election_lost', commandDisposition: 'unknown', wav: wav.toString('base64'), sha256: hash
-  }));
+  for (const node of [android, windows]) await mkdir(join(volume, node), { recursive: true });
+  const recordings = [
+    { node: android, event: androidEvent, groupId: episode, disposition: 'election_lost' },
+    { node: windows, event: windowsEvent, groupId: episode, disposition: 'activated' },
+    { node: windows, event: localEvent, groupId: localEvent, disposition: 'verifier_rejected' },
+  ];
+  for (const [index, { node, event, groupId, disposition }] of recordings.entries()) {
+    const audio = Buffer.from(wav);
+    audio.writeInt16LE(123 + index, 44);
+    await writeFile(join(volume, node, event + '.json'), JSON.stringify({
+      schemaVersion: 1, activatedAt: events[0].activatedAt, groupId, origin: 'wake_word',
+      disposition, commandDisposition: 'unknown', wav: audio.toString('base64'),
+      sha256: createHash('sha256').update(audio).digest('hex'),
+    }));
+  }
   execFileSync(python, [fileURLToPath(new URL('../../../scripts/hands-free/export-central-dataset.py', import.meta.url)), volume, exported]);
   execFileSync(python, ['-m', 'zipfile', '-e', exported, review]);
+  const manifest = (await readFile(join(review, 'manifest.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(manifest.map(row => [row.nodeId, row.originalEventId, row.groupId]),
+    recordings.map(({ node, event, groupId }) => [node, event, groupId]));
   await page.goto(pathToFileURL(join(review, 'index.html')).href);
   assert.match(await page.locator('#technical').innerText(), /election_lost/);
   assert.equal(await page.locator('#export').isDisabled(), true);
   await page.locator('[data-intent="directed"]').click();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('1');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('2');
   await page.locator('#files').setInputFiles(review);
-  const [centralRow] = await page.evaluate(async () => (await window.AegisReviewer.buildDataset()).rows);
-  assert.equal(centralRow.humanLabel, null);
-  assert.equal(centralRow.commandLabel, 'directed');
+  const centralRows = await page.evaluate(async () => (await window.AegisReviewer.buildDataset()).rows);
+  const [centralRow] = centralRows;
+  assert.deepEqual(centralRows.map(row => row.groupId), [episode, episode, localEvent]);
+  assert.deepEqual(centralRows.map(row => row.split), [null, null, null]);
+  assert.equal(new Set(centralRows.map(row => row.triggerContext.sha256)).size, 3);
+  assert.deepEqual(centralRows.map(row => row.commandLabel), ['directed', null, null]);
+  assert.deepEqual(centralRows.map(row => row.humanLabel), [null, 'correct', 'false_positive']);
   assert.equal(centralRow.triggerContext.sha256, hash);
-  assert.equal(centralRow.provenance.originalEventId, event);
+  assert.equal(centralRow.provenance.originalEventId, androidEvent);
   assert.deepEqual(errors,[]);assert.deepEqual(network,[]);
   console.log('Offline file:// reviewer: labels, keyboard, persistence, SHA-256, WAV selection, dated dataset ZIP and group provenance passed. No network requests. Synthetic browser fixture, not device validation.');
 } finally {await browser?.close();await rm(directory,{recursive:true,force:true});}

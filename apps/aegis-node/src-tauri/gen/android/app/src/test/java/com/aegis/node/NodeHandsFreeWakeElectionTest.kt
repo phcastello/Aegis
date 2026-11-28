@@ -60,8 +60,9 @@ class NodeHandsFreeWakeElectionTest {
         }
     }
 
-    private fun result(request: JSONObject, decision: String) =
-        JSONObject().put("activationId", request.getString("activationId")).put("decision", decision).toString()
+    private fun result(request: JSONObject, decision: String, episodeId: Any? = null) =
+        JSONObject().put("activationId", request.getString("activationId")).put("decision", decision)
+            .put("episodeId", episodeId).toString()
 
     @Test fun grantIsPinnedToIdentityAndDeadlineAndOnlyScoresAreSent() {
         Coordinator { result(it, "granted") }.use { server ->
@@ -76,12 +77,41 @@ class NodeHandsFreeWakeElectionTest {
                 assertEquals(election.activationId, sent.getString("activationId"))
                 assertEquals("0", server.requestHeaders.get()["x-aegis-detection-age-ms"])
                 assertNull(election.coordinatorTiming) // Older servers omit the timing header.
+                assertNull(election.episodeId) // Older servers omit the optional episode.
                 assertTrue(election.canActivate())
                 session.set(server.session.copy(credential = "replacement"))
                 assertFalse(election.canActivate())
                 session.set(server.session)
                 now.set(3000)
                 assertFalse(election.canActivate())
+            }
+        }
+    }
+
+    @Test fun onlyTrustedDecisionsProvideAnEpisodeForDatasetGrouping() {
+        val episodeId = "e602008a-7283-43ae-97a0-ab3238c731c9"
+        val foreignActivationId = "694b4db4-ff99-44a2-8a08-21bd2e326bc5"
+        for ((expected, remote, group) in listOf(
+            Triple(HandsFreeWakeElection.Decision.GRANTED, "granted", episodeId),
+            Triple(HandsFreeWakeElection.Decision.SUPPRESSED, "suppressed", episodeId),
+            Triple(HandsFreeWakeElection.Decision.GRANTED, "granted", "0-0-0-0-1"),
+            Triple(HandsFreeWakeElection.Decision.SUPPRESSED, "suppressed", "00000000-0000-0000-0000-000000000000"),
+            Triple(HandsFreeWakeElection.Decision.SUPPRESSED, "suppressed", JSONObject.NULL),
+            Triple(HandsFreeWakeElection.Decision.UNAVAILABLE, "unknown", episodeId)
+        )) {
+            Coordinator { result(it, remote, group) }.use { server ->
+                HandsFreeWakeElection({ server.session }, { 1000L }, 3000, { true }, false).use { election ->
+                    assertEquals(expected, election.claim(window, .75f))
+                    assertEquals(episodeId.takeIf { group == it && expected != HandsFreeWakeElection.Decision.UNAVAILABLE }, election.episodeId)
+                }
+            }
+        }
+        Coordinator { request ->
+            JSONObject(result(request, "granted", episodeId)).put("activationId", foreignActivationId).toString()
+        }.use { server ->
+            HandsFreeWakeElection({ server.session }, { 1000L }, 3000, { true }, false).use { election ->
+                assertEquals(HandsFreeWakeElection.Decision.UNAVAILABLE, election.claim(window, .75f))
+                assertNull(election.episodeId)
             }
         }
     }

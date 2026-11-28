@@ -649,9 +649,13 @@ fn winner_transcribes_one_command_streams_committed_segments_and_uses_native_pla
         s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
             .unwrap();
     });
-    assert!(backend
-        .claim(session, Instant::now(), 0.9, Some(12.))
-        .unwrap());
+    assert_eq!(
+        backend.claim(session, Instant::now(), 0.9, Some(12.)),
+        Ok(WakeClaim {
+            granted: true,
+            episode_id: None,
+        })
+    );
     let audio = AudioFixture {
         wait_for_prefetch: Some(prefetch_ready),
         ..Default::default()
@@ -693,7 +697,13 @@ fn suppressed_wrong_id_stale_and_revoked_candidates_never_proceed() {
             json!({"activationId":Uuid::new_v4(),"decision":"granted"}),
         );
     });
-    assert!(!backend.claim(id, Instant::now(), 0.8, None).unwrap());
+    assert_eq!(
+        backend.claim(id, Instant::now(), 0.8, None),
+        Ok(WakeClaim {
+            granted: false,
+            episode_id: None,
+        })
+    );
     assert_eq!(
         backend.claim(id, Instant::now(), 0.8, None),
         Err("backend_response")
@@ -709,6 +719,41 @@ fn suppressed_wrong_id_stale_and_revoked_candidates_never_proceed() {
         revoked.claim(id, Instant::now(), 0.8, None),
         Err("pairing_required")
     );
+}
+
+#[test]
+fn wake_claim_reads_an_optional_episode_independently_of_the_activation_id() {
+    let (backend, server) = fixture();
+    let episode = Uuid::new_v4();
+    let cases = [
+        ("granted", json!(episode), Some(episode)),
+        ("suppressed", json!(episode), Some(episode)),
+        ("suppressed", Value::Null, None),
+        ("granted", json!(Uuid::nil()), None),
+        ("granted", json!("invalid UUID"), None),
+    ];
+    let replies = cases.clone();
+    let worker = thread::spawn(move || {
+        for (decision, episode_id, _) in replies {
+            let (socket, payload) = request(&server, "/api/nodes/me/voice-activations/claim");
+            let payload: Value = serde_json::from_slice(&payload).unwrap();
+            assert!(payload.get("episodeId").is_none());
+            answer(
+                socket,
+                json!({"activationId":payload["activationId"],"decision":decision,"episodeId":episode_id}),
+            );
+        }
+    });
+    for (decision, _, episode_id) in cases {
+        assert_eq!(
+            backend.claim(Uuid::new_v4(), Instant::now(), 0.8, None),
+            Ok(WakeClaim {
+                granted: decision == "granted",
+                episode_id,
+            })
+        );
+    }
+    worker.join().unwrap();
 }
 
 #[test]

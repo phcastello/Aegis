@@ -255,6 +255,11 @@ internal class WakeDatasetClip(val epoch: String, val decision: Long, private va
     }
     val complete get() = length == post.size && disposition != "activated"
 
+    fun groupWithEpisode(episodeId: String?) {
+        if (episodeId != null && metadata.optString("origin") == "wake_word")
+            metadata.put("groupId", episodeId)
+    }
+
     fun payload(): JSONObject {
         val result = JSONObject().put("schemaVersion", 1).put("disposition", disposition).put("commandDisposition", commandDisposition)
         for (key in listOf("activatedAt", "groupId", "origin", "appVersion", "build", "modelVersion", "modelSha256",

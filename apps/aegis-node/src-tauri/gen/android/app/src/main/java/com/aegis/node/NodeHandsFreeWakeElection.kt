@@ -39,6 +39,8 @@ internal class HandsFreeWakeElection(
     private var inFlight: Call? = null
     @Volatile private var closed = false
     @Volatile private var granted = false
+    @Volatile var episodeId: String? = null
+        private set
     @Volatile var coordinatorTiming: CoordinatorTiming? = null
         private set
     @Volatile var transportTiming: TransportTiming? = null
@@ -82,7 +84,7 @@ internal class HandsFreeWakeElection(
                 val bytes = response.body?.byteStream()?.readBytesBounded(2048) ?: return Decision.UNAVAILABLE
                 val outcome = JSONObject(String(bytes, Charsets.UTF_8))
                 if (outcome.optString("activationId") != activationId || !responseAuthority()) return Decision.UNAVAILABLE
-                when (outcome.optString("decision")) {
+                val decision = when (outcome.optString("decision")) {
                     "granted" -> {
                         coordinatorTiming = parseCoordinatorTiming(response, clock() - callStartedAt)
                         transportTiming = trace.snapshot()
@@ -92,11 +94,22 @@ internal class HandsFreeWakeElection(
                     "suppressed" -> Decision.SUPPRESSED
                     else -> Decision.UNAVAILABLE
                 }
+                if (decision != Decision.UNAVAILABLE) rememberEpisode(outcome)
+                decision
             }
         } catch (_: Exception) {
             Decision.UNAVAILABLE
         } finally {
             synchronized(this) { inFlight = null }
+        }
+    }
+
+    private fun rememberEpisode(outcome: JSONObject) {
+        val value = outcome.opt("episodeId") as? String ?: return
+        val id = try { UUID.fromString(value).toString() } catch (_: IllegalArgumentException) { return }
+        if (!id.equals(value, ignoreCase = true) || id == "00000000-0000-0000-0000-000000000000") return
+        synchronized(this) {
+            if (!closed) episodeId = id
         }
     }
 
