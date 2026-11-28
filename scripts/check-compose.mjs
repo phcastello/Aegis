@@ -26,7 +26,11 @@ try {
     for (const service of Object.values(configuration.services)) {
       for (const port of service.ports ?? []) assert.equal(port.host_ip, '127.0.0.1');
     }
-    assert.deepEqual(Object.keys(configuration.volumes).sort(), ['data_protection_keys', 'neo4j_data', 'postgres_data', 'qdrant_data']);
+    assert.deepEqual(Object.keys(configuration.volumes).sort(), ['data_protection_keys', 'neo4j_data', 'postgres_data', 'qdrant_data', 'script_workspaces', 'wake_dataset']);
+    for (const [source, target] of [['script_workspaces', '/var/lib/aegis/script-workspaces'], ['wake_dataset', '/var/lib/aegis/wake-dataset']]) {
+      assert.ok(configuration.services['aegis-api'].volumes.some(v => v.type === 'volume' && v.source === source && v.target === target && !v.read_only));
+    }
+    assert.ok(configuration.services['aegis-api'].tmpfs.includes('/run/aegis-script:rw,nosuid,nodev,noexec,size=1073741824,nr_inodes=16384,mode=0700'));
     assert.equal(configuration.services['aegis-api'].container_name, 'aegis-api');
     assert.ok(configuration.services['aegis-api'].volumes.some(volume => volume.source === 'data_protection_keys'));
     assert.ok(!Object.keys(configuration.services['aegis-api'].environment).some(key => key.includes('WEB_PUSH')));

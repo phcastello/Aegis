@@ -37,6 +37,13 @@ credenciais e bancos; alterações de Compose exigem reconciliar a instalação 
 da publicação. Os health checks reais são concluídos nessa preparação, sem
 repetição durante os builds nativos.
 
+Na v0.9.0 o publicador reconhece a alteração de Compose que adiciona os dois
+volumes privados `script_workspaces` e `wake_dataset` e o `tmpfs` de execução
+Python. Antes da substituição, confere os destinos e a propriedade dos volumes.
+Depois, verifica a identidade dos volumes antigos e novos e os limites do
+`tmpfs` no container iniciado. A configuração de recuperação conserva os
+mounts da imagem anterior.
+
 Sem migrations pendentes, não há backup, restauração de ensaio nem execução do
 migrador. Migration pendente precisa de revisão exata em `SAFE_MIGRATIONS` no
 script. Nome ou palavras como AddColumn não provam segurança. A revisão considera Up, dados e

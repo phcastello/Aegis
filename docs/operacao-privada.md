@@ -25,6 +25,12 @@ Não é necessário publicar os bancos em outras interfaces para que a API Docke
 
 Os nomes dos containers e dos quatro volumes (`postgres_data`, `qdrant_data`, `neo4j_data`, `data_protection_keys`) continuam iguais. Em uma instalação existente, execute na mesma pasta e com o mesmo projeto Compose usado antes; preserve um eventual `COMPOSE_PROJECT_NAME` ou `-p` já adotado. Trocar o nome do projeto pode selecionar volumes novos e aparentar perda de dados. Não remova volumes para atualizar. Preserve o key ring Data Protection, os arquivos FCM e as identidades pareadas.
 
+Desde a v0.9.0 o backend também usa os volumes privados `script_workspaces`
+para os intermediários de cada conversa e `wake_dataset` para as amostras
+de ativação sincronizadas com autorização em cada dispositivo. Inclua o
+`wake_dataset` nos backups que devem conservar a coleta. Os anexos recebidos
+e entregues ficam no PostgreSQL.
+
 ## Gateway HTTP e aposentadoria do cliente web
 
 O domínio privado continua atendido pelo serviço Nginx `aegis-pwa`, na mesma

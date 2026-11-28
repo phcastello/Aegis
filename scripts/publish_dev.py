@@ -160,6 +160,50 @@ def migration_policy(source, pending):
                 "Migration destructive or uncertain; specific review/authorization required: " + migration)
 
 
+# The private installation is reconstructed from its resolved Compose snapshot.
+# Apply only these reviewed additions to the candidate, keeping rollback's snapshot intact.
+FILE_VOLUMES = {"script_workspaces": "/var/lib/aegis/script-workspaces", "wake_dataset": "/var/lib/aegis/wake-dataset"}
+SCRIPT_TMPFS = "/run/aegis-script:rw,nosuid,nodev,noexec,size=1073741824,nr_inodes=16384,mode=0700"
+
+
+def adds_file_volumes(before, after):
+    anchor = "      - ${AEGIS_FCM_CREDENTIALS_DIR:-./.runtime-secrets/fcm}:/run/aegis-fcm:ro\n"
+    if before.count(anchor) != 1 or not before.endswith("  data_protection_keys:\n"):
+        return False
+    mounts = "".join(f"      - {name}:{target}\n" for name, target in FILE_VOLUMES.items())
+    expected = before.replace(anchor, anchor + mounts + "    tmpfs:\n      - " + SCRIPT_TMPFS + "\n")
+    return after == expected + "".join(f"  {name}:\n" for name in FILE_VOLUMES)
+
+
+def add_file_mounts(config, project):
+    api = config["services"]["aegis-api"]
+    tmp_target = SCRIPT_TMPFS.partition(":")[0]
+    destinations = {v["target"] for v in api.get("volumes", [])}
+    destinations.update(t.partition(":")[0] for t in api.get("tmpfs", []))
+    require(not destinations.intersection([*FILE_VOLUMES.values(), tmp_target]) and
+            not FILE_VOLUMES.keys() & config.get("volumes", {}).keys(),
+            "Existing private storage conflicts with the new dataset/workspace mounts.")
+    for name, target in FILE_VOLUMES.items():
+        config.setdefault("volumes", {})[name] = {"name": f"{project}_{name}"}
+        api.setdefault("volumes", []).append({"type": "volume", "source": name, "target": target})
+    api.setdefault("tmpfs", []).append(SCRIPT_TMPFS)
+
+
+def validate_mounts(previous, current, project, added):
+    mounts = {v["Destination"]: v for v in current["Mounts"]}
+    if added:
+        for name, target in FILE_VOLUMES.items():
+            mount = mounts.pop(target, {})
+            require(mount.get("Type") == "volume" and mount.get("Name") == f"{project}_{name}" and mount.get("RW"),
+                    "New private volume missing or incompatible: " + name)
+        target, _, options = SCRIPT_TMPFS.partition(":")
+        scratch = mounts.pop(target, None)
+        actual = (current["HostConfig"].get("Tmpfs") or {}).get(target, "")
+        require((scratch is None or scratch["Type"] == "tmpfs") and
+                set(options.split(",")) <= set(actual.split(",")), "Bounded script tmpfs is missing or incompatible.")
+    require(mounts == {v["Destination"]: v for v in previous["Mounts"]}, "Persistent mounts changed.")
+
+
 def publish(port, plan, journal):
     """Never advance a feed until private deployment passed. Journal every boundary.
 
@@ -389,6 +433,21 @@ class PrivateHost:
                     after = self.run(["git", "show", plan["sha"] + ":docker-compose.yml"])
                     if reconciled_reasoning_default(paths, before, after, self.api_env):
                         reviewed_change = "conversation-reasoning-default-medium-to-low"
+                    elif adds_file_volumes(before, after):
+                        reviewed_change = "private-workspace-and-wake-dataset-storage"
+                        # Detect target collisions before building images. Existing named volumes
+                        # may belong to a previous unsuccessful attempt for this same project.
+                        import copy
+                        add_file_mounts(copy.deepcopy(self.config), self.project)
+                        existing = set(self.run(["docker", "volume", "ls", "--format", "{{.Name}}"]).splitlines())
+                        for name in FILE_VOLUMES:
+                            volume_name = f"{self.project}_{name}"
+                            if volume_name in existing:
+                                labels = json.loads(self.run(["docker", "volume", "inspect", volume_name]))[0].get("Labels") or {}
+                                require(labels.get("com.docker.compose.project") == self.project and
+                                        labels.get("com.docker.compose.volume") == name,
+                                        "New mount name is already used by another volume.")
+                        self.add_file_volumes = True
                     else:
                         settings = self.source / "backend/src/Aegis.Api/appsettings.json"
                         if settings.is_file() and reconciled_web_search_defaults(
@@ -558,6 +617,8 @@ class PrivateHost:
 
     def deploy(self, plan):
         config = json.loads(json.dumps(self.config))
+        if getattr(self, "add_file_volumes", False):
+            add_file_mounts(config, self.project)
         for component, image in self.images.items():
             service = "aegis-api" if component == "backend" else "aegis-pwa"
             config["services"][service]["image"] = image
@@ -606,7 +667,8 @@ class PrivateHost:
             current = self.inspect(service)
             expected = old["Image"] if initial else self.images.get(component, old["Image"])
             require(current["State"]["Running"] and current["Image"] == expected, "Running image differs from selected image.")
-            require(current["Mounts"] == old["Mounts"], "Persistent mounts changed.")
+            validate_mounts(old, current, self.project, not initial and component == "backend" and
+                            getattr(self, "add_file_volumes", False))
             if not initial and component in self.images:
                 require(current["Config"]["Labels"].get(REVISION) == plan["sha"], "Running SHA differs from candidate.")
         is_gateway = self.validate_gateway(initial)

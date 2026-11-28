@@ -119,6 +119,10 @@ services:
     volumes:
       - data_protection_keys:/root/.aspnet/DataProtection-Keys
       - ${AEGIS_FCM_CREDENTIALS_DIR:-./.runtime-secrets/fcm}:/run/aegis-fcm:ro
+      - script_workspaces:/var/lib/aegis/script-workspaces
+      - wake_dataset:/var/lib/aegis/wake-dataset
+    tmpfs:
+      - /run/aegis-script:rw,nosuid,nodev,noexec,size=1073741824,nr_inodes=16384,mode=0700
 
   postgres:
     image: postgres:16-alpine
@@ -157,3 +161,5 @@ volumes:
   qdrant_data:
   neo4j_data:
   data_protection_keys:
+  script_workspaces:
+  wake_dataset:

@@ -117,6 +117,29 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(dev.Blocked, "Unclassified"):
             dev.scope(["new-runtime/runtime.conf"])
 
+    def test_private_file_storage_additions_only(self):
+        after = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text()
+        added = [f"      - {k}:{v}\n" for k, v in dev.FILE_VOLUMES.items()]
+        added += [f"    tmpfs:\n      - {dev.SCRIPT_TMPFS}\n", *(f"  {k}:\n" for k in dev.FILE_VOLUMES)]
+        before = after
+        for line in added:
+            before = before.replace(line, "")
+        self.assertTrue(dev.adds_file_volumes(before, after))
+        self.assertFalse(dev.adds_file_volumes(before, after.replace("size=1073741824", "size=9999999999")))
+        self.assertFalse(dev.adds_file_volumes(before, after + "  other:\n"))
+        config = {"services": {"aegis-api": {"volumes": [{"type": "volume", "source": "keys", "target": "/keys"}]}}}
+        dev.add_file_mounts(config, "aegis")
+        with self.assertRaises(dev.Blocked):
+            dev.add_file_mounts(config, "aegis")
+        old = {"Mounts": [{"Type": "volume", "Name": "aegis_keys", "Destination": "/keys", "RW": True}]}
+        new = {"Mounts": old["Mounts"] + [{"Type": "volume", "Name": "aegis_" + k, "Destination": v, "RW": True}
+                                           for k, v in dev.FILE_VOLUMES.items()],
+               "HostConfig": {"Tmpfs": dict([dev.SCRIPT_TMPFS.split(":", 1)])}}
+        dev.validate_mounts(old, new, "aegis", True)
+        new["Mounts"].pop(0)
+        with self.assertRaises(dev.Blocked):
+            dev.validate_mounts(old, new, "aegis", True)
+
     def test_reconciled_reasoning_default_requires_exact_reviewed_change_and_runtime_low(self):
         before = "services:\n  aegis-api:\n    environment:\n      AEGIS_CHAT_REASONING_EFFORT: ${AEGIS_CHAT_REASONING_EFFORT:-medium}\n"
         after = before.replace("EFFORT:-medium", "EFFORT:-low")
