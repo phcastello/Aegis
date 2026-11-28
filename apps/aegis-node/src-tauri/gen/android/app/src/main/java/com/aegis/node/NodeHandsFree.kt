@@ -44,7 +44,8 @@ object NodeHandsFree {
     fun configureCollection(context:Context,payload:String):String {
         val args=JSONObject(payload);val runtime=runtime(context)
         runtime.interruptBatteryStudy("collection_changed")
-        runtime.collection.configure(args.getBoolean("enabled"),args.getInt("limitMiB"))
+        if (args.has("syncEnabled")) runtime.dataset.configure(args.getBoolean("syncEnabled"))
+        else runtime.collection.configure(args.getBoolean("enabled"),args.getInt("limitMiB"))
         return runtime.state().toString()
     }
     fun deleteCollection(context:Context):String {
@@ -75,6 +76,8 @@ internal class HandsFreeRuntime(private val context:Context) {
     private val prefs=context.getSharedPreferences("aegis-hands-free-v1",Context.MODE_PRIVATE)
     internal val metrics=HandsFreeMetrics(context)
     internal val collection=HandsFreeActivationCollection(context)
+    internal val dataset = NodeWakeDataset.get(context)
+    private var heldDatasetCommand: Pair<String, String>? = null
     private val batteryDiagnostics=HandsFreeBatteryDiagnostics(context)
     private val powerMonitors=HandsFreePowerMonitors(context)
     private val batteryAutomation=HandsFreeBatteryAutomation(context)
@@ -328,6 +331,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             .put("modelName",model?.name?:JSONObject.NULL).put("modelVersion",model?.version?:JSONObject.NULL)
             .put("modelSha256",model?.sha256?:JSONObject.NULL)
             .put("collection",collection.state())
+            .put("wakeSync",JSONObject().put("enabled", dataset.epoch != null).put("status", dataset.status))
             .put("batteryDiagnostics",batteryView)
             .put("mediaReference",mediaReference)
         }
@@ -808,6 +812,17 @@ internal class HandsFreeRuntime(private val context:Context) {
             .put("sessionId",token).put("groupId",if(diagnostic)recordingGroupId?:token else token).put("humanLabel",JSONObject.NULL)
     }
     private fun finishEvent(finalState:String,reason:String?) {
+        heldDatasetCommand?.let { (epoch, event) ->
+            val disposition = when {
+                finalState == "ignored" -> "ignored"
+                finalState == "played" -> "accepted"
+                reason == "no_speech" -> "no_speech"
+                finalState == "cancelled" -> "cancelled"
+                else -> "unknown"
+            }
+            dataset.finishCommand(epoch, event, disposition)
+        }
+        heldDatasetCommand = null
         val id=activeEvent;activeEvent=null
         val transcription=when {
             transcriptionStatus=="in_progress" && finalState=="failed"->"failed"
@@ -1393,6 +1408,11 @@ internal class HandsFreeRuntime(private val context:Context) {
                             turn.playedAudio -> "played"
                             else -> "empty"
                         }
+                        heldDatasetCommand?.let { (epoch, event) ->
+                            val disposition = when { turn.ignored -> "ignored"; turn.playedAudio -> "accepted"; else -> "unknown" }
+                            dataset.finishCommand(epoch, event, disposition)
+                            heldDatasetCommand = null
+                        }
                         if(!continuation){
                             val reason=when {
                                 turn.readingStopped -> "barge_in_stop"
@@ -1587,6 +1607,8 @@ internal class HandsFreeRuntime(private val context:Context) {
         // Its post window uses the existing 3s no-speech bound; overlapping events share reads.
         data class DiagnosticCapture(val id:String?,var remaining:Int,var margin:Int)
         val diagnosticCaptures=mutableListOf<DiagnosticCapture>()
+        val datasetClips = mutableListOf<WakeDatasetClip>()
+        val datasetWindow = WakeDatasetConsentWindow()
         var diagnosticCancelGeneration=diagnosticCancelEpoch.get()
         var captureExit="capture_interrupted"
         var receivedAt=SystemClock.elapsedRealtime();var checkedAt=receivedAt
@@ -1626,12 +1648,14 @@ internal class HandsFreeRuntime(private val context:Context) {
                 // either the audio or the winner rule. Idle never probes that reference here.
                 val waitingForElection=electWake && !pendingActivation && (wakeCandidate!=null || pendingVerification!=null)
                 val readSize=handsFreePendingWakeReadSamples(buffer.size,waitingForElection,waitingForElection && NodeExternalPlaybackReference.active())
+                val consentBeforeRead = dataset.epoch
                 val count=audio.read(buffer,0,readSize,AudioRecord.READ_BLOCKING)
                 val readReturnedAtMs=HandsFreeTurnLatency.now()
                 if(!current(generation)){retainCancellationPrefix(count,readReturnedAtMs);return null}
                 val now=SystemClock.elapsedRealtime()
                 if(count<=0 || silenced.get())throw MicrophoneUnavailable()
                 mediaFilter?.advance(count)
+                val blockConsent = datasetWindow.received(consentBeforeRead, dataset.epoch, count)
                 mediaFilter?.filter(buffer, count)
                 if(captured || continuation)HandsFreePanelSignal.capture(sessionId,buffer,count,now)
                 if(startup!=null && !measureBlock(audio)){receivedAt=now;continue}
@@ -1648,6 +1672,13 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(sessionCancelled && (captured || continuation)) {
                     retainCancellationPrefix(count,readReturnedAtMs)
                     return ByteArray(0)
+                }
+                val clips = datasetClips.iterator()
+                while (clips.hasNext()) {
+                    val clip = clips.next()
+                    if (clip.epoch != dataset.epoch) { clip.clear(); clips.remove(); continue }
+                    clip.append(buffer, 0, count)
+                    if (clip.complete) { dataset.persist(clip); clips.remove() }
                 }
                 val pendingDiagnostics=diagnosticCaptures.iterator()
                 val cancellationGeneration=diagnosticCancelEpoch.get()
@@ -1740,6 +1771,18 @@ internal class HandsFreeRuntime(private val context:Context) {
                 if(event == -2L)error("detector_inference")
                 // This read may contain a decision preceding an explicit diagnostic cancellation.
                 if(diagnostic && diagnosticCancelled)event=-1L
+                // Capture the detector observation before verification/election can discard it.
+                val consent = blockConsent?.takeIf { it == dataset.epoch }
+                if (consent != null && event >= 0 && !batteryStudy && !continuation && !pendingActivation && datasetClips.size < 8) {
+                    val boundary = HandsFreeActivationBoundary(detectorSamples - count, count, event)
+                    val meta = activationMetadata(if (diagnostic) "diagnostic" else "wake_word", event,
+                        boundary.offset, MicroWakeWordNative.activationScores(detector), recordingGroup)
+                    val observed = java.time.OffsetDateTime.now().minusNanos(boundary.postCount.toLong() * 1000000000 / 16000)
+                    meta.put("activatedAt", observed.toString()).put("groupId", recordingGroup)
+                    val clip = WakeDatasetClip(consent, event, datasetWindow.context(ring, boundary), meta)
+                    clip.append(buffer, boundary.offset, boundary.postCount)
+                    datasetClips.add(clip)
+                }
                 var verifiedCandidate:HandsFreeWakeCandidate?=null
                 var verifiedPending:HandsFreePendingWakeVerification?=null
                 var verifiedOutcome:HandsFreePendingWakeVerification.Outcome?=null
@@ -1784,6 +1827,15 @@ internal class HandsFreeRuntime(private val context:Context) {
                     if(pending!=null) {
                         val outcome=pending.poll(SystemClock.elapsedRealtime())
                         if(outcome.status!=HandsFreePendingWakeVerification.Status.WAITING) {
+                            datasetClips.find { it.decision == pending.candidate.decisionSample }?.let { clip ->
+                                clip.verifierScore(outcome.score.takeIf { wakeVerifier != null })
+                                clip.disposition = when (outcome.status) {
+                                    HandsFreePendingWakeVerification.Status.SUPPRESSED -> "election_lost"
+                                    HandsFreePendingWakeVerification.Status.REJECTED -> "verifier_rejected"
+                                    HandsFreePendingWakeVerification.Status.ACCEPTED -> "candidate"
+                                    else -> "unavailable"
+                                }
+                            }
                             val terminalObservedAt=SystemClock.elapsedRealtime()
                             metrics.timing(if(electWake)"wake_verification_and_election_wait" else "wake_verifier_wait",terminalObservedAt-verificationStartedAt,metrics.identityToken())
                             when(outcome.status) {
@@ -1832,11 +1884,14 @@ internal class HandsFreeRuntime(private val context:Context) {
                         if(continuation && sessionCancelled)return ByteArray(0)
                         val assistantActivation=pendingActivation;pendingActivation=false
                         if(electWake && !assistantActivation && verifiedPending?.election?.canActivate()!=true) {
+                            datasetClips.find { it.decision == event }?.disposition = "unavailable"
                             verifiedPending?.close();pendingVerification=null
                             command.fill(0,0,verifiedCommandLength)
                             continue
                         }
                         if(!continuation)metrics.add("activations")
+                        if (!diagnostic && !continuation && !assistantActivation)
+                            datasetClips.find { it.decision == event }?.disposition = "activated"
                         if(!continuation && !assistantActivation && !diagnostic) {
                             val activatedAt=SystemClock.elapsedRealtime()
                             continuityActivation=conversationContinuity.activate(verifiedPending?.election?.grantedIdentity() ?: currentIdentity(),activatedAt)
@@ -1969,6 +2024,15 @@ internal class HandsFreeRuntime(private val context:Context) {
             throw error
         }finally {
             collection.finishCapture(captureEvent)
+            synchronized(lock) {
+                for (clip in datasetClips) {
+                    val awaitCommand = clip.disposition == "activated" && capturedSuccessfully && !sessionCancelled
+                    if (awaitCommand) heldDatasetCommand = clip.epoch to clip.id
+                    else if (clip.disposition == "activated") clip.commandDisposition =
+                        if (sessionCancelled) "cancelled" else if (captureExit == "no_speech") "no_speech" else "unknown"
+                    dataset.persist(clip, hold = awaitCommand)
+                }
+            }
             for(item in diagnosticCaptures) {
                 collection.finishCapture(item.id)
                 collection.finish(item.id,"interrupted",endReason?:captureExit,"not_started")

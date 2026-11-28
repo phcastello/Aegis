@@ -64,6 +64,8 @@ pub async fn node_hands_free(
         "batteryFinish" => ("handsFreeBatteryFinish", json!({})),
         "batteryAutoStart" | "batteryAutoValidate" | "batteryAutoCancel" => battery_auto_control(operation.as_str())?,
         "cancel" => ("handsFreeCancel", json!({})),
+        "collectionSync" => ("handsFreeCollectionConfigure",
+            json!({"syncEnabled":enabled.ok_or_else(|| HandsFreeError::new("invalid_request"))?})),
         "collectionConfigure" => {
             let limit = collection_limit_mi_b.ok_or_else(|| HandsFreeError::new("invalid_request"))?;
             if !(10..=2048).contains(&limit) { return Err(HandsFreeError::new("invalid_request")); }

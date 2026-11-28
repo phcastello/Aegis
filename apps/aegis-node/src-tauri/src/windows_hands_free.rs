@@ -563,11 +563,12 @@ fn cycle(
         return Err("pairing_required");
     }
     let mut detector = windows_wakeword::Detector::open(&shared.dir)?;
+    let mut ring = PreRoll::new(shared.wake_queue.epoch());
     let mut mic = Input::open()?;
     let mut history = Background::default();
-    let mut ring = PreRoll::default();
     shared.publish("listening");
     let confidence = loop {
+        ring.before_read(shared.wake_queue.epoch(), || mic.pending());
         let samples = mic.read(cancel)?;
         history.push(&samples);
         ring.push(shared.wake_queue.epoch(), &samples);

@@ -7,11 +7,17 @@
   const allowed = new Set(Object.keys(names));
   const storageKey = `aegis-activation-labels-v1:${events.map(e=>e.id).join(':')}`;
   let labels = {}, labelTimes = {}, position = 0, selectedFiles = new Map();
+  let intentions = {}, intentionTimes = {};
+  const intentValues = new Set(['directed', 'not_directed', 'uncertain']);
+  try {
+    intentions = JSON.parse(localStorage.getItem(storageKey + ':intent') || '{}');
+    intentionTimes = JSON.parse(localStorage.getItem(storageKey + ':intent-times') || '{}');
+  } catch { /* Local review still works without browser storage. */ }
   function notice(text){ $('notice').textContent=text; }
   try { labels=JSON.parse(localStorage.getItem(storageKey)||'{}');labelTimes=JSON.parse(localStorage.getItem(storageKey+':times')||'{}'); } catch { notice('Este navegador não mantém rótulos locais. Exporte o dataset antes de fechar.'); }
   function current(){return events[position];}
   function render(){
-    const e=current(), count=events.filter(x=>allowed.has(labels[x.id])).length;
+    const e=current(), count=events.filter(x=>allowed.has(labels[x.id]) || intentValues.has(intentions[x.id])).length;
     $('progress').textContent=`${count} / ${events.length} classificadas`;
     $('previous').disabled=!position; $('next').disabled=position>=events.length-1;
     $('export').disabled=!count;
@@ -20,6 +26,8 @@
     $('identity').textContent=`Modelo: ${e.modelVersion??'desconhecido'} · score instantâneo: ${e.instantaneousScore??e.score??'desconhecido'} · decisão: ${e.decisionScore??'desconhecido'}`;
     $('technical').textContent=`${e.finalState??'desconhecido'} · ${e.endReason??'motivo desconhecido'} · STT: ${e.transcriptionStatus??'desconhecido'}${e.snapshotInProgress?' · snapshot durante sessão ativa':''}`;
     $('event-id').textContent=`ID: ${e.id}`; $('position').textContent=`${position+1} / ${events.length}`;
+    if (e.disposition) $('technical').textContent = `Detector/eleição: ${e.disposition} · comando: ${e.commandDisposition || 'unknown'}`;
+    document.querySelectorAll('[data-intent]').forEach(button => button.setAttribute('aria-pressed', String(!!button.dataset.intent && button.dataset.intent === intentions[e.id])));
     for(const [id,key] of [['context','triggerContext'],['post','postActivation']]) {const a=$(id);a.pause();if(e[key]?.path)a.src=e[key].path;else a.removeAttribute('src');a.load();}
     $('label').textContent=names[labels[e.id]]||'Não classificada';
     document.querySelectorAll('[data-label]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.label===labels[e.id])));
@@ -27,6 +35,18 @@
   function label(value){if(!current())return;if(value){labels[current().id]=value;labelTimes[current().id]=new Date().toISOString();}else{delete labels[current().id];delete labelTimes[current().id];}try{localStorage.setItem(storageKey,JSON.stringify(labels));localStorage.setItem(storageKey+':times',JSON.stringify(labelTimes));}catch{notice('Rótulos apenas em memória. Exporte antes de fechar.');}render();}
   function move(delta){position=Math.max(0,Math.min(events.length-1,position+delta));render();}
   document.querySelectorAll('[data-label]').forEach(b=>b.addEventListener('click',()=>label(b.dataset.label)));
+  document.querySelectorAll('[data-intent]').forEach(button => button.addEventListener('click', () => {
+    const e = current();
+    if (!e) return;
+    const value = button.dataset.intent;
+    if (intentValues.has(value)) { intentions[e.id] = value; intentionTimes[e.id] = new Date().toISOString(); }
+    else { delete intentions[e.id]; delete intentionTimes[e.id]; }
+    try {
+      localStorage.setItem(storageKey + ':intent', JSON.stringify(intentions));
+      localStorage.setItem(storageKey + ':intent-times', JSON.stringify(intentionTimes));
+    } catch { notice('Rótulos apenas em memória. Exporte antes de fechar.'); }
+    render();
+  }));
   $('clear').addEventListener('click',()=>label(null));$('previous').addEventListener('click',()=>move(-1));$('next').addEventListener('click',()=>move(1));
   document.addEventListener('keydown',event=>{if(/INPUT|SELECT|TEXTAREA/.test(event.target.tagName))return;const actions={ArrowLeft:()=>move(-1),ArrowRight:()=>move(1),'1':()=>label('correct'),'2':()=>label('false_positive'),'3':()=>label('uncertain'),'0':()=>label(null)};if(actions[event.key]){event.preventDefault();actions[event.key]();}});
   $('files').addEventListener('change',event=>{selectedFiles=new Map();for(const file of event.target.files){const path=file.webkitRelativePath;const withoutRoot=path.slice(path.indexOf('/')+1);selectedFiles.set(withoutRoot,file);}notice(`${selectedFiles.size} arquivos locais selecionados.`);});
@@ -37,15 +57,18 @@
   function dated(date){const pad=n=>String(n).padStart(2,'0'),offset=-date.getTimezoneOffset(),sign=offset>=0?'+':'-';return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}${sign}${pad(Math.floor(Math.abs(offset)/60))}${pad(Math.abs(offset)%60)}`;}
   async function buildDataset(){
     const rows=[],entries=[],generatedAt=new Date().toISOString(),seen=new Set();
-    for(const event of events){const humanLabel=labels[event.id];if(!allowed.has(humanLabel))continue;
+    for(const event of events){
+      const humanLabel = allowed.has(labels[event.id]) ? labels[event.id] : null;
+      const commandLabel = intentValues.has(intentions[event.id]) ? intentions[event.id] : null;
+      if (!humanLabel && !commandLabel) continue;
       const groupId=event.groupId??event.correlation?.sessionId??event.sessionId??event.id;
-      const row={...event,humanLabel,labeledBy:'owner',labeledAt:labelTimes[event.id]??null,datasetGeneratedAt:generatedAt,provenance:{source:'Aegis Android local activation collection',sourceExportedAt:event.exportedAt??null,originalEventId:event.id},groupId,groupUnknown:!(event.groupId??event.correlation?.sessionId??event.sessionId),split:null};
+      const row={...event,humanLabel,commandLabel,commandLabeledAt:intentionTimes[event.id]??null,labeledBy:'owner',labeledAt:labelTimes[event.id]??null,datasetGeneratedAt:generatedAt,provenance:{source:event.source??'Aegis Android local activation collection',sourceExportedAt:event.exportedAt??null,originalEventId:event.originalEventId??event.id},groupId,groupUnknown:!(event.groupId??event.correlation?.sessionId??event.sessionId),split:null};
       for(const key of ['triggerContext','postActivation']){const audio=event[key];if(!audio?.path)continue;const file=selectedFiles.get(audio.path);if(!file)throw new Error(`Selecione a pasta extraída contendo ${audio.path}.`);if(!seen.has(audio.path)){const bytes=new Uint8Array(await file.arrayBuffer());if(crypto.subtle&&audio.sha256){const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');if(digest!==audio.sha256)throw new Error(`Hash diferente para ${audio.path}.`);}entries.push({name:audio.path,bytes});seen.add(audio.path);}}
       rows.push(row);
     }
     if(!rows.length)throw new Error('Classifique uma ocorrência antes de exportar.');
     entries.push({name:'dataset.jsonl',bytes:encoder.encode(rows.map(r=>JSON.stringify(r)).join('\n')+'\n')});
-    const columns=['id','humanLabel','labeledAt','activatedAt','endedAt','groupId','groupUnknown','modelVersion','modelSha256','appVersion','build','triggerContextPath','triggerContextSha256','postActivationPath','postActivationSha256','sourceExportedAt','datasetGeneratedAt'];
+    const columns=['id','humanLabel','commandLabel','labeledAt','commandLabeledAt','activatedAt','endedAt','groupId','groupUnknown','modelVersion','modelSha256','appVersion','build','disposition','commandDisposition','triggerContextPath','triggerContextSha256','postActivationPath','postActivationSha256','sourceExportedAt','datasetGeneratedAt'];
     const csv=rows.map(r=>({...r,triggerContextPath:r.triggerContext?.path,triggerContextSha256:r.triggerContext?.sha256,postActivationPath:r.postActivation?.path,postActivationSha256:r.postActivation?.sha256,sourceExportedAt:r.exportedAt}));
     entries.push({name:'dataset.csv',bytes:encoder.encode(columns.join(',')+'\n'+csv.map(r=>columns.map(k=>csvCell(r[k])).join(',')).join('\n')+'\n')});
     entries.push({name:'README.txt',bytes:encoder.encode('Aegis dataset schema 1. Human labels only; uncertain is not a negative. No training performed. Keep all rows sharing groupId in the same future train/validation/test split. split=null means no assignment. Dataset JSONL preserves the complete source event and hashes. WAV paths remain relative. Private local recordings.\n')});

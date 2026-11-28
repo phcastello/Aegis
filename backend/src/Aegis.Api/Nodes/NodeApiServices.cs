@@ -14,6 +14,7 @@ public static class NodeApiServices
         services.AddAuthorization(options => options.AddPolicy("NodeManagement", policy =>
             policy.AddAuthenticationSchemes(NodeAuthenticationHandler.SchemeName).RequireAuthenticatedUser()));
         services.AddScoped<NodeApiFilter>();
+        services.AddSingleton<WakeDatasetStore>();
         services.AddSingleton<VoiceActivationArbiter>();
         services.AddHostedService<VoiceActivationArbiter>(p => p.GetRequiredService<VoiceActivationArbiter>());
         services.AddDataProtection();
@@ -60,6 +61,9 @@ public static class NodeApiServices
             options.AddPolicy("node-codes", context => RateLimitPartition.GetFixedWindowLimiter(
                 context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions {
                     PermitLimit = 3, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+            options.AddPolicy("node-wake-dataset", context => RateLimitPartition.GetFixedWindowLimiter(
+                context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unauthenticated", _ => new FixedWindowRateLimiterOptions {
+                    PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
             // A shared budget for anonymous establishment also prevents bypass by rotating IPs.
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 context.Request.Path.StartsWithSegments("/api/nodes/pair")

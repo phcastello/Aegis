@@ -30,15 +30,29 @@ const QUEUE_BYTES: usize = 100 * 1024 * 1024;
 #[derive(Default)]
 pub struct PreRoll {
     epoch: u64,
+    discard: usize,
     samples: VecDeque<i16>,
 }
 impl PreRoll {
-    pub fn push(&mut self, epoch: u64, block: &[i16]) {
+    pub fn new(epoch: u64) -> Self {
+        Self {
+            epoch,
+            ..Self::default()
+        }
+    }
+    pub fn before_read(&mut self, epoch: u64, pending: impl FnOnce() -> usize) {
         if self.epoch != epoch {
             self.samples.clear();
             self.epoch = epoch;
+            // Completed driver buffers and the one currently being filled can
+            // contain audio from before this consent generation.
+            self.discard = if epoch % 2 == 1 { pending() + 1 } else { 0 };
         }
-        if epoch % 2 == 1 {
+    }
+    pub fn push(&mut self, epoch: u64, block: &[i16]) {
+        if self.discard > 0 {
+            self.discard -= 1;
+        } else if self.epoch == epoch && epoch % 2 == 1 {
             self.samples.extend(block);
             self.samples
                 .drain(..self.samples.len().saturating_sub(2 * RATE));
@@ -337,6 +351,10 @@ mod tests {
         let id = Uuid::new_v4();
         assert!(queue.capture(id, [5; 32], &mut ring, 0.7, false).is_none());
         queue.configure(Some([5; 32])).unwrap();
+        ring.before_read(queue.epoch(), || 1);
+        ring.push(queue.epoch(), &[1; 320]);
+        ring.push(queue.epoch(), &[1; 320]);
+        assert!(ring.samples.is_empty());
         ring.push(queue.epoch(), &[2; 320]);
         assert_eq!(ring.samples.len(), 320);
         let clip = queue.capture(id, [5; 32], &mut ring, 0.7, false).unwrap();

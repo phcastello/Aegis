@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, cp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, cp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
@@ -25,15 +25,17 @@ try {
   await page.goto(pathToFileURL(join(directory,'index.html')).href);
   assert.equal(await page.locator('#label').innerText(),'Não classificada');assert.equal(await page.locator('#progress').innerText(),'0 / 2 classificadas');assert.equal(await page.locator('#export').isDisabled(),true);
   await page.keyboard.press('1');
+  await page.locator('[data-intent="not_directed"]').click();
   await page.locator('#context').evaluate(audio => audio.play());await page.locator('#post').evaluate(audio => audio.play());
   assert.equal(await page.locator('#context').evaluate(audio => audio.duration > 0),true);
   await page.keyboard.press('ArrowRight');await page.keyboard.press('3');
   assert.equal(await page.locator('#label').innerText(),'Incerta');assert.equal(await page.locator('#progress').innerText(),'2 / 2 classificadas');
   await page.reload();assert.equal(await page.locator('#label').innerText(),'Correta');
+  assert.equal(await page.locator('[data-intent="not_directed"]').getAttribute('aria-pressed'), 'true');
   await page.locator('#files').setInputFiles(directory);
   const downloadPromise=page.waitForEvent('download');await page.locator('#export').click();const download=await downloadPromise;assert.match(download.suggestedFilename(),/^aegis-dataset-\d{4}-\d\d-\d\d_.*\.zip$/);
   const zipPath=join(directory,'dataset.zip');await download.saveAs(zipPath);
-  const report=JSON.parse(execFileSync('python3',['-c',`import json,zipfile,sys,hashlib
+  const report=JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3',['-c',`import json,zipfile,sys,hashlib
 with zipfile.ZipFile(sys.argv[1]) as z:
  assert z.testzip() is None
  rows=[json.loads(x) for x in z.read('dataset.jsonl').decode().splitlines()]
@@ -45,6 +47,27 @@ with zipfile.ZipFile(sys.argv[1]) as z:
   await page.keyboard.press('0');assert.equal(await page.locator('#label').innerText(),'Não classificada');
   assert.equal(await page.evaluate(() => {try {window.AegisReviewer.zip(new Array(65536).fill({name:'a',bytes:new Uint8Array()}));return false;}catch(error){return error.message.includes('65.535');}}),true);
   assert.equal(report.rows.every(row=>typeof row.labeledAt==='string'),true);
+  assert.deepEqual(report.rows.map(row => row.commandLabel), ['not_directed', null]);
+  const node = '1d9ef396-f410-42d9-905e-d366ab6cd989', event = '808586f7-98ec-4ae2-8c9d-de16d3511f52';
+  const volume = join(directory, 'volume'), exported = join(directory, 'central.zip'), review = join(directory, 'central');
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  await mkdir(join(volume, node), { recursive: true });
+  await writeFile(join(volume, node, event + '.json'), JSON.stringify({
+    schemaVersion: 1, activatedAt: events[0].activatedAt, groupId: event, origin: 'wake_word',
+    disposition: 'election_lost', commandDisposition: 'unknown', wav: wav.toString('base64'), sha256: hash
+  }));
+  execFileSync(python, [fileURLToPath(new URL('../../../scripts/hands-free/export-central-dataset.py', import.meta.url)), volume, exported]);
+  execFileSync(python, ['-m', 'zipfile', '-e', exported, review]);
+  await page.goto(pathToFileURL(join(review, 'index.html')).href);
+  assert.match(await page.locator('#technical').innerText(), /election_lost/);
+  assert.equal(await page.locator('#export').isDisabled(), true);
+  await page.locator('[data-intent="directed"]').click();
+  await page.locator('#files').setInputFiles(review);
+  const [centralRow] = await page.evaluate(async () => (await window.AegisReviewer.buildDataset()).rows);
+  assert.equal(centralRow.humanLabel, null);
+  assert.equal(centralRow.commandLabel, 'directed');
+  assert.equal(centralRow.triggerContext.sha256, hash);
+  assert.equal(centralRow.provenance.originalEventId, event);
   assert.deepEqual(errors,[]);assert.deepEqual(network,[]);
   console.log('Offline file:// reviewer: labels, keyboard, persistence, SHA-256, WAV selection, dated dataset ZIP and group provenance passed. No network requests. Synthetic browser fixture, not device validation.');
 } finally {await browser?.close();await rm(directory,{recursive:true,force:true});}

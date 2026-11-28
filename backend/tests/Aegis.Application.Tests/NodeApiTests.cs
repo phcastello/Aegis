@@ -17,9 +17,10 @@ using Xunit;
 namespace Aegis.Application.Tests;
 public sealed class NodeApiTests
 {
-    private static async Task<(WebApplication App, HttpClient Client, NodeRegistry Registry)> Host()
+    internal static async Task<(WebApplication App, HttpClient Client, NodeRegistry Registry)> Host(string? wakeDatasetDirectory = null)
     {
         var name = Guid.NewGuid().ToString(); var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
+        if (wakeDatasetDirectory is not null) builder.Configuration["WakeDataset:Directory"] = wakeDatasetDirectory;
         builder.Services.AddControllers().AddApplicationPart(typeof(NodesController).Assembly);
         builder.Services.AddNodeApi(); builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
@@ -29,7 +30,7 @@ public sealed class NodeApiTests
         var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>().UseInMemoryDatabase(name).Options);
         return (app, app.GetTestClient(), new(db, TimeProvider.System));
     }
-    private static async Task<(NodeView Node, string Secret)> Pair(NodeRegistry registry)
+    internal static async Task<(NodeView Node, string Secret)> Pair(NodeRegistry registry)
     {
         var request = NodeIdentityTests.Request((await registry.CreateCodeAsync(null)).Code);
         var receipt = await registry.PairAsync(request); return (await registry.FinalizeAsync(new(request.AttemptId, receipt.Credential)), receipt.Credential);

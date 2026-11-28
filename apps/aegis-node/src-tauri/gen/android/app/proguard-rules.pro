@@ -29,6 +29,7 @@
 }
 # Android components instantiated by framework / WorkManager names persisted across process death.
 -keepnames class com.aegis.node.NodeSyncWorker
+-keepnames class com.aegis.node.NodeWakeDatasetWorker
 -keepnames class com.aegis.node.NodeLocationWorker
 -keepnames class com.aegis.node.NodeGeoConfirmWorker
 -keepnames class com.aegis.node.NodeGeofenceRestoreWorker
