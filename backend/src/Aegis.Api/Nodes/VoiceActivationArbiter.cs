@@ -5,7 +5,7 @@ namespace Aegis.Api.Nodes;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record VoiceActivationClaim(Guid ActivationId, double? SnrDb = null, double? Confidence = null);
-public sealed record VoiceActivationDecision(Guid ActivationId, string Decision);
+public sealed record VoiceActivationDecision(Guid ActivationId, string Decision, Guid? EpisodeId = null);
 
 // One private owner and one API process. Ownership covers an acoustic activation,
 // independently of the eventual chat/turn ID. No timer or participant inventory:
@@ -17,10 +17,11 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromMinutes(2);
     private const int ReceiptCapacity = 4096;
 
-    private sealed record Receipt(long Received, bool Granted);
+    private sealed record Receipt(long Received, bool Granted, Guid? EpisodeId);
+    private readonly record struct SuppressionWindow(long Started, Guid? EpisodeId);
     private readonly object gate = new();
     private readonly Dictionary<(Guid Node, Guid Activation), Receipt> receipts = new();
-    private long? suppressSince;
+    private SuppressionWindow? suppression;
     private bool stopped;
 
     // A replacement process has no receipts from its predecessor. Quarantine
@@ -30,7 +31,7 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
         lock (gate)
         {
             receipts.Clear();
-            suppressSince = clock.GetTimestamp();
+            suppression = new(clock.GetTimestamp(), null);
             stopped = false;
         }
         return Task.CompletedTask;
@@ -60,21 +61,23 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
             var now = clock.GetTimestamp();
             Advance(now);
             var key = (node, claim.ActivationId);
-            if (stopped) return new(claim.ActivationId, "suppressed");
             if (receipts.TryGetValue(key, out var cached))
             {
                 // Never revive an earlier grant after its request lifetime, even
                 // during a later winning activation (receipts outlive suppression).
-                var validGrant = cached.Granted && clock.GetElapsedTime(cached.Received, now) < CatchUpWindow;
-                return new(claim.ActivationId, validGrant ? "granted" : "suppressed");
+                var validGrant = !stopped && cached.Granted && clock.GetElapsedTime(cached.Received, now) < CatchUpWindow;
+                return new(claim.ActivationId, validGrant ? "granted" : "suppressed", cached.EpisodeId);
             }
+            if (stopped) return new(claim.ActivationId, "suppressed");
 
-            var granted = !suppressSince.HasValue;
-            Remember(key, new(now, granted));
-            if (granted) suppressSince = now;
+            var granted = suppression is null;
+            // The startup quarantine also suppresses, but has no winning episode.
+            var episodeId = granted ? Guid.NewGuid() : suppression?.EpisodeId;
+            Remember(key, new(now, granted, episodeId));
+            if (granted) suppression = new(now, episodeId);
             // If the client disconnects after commitment, it remains the sole
             // winner. A lost response cannot transfer ownership to a late node.
-            return new(claim.ActivationId, granted ? "granted" : "suppressed");
+            return new(claim.ActivationId, granted ? "granted" : "suppressed", episodeId);
         }
     }
 
@@ -90,7 +93,7 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
             // Cancellation can overtake the POST. Preserve a rejected receipt in
             // that case. Cancellation after commitment never revokes a grant or
             // shortens catch-up suppression; otherwise two clients could emit cues.
-            if (!receipts.ContainsKey(key)) Remember(key, new(now, false));
+            if (!receipts.ContainsKey(key)) Remember(key, new(now, false, null));
         }
     }
 
@@ -103,8 +106,8 @@ public sealed class VoiceActivationArbiter(TimeProvider clock) : IHostedService
 
     private void Advance(long now)
     {
-        if (suppressSince is { } start && clock.GetElapsedTime(start, now) >= CatchUpWindow)
-            suppressSince = null;
+        if (suppression is { } window && clock.GetElapsedTime(window.Started, now) >= CatchUpWindow)
+            suppression = null;
         foreach (var entry in receipts)
             if (clock.GetElapsedTime(entry.Value.Received, now) >= ReceiptRetention)
                 receipts.Remove(entry.Key);

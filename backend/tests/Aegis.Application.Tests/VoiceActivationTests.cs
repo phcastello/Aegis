@@ -1,5 +1,6 @@
 using Aegis.Api.Nodes;
 using Aegis.Application.Nodes;
+using System.Text.Json;
 using Xunit;
 
 namespace Aegis.Application.Tests;
@@ -31,8 +32,12 @@ public sealed class VoiceActivationTests
         // No clock advancement or timer is required to grant the first candidate.
         var first = Claim(arbiter, Phone, snr: 5, confidence: .4, detectionAgeMs: 300);
         Assert.Equal("granted", first.Decision);
+        Assert.NotNull(first.EpisodeId);
+        Assert.NotEqual(Guid.Empty, first.EpisodeId.Value);
+        Assert.NotEqual(first.ActivationId, first.EpisodeId.Value);
         var later = Claim(arbiter, Desktop, snr: 40, confidence: 1, detectionAgeMs: 0);
         Assert.Equal("suppressed", later.Decision);
+        Assert.Equal(first.EpisodeId, later.EpisodeId);
         Assert.Equal(0, clock.GetTimestamp());
     }
 
@@ -49,10 +54,12 @@ public sealed class VoiceActivationTests
         launch.SetResult();
         var decisions = await Task.WhenAll(requests);
         var winner = Assert.Single(decisions, item => item.decision.Decision == "granted");
+        Assert.NotNull(winner.decision.EpisodeId);
         Assert.Equal(winner.decision, Claim(arbiter, winner.node, winner.decision.ActivationId));
         foreach (var loser in decisions.Where(item => item.node != winner.node))
         {
             Assert.Equal("suppressed", loser.decision.Decision);
+            Assert.Equal(winner.decision.EpisodeId, loser.decision.EpisodeId);
             Assert.Equal(loser.decision, Claim(arbiter, loser.node, loser.decision.ActivationId));
         }
     }
@@ -68,14 +75,20 @@ public sealed class VoiceActivationTests
         Assert.Equal(first, Claim(arbiter, Phone, sameId, snr: 40));
         var loser = Claim(arbiter, Desktop, sameId);
         Assert.Equal("suppressed", loser.Decision);
+        Assert.Equal(first.EpisodeId, loser.EpisodeId);
         Assert.Equal(loser, Claim(arbiter, Desktop, sameId));
         Assert.Equal("suppressed", Claim(arbiter, Phone).Decision);
         clock.Advance(VoiceActivationArbiter.CatchUpWindow);
-        Assert.Equal("suppressed", Claim(arbiter, Phone, sameId).Decision);
+        var expired = Claim(arbiter, Phone, sameId);
+        Assert.Equal("suppressed", expired.Decision);
+        Assert.Equal(first.EpisodeId, expired.EpisodeId);
         Assert.Equal("suppressed", Claim(arbiter, Desktop, sameId).Decision);
         var next = Claim(arbiter, Desktop);
         Assert.Equal("granted", next.Decision);
-        Assert.Equal("suppressed", Claim(arbiter, Phone, sameId).Decision);
+        Assert.NotNull(next.EpisodeId);
+        Assert.NotEqual(first.EpisodeId, next.EpisodeId);
+        Assert.Equal(expired, Claim(arbiter, Phone, sameId));
+        Assert.Equal(loser, Claim(arbiter, Desktop, sameId));
         Assert.Equal(next, Claim(arbiter, Desktop, next.ActivationId));
     }
 
@@ -100,13 +113,18 @@ public sealed class VoiceActivationTests
         var arbiter = new VoiceActivationArbiter(clock);
         var id = Guid.NewGuid();
         arbiter.Abandon(Desktop, id);
-        Assert.Equal("suppressed", Claim(arbiter, Desktop, id).Decision);
+        var unwitnessed = Claim(arbiter, Desktop, id);
+        Assert.Equal("suppressed", unwitnessed.Decision);
+        Assert.Null(unwitnessed.EpisodeId);
         // Another node's same local ID is independent.
         var winner = Claim(arbiter, Phone, id);
         Assert.Equal("granted", winner.Decision);
         arbiter.Abandon(Phone, id);
         Assert.Equal(winner, Claim(arbiter, Phone, id));
-        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        Assert.Equal(unwitnessed, Claim(arbiter, Desktop, id));
+        var caughtUp = Claim(arbiter, Desktop);
+        Assert.Equal("suppressed", caughtUp.Decision);
+        Assert.Equal(winner.EpisodeId, caughtUp.EpisodeId);
         clock.Advance(VoiceActivationArbiter.CatchUpWindow);
         Assert.Equal("suppressed", Claim(arbiter, Phone, id).Decision);
         Assert.Equal("suppressed", Claim(arbiter, Desktop, id).Decision);
@@ -133,18 +151,45 @@ public sealed class VoiceActivationTests
         await arbiter.StartAsync(default);
         var stale = Claim(arbiter, Desktop);
         Assert.Equal("suppressed", stale.Decision);
+        Assert.Null(stale.EpisodeId);
         clock.Advance(VoiceActivationArbiter.CatchUpWindow);
         Assert.Equal(stale, Claim(arbiter, Desktop, stale.ActivationId));
         var winner = Claim(arbiter, Phone);
         Assert.Equal("granted", winner.Decision);
         await arbiter.StopAsync(default);
-        Assert.Equal("suppressed", Claim(arbiter, Phone, winner.ActivationId).Decision);
+        var stopped = Claim(arbiter, Phone, winner.ActivationId);
+        Assert.Equal("suppressed", stopped.Decision);
+        Assert.Equal(winner.EpisodeId, stopped.EpisodeId);
         clock.Advance(VoiceActivationArbiter.CatchUpWindow);
-        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        var freshDuringShutdown = Claim(arbiter, Desktop);
+        Assert.Equal("suppressed", freshDuringShutdown.Decision);
+        Assert.Null(freshDuringShutdown.EpisodeId);
         await arbiter.StartAsync(default);
-        Assert.Equal("suppressed", Claim(arbiter, Desktop).Decision);
+        var quarantined = Claim(arbiter, Phone, winner.ActivationId);
+        Assert.Equal("suppressed", quarantined.Decision);
+        Assert.Null(quarantined.EpisodeId);
         clock.Advance(VoiceActivationArbiter.CatchUpWindow);
-        Assert.Equal("granted", Claim(arbiter, Desktop).Decision);
+        var restarted = Claim(arbiter, Desktop);
+        Assert.Equal("granted", restarted.Decision);
+        Assert.NotEqual(winner.EpisodeId, restarted.EpisodeId);
+        Assert.Equal(quarantined, Claim(arbiter, Phone, winner.ActivationId));
+    }
+
+    private sealed record LegacyDecision(Guid ActivationId, string Decision);
+
+    [Fact]
+    public void EpisodeIdIsAnAdditiveNullableWebJsonField()
+    {
+        var arbiter = new VoiceActivationArbiter(new Clock());
+        var decision = Claim(arbiter, Phone);
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var granted = JsonSerializer.SerializeToElement(decision, json);
+        Assert.Equal(decision.EpisodeId!.Value, granted.GetProperty("episodeId").GetGuid());
+        Assert.Equal(new LegacyDecision(decision.ActivationId, decision.Decision), granted.Deserialize<LegacyDecision>(json));
+        var id = Guid.NewGuid();
+        arbiter.Abandon(Desktop, id);
+        var unlinked = JsonSerializer.SerializeToElement(Claim(arbiter, Desktop, id), json);
+        Assert.Equal(JsonValueKind.Null, unlinked.GetProperty("episodeId").ValueKind);
     }
 
     [Theory]

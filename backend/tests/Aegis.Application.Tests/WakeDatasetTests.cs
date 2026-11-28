@@ -16,16 +16,60 @@ public sealed class WakeDatasetTests : IDisposable
     private WakeDatasetStore Store(long quota = 2000000) => new(new ConfigurationBuilder().AddInMemoryCollection(
         new Dictionary<string, string?> { ["WakeDataset:Directory"] = directory, ["WakeDataset:MaximumBytes"] = quota.ToString() }).Build());
 
-    private static WakeSample Sample()
+    private static WakeSample Sample(short reading = 42)
     {
         using var buffer = new MemoryStream();
         using var writer = new BinaryWriter(buffer);
         writer.Write("RIFF"u8); writer.Write(38); writer.Write("WAVEfmt "u8);
         writer.Write(16); writer.Write((short)1); writer.Write((short)1); writer.Write(16000); writer.Write(32000);
-        writer.Write((short)2); writer.Write((short)16); writer.Write("data"u8); writer.Write(2); writer.Write((short)42);
+        writer.Write((short)2); writer.Write((short)16); writer.Write("data"u8); writer.Write(2); writer.Write(reading);
         var wav = buffer.ToArray();
         return new(1, DateTimeOffset.UtcNow, Guid.NewGuid(), "wake_word", "unstable", 20, "model", null,
             null, 0.7, null, Convert.ToHexString(SHA256.HashData(wav)), wav, "election_lost", null, null, "unknown");
+    }
+
+    private sealed class FixedClock : TimeProvider
+    {
+        public override long GetTimestamp() => 0;
+    }
+
+    [Fact]
+    public async Task NodesInOneElectionKeepIndependentAudioAndLabelsUnderTheSameGroup()
+    {
+        var otherNode = Guid.NewGuid();
+        var otherId = Guid.NewGuid();
+        var arbiter = new VoiceActivationArbiter(new FixedClock());
+        var granted = arbiter.Claim(node, new(id), default);
+        var suppressed = arbiter.Claim(otherNode, new(otherId), default);
+        Assert.Equal("granted", granted.Decision);
+        Assert.Equal("suppressed", suppressed.Decision);
+        Assert.NotNull(granted.EpisodeId);
+        Assert.Equal(granted.EpisodeId, suppressed.EpisodeId);
+
+        var winner = Sample() with { GroupId = granted.EpisodeId.Value, Disposition = "activated" };
+        var loser = Sample(73) with { GroupId = suppressed.EpisodeId!.Value };
+        var store = Store();
+        await Task.WhenAll(store.SaveAsync(node, id, winner, default),
+            store.SaveAsync(otherNode, otherId, loser, default));
+        await store.LabelAsync(node, id, new("correct", "directed"), default);
+        await store.LabelAsync(otherNode, otherId, new("uncertain", "not_directed"), default);
+
+        var reopened = Store();
+        await reopened.SaveAsync(node, id, winner, default);
+        await reopened.SaveAsync(otherNode, otherId, loser, default);
+        var rows = (await reopened.ReviewAsync(null, null, 0, default)).Samples;
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal(granted.EpisodeId.Value, row.GroupId));
+        var winningEntry = Assert.Single(rows, row => row.NodeId == node && row.EventId == id);
+        var losingEntry = Assert.Single(rows, row => row.NodeId == otherNode && row.EventId == otherId);
+        Assert.Equal(("correct", "directed"), (winningEntry.HumanLabel, winningEntry.CommandLabel));
+        Assert.Equal(("uncertain", "not_directed"), (losingEntry.HumanLabel, losingEntry.CommandLabel));
+        var winningAudio = await reopened.AudioAsync(node, id, false, default);
+        var losingAudio = await reopened.AudioAsync(otherNode, otherId, false, default);
+        Assert.Equal(winner.Wav, winningAudio);
+        Assert.Equal(loser.Wav, losingAudio);
+        Assert.Equal(winner.Sha256, Convert.ToHexString(SHA256.HashData(winningAudio)));
+        Assert.Equal(loser.Sha256, Convert.ToHexString(SHA256.HashData(losingAudio)));
     }
 
     [Fact]
