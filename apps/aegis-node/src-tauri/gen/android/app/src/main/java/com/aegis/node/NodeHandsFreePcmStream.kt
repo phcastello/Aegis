@@ -66,6 +66,8 @@ internal interface HandsFreePcmDevice : AutoCloseable {
     fun playedFrames(): Long
     fun timestamp(): HandsFreeAudioTimestamp? = null
     fun discontinuity(): Long = 0
+    /** Allow an EOF tail shorter than the device's streaming start threshold. */
+    fun allowShortDrain() = Unit
     fun endMarker(frame: Int, reached: () -> Unit)
     fun play()
     fun pause() = Unit
@@ -203,6 +205,10 @@ internal class HandsFreeStreamingPcmSink(
         check(finished.compareAndSet(false, true)); checkCurrent()
         val target = device ?: error("empty_audio_playback")
         check(writtenFrames in 1..maximumFrames)
+        synchronized(playbackLock) {
+            awaitPlayback()
+            if (target.playedFrames() < writtenFrames) target.allowShortDrain()
+        }
         if (target.playedFrames() < writtenFrames) {
             target.endMarker(writtenFrames.toInt()) { completion.countDown() }
             val remaining = (writtenFrames - target.playedFrames()).coerceAtLeast(0)

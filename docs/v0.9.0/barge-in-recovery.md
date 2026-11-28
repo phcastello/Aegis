@@ -73,6 +73,27 @@ Os clientes precisam suportar os três resultados do candidato: descartar e reto
 
 Registrar duração da pausa, resultado de STT (vazio, texto, erro), disposição (retomada, encerramento, substituição), segmento e quantidade de frames efetivamente ouvidos e motivo de cancelamento. Vincular os registros ao turno/sessão, limitar retenção e evitar texto bruto ou áudio duplicados em logs de diagnóstico. A coleta experimental de wake word segue sua configuração própria.
 
+## Continuidade do áudio quando os blocos chegam em rajadas
+
+Cada trecho PCM recebido no hands-free Android acorda o leitor imediatamente.
+O pipe de Java pode esperar até um segundo sem essa notificação quando a leitura
+já está bloqueada. [Implementação do pipe no Android](https://android.googlesource.com/platform/libcore/+/refs/heads/main/ojluni/src/main/java/java/io/PipedOutputStream.java)
+
+Os players de fala acumulam 160 ms de PCM no início e após esvaziar a fila.
+No Android 12 ou mais recente, o `AudioTrack` aplica esse limiar na leitura
+manual e no hands-free. No Windows, o hands-free prepara a fila antes de enviar
+PCM ao WinMM, que inicia assim que recebe o primeiro bloco. A leitura manual
+no Windows usa a fila do `AudioWorklet`. O fim do stream libera imediatamente
+o áudio que restar abaixo do limiar, inclusive em falas curtas. A reprodução
+mantém a frequência e o cursor originais e descarta confirmações do worklet de
+uma fala anterior. No Android 11 e anteriores, permanece o limiar legado.
+[Android AudioTrack](https://developer.android.com/reference/android/media/AudioTrack#play())
+· [Microsoft waveOutWrite](https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-waveoutwrite)
+· [Chrome AudioWorklet](https://developer.chrome.com/blog/audio-worklet-design-pattern/)
+
+Essa reserva absorve irregularidades curtas. Se o fluxo entregar continuamente
+menos PCM do que o alto-falante consome, a fila vai esvaziar de novo.
+
 ## Matriz mínima de aceitação
 
 Os casos de propriedade e efeitos devem passar em testes determinísticos nas duas plataformas e backend. A acústica real requer bancada Android e Windows com o TTS instalado.

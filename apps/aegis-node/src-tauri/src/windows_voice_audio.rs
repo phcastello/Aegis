@@ -24,6 +24,7 @@ use windows::{
 };
 
 const HEADER: u32 = size_of::<WAVEHDR>() as u32;
+const SPEECH_RESERVE_FRAMES: usize = SPEECH_RATE as usize * 160 / 1000;
 fn format(rate: u32) -> WAVEFORMATEX {
     WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_PCM as u16,
@@ -435,15 +436,22 @@ pub(crate) struct Output {
     handle: HWAVEOUT,
     event: Event,
     buffers: VecDeque<Buffer>,
+    speech_reserve: Option<Vec<i16>>,
     control: PlaybackControl,
     spectrum: Option<SpectrumObservation>,
     reference: Option<(RenderReference, u64)>,
 }
 impl Output {
     pub fn open() -> Result<Self, &'static str> {
-        Self::controlled(PlaybackControl::default())
+        Self::open_device(PlaybackControl::default(), None)
     }
     pub fn controlled(control: PlaybackControl) -> Result<Self, &'static str> {
+        Self::open_device(control, Some(Vec::with_capacity(SPEECH_RESERVE_FRAMES)))
+    }
+    fn open_device(
+        control: PlaybackControl,
+        speech_reserve: Option<Vec<i16>>,
+    ) -> Result<Self, &'static str> {
         let event = Event::new()?;
         let mut handle = HWAVEOUT::default();
         if unsafe {
@@ -463,6 +471,7 @@ impl Output {
             handle,
             event,
             buffers: VecDeque::new(),
+            speech_reserve,
             control,
             spectrum: None,
             reference: None,
@@ -524,6 +533,41 @@ impl Output {
         samples: &[i16],
         cancel: &CancellationToken,
     ) -> Result<(), &'static str> {
+        self.control.wait_running(cancel)?;
+        let mut offset = 0;
+        // Collect a fresh reserve after the last hardware buffer runs out.
+        // Output::open keeps the short activation cue on the immediate path.
+        if self.buffers.back().is_none_or(Buffer::done) {
+            if let Some(reserve) = &mut self.speech_reserve {
+                offset = (SPEECH_RESERVE_FRAMES - reserve.len()).min(samples.len());
+                reserve.extend_from_slice(&samples[..offset]);
+                if reserve.len() < SPEECH_RESERVE_FRAMES {
+                    return Ok(());
+                }
+                self.submit_reserve(cancel)?;
+            }
+        }
+        self.write_device(&samples[offset..], cancel)
+    }
+    fn submit_reserve(&mut self, cancel: &CancellationToken) -> Result<(), &'static str> {
+        let Some(pending) = self
+            .speech_reserve
+            .as_mut()
+            .filter(|samples| !samples.is_empty())
+        else {
+            return Ok(());
+        };
+        let mut pending = std::mem::take(pending);
+        let result = self.write_device(&pending, cancel);
+        pending.clear();
+        self.speech_reserve = Some(pending);
+        result
+    }
+    fn write_device(
+        &mut self,
+        samples: &[i16],
+        cancel: &CancellationToken,
+    ) -> Result<(), &'static str> {
         for chunk in samples.chunks(2400) {
             self.control.wait_running(cancel)?;
             while self.buffers.len() >= 4 {
@@ -563,6 +607,7 @@ impl Output {
         Ok(())
     }
     pub fn finish(&mut self, cancel: &CancellationToken) -> Result<(), &'static str> {
+        self.submit_reserve(cancel)?;
         while !self.buffers.is_empty() {
             self.reclaim(cancel)?;
         }
@@ -656,6 +701,27 @@ mod tests {
         playback.resume().unwrap();
         output.finish(&cancel).unwrap();
         assert_eq!(output.played_frames(), Some(2400 * 4));
+    }
+
+    #[test]
+    #[ignore = "requires a Windows PCM output device; plays digital silence"]
+    fn speech_reserves_frames_after_a_gap_and_plays_short_tail_at_eof() {
+        let cancel = CancellationToken::new();
+        let control = PlaybackControl::default();
+        let mut output = Output::controlled(control.clone()).unwrap();
+
+        output.write(&[0; 1920], &cancel).unwrap();
+        assert_eq!(control.state.0.lock().unwrap().submitted, 0);
+        output.write(&[0; 1920], &cancel).unwrap();
+        assert_eq!(control.state.0.lock().unwrap().submitted, 3840);
+        while !output.buffers.is_empty() {
+            output.reclaim(&cancel).unwrap();
+        }
+
+        output.write(&[0; 960], &cancel).unwrap();
+        assert_eq!(control.state.0.lock().unwrap().submitted, 3840);
+        output.finish(&cancel).unwrap();
+        assert_eq!(output.played_frames(), Some(4800));
     }
 
     // Explicit bench invocation only. Discard two 20 ms blocks in memory and

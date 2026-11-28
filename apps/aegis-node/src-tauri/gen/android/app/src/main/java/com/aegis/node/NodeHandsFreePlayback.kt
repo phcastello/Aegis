@@ -99,6 +99,8 @@ internal class HandsFreePlayback(
     }
 
     companion object {
+    private const val START_BUFFER_FRAMES = 24_000 * 160 / 1_000
+
     private fun openDevice(context: Context, nativeCapture: Boolean, borrowedFocus: Boolean,
                            onFocusLoss: () -> Unit): HandsFreePcmDevice {
         val manager = context.getSystemService(AudioManager::class.java)
@@ -133,9 +135,8 @@ internal class HandsFreePlayback(
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                 .setBufferSizeInBytes(maxOf(minimum, 24000)).setTransferMode(AudioTrack.MODE_STREAM).build()
             output = track; check(track.state == AudioTrack.STATE_INITIALIZED)
-            // Default streaming threshold is the entire capacity. Modern Android can start even
-            // a short reply immediately; older releases use the smallest accepted native buffer.
-            if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)
+            // Keep a reserve before onset and after an underrun while more PCM may arrive.
+            if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(START_BUFFER_FRAMES)
             else track.setBufferSizeInFrames(1)
             val routeChanges = AtomicLong()
             val routing = AudioRouting.OnRoutingChangedListener { routeChanges.incrementAndGet() }
@@ -149,6 +150,9 @@ internal class HandsFreePlayback(
                     HandsFreeAudioTimestamp(audioTimestamp.framePosition, audioTimestamp.nanoTime) else null
                 override fun discontinuity() =
                     (routeChanges.get() shl 32) or (track.underrunCount.toLong() and 0xffffffffL)
+                override fun allowShortDrain() {
+                    if (Build.VERSION.SDK_INT >= 31) track.setStartThresholdInFrames(1)
+                }
                 override fun endMarker(frame: Int, reached: () -> Unit) {
                     track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
                         override fun onMarkerReached(track: AudioTrack) { reached() }

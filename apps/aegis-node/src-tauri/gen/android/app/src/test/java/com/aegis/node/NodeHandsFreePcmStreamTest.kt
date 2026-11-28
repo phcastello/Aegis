@@ -173,6 +173,42 @@ class NodeHandsFreePcmStreamTest {
         }finally{sink.abort();sink.close();executor.shutdownNow()}
     }
 
+    @Test fun eofDrainsShortRepliesAndTailsWithoutPausingOrRecreatingTheTrack() {
+        val reserve = 3_840
+        val tailFrames = 960
+        for (alreadyPlayed in listOf(0, reserve)) {
+            val backing = Device(autoPlay = false)
+            val pcm = encode(ShortArray(alreadyPlayed + tailFrames) { (it % 100).toShort() })
+            var starts = 0
+            var drainRequests = 0
+            val track = object : HandsFreePcmDevice by backing {
+                override fun play() { starts++; backing.play() }
+                override fun pause() = fail("Buffering must not pause the track")
+                override fun write(bytes: ByteArray, offset: Int, count: Int): Int {
+                    val written = backing.write(bytes, offset, count)
+                    if (backing.queuedFrames >= reserve) backing.advance(reserve)
+                    return written
+                }
+                override fun allowShortDrain() {
+                    drainRequests++
+                    assertEquals(tailFrames, backing.queuedFrames)
+                    backing.advance(tailFrames)
+                }
+            }
+            HandsFreeStreamingPcmSink({ track }).use { sink ->
+                if (alreadyPlayed > 0) sink.write(pcm, 0, alreadyPlayed * 2)
+                sink.write(pcm, alreadyPlayed * 2, tailFrames * 2)
+                assertEquals(alreadyPlayed.toLong(), track.playedFrames())
+                assertEquals(0, drainRequests)
+                sink.finish()
+                assertEquals(1, drainRequests)
+                assertEquals(1, starts)
+                assertEquals((alreadyPlayed + tailFrames).toLong(), track.playedFrames())
+                assertArrayEquals(pcm, backing.recorded.toByteArray())
+            }
+        }
+    }
+
     @Test fun deviceBackpressureBoundsTheQueueAndAbortUnblocksTheProducer() {
         val device=Device(autoPlay=false,capacityFrames=4)
         val sink=HandsFreeStreamingPcmSink({device})

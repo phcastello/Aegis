@@ -8,7 +8,12 @@ type PlaybackMetrics = {
 };
 
 const SOURCE_RATE = 24000;
-const TARGET_BUFFER_SECONDS = 0.4;
+const START_BUFFER_SECONDS = 0.16;
+const MAX_BUFFER_SECONDS = 0.4;
+
+type PlaybackEvent =
+  | { type: 'consumed'; generation: number; frames: number }
+  | { type: 'playing' | 'underrun'; generation: number };
 
 /** Persistent Web Audio PCM player. One instance remains alive for the whole chat view. */
 export class VoicePlaybackService {
@@ -47,9 +52,10 @@ export class VoicePlaybackService {
         URL.revokeObjectURL(module);
       }
       this.node = new AudioWorkletNode(this.context, 'aegis-pcm-player', { outputChannelCount: [1] });
-      this.node.port.onmessage = (event: MessageEvent<{ type: string; frames?: number }>) => {
-        if (event.data.type === 'consumed') {
-          const frames = event.data.frames ?? 0;
+      this.node.port.onmessage = ({ data }: MessageEvent<PlaybackEvent>) => {
+        if (data.generation !== this.generation) return;
+        if (data.type === 'consumed') {
+          const { frames } = data;
           this.queuedFrames = Math.max(0, this.queuedFrames - frames);
           this.metrics.playedAudioSeconds += frames / this.context!.sampleRate;
           this.resolveDrainWaiters();
@@ -57,8 +63,12 @@ export class VoicePlaybackService {
             this.setState('idle');
             this.resolveFinishWaiters();
           }
-        } else if (event.data.type === 'underrun') {
+        } else if (data.type === 'underrun') {
+          if (this.inputCompletedGeneration === this.generation) return;
           this.metrics.underrunCount += 1;
+          this.setState('buffering');
+        } else if (data.type === 'playing') {
+          this.setState('playing');
         }
       };
       this.node.connect(this.context.destination);
@@ -68,41 +78,41 @@ export class VoicePlaybackService {
   }
 
   begin(): number {
-    this.generation += 1;
-    this.residual = null;
-    this.sourceCarry = null;
-    this.resamplePosition = 0;
-    this.queuedFrames = 0;
-    this.inputCompletedGeneration = null;
-    this.node?.port.postMessage({ type: 'clear', generation: this.generation });
+    this.clear();
     this.setState('buffering');
     return this.generation;
   }
 
   async enqueuePcm(chunk: Uint8Array, generation: number): Promise<void> {
-    if (!this.context || !this.node || generation !== this.generation) return;
+    if (!this.context || generation !== this.generation) return;
     const samples = this.decodeS16Le(chunk);
     if (samples.length === 0) return;
-    const resampled = this.resample(samples);
-    if (resampled.length === 0 || generation !== this.generation) return;
+    await this.enqueueFrames(this.resample(samples), generation);
+  }
 
+  private async enqueueFrames(samples: Float32Array, generation: number): Promise<void> {
+    if (!this.context || !this.node || generation !== this.generation) return;
     // Never drop PCM because a ReadableStream happened to deliver a large chunk.
     // Splitting before transferring is important: transferring a subarray would detach
     // the whole resampled buffer and silently lose its remaining samples.
-    const packetFrames = Math.max(1, Math.floor((TARGET_BUFFER_SECONDS / 2) * this.context.sampleRate));
-    for (let offset = 0; offset < resampled.length; offset += packetFrames) {
-      const packet = resampled.slice(offset, Math.min(offset + packetFrames, resampled.length));
+    // Leave room for a whole packet while the worklet is still building its 160 ms reserve.
+    const packetFrames = Math.max(1, Math.floor((MAX_BUFFER_SECONDS / 2) * this.context.sampleRate));
+    for (let offset = 0; offset < samples.length; offset += packetFrames) {
+      const packet = samples.slice(offset, Math.min(offset + packetFrames, samples.length));
       await this.waitForCapacity(generation, packet.length);
       if (generation !== this.generation) return;
       this.queuedFrames += packet.length;
-      this.metrics.queuedAudioSeconds = this.queuedFrames / this.context.sampleRate;
       this.node.port.postMessage({ type: 'enqueue', generation, samples: packet }, [packet.buffer]);
-      if (this.queuedFrames >= packetFrames) this.setState('playing');
     }
   }
 
   stop(): void {
     this.setState('stopping');
+    this.clear();
+    this.setState('stopped');
+  }
+
+  private clear(): void {
     this.generation += 1;
     this.residual = null;
     this.sourceCarry = null;
@@ -112,7 +122,6 @@ export class VoicePlaybackService {
     this.node?.port.postMessage({ type: 'clear', generation: this.generation });
     this.resolveDrainWaiters();
     this.resolveFinishWaiters();
-    this.setState('stopped');
   }
 
   fail(): void {
@@ -122,7 +131,15 @@ export class VoicePlaybackService {
 
   async finish(generation: number): Promise<void> {
     if (generation !== this.generation) return;
+    if (this.sourceCarry !== null) {
+      // There is no next packet to interpolate against. Hold the final input frame.
+      const tail = this.resample(Float32Array.of(this.sourceCarry));
+      this.sourceCarry = null;
+      await this.enqueueFrames(tail, generation);
+      if (generation !== this.generation) return;
+    }
     this.inputCompletedGeneration = generation;
+    this.node?.port.postMessage({ type: 'end', generation });
     if (this.queuedFrames === 0) {
       this.setState('idle');
       return;
@@ -162,7 +179,7 @@ export class VoicePlaybackService {
   private async waitForCapacity(generation: number, incomingFrames: number): Promise<void> {
     const context = this.context;
     if (!context) return;
-    const targetFrames = Math.floor(TARGET_BUFFER_SECONDS * context.sampleRate);
+    const targetFrames = Math.floor(MAX_BUFFER_SECONDS * context.sampleRate);
     while (generation === this.generation && this.queuedFrames + incomingFrames > targetFrames) {
       await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
     }
@@ -188,21 +205,62 @@ export class VoicePlaybackService {
 
 const workletSource = `
 class AegisPcmPlayer extends AudioWorkletProcessor {
-  constructor() { super(); this.queue = []; this.offset = 0; this.generation = 0; this.lastUnderrun = 0;
-    this.port.onmessage = (event) => { const data = event.data;
-      if (data.type === 'clear') { this.generation = data.generation; this.queue = []; this.offset = 0; }
-      if (data.type === 'enqueue' && data.generation === this.generation) this.queue.push(data.samples);
+  constructor() {
+    super();
+    this.minimumFrames = Math.ceil(sampleRate * ${START_BUFFER_SECONDS});
+    this.clear(0);
+    this.port.onmessage = ({ data }) => {
+      if (data.type === 'clear') {
+        this.clear(data.generation);
+      } else if (data.generation === this.generation) {
+        if (data.type === 'enqueue') {
+          this.queue.push(data.samples);
+          this.frames += data.samples.length;
+        } else if (data.type === 'end') {
+          this.ended = true;
+        }
+      }
     };
   }
-  process(inputs, outputs) { const output = outputs[0][0]; let consumed = 0;
-    for (let index = 0; index < output.length; index += 1) {
-      const current = this.queue[0];
-      if (!current) { output[index] = 0; continue; }
-      output[index] = current[this.offset++]; consumed += 1;
-      if (this.offset >= current.length) { this.queue.shift(); this.offset = 0; }
+
+  clear(generation) {
+    this.generation = generation;
+    this.queue = [];
+    this.offset = 0;
+    this.frames = 0;
+    this.playing = false;
+    this.ended = false;
+  }
+
+  process(inputs, outputs) {
+    const output = outputs[0][0];
+    if (!this.playing) {
+      // The unfilled output remains silent until the reserve is ready or EOF arrives.
+      if (this.frames < this.minimumFrames && !(this.ended && this.frames > 0)) return true;
+      this.playing = true;
+      this.port.postMessage({ type: 'playing', generation: this.generation });
     }
-    if (consumed) this.port.postMessage({ type: 'consumed', frames: consumed });
-    else if (currentTime - this.lastUnderrun > 1) { this.lastUnderrun = currentTime; this.port.postMessage({ type: 'underrun' }); }
+
+    let consumed = 0;
+    while (consumed < output.length && this.queue.length > 0) {
+      const current = this.queue[0];
+      const count = Math.min(current.length - this.offset, output.length - consumed);
+      for (let index = 0; index < count; index++) output[consumed + index] = current[this.offset + index];
+      consumed += count;
+      this.offset += count;
+      if (this.offset === current.length) {
+        this.queue.shift();
+        this.offset = 0;
+      }
+    }
+    this.frames -= consumed;
+    if (consumed > 0) {
+      this.port.postMessage({ type: 'consumed', generation: this.generation, frames: consumed });
+    }
+    if (consumed < output.length) {
+      this.playing = false;
+      if (!this.ended) this.port.postMessage({ type: 'underrun', generation: this.generation });
+    }
     return true;
   }
 }
