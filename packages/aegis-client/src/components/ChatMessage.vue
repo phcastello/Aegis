@@ -86,20 +86,18 @@ async function copy(): Promise<void> {
       </div>
       <MemoryActivityDisclosure v-if="message.role === 'assistant' && message.memoryActivity?.sections.length"
         :activity="message.memoryActivity" />
-      <div v-if="message.role === 'user' || message.content.trim() || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
-        <template v-if="message.role === 'user'">
-          <ul v-if="message.attachments?.length" class="attachment-list" aria-label="Arquivos anexados">
-            <li v-for="file in message.attachments" :key="file.id" class="attachment-chip">
-              <a v-if="attachmentUrl(file.id)" class="attachment-name" :href="attachmentUrl(file.id)" :download="file.fileName"
-                @click="openAttachment($event, file.id)">{{ file.fileName }}</a>
-              <span v-else class="attachment-name">{{ file.fileName }}</span><small>{{ attachmentSize(file.sizeBytes) }}</small>
-            </li>
-          </ul>
-          <span v-if="attachmentError" role="status">Não foi possível abrir o anexo.</span>
-          <p v-if="message.content">{{ message.content }}</p>
-        </template>
-        <MarkdownMessage v-else :content="message.content" :animate-changes="message.streaming"
+      <div v-if="message.role === 'user' || message.content.trim() || message.attachments?.length || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
+        <MarkdownMessage v-if="message.role !== 'user'" :content="message.content" :animate-changes="message.streaming"
           :web-research="message.streaming ? null : message.webResearch" />
+        <ul v-if="message.attachments?.length" class="attachment-list" :aria-label="message.role === 'assistant' ? 'Arquivos gerados' : 'Arquivos anexados'">
+          <li v-for="file in message.attachments" :key="file.id" class="attachment-chip">
+            <a v-if="attachmentUrl(file.id)" class="attachment-name" :href="attachmentUrl(file.id)" :download="file.fileName"
+              @click="openAttachment($event, file.id)">{{ file.fileName }}</a>
+            <span v-else class="attachment-name">{{ file.fileName }}</span><small>{{ attachmentSize(file.sizeBytes) }}</small>
+          </li>
+        </ul>
+        <span v-if="attachmentError" role="status">Não foi possível abrir o anexo.</span>
+        <p v-if="message.role === 'user' && message.content">{{ message.content }}</p>
         <span v-if="message.streaming" class="generation-marker" role="status" aria-label="Aegis está respondendo"></span>
       </div>
       <div v-if="showMessageActions || sources.length" class="message-actions">

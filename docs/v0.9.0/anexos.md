@@ -19,6 +19,13 @@ O cliente registra o tamanho do arquivo e envia os dados binários em blocos num
 Um proxy externo precisa aceitar corpos de pelo menos 4 MiB para os blocos. A rota de mensagens mantém o limite de 12 MiB para o envelope usado pelas versões antigas.
 [Configuração de tamanho no Nginx](https://nginx.org/en/docs/http/ngx_http_core_module.html#client_max_body_size)
 
+## Arquivos gerados pela Aegis
+
+Os arquivos que o Python gera para entrega aparecem na própria resposta, inclusive quando um trabalho termina em segundo plano. No Android ou Windows, toque ou clique no nome para baixar o original. Ao reabrir a conversa, o arquivo continua disponível. Uma nova versão entregue em outra mensagem preserva a anterior.
+
+O Code Interpreter da OpenAI descreve o resultado de um script com referências a arquivos na mensagem da assistente. Na Aegis, o backend guarda os bytes em blocos no PostgreSQL privado e vincula os arquivos à resposta quando ela é salva. Cada link usa os identificadores da mensagem e do anexo.
+[Arquivos gerados no Code Interpreter](https://developers.openai.com/api/docs/guides/tools-code-interpreter#dealing-with-citations)
+
 ## Leitura pela Aegis
 
 A Aegis recebe uma prévia dos anexos. Em texto, CSV, JSON e código, ela pode buscar uma expressão ou ler outro trecho quando a resposta estiver fora da prévia. Em DOCX, XLSX e PPTX grandes, o servidor extrai até 128 MiB de texto, lendo até 512 MiB de XML. Se a extração for parcial, a Aegis recebe um aviso sobre o alcance da busca. PDFs pequenos e imagens compatíveis podem seguir diretamente para o modelo. Em PDFs grandes, o servidor usa o Poppler para obter uma prévia e consultar o texto por página. Imagens grandes recebem uma prévia visual reduzida com libvips.

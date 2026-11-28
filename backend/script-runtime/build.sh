@@ -49,6 +49,17 @@ export WASI_SDK_PATH="$PWD/wasi-sdk-$wasi_version.0-$wasi_arch-linux"
 export SOURCE_DATE_EPOCH=1792886400
 export TERM=dumb
 
+download "https://zlib.net/fossils/zlib-1.4.tar.gz" \
+    02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
+(
+    cd zlib-1.4
+    CHOST=wasm32-wasi CC="$WASI_SDK_PATH/bin/clang" AR="$WASI_SDK_PATH/bin/llvm-ar" \
+        RANLIB="$WASI_SDK_PATH/bin/llvm-ranlib" ./configure --static
+    make -s -j4 libz.a
+    cp zlib.h zconf.h "$WASI_SDK_PATH/share/wasi-sysroot/include/"
+    cp libz.a "$WASI_SDK_PATH/share/wasi-sysroot/lib/wasm32-wasi/"
+)
+
 cd "Python-$python_version"
 python3 Tools/wasm/wasi configure-build-python --quiet -- --without-ensurepip --disable-test-modules
 make -s -j4 -C "cross-build/$(./config.guess)"
@@ -59,6 +70,7 @@ mkdir -p "$runtime/license" "$runtime/stdlib"
 cp -R Lib/. "$runtime/stdlib"
 rm -rf "$runtime/stdlib/test" "$runtime/stdlib/idlelib/idle_test" "$runtime/stdlib/tkinter/test"
 cp LICENSE "$runtime/license/CPython"
+cp ../zlib-1.4/LICENSE "$runtime/license/zlib"
 cp /opt/wasmtime-c-api/LICENSE "$runtime/license/Wasmtime"
 cp /opt/wasmtime-c-api/lib/libwasmtime.so "$runtime/"
 

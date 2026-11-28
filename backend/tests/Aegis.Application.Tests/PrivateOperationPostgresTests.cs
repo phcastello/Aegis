@@ -10,6 +10,8 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
 
@@ -27,7 +29,7 @@ public sealed class PrivateOperationPostgresTests
         }
     }
 
-    private static async Task WithSchema(Func<Func<AegisDbContext>, Task> test)
+    internal static async Task WithSchema(Func<Func<AegisDbContext>, Task> test)
     {
         var connection = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("AEGIS_OPERATION_TEST_DATABASE"));
         if (connection.Database != "aegis_operation_test")
@@ -105,6 +107,65 @@ public sealed class PrivateOperationPostgresTests
         Assert.Equal(0, await new ChatUploadStore(reopened).DiscardAsync(upload.Id, default));
         await reopened.ChatAttachments.Where(a => a.Id == accepted.Id).ExecuteDeleteAsync();
         Assert.False(await reopened.ChatUploadChunks.AnyAsync());
+    });
+
+    [OperationFact]
+    public Task ScriptOutputIsAttachedAtomicallyAndUnclaimedFilesAreDiscarded() => WithSchema(async create =>
+    {
+        await using var db = create();
+        await db.Database.MigrateAsync();
+        var conversation = new Conversation();
+        var question = conversation.AddMessage(ChatRoles.User, "Gere o relatório");
+        db.AddConversation(conversation);
+        await db.SaveChangesAsync();
+        var jobs = new ResearchJobStore(db, TimeProvider.System);
+        jobs.Stage(question, "Consolide as vendas", isPython: true);
+        await db.SaveChangesAsync();
+        var job = await jobs.ClaimAsync(default, allowWeb: false, allowPython: true);
+        Assert.NotNull(job);
+        await using var services = new ServiceCollection().AddScoped<AegisDbContext>(_ => create())
+            .AddScoped<ChatUploadStore>().BuildServiceProvider();
+        var store = new ScriptArtifactStore(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<ScriptArtifactStore>.Instance);
+        var context = new ToolExecutionContext(conversation.Id, question.Id, question.Content);
+        var path = Path.GetTempFileName();
+        try
+        {
+            var file = new ScriptArtifactFile("relatório.csv", path);
+            Guid answerId;
+            await using (var pending = context.Artifacts)
+            {
+                // Revisions of a named output replace the draft only after a complete import.
+                await File.WriteAllTextAsync(path, "rascunho");
+                pending.Publish(await store.StageAsync([file], context, default));
+                await File.WriteAllTextAsync(path, "total\n42");
+                pending.Publish(await store.StageAsync([file], context, default));
+                await File.WriteAllBytesAsync(path, []);
+                pending.Publish(await store.StageAsync([new ScriptArtifactFile("vazio.txt", path)], context, default));
+                Assert.Empty(await db.GetAttachmentIndexAsync(conversation.Id, default));
+                var audit = new Aegis.Application.Llm.LlmRequestAuditData("fake", "fake", true, 1, "{}", 200, null, null, null);
+                await jobs.CompleteAsync(job, new ResearchJobResult("Preparei o relatório.", "fake", null, audit), default, pending);
+                answerId = (await jobs.GetAsync(job.JobId, default))!.ResultMessageId!.Value;
+            }
+            await using var reopened = create();
+            Assert.Equal(2, await reopened.ChatUploads.CountAsync());
+            var outputs = await reopened.GetMessageAttachmentsAsync(answerId, default);
+            Assert.Equal(new[] { "relatório.csv", "vazio.txt" }, outputs.Select(x => x.FileName));
+            var output = outputs.First();
+            Assert.Equal("text/csv", output.ContentType);
+            await using var bytes = await reopened.OpenAttachmentContentAsync(output, default);
+            Assert.Equal("total\n42", await new StreamReader(bytes).ReadToEndAsync());
+            Assert.Null(await reopened.GetAttachmentAsync(question.Id, output.Id, default));
+            var history = await reopened.GetConversationWithMessagesAsync(conversation.Id);
+            var followUp = await ChatAttachmentContent.ForFollowUpAsync(reopened, conversation.Id, history!.Messages,
+                "Abra relatório.csv", default);
+            Assert.Contains("42", followUp.UserInput("Abra relatório.csv").GetRawText());
+
+            var interrupted = new ToolExecutionContext(conversation.Id, question.Id, question.Content);
+            await using (var discarded = interrupted.Artifacts)
+                await store.StageAsync([new ScriptArtifactFile("cancelado.txt", path)], interrupted, default);
+            Assert.False(await reopened.ChatUploads.AnyAsync(upload => upload.AttachmentId == null));
+        }
+        finally { File.Delete(path); }
     });
 
     [OperationFact]

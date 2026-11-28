@@ -6,20 +6,22 @@ using Aegis.Application.Tools;
 
 namespace Aegis.Infrastructure.Tools;
 
-public sealed class WasmPythonScriptRunner : IPythonScriptRunner
+public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonScriptRunner
 {
     private const string RuntimeDirectory = "/opt/aegis-python";
     private const string RunnerPath = RuntimeDirectory + "/runner";
-    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(30);
     private readonly SemaphoreSlim _slots = new(2, 2);
 
     public bool IsAvailable => OperatingSystem.IsLinux()
         && File.Exists(RunnerPath)
         && File.Exists(RuntimeDirectory + "/python.cwasm")
         && File.Exists(RuntimeDirectory + "/libwasmtime.so")
-        && Directory.Exists(RuntimeDirectory + "/stdlib");
+        && Directory.Exists(RuntimeDirectory + "/stdlib")
+        && workspace.HasBoundedScratch;
 
-    public async Task<PythonScriptResult> RunAsync(string code, string? input, CancellationToken cancellationToken)
+    public async Task<PythonScriptResult> RunAsync(string code, string? input, IReadOnlyList<string> inputFiles,
+        ToolExecutionContext context, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(code) || Encoding.UTF8.GetByteCount(code) > PythonScriptTool.MaximumCodeBytes
             || (input is not null && Encoding.UTF8.GetByteCount(input) > PythonScriptTool.MaximumInputBytes))
@@ -39,7 +41,8 @@ public sealed class WasmPythonScriptRunner : IPythonScriptRunner
 
         try
         {
-            return await ExecuteAsync(code, input, cancellationToken);
+            return await workspace.RunAsync(context, inputFiles,
+                (dirs, token) => ExecuteAsync(code, input, dirs, token), cancellationToken);
         }
         finally
         {
@@ -47,7 +50,8 @@ public sealed class WasmPythonScriptRunner : IPythonScriptRunner
         }
     }
 
-    private static async Task<PythonScriptResult> ExecuteAsync(string code, string? input, CancellationToken cancellationToken)
+    private static async Task<PythonScriptResult> ExecuteAsync(string code, string? input, ScriptDirectories dirs,
+        CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(ExecutionTimeout);
@@ -64,6 +68,9 @@ public sealed class WasmPythonScriptRunner : IPythonScriptRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+        startInfo.ArgumentList.Add(dirs.Inputs);
+        startInfo.ArgumentList.Add(dirs.Work);
+        startInfo.ArgumentList.Add(dirs.Outputs);
         startInfo.Environment.Clear();
         using var process = new Process { StartInfo = startInfo };
         try

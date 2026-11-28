@@ -7,5 +7,5 @@ public static class ChatUploadLimits
     public const long MaxMessageBytes = (long)MaxFiles * MaxFileBytes;
     public const int ChunkSize = 4 * 1024 * 1024;
 
-    public static int ChunkCount(int size) => (size - 1) / ChunkSize + 1;
+    public static int ChunkCount(int size) => size == 0 ? 0 : (size - 1) / ChunkSize + 1;
 }

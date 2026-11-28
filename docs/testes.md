@@ -35,6 +35,8 @@ os testes de integração são ignorados; isso não comprova migrations nem pers
 O teste de operação/migrations usa ainda `AEGIS_OPERATION_TEST_DATABASE`, aceitando
 somente o banco descartável `aegis_operation_test`; veja [operação privada](operacao-privada.md).
 
+Para testar a entrega de arquivos gerados, execute `ScriptFileDeliveryIntegrationTests` no contêiner de testes Linux com o runtime da imagem candidata em `/opt/aegis-python`, o tmpfs de execução em `/run/aegis-script` e o mesmo banco descartável. Ative `AEGIS_SCRIPT_DELIVERY_TEST=1`. O teste envia um ZIP com compressão DEFLATE pela API, pede um CSV, reusa o intermediário no segundo turno e baixa as duas versões pelo histórico. O modelo é simulado e o Python executa no WASI empacotado.
+
 Para paridade browser, instale Chromium com `npx playwright-core install chromium`
 em `packages/aegis-client`. Em um terminal na raiz, mantenha o host nativo local:
 

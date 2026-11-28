@@ -46,6 +46,7 @@ public static class DependencyInjection
         services.AddScoped<IAegisDbContext>(provider => provider.GetRequiredService<AegisDbContext>());
         services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
         services.AddScoped<ChatUploadStore>();
+        services.AddSingleton<IScriptArtifactStore, ScriptArtifactStore>();
         services.AddHostedService<ChatUploadCleanup>();
         services.AddDataProtection()
             .SetApplicationName("Aegis");
@@ -58,6 +59,9 @@ public static class DependencyInjection
         if (webSearch.MaxSearchActionsPerTurn is < 1 or > 20)
             throw new InvalidOperationException("Invalid web search action budget.");
         services.AddSingleton(webSearch);
+        services.AddSingleton<ScriptWorkspace>();
+        services.AddSingleton<IScriptWorkspaceCleanup>(p => p.GetRequiredService<ScriptWorkspace>());
+        services.AddHostedService<ScriptWorkspaceCleanup>();
         services.AddSingleton<IPythonScriptRunner, WasmPythonScriptRunner>();
         services.AddScoped<PythonScriptTool>();
         services.AddScoped<IAegisTool>(provider => provider.GetRequiredService<PythonScriptTool>());

@@ -1,13 +1,16 @@
 import json
+import pathlib
 import subprocess
+import tempfile
+import zipfile
 
 
 RUNNER = "/opt/aegis-python/runner"
 
 
-def run(code, data=None):
+def run(code, data=None, directories=()):
     return subprocess.run(
-        [RUNNER],
+        [RUNNER, *directories],
         input=json.dumps({"code": code, "input": data}),
         encoding="utf-8",
         capture_output=True,
@@ -70,3 +73,31 @@ memory = run("bytearray(128 * 1024 * 1024)")
 assert memory.returncode == 1 and 'MemoryError' in memory.stderr, memory
 
 print("Python WASI runtime checks passed")
+
+with tempfile.TemporaryDirectory() as temp:
+    directories = [pathlib.Path(temp, name) for name in ("inputs", "work", "outputs")]
+    for directory in directories:
+        directory.mkdir()
+    with zipfile.ZipFile(directories[0] / "vendas.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("dados.csv", "venda\n19\n23\n")
+    expect_success(run("""
+import csv, io, zipfile
+from pathlib import Path
+with zipfile.ZipFile('/inputs/vendas.zip') as z, z.open('dados.csv') as f:
+    total = sum(int(row['venda']) for row in csv.DictReader(io.TextIOWrapper(f)))
+Path('/work/total').write_text(str(total))
+for path in ('/inputs/vendas.zip', '/work/../outside', '/outputs/../../etc/secret'):
+    try:
+        open(path, 'wb')
+    except OSError:
+        continue
+    raise AssertionError('unexpected write access')
+""", directories=directories))
+    expect_success(run("""
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+with ZipFile('/outputs/resultado.zip', 'w', ZIP_DEFLATED) as result:
+    result.writestr('total.txt', Path('/work/total').read_bytes())
+""", directories=directories))
+    with zipfile.ZipFile(directories[2] / "resultado.zip") as result:
+        assert result.read("total.txt") == b"42"

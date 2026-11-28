@@ -119,6 +119,7 @@ export interface ChatStreamHandlers {
     titleSource?: string | null;
     memoryActivity?: MemoryActivitySnapshot | null;
     webResearch?: WebResearch | null;
+    attachments?: ChatAttachment[];
   isProactive?: boolean;
   proactiveSequence?: number | null;
   }) => void;

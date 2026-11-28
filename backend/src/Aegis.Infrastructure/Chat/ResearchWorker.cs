@@ -86,6 +86,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
             var request = new ModelRequest(instructions, job.Content, InputItems: input, AuditInputItems: audit);
             var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content,
                 AttachmentReader: attachments.OffersReader ? attachments : null);
+            await using var artifacts = context.Artifacts;
             var content = new StringBuilder();
             var progress = new ResearchProgress(job.IsPython);
 
@@ -104,7 +105,7 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
 
                 await store.CompleteAsync(job, new ResearchJobResult(content.ToString(), chunk.Model,
                     chunk.MetadataJson, JobAudit(chunk.AuditData)),
-                    jobCancellation.Token);
+                    jobCancellation.Token, artifacts);
                 return true;
             }
 

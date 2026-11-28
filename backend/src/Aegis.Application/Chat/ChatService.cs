@@ -32,7 +32,8 @@ public sealed class ChatService(
     IMemoryActivityStore? activity = null,
     ILogger<ChatService>? logger = null,
     IResearchDelegationQueue? researchQueue = null,
-    VoiceInterruptionReceipts? interruptionReceipts = null) : IChatService
+    VoiceInterruptionReceipts? interruptionReceipts = null,
+    IScriptWorkspaceCleanup? scriptWorkspaces = null) : IChatService
 {
     private const int DefaultConversationSummaryLimit = 30;
     private const int MaxConversationSummaryLimit = 100;
@@ -75,9 +76,10 @@ public sealed class ChatService(
 
         try
         {
+            await using var artifacts = new ScriptArtifacts();
             var modelRequest = CreateModelRequest(promptResult, userContent, request);
             var completion = await TurnLatencyProfile.MeasureAsync("chat.model_and_tools", () =>
-                RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, promptResult.AttachmentReader, turnToken,
+                RunToolCompletionAsync(modelRequest, conversation.Id, userMessage.Id, userContent, request, promptResult.AttachmentReader, artifacts, turnToken,
                     defer ? ct => AcceptTurnAsync(pending, request, effectiveTurnId, ct) : null));
             if (completion.Ignored)
             {
@@ -96,6 +98,7 @@ public sealed class ChatService(
                 throw new OperationCanceledException(turnToken);
             }
             dbContext.AddChatMessage(assistantMessage);
+            var generated = await artifacts.AttachAsync(dbContext, assistantMessage.Id, turnToken);
             assistantMessage.AttachAuditData(
                 completion.Model,
                 promptResult.Prompt,
@@ -119,7 +122,7 @@ public sealed class ChatService(
                 conversation.Id,
                 conversation.Title,
                 conversation.TitleSource,
-                MapMessage(assistantMessage, memoryActivity), completion.VoiceContinuation);
+                MapMessage(assistantMessage, memoryActivity, generated), completion.VoiceContinuation);
         }
         catch (OperationCanceledException) when (turnToken.IsCancellationRequested)
         {
@@ -184,12 +187,14 @@ public sealed class ChatService(
             userContent, conversation.Id, request.IsHandsFree, userMessage, pending.Attachments, turnToken);
         promptResult = HandsFreeReply.AddOperationalContext(promptResult, request);
         var modelRequest = CreateModelRequest(promptResult, userContent, request);
+        await using var artifacts = new ScriptArtifacts();
         IAsyncEnumerable<ModelStreamChunk> chunks = toolLoop.StreamAsync(
             modelRequest, new ToolExecutionContext(conversation.Id, userMessage.Id, userContent,
                 request.IsHandsFree ? HandsFreeReply.Origin : null, request.VoiceSessionId, request.VoiceSegments,
                 defer ? ct => AcceptTurnAsync(pending, request, turnId, ct) : null,
                 AllowResearchDelegation: researchQueue is not null,
-                AllowPythonDelegation: researchQueue is not null, AttachmentReader: promptResult.AttachmentReader), turnToken);
+                AllowPythonDelegation: researchQueue is not null, AttachmentReader: promptResult.AttachmentReader)
+                { Artifacts = artifacts }, turnToken);
 
         var content = new StringBuilder();
         ChatMessage? segmentedMessage = null;
@@ -276,6 +281,7 @@ public sealed class ChatService(
             }
 
             if (segmentedMessage is null) dbContext.AddChatMessage(assistantMessage);
+            var generated = await artifacts.AttachAsync(dbContext, assistantMessage.Id, turnToken);
             assistantMessage.AttachAuditData(chunk.Model, promptResult.Prompt,
                 promptResult.AuditRuntimeContext ?? promptResult.RuntimeContext,
                 segments.Count > 0 ? SpeechSegmentMetadata(turn.TurnId, "complete", segments, chunk.MetadataJson) : chunk.MetadataJson);
@@ -292,7 +298,7 @@ public sealed class ChatService(
                 yield return ChatStreamEvent.Done(turn.TurnId, conversation.Id, assistantMessage.Id,
                     conversation.Title, conversation.TitleSource, memoryActivity, chunk.VoiceContinuation,
                     WebResearchMetadata.Read(assistantMessage.MetadataJson, assistantMessage.Content),
-                    researchVoiceSession.HasValue && chunk.DelegatedResearchBrief is not null ? userMessage.Id : null);
+                    researchVoiceSession.HasValue && chunk.DelegatedResearchBrief is not null ? userMessage.Id : null, generated);
             }
             streamCompleted = true;
             yield break;
@@ -418,6 +424,7 @@ public sealed class ChatService(
 
         conversation.Delete();
         await dbContext.SaveChangesAsync(cancellationToken);
+        if (scriptWorkspaces is not null) await scriptWorkspaces.DeleteAsync(conversationId, CancellationToken.None);
 
         return true;
     }
@@ -709,6 +716,7 @@ public sealed class ChatService(
         string userContent,
         SendMessageRequest clientRequest,
         ChatAttachmentContent? attachmentReader,
+        ScriptArtifacts artifacts,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? acceptVoiceTurn = null)
     {
@@ -717,7 +725,8 @@ public sealed class ChatService(
             new ToolExecutionContext(conversationId, userMessageId, userContent,
                 clientRequest.IsHandsFree ? HandsFreeReply.Origin : null, clientRequest.VoiceSessionId, clientRequest.VoiceSegments,
                 acceptVoiceTurn, AllowResearchDelegation: researchQueue is not null,
-                AllowPythonDelegation: researchQueue is not null, AttachmentReader: attachmentReader), cancellationToken);
+                AllowPythonDelegation: researchQueue is not null, AttachmentReader: attachmentReader)
+                { Artifacts = artifacts }, cancellationToken);
 
         return new ModelCompletionResponse(
             response.Content,

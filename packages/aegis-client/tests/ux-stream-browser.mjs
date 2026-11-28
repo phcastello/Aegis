@@ -127,13 +127,13 @@ function createFixture(viteOrigin) {
           this.accepted = true; this.event({ type: 'conversation', conversationId: id });
         },
         token(content) { this.content += content; this.event({ type: 'token', content }); },
-        done(title = data.get(id)?.title) {
+        done(title = data.get(id)?.title, attachments) {
           const row = data.get(id);
           if (row) {
             row.title = title; row.updatedAt = new Date().toISOString();
-            row.messages.push({ id: `${body.turnId}-assistant`, conversationId: id, role: 'assistant', content: this.content, createdAt: row.updatedAt });
+            row.messages.push({ id: `${body.turnId}-assistant`, conversationId: id, role: 'assistant', content: this.content, attachments, createdAt: row.updatedAt });
           }
-          this.event({ type: 'done', conversationId: id, messageId: `${body.turnId}-assistant`, conversationTitle: title, titleSource: row?.titleSource }); res.end();
+          this.event({ type: 'done', conversationId: id, messageId: `${body.turnId}-assistant`, attachments, conversationTitle: title, titleSource: row?.titleSource }); res.end();
         },
         fail() { this.event({ type: 'error', message: 'Falha de rede na conversa de origem.' }); res.end(); }
       };
@@ -346,9 +346,15 @@ try {
       equal(await composer().inputValue(), '', 'sent new draft was not left under the persisted ID');
       equal(await page.locator('.messages').getByText('Rascunho novo original', { exact: true }).count(), 1, 'history restoration does not duplicate the accepted prompt');
       equal(await page.locator('.messages').getByText('Token exclusivo da primeira conversa. Resposta criada em segundo plano.', { exact: true }).count(), 1, 'history restoration does not duplicate the response');
-      const second = await send('Segunda mensagem'); second.accept(); second.token('Segunda resposta. '); second.done(); await settled();
+      const second = await send('Segunda mensagem'); second.accept(); second.token('Segunda resposta. ');
+      second.done(undefined, [{ id: 'output-1', fileName: 'relatório.csv', contentType: 'text/csv', sizeBytes: 8 }]);
+      await settled();
+      const output = page.getByRole('list', { name: 'Arquivos gerados' }).getByRole('link', { name: 'relatório.csv' });
+      ok((await output.getAttribute('href')).endsWith(`/api/chat/messages/${second.request.turnId}-assistant/attachments/output-1`),
+        'the final stream event makes the generated file downloadable on its assistant message');
       equal(await composer().inputValue(), '', 'second send does not resurrect the obsolete new draft');
       await select('Beta'); await select('Criada pelo teste');
+      equal(await output.getAttribute('download'), 'relatório.csv', 'restored assistant file retains its download name');
       equal(await composer().inputValue(), '', 'round trip after two sends does not resurrect drafts');
 
       // The ID is complete in the DOM and clipboard, visually ellipsized only.

@@ -606,7 +606,9 @@ public sealed class ToolLoopTests
     [PackagedPythonFact]
     public async Task PackagedPythonDrawGivesValidBoundsAndExactValueToChat()
     {
-        var runner = new WasmPythonScriptRunner();
+        using var fixture = new ScriptWorkspaceFixture(scratchParent: "/run/aegis-script");
+        var runner = new WasmPythonScriptRunner(fixture.Workspace);
+        var conversation = fixture.Conversation();
         Assert.True(runner.IsAvailable);
         using var metrics = new AegisMetrics();
         foreach (var (lower, upper) in new[] { (-47, -47), (91, 91), (-47, 91) })
@@ -629,7 +631,7 @@ public sealed class ToolLoopTests
             var loop = new AegisToolLoop(model, new AegisToolRegistry([new PythonScriptTool(runner)]),
                 NullLogger<AegisToolLoop>.Instance, metrics);
             var request = new ModelRequest("identity", userRequest);
-            var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), userRequest, AllowPythonDelegation: true);
+            var context = new ToolExecutionContext(conversation.Id, conversation.Messages.First().Id, userRequest, AllowPythonDelegation: true);
             var chunks = new List<ModelStreamChunk>();
             await foreach (var chunk in loop.StreamAsync(request, context)) chunks.Add(chunk);
             Assert.NotNull(drawn);
@@ -645,7 +647,7 @@ public sealed class ToolLoopTests
         public PackagedPythonFactAttribute()
         {
             if (Environment.GetEnvironmentVariable("AEGIS_PYTHON_TEST_PACKAGED") is not "1")
-                Skip = "Requires the packaged Python runtime and AEGIS_PYTHON_TEST_PACKAGED=1.";
+                Skip = "Requires the packaged runtime, bounded /run/aegis-script tmpfs and AEGIS_PYTHON_TEST_PACKAGED=1.";
         }
     }
 
@@ -753,7 +755,8 @@ public sealed class ToolLoopTests
     {
         public bool IsAvailable => isAvailable;
         public List<(string Code, string? Input)> Calls { get; } = [];
-        public Task<PythonScriptResult> RunAsync(string code, string? input, CancellationToken cancellationToken)
+        public Task<PythonScriptResult> RunAsync(string code, string? input, IReadOnlyList<string> inputFiles,
+            ToolExecutionContext context, CancellationToken cancellationToken)
         {
             Calls.Add((code, input));
             return Task.FromResult(new PythonScriptResult(true, output, ""));

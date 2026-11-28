@@ -1395,13 +1395,14 @@ async function handleSubmit(): Promise<void> {
         owner.researchSites = mergeResearchSites(owner.researchSites, sources);
         if (!owner.toolMessage) showToolStatus('Pesquisando na web…', 'started', owner, true);
       },
-      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity, webResearch }) => {
+      onDone: ({ turnId: completedTurnId, conversationId: id, messageId, conversationTitle, titleSource, memoryActivity, webResearch, attachments }) => {
         if (!owns() || completedTurnId !== turnId) return;
         owner.title = conversationTitle ?? owner.title ?? 'Nova conversa';
         associateTurnConversation(turn, id, titleSource);
         assistantMessage.serverId = messageId;
         assistantMessage.memoryActivity = memoryActivity;
         assistantMessage.webResearch = webResearch;
+        assistantMessage.attachments = attachments;
         assistantMessage.pending = false;
         completePresentation(presentation);
         activeTurns.delete(turnId);

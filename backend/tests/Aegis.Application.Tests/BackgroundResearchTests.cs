@@ -550,7 +550,8 @@ public sealed class BackgroundResearchTests
         public bool IsAvailable => true;
         public int Runs { get; private set; }
 
-        public Task<PythonScriptResult> RunAsync(string code, string? input, CancellationToken cancellationToken)
+        public Task<PythonScriptResult> RunAsync(string code, string? input, IReadOnlyList<string> inputFiles,
+            ToolExecutionContext context, CancellationToken cancellationToken)
         {
             Assert.Contains("secrets.randbelow(53)", code);
             Assert.Null(input);

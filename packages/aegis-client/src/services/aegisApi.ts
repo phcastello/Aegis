@@ -1,4 +1,5 @@
 import type {
+  ChatAttachment,
   ChatStreamHandlers,
   Conversation,
   ConversationPage,
@@ -116,6 +117,7 @@ export async function sendMessageStream(
       titleSource?: string | null;
       memoryActivity?: MemoryActivitySnapshot | null;
       webResearch?: WebResearch | null;
+      attachments?: ChatAttachment[];
       sources?: unknown;
     };
 
@@ -156,7 +158,8 @@ export async function sendMessageStream(
             conversationTitle: event.conversationTitle,
             titleSource: event.titleSource,
             memoryActivity: event.memoryActivity,
-            webResearch: event.webResearch
+            webResearch: event.webResearch,
+            attachments: event.attachments
           });
         }
         break;

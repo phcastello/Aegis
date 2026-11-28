@@ -101,6 +101,50 @@ public sealed class AssistantRefinementTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GeneratedFileIsReturnedOnFinalAnswerAndInHistory(bool streaming)
+    {
+        using var db = new AegisDbContext(new DbContextOptionsBuilder<AegisDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var file = new UploadedChatFile("total.csv", "text/csv", 2, DateTimeOffset.UtcNow.AddHours(1));
+        db.ChatUploads.Add(file);
+        db.ChatUploadChunks.Add(new ChatUploadChunk(file.Id, 0, "42"u8.ToArray()));
+        await db.SaveChangesAsync();
+        var loop = new CaptureLoop(context => context.Artifacts.Publish(new Dictionary<string, Guid> { [file.FileName] = file.Id }));
+        using var metrics = new AegisMetrics();
+        using var registry = new ActiveTurnRegistry(metrics);
+        var voice = DispatchProxy.Create<IVoiceService, StubProxy>();
+        ((StubProxy)(object)voice).InvokeMethod = (_, args) => Task.FromResult(registry.Register((Guid)args![0]!, (Guid)args[1]!));
+        var queue = DispatchProxy.Create<IConversationTitleJobQueue, StubProxy>();
+        ((StubProxy)(object)queue).InvokeMethod = (_, _) => ValueTask.CompletedTask;
+        var chat = new ChatService(db, new PromptBuilder(new Runtime()), loop, queue, registry, voice);
+        var request = new SendMessageRequest { TurnId = Guid.NewGuid(), Content = "Me devolve o resultado em CSV." };
+        ChatAttachmentResponse descriptor;
+        Guid messageId;
+        if (streaming)
+        {
+            var events = new List<ChatStreamEvent>();
+            await foreach (var item in chat.StreamMessageAsync(request)) events.Add(item);
+            var done = Assert.Single(events, item => item.Type == "done");
+            descriptor = Assert.Single(done.Attachments!);
+            messageId = done.AssistantMessageId!.Value;
+        }
+        else
+        {
+            var result = await chat.SendMessageAsync(request);
+            descriptor = Assert.Single(result!.Message.Attachments!);
+            messageId = result.Message.Id;
+        }
+        db.ChangeTracker.Clear();
+        var history = await chat.GetConversationAsync((await db.Conversations.SingleAsync()).Id);
+        var answer = Assert.Single(history!.Messages, m => m.Role == "assistant");
+        Assert.Equal(messageId, answer.Id);
+        Assert.Equal(descriptor, Assert.Single(answer.Attachments!));
+        Assert.Equal(file.FileName, descriptor.FileName);
+    }
+
+    [Theory]
     [InlineData("qual meu time favorito?", false)]
     [InlineData("qual meu time favorito", false)]
     [InlineData("me diz qual meu time favorito", false)]
@@ -144,7 +188,7 @@ public sealed class AssistantRefinementTests
     {
         public Task<string> GetRuntimeContextAsync(CancellationToken cancellationToken = default) => Task.FromResult("Horário atual");
     }
-    private sealed class CaptureLoop : IAegisToolLoop
+    private sealed class CaptureLoop(Action<ToolExecutionContext>? execute = null) : IAegisToolLoop
     {
         public ModelRequest? Request;
         public bool Completed;
@@ -152,12 +196,14 @@ public sealed class AssistantRefinementTests
         public Task<ModelToolResponse> RunAsync(ModelRequest request, ToolExecutionContext context, CancellationToken cancellationToken = default)
         {
             Request = request;
+            execute?.Invoke(context);
             return Task.FromResult(new ModelToolResponse("Aí sim. O secundário serve bem de apoio.", "fake", "fake", ModelPurpose.Chat, [], [], null, null, Audit));
         }
         public async IAsyncEnumerable<ModelStreamChunk> StreamAsync(ModelRequest request, ToolExecutionContext context,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Request = request;
+            execute?.Invoke(context);
             yield return new("Aí sim. ", false);
             await Task.Yield();
             yield return new("O secundário serve bem de apoio.", false);

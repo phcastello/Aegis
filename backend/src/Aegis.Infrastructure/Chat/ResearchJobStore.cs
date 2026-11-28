@@ -1,6 +1,7 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
+using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
@@ -242,7 +243,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         return await SaveTransitionAsync(ct);
     }
 
-    internal async Task CompleteAsync(ResearchJobInput input, ResearchJobResult result, CancellationToken ct)
+    internal async Task CompleteAsync(ResearchJobInput input, ResearchJobResult result, CancellationToken ct, ScriptArtifacts? artifacts = null)
     {
         db.ChangeTracker.Clear();
         var job = await VisibleJobs().SingleOrDefaultAsync(item => item.Id == input.JobId && item.State == ResearchJob.Running, ct);
@@ -256,6 +257,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         var message = conversation.AddMessage(ChatRoles.Assistant, result.Content, now);
         message.AttachAuditData(result.Model, null, null, result.MetadataJson);
         db.ChatMessages.Add(message);
+        if (artifacts is not null) await artifacts.AttachAsync(db, message.Id, ct);
         AddAudit(job, message.Id, result.Audit);
         job.Complete(message.Id, now);
         await SaveTransitionAsync(ct);

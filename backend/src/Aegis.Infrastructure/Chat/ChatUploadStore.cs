@@ -12,12 +12,15 @@ public sealed class ChatUploadStore(AegisDbContext db)
 {
     private const long MaxPendingBytes = 2 * ChatUploadLimits.MaxMessageBytes;
 
-    public async Task<UploadedChatFile> CreateAsync(string name, string? contentType, int size, CancellationToken ct)
+    public Task<UploadedChatFile> CreateAsync(string name, string? contentType, int size, CancellationToken ct) =>
+        ReserveAsync(name, contentType, size, ct, allowEmpty: false);
+
+    internal async Task<UploadedChatFile> ReserveAsync(string name, string? contentType, int size, CancellationToken ct, bool allowEmpty)
     {
         name = name.Trim();
         if (name.Length is 0 or > 255 || name is "." or ".." || name.IndexOfAny(['/', '\\']) >= 0 || name.Any(char.IsControl))
             throw new ArgumentException("Nome de arquivo inválido.");
-        if (size is <= 0 or > ChatUploadLimits.MaxFileBytes)
+        if (size is < 0 or > ChatUploadLimits.MaxFileBytes || size == 0 && !allowEmpty)
             throw new ArgumentException("O arquivo deve ter entre um byte e 512 MiB.");
         // The model reader identifies the content independently. The client hint
         // is never allowed to introduce parameters or invalid response headers.

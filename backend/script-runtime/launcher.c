@@ -47,7 +47,8 @@ static int runtime_failed(const char *step, wasmtime_error_t *error) {
     return HOST_FAILED;
 }
 
-int main(void) {
+int main(int argc, char **paths) {
+    if (argc != 1 && argc != 4) return HOST_FAILED;
     wasm_config_t *config = wasm_config_new();
     wasmtime_config_consume_fuel_set(config, true);
     wasmtime_config_max_wasm_stack_set(config, WASM_STACK);
@@ -68,7 +69,7 @@ int main(void) {
     wasmtime_store_t *store = wasmtime_store_new(engine, NULL, NULL);
     wasmtime_store_limiter(store, MAX_MEMORY, -1, 1, -1, 1);
     wasmtime_context_t *context = wasmtime_store_context(store);
-    error = wasmtime_context_set_fuel(context, fuel);
+    error = wasmtime_context_set_fuel(context, argc == 4 ? 4 * fuel : fuel);
     if (error != NULL) {
         return runtime_failed("set the execution limit", error);
     }
@@ -81,6 +82,12 @@ int main(void) {
         || !wasi_config_preopen_dir(wasi, "/opt/aegis-python/stdlib", "/usr/local/lib/python3.14", false)) {
         wasi_config_delete(wasi);
         return runtime_failed("configure the standard library", NULL);
+    }
+    if (argc == 4 && (!wasi_config_preopen_dir(wasi, paths[1], "/inputs", false)
+        || !wasi_config_preopen_dir(wasi, paths[2], "/work", true)
+        || !wasi_config_preopen_dir(wasi, paths[3], "/outputs", true))) {
+        wasi_config_delete(wasi);
+        return runtime_failed("configure conversation files", NULL);
     }
     wasi_config_inherit_stdin(wasi);
     wasi_config_set_stdout_custom(wasi, write_output, &out, NULL);
