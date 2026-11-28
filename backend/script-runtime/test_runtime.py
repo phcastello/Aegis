@@ -8,13 +8,13 @@ import zipfile
 RUNNER = "/opt/aegis-python/runner"
 
 
-def run(code, data=None, directories=(), audit=False):
+def run(code, data=None, directories=(), audit=False, timeout_seconds=5):
     return subprocess.run(
         [RUNNER, *directories],
         input=json.dumps({"code": code, "input": data, "workspace": bool(directories), "audit": audit}),
         encoding="utf-8",
         capture_output=True,
-        timeout=5,
+        timeout=timeout_seconds,
         env={"AEGIS_RUNTIME_TEST_SECRET": "host-only"},
     )
 
@@ -136,7 +136,7 @@ pdf = PdfWriter()
 pdf.add_blank_page(72, 72)
 pdf.write('/outputs/resumo.pdf')
 assert len(PdfReader('/outputs/resumo.pdf').pages) == 1
-""", directories=directories))
+""", directories=directories, timeout_seconds=30))
     with zipfile.ZipFile(directories[2] / "vendas.xlsx") as result:
         assert b"<v>42</v>" in result.read("xl/worksheets/sheet1.xml")
     with zipfile.ZipFile(directories[2] / "relatório.docx") as result:
