@@ -37,7 +37,10 @@ import org.json.JSONObject
 
 internal object SharedChatAttachments {
     private const val MAX_FILES = 20
-    private const val TOO_MANY = "Anexe até $MAX_FILES arquivos por mensagem."
+    private const val TOO_MANY = "Adicione até $MAX_FILES anexos por mensagem."
+    private const val MAX_SHARED_TEXT = 16_384
+    private const val TEXT_TOO_LONG = "O texto compartilhado é longo demais."
+    private const val EMPTY_SHARE = "Compartilhe um arquivo, link ou texto."
     private const val MAX_BYTES = 512L * 1024 * 1024
     private const val MAX_CHUNK = 4 * 1024 * 1024
     private const val THUMBNAIL_EDGE = 256
@@ -58,6 +61,7 @@ internal object SharedChatAttachments {
         .connectTimeout(15, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
     private var cache: File? = null
     private var pending = emptyList<Uri>()
+    private var pendingText = emptyList<String>()
     private var pendingError: String? = null
 
     @Synchronized
@@ -65,21 +69,30 @@ internal object SharedChatAttachments {
     fun accept(intent: Intent?): Boolean {
         if (intent == null || intent.action !in listOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE)) return false
         try {
+            val clips = intent.clipData
+            require(clips == null || clips.itemCount <= MAX_FILES) { TOO_MANY }
             val streams = if (intent.action == Intent.ACTION_SEND)
                 listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
             else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            val clipItems = if (clips == null) emptyList() else (0 until clips.itemCount).map(clips::getItemAt)
             val uris = streams.ifEmpty {
-                val clips = intent.clipData ?: return@ifEmpty emptyList()
-                require(clips.itemCount <= MAX_FILES) { TOO_MANY }
-                (0 until clips.itemCount).mapNotNull { clips.getItemAt(it).uri }
+                clipItems.mapNotNull { it.uri }
+            }.distinct()
+            val texts = listOfNotNull(intent.getCharSequenceExtra(Intent.EXTRA_TEXT)).ifEmpty {
+                clipItems.filter { it.uri == null }.mapNotNull { it.text }
+            }.mapNotNull {
+                require(it.length <= MAX_SHARED_TEXT) { TEXT_TOO_LONG }
+                it.toString().trim().takeIf(String::isNotEmpty)
             }
-            require(uris.isNotEmpty()) { "Compartilhe um arquivo para anexá-lo à mensagem." }
-            require(uris.size <= MAX_FILES - pending.size) { TOO_MANY }
+            require(uris.isNotEmpty() || texts.isNotEmpty()) { EMPTY_SHARE }
+            require(uris.size + pending.size <= MAX_FILES && texts.size + pendingText.size <= MAX_FILES) { TOO_MANY }
+            require(texts.sumOf(String::length) + pendingText.sumOf(String::length) <= MAX_SHARED_TEXT) { TEXT_TOO_LONG }
             require(uris.all { it.scheme == "content" && !it.authority.isNullOrEmpty() })
             pending = pending + uris
+            pendingText = pendingText + texts
         } catch (error: Exception) {
             pendingError = when (error.message) {
-                TOO_MANY, "Compartilhe um arquivo para anexá-lo à mensagem." -> error.message
+                TOO_MANY, EMPTY_SHARE, TEXT_TOO_LONG -> error.message
                 else -> "Não foi possível receber os arquivos compartilhados."
             }
         }
@@ -88,9 +101,10 @@ internal object SharedChatAttachments {
 
     // Only URI grants received from the system share intent are registered as sources.
     fun take(context: Context): JSONObject {
-        val (uris, error) = synchronized(this) {
-            val batch = pending to pendingError
+        val (uris, texts, error) = synchronized(this) {
+            val batch = Triple(pending, pendingText, pendingError)
             pending = emptyList()
+            pendingText = emptyList()
             pendingError = null
             batch
         }
@@ -98,6 +112,7 @@ internal object SharedChatAttachments {
         val files = JSONArray()
         val added = mutableListOf<String>()
         val result = JSONObject().put("files", files)
+        if (texts.isNotEmpty()) result.put("texts", JSONArray(texts))
         if (error != null) result.put("error", error)
         try {
             val resolver = context.contentResolver
@@ -134,7 +149,7 @@ internal object SharedChatAttachments {
             }
         } catch (failure: Exception) {
             added.forEach { sources.remove(it)?.close() }
-            return JSONObject().put("files", JSONArray()).put("error", if (failure.message == TOO_LARGE) TOO_LARGE
+            return result.put("files", JSONArray()).put("error", if (failure.message == TOO_LARGE) TOO_LARGE
                 else "Não foi possível ler o arquivo. Compartilhe novamente ou use o botão de anexo.")
         }
         return result

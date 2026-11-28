@@ -32,6 +32,10 @@ try {
     localStorage.setItem('aegis.voice.autoSpeak', 'false');
     const initial = { enabled: false, diagnostic: false, assistantSelected: false, permissionGranted: false, modelReady: false, captureConfirmed: false, status: 'disabled', message: 'Escuta desligada.' };
     const windows = new URLSearchParams(location.search).has('windows');
+    const wakeNode = 'aef00000-0000-4000-8000-000000000001';
+    let wakeSample = { nodeId: wakeNode, eventId: 'aef00000-0000-4000-8000-000000000002',
+      activatedAt: '2026-11-27T19:10:00Z', disposition: 'activated', commandDisposition: 'ignored',
+      hasPostAudio: true, humanLabel: null, commandLabel: null };
     initial.wakeSync = { enabled: false, status: 'ready' };
     if (windows) { initial.assistantSelected = true; initial.permissionGranted = true; initial.generation = 0; }
     window.hfFixture = { fail: windows ? null : 'command_not_authorized', calls: [], initial, queue: [], active: 0, peak: 0 };
@@ -83,6 +87,17 @@ try {
       }
       if (command === 'runtime_info') return { platform: windows ? 'windows' : 'android', backendUrl: location.origin, version };
       if (command === 'node_status') return { state: 'unpaired', node: null, error: null };
+      if (command === 'node_wake_dataset') {
+        const request = args.request;
+        if (request.operation === 'audio') return { wav: 'UklGRiYAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQIAAAAAAA==' };
+        if (request.operation === 'label') return Object.assign(wakeSample, {
+          humanLabel: request.humanLabel, commandLabel: request.commandLabel
+        });
+        if (request.operation === 'delete') { wakeSample = null; return; }
+        const samples = !wakeSample || request.filter === 'correct' && wakeSample.humanLabel !== 'correct' ? [] : [wakeSample];
+        return { samples, total: samples.length, nextOffset: null, bytes: wakeSample ? 512 : 0, maximumBytes: 512,
+          quotaBlocked: !!wakeSample, nodes: wakeSample ? [{ nodeId: wakeNode, bytes: 512, samples: 1, quotaBlocked: true }] : [] };
+      }
       if (command === 'node_notification_settings') return { granted: true, pendingActions: 0, failedActions: 0, actionDiagnosticsAvailable: true, actionDiagnostics: [] };
       if (command === 'node_transport_status') return { transportState: 'offline' };
       if (command === 'node_consume_reminder_open') return { reminderId: null };
@@ -159,6 +174,31 @@ try {
   assert.equal(await sync.isChecked(), false);
   await sync.check();
   await hf.getByText('Aguardando uma ativação.', { exact: true }).waitFor();
+  await page.evaluate(() => Object.assign(window.hfFixture.initial.wakeSync, {
+    status: 'server_full', pendingEvents: 2, rejectedEvents: 1, pendingBytes: 512, maximumBytes: 104857600, skippedEvents: 1
+  }));
+  await hf.getByRole('button', { name: 'Atualizar estado', exact: true }).click();
+  await hf.getByText(/2 aguardando envio · 1 recusadas/).waitFor();
+  await hf.getByText(/Uma ativação ficou sem amostra/).waitFor();
+  await hf.getByRole('button', { name: 'Revisar amostras do servidor', exact: true }).click();
+  const corpus = hf.getByRole('region', { name: 'Acervo de amostras no servidor', exact: true });
+  await corpus.getByText(/A cota do servidor bloqueou novos envios/).waitFor();
+  await corpus.getByLabel('Ativações', { exact: true }).selectOption('ignored');
+  await corpus.getByRole('button', { name: /Fala ignorada/ }).click();
+  await corpus.getByRole('button', { name: 'Carregar ativação', exact: true }).click();
+  await corpus.locator('audio[src^="blob:"]').waitFor();
+  await corpus.getByLabel('A palavra “Aegis” foi dita?', { exact: true }).selectOption('correct');
+  await corpus.getByLabel('A fala era dirigida à Aegis?', { exact: true }).selectOption('not_directed');
+  await corpus.getByRole('button', { name: 'Salvar rótulos', exact: true }).click();
+  await corpus.getByText('Rótulos salvos no servidor.', { exact: true }).waitFor();
+  await corpus.getByLabel('Ativações', { exact: true }).selectOption('correct');
+  await corpus.getByRole('button', { name: /Fala ignorada.*Revisada/ }).click();
+  await corpus.getByRole('button', { name: 'Excluir desta coleção…', exact: true }).click();
+  await corpus.getByRole('button', { name: 'Manter amostra', exact: true }).click();
+  await corpus.getByRole('button', { name: 'Excluir desta coleção…', exact: true }).click();
+  await corpus.getByRole('button', { name: 'Confirmar exclusão', exact: true }).click();
+  await corpus.getByText('Nenhuma amostra para este filtro.', { exact: true }).waitFor();
+  await hf.getByRole('button', { name: 'Fechar acervo do servidor', exact: true }).click();
   await sync.uncheck();
   assert.equal(await hf.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).isChecked(), false);
   // Consent is separate from ordinary hands-free; querying or a denied result
@@ -669,6 +709,9 @@ try {
   await desktopSync.check();
   await voice.getByText('Aguardando uma ativação.', { exact: true }).waitFor();
   await desktopSync.uncheck();
+  await voice.getByRole('button', { name: 'Revisar amostras do servidor', exact: true }).click();
+  await voice.getByText(/A cota do servidor bloqueou novos envios/).waitFor();
+  await voice.getByRole('button', { name: 'Fechar acervo do servidor', exact: true }).click();
   await voice.getByRole('button', { name: 'Importar modelo privado', exact: true }).click();
   await voice.getByText('Modelo instalado: Aegis Open v2', { exact: true }).waitFor();
   await voice.getByRole('checkbox', { name: 'Escutar “Aegis”', exact: true }).check();

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-wake-dataset"
+description = "Enables the node_wake_dataset command without any pre-configured scope."
+commands.allow = ["node_wake_dataset"]
+
+[[permission]]
+identifier = "deny-node-wake-dataset"
+description = "Denies the node_wake_dataset command without any pre-configured scope."
+commands.deny = ["node_wake_dataset"]

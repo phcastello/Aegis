@@ -35,6 +35,7 @@ internal class NodeWakeDataset private constructor(private val context: Context)
         private set
     @Volatile var status: String = if (epoch == null) "ready" else prefs.getString("status", "ready") ?: "ready"
         private set
+    private var skippedEvents = if (epoch == null) 0 else prefs.getLong("skippedEvents", 0L)
 
     init {
         writer.execute {
@@ -48,13 +49,14 @@ internal class NodeWakeDataset private constructor(private val context: Context)
     @Synchronized fun configure(enabled: Boolean) {
         if (!enabled) {
             val old = epoch ?: return
-            check(prefs.edit().remove("epoch").remove("node").remove("origin").remove("status").commit())
+            check(prefs.edit().remove("epoch").remove("node").remove("origin").remove("status").remove("skippedEvents").commit())
             epoch = null
             calls.forEach { it.cancel() }
             WorkManager.getInstance(context).cancelAllWorkByTag("wake-dataset-" + old)
             // Detach this generation immediately. New consent always uses another directory.
             File(root, old).deleteRecursively()
             status = "ready"
+            skippedEvents = 0
             return
         }
         val session = NodeNativeSession.read(context) ?: throw IllegalStateException("node_unavailable")
@@ -67,10 +69,23 @@ internal class NodeWakeDataset private constructor(private val context: Context)
         status = "ready"
     }
 
+    @Synchronized fun snapshot(): JSONObject {
+        val token = epoch
+        val queue = wakeDatasetQueueFiles(token?.let { File(root, it) })
+        return JSONObject().put("enabled", token != null).put("status", status)
+            .put("pendingEvents", queue.pending).put("rejectedEvents", queue.rejected)
+            .put("pendingBytes", queue.bytes).put("maximumBytes", QUOTA).put("skippedEvents", skippedEvents)
+    }
+
     private fun matching(s: NodeNativeSession.Session) =
         s.nodeId == prefs.getString("node", null) && s.origin == prefs.getString("origin", null)
 
     private fun state(value: String) { status = value; prefs.edit().putString("status", value).apply() }
+    private fun skip() {
+        if (skippedEvents < Long.MAX_VALUE) skippedEvents++
+        prefs.edit().putLong("skippedEvents", skippedEvents).apply()
+        state("queue_full")
+    }
 
     fun persist(clip: WakeDatasetClip, hold: Boolean = false) {
         if (clip.epoch != epoch) { clip.clear(); return }
@@ -83,7 +98,7 @@ internal class NodeWakeDataset private constructor(private val context: Context)
                         val directory = File(root, clip.epoch)
                         check(directory.isDirectory || directory.mkdirs())
                         if (directory.listFiles().orEmpty().sumOf { it.length() } + payload.size > QUOTA) {
-                            state("queue_full"); return@synchronized
+                            skip(); return@synchronized
                         }
                         val tmp = File(directory, clip.id + ".tmp")
                         try {
@@ -96,7 +111,10 @@ internal class NodeWakeDataset private constructor(private val context: Context)
                 } catch (_: Exception) { if (epoch == clip.epoch) state("rejected") }
                 finally { clip.clear() }
             }
-        } catch (_: java.util.concurrent.RejectedExecutionException) { clip.clear(); state("queue_full") }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            clip.clear()
+            synchronized(this) { if (epoch == clip.epoch) skip() }
+        }
     }
 
     fun finishCommand(token: String, id: String, disposition: String) {
@@ -149,16 +167,26 @@ internal class NodeWakeDataset private constructor(private val context: Context)
                         return ListenableWorker.Result.success()
                     }
                     if (response.code in listOf(400, 409, 413, 422)) {
+                        val rejected = file.resolveSibling(id + ".rejected")
+                        if (!file.renameTo(rejected) && file.exists()) return ListenableWorker.Result.retry()
                         state("rejected")
                         return ListenableWorker.Result.failure()
                     }
-                    state("waiting")
+                    state(if (response.code == 507) "server_full" else "waiting")
                     return ListenableWorker.Result.retry()
                 }
             }
         } catch (_: IOException) { return ListenableWorker.Result.retry() }
         finally { synchronized(this) { calls.remove(call) } }
     }
+}
+
+internal data class WakeDatasetQueueFiles(val pending: Int, val rejected: Int, val bytes: Long)
+
+internal fun wakeDatasetQueueFiles(directory: File?): WakeDatasetQueueFiles {
+    val files = directory?.listFiles().orEmpty().filter { it.isFile && it.extension in setOf("json", "hold", "rejected") }
+    val rejected = files.count { it.extension == "rejected" }
+    return WakeDatasetQueueFiles(files.size - rejected, rejected, files.sumOf { it.length() })
 }
 
 /** Called before writes on startup. A completed row wins over an older, held copy. */
@@ -172,8 +200,9 @@ internal fun recoverWakeDataset(root: File, epoch: String?, schedule: (String, S
                 "tmp" -> file.delete()
                 "hold" -> {
                     val ready = file.resolveSibling(file.nameWithoutExtension + ".json")
-                    if (ready.exists()) file.delete() else check(file.renameTo(ready))
-                    readyIds.add(ready.nameWithoutExtension)
+                    val rejected = file.resolveSibling(file.nameWithoutExtension + ".rejected")
+                    if (ready.exists() || rejected.exists()) file.delete() else check(file.renameTo(ready))
+                    if (ready.exists()) readyIds.add(ready.nameWithoutExtension)
                 }
                 "json" -> readyIds.add(file.nameWithoutExtension)
             }

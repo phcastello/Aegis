@@ -23,11 +23,17 @@ def export(source, destination):
         try:
             with ZipFile(output, "w", ZIP_DEFLATED) as archive:
                 for path in sorted(source.glob("*/*.json")):
+                    if path.with_suffix(".deleted").exists():
+                        continue
                     node, event = str(uuid.UUID(path.parent.name)), str(uuid.UUID(path.stem))
                     row = json.loads(path.read_bytes())
+                    sidecar = path.with_suffix(".meta")
+                    labels = json.loads(sidecar.read_bytes()) if sidecar.is_file() else {}
+                    reviewed_at = labels.get("reviewedAt")
                     # Node scope makes event identities unambiguous even after importing several devices.
                     row.update(id=f"{node}/{event}", originalEventId=event, nodeId=node, exportedAt=at,
-                               source="Aegis central wake dataset", humanLabel=None, commandLabel=None)
+                               source="Aegis central wake dataset", humanLabel=labels.get("humanLabel"),
+                               commandLabel=labels.get("commandLabel"), labeledAt=reviewed_at, commandLabeledAt=reviewed_at)
                     for field, checksum, reference, name in [
                         ("wav", "sha256", "triggerContext", "trigger_context.wav"),
                         ("postWav", "postSha256", "postActivation", "post_activation.wav"),

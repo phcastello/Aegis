@@ -46,13 +46,8 @@
                 <action android:name="android.intent.action.SEND" />
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="image/*" />
-                <data android:mimeType="text/*" />
-                <data android:mimeType="application/pdf" />
-                <data android:mimeType="application/zip" />
-                <data android:mimeType="application/x-zip-compressed" />
-                <data android:mimeType="application/octet-stream" />
-                <data android:mimeType="application/json" />
+                <!-- Any granted file can be preserved as an attachment, including videos and Office documents. -->
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 

@@ -87,6 +87,7 @@ fn main() {
             "node_reminders",
             "node_places",
             "node_custom_instructions",
+            "node_wake_dataset",
             "node_location",
             "node_geofences",
             "node_settings_open",

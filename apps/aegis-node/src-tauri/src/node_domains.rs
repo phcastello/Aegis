@@ -26,6 +26,50 @@ pub async fn node_custom_instructions(
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum WakeDatasetRequest {
+    List { node_id: Option<uuid::Uuid>, filter: Option<String>, offset: i32 },
+    Audio { node_id: uuid::Uuid, event_id: uuid::Uuid, command: bool },
+    Label { node_id: uuid::Uuid, event_id: uuid::Uuid, human_label: Option<String>, command_label: Option<String> },
+    Delete { node_id: uuid::Uuid, event_id: uuid::Uuid },
+}
+
+#[tauri::command]
+pub async fn node_wake_dataset(
+    runtime: tauri::State<'_, NodeRuntime>,
+    request: WakeDatasetRequest,
+) -> Result<Value, String> {
+    const ROOT: &str = "/settings/wake-dataset";
+    let (method, path, payload) = match request {
+        WakeDatasetRequest::List { node_id, filter, offset } => {
+            if offset < 0 || !matches!(filter.as_deref(), None | Some("unreviewed" | "ignored" | "election_lost" | "verifier_rejected" | "false_positive" | "correct" | "not_directed")) {
+                return Err("Selecione um filtro válido de ativações.".into());
+            }
+            let mut path = format!("{ROOT}?offset={offset}");
+            if let Some(node_id) = node_id { path.push_str(&format!("&nodeId={node_id}")); }
+            if let Some(filter) = filter { path.push_str(&format!("&filter={filter}")); }
+            (reqwest::Method::GET, path, Value::Null)
+        }
+        WakeDatasetRequest::Audio { node_id, event_id, command } => {
+            let clip = if command { "command" } else { "trigger" };
+            (reqwest::Method::GET, format!("{ROOT}/{node_id}/{event_id}/audio/{clip}"), Value::Null)
+        }
+        WakeDatasetRequest::Label { node_id, event_id, human_label, command_label } => {
+            if !matches!(human_label.as_deref(), None | Some("correct" | "false_positive" | "uncertain")) ||
+                !matches!(command_label.as_deref(), None | Some("directed" | "not_directed" | "uncertain")) {
+                return Err("Selecione rótulos válidos para a amostra.".into());
+            }
+            (reqwest::Method::PUT, format!("{ROOT}/{node_id}/{event_id}/labels"),
+                json!({"humanLabel": human_label, "commandLabel": command_label}))
+        }
+        WakeDatasetRequest::Delete { node_id, event_id } => {
+            (reqwest::Method::DELETE, format!("{ROOT}/{node_id}/{event_id}"), Value::Null)
+        }
+    };
+    runtime.domain_call(method, path, payload).await
+}
+
 async fn call(
     runtime: &NodeRuntime,
     domain: &str,

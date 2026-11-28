@@ -12,6 +12,19 @@ test('file-only turns from two devices retain their own attachment IDs', () => {
   assert.equal(local.serverId, 'server-user');
   assert.equal(local.attachments[0].id, 'server-file');
 });
+test('link-only turns use the exact URL and reconcile the attachment-only question', () => {
+  const link = { id: 'local-link', fileName: 'example.com', sizeBytes: 22, linkUrl: 'https://example.com/ab' };
+  const local = { id: 'local-user', role: 'user', content: '', attachments: [link] };
+  const remote = [
+    { ...local, id: 'other-user', content: 'Analise os anexos.', attachments: [{ ...link, linkUrl: 'https://example.com/xy', id: 'other-link' }] },
+    { ...local, id: 'server-user', content: 'Analise os anexos.', attachments: [{ ...link, id: 'server-link' }] },
+  ];
+  const merged = mergeConversationMessages([local], remote);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1], local);
+  assert.equal(local.serverId, 'server-user');
+  assert.equal(local.attachments[0].id, 'server-link');
+});
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 test('coalesces duplicates and discards an out-of-order snapshot before retrying the newest invalidation', async () => {
   const old=deferred(), fresh=deferred(), applied=[]; let reads=0;

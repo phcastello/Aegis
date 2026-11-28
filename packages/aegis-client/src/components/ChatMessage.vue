@@ -6,7 +6,7 @@ import WebSourceStack from './WebSourceStack.vue';
 import { mergeResearchSites, topResearchSites, type ResearchSite } from '../services/researchSites';
 import { prepareWebResearch } from '../services/webResearchPresentation';
 import { clientEnvironment, openClientLink } from '../services/clientEnvironment';
-import { attachmentSize, chatAttachmentUrl } from '../services/chatAttachments';
+import { attachmentLinkUrl, attachmentSize, chatAttachmentUrl } from '../services/chatAttachments';
 import { copyVideoCitationLabels, type VideoCitation } from '../services/chatVideo';
 import MemoryActivityDisclosure from './MemoryActivityDisclosure.vue';
 import type { ChatAttachment, FeedbackRating, LocalChatMessage } from '../types/chat';
@@ -32,13 +32,15 @@ const sourcesId = useId();
 const sourcesOpen = ref(false);
 const sourceLinkError = ref(false);
 const attachmentError = ref(false);
-function attachmentUrl(id: string): string | undefined {
+function attachmentUrl(file: ChatAttachment): string | undefined {
+  if (file.linkUrl) return attachmentLinkUrl(file.linkUrl)?.href;
+  const id = file.id;
   const messageId = props.message.serverId ?? props.message.id;
   if (messageId.startsWith('local-') || id.startsWith('local-')) return;
   return chatAttachmentUrl(messageId, id);
 }
-async function openAttachment(event: MouseEvent, id: string): Promise<void> {
-  const url = attachmentUrl(id);
+async function openAttachment(event: MouseEvent, file: ChatAttachment): Promise<void> {
+  const url = attachmentUrl(file);
   if (!url || clientEnvironment().externalLinks !== 'system') return;
   event.preventDefault();
   try { await openClientLink(url); attachmentError.value = false; }
@@ -94,11 +96,12 @@ async function copy(): Promise<void> {
         <MarkdownMessage v-if="message.role !== 'user'" :content="message.content" :animate-changes="message.streaming"
           :web-research="message.streaming ? null : message.webResearch" :resolve-video="resolveVideo"
           @open-video="emit('openVideo', $event)" />
-        <ul v-if="message.attachments?.length" class="attachment-list" :aria-label="message.role === 'assistant' ? 'Arquivos gerados' : 'Arquivos anexados'">
+        <ul v-if="message.attachments?.length" class="attachment-list" :aria-label="message.role === 'assistant' ? 'Arquivos gerados' : 'Anexos'">
           <li v-for="file in message.attachments" :key="file.id" class="attachment-chip">
-            <a v-if="attachmentUrl(file.id)" class="attachment-name" :href="attachmentUrl(file.id)" :download="file.fileName"
-              @click="openAttachment($event, file.id)">{{ file.fileName }}</a>
-            <span v-else class="attachment-name">{{ file.fileName }}</span><small>{{ attachmentSize(file.sizeBytes) }}</small>
+            <a v-if="attachmentUrl(file)" class="attachment-name" :href="attachmentUrl(file)" :download="file.linkUrl ? undefined : file.fileName"
+              :target="file.linkUrl ? '_blank' : undefined" :rel="file.linkUrl ? 'noopener noreferrer' : undefined"
+              @click="openAttachment($event, file)">{{ file.fileName }}</a>
+            <span v-else class="attachment-name">{{ file.fileName }}</span><small>{{ file.linkUrl ? 'Link' : attachmentSize(file.sizeBytes) }}</small>
           </li>
         </ul>
         <span v-if="attachmentError" role="status">Não foi possível abrir o anexo.</span>

@@ -148,11 +148,15 @@ function createFixture(viteOrigin) {
         event(event) { if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify({ turnId: body.turnId, ...event }) + '\n'); },
         accept() {
           if (!data.has(id)) data.set(id, { id, title: 'Nova conversa', createdAt: date, updatedAt: date, messages: [], read: 0 });
-          const attachments = body.attachmentUploadIds?.map((uploadId, index) => {
+          const attachments = (body.attachmentUploadIds ?? []).map((uploadId, index) => {
             const { fileName, contentType, sizeBytes, received } = uploads.get(uploadId);
             assert.equal(received, sizeBytes);
             return { id: fileName === 'gravacao.webm' ? videoFile : `attachment-${index}`, fileName, contentType, sizeBytes };
           });
+          attachments.push(...(body.attachmentLinks ?? []).map((linkUrl, index) => ({
+            id: `link-${index}`, fileName: new URL(linkUrl).hostname, contentType: 'text/uri-list',
+            sizeBytes: linkUrl.length, linkUrl,
+          })));
           const userId = attachments?.some(file => file.id === videoFile) ? videoUser : `${body.turnId}-user`;
           data.get(id).messages.push({ id: userId, conversationId: id, role: 'user', content: body.content, attachments, createdAt: date });
           this.accepted = true; this.event({ type: 'conversation', conversationId: id });
@@ -188,7 +192,7 @@ let assertions = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); assertions++; };
 const ok = (value, message) => { assert.ok(value, message); assertions++; };
 async function checkAttachmentPreviews(page, platform, width) {
-  const add = page.getByRole('button', { name: 'Anexar arquivo', exact: true });
+  const add = page.getByRole('button', { name: 'Adicionar anexo', exact: true });
   const list = page.getByRole('list', { name: 'Anexos da mensagem' });
   const textarea = page.getByRole('textbox', { name: 'Mensagem', exact: true });
   const [addBox, textBox] = await Promise.all([add.boundingBox(), textarea.boundingBox()]);
@@ -216,7 +220,9 @@ async function checkAttachmentPreviews(page, platform, width) {
     { name: 'roteiro-de-viagem.txt', mimeType: 'text/plain', buffer: Buffer.from('Roteiro da viagem') },
     { name: 'aulas.zip', mimeType: 'application/zip', buffer: Buffer.from(zipBase64, 'base64') },
   ];
-  const chooser = page.waitForEvent('filechooser'); await add.click();
+  await add.click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Anexar arquivos', exact: true }).click();
   await (await chooser).setFiles(files);
   await list.waitFor();
   equal(await list.getByRole('listitem').count(), 3, 'each file gets its own preview card');
@@ -257,6 +263,32 @@ async function checkAttachmentPreviews(page, platform, width) {
   const next = card(name).locator('img'); await next.waitFor();
   ok(await next.evaluate(async image => { await image.decode(); return image.naturalWidth > 1; }), 'shared or pasted image also has a decoded thumbnail');
   await card(name).getByRole('button').click();
+
+  await add.click();
+  await page.getByRole('button', { name: 'Anexar link', exact: true }).click();
+  const linkDialog = page.getByRole('dialog', { name: 'Anexar link' });
+  await linkDialog.getByRole('textbox', { name: 'Endereço' }).fill('javascript:alert(1)');
+  await linkDialog.getByRole('button', { name: 'Anexar', exact: true }).click();
+  await linkDialog.getByRole('alert').waitFor();
+  await linkDialog.getByRole('textbox', { name: 'Endereço' }).fill('https://example.com/guia?id=7#mapa');
+  await linkDialog.getByRole('button', { name: 'Anexar', exact: true }).click();
+  await card('example.com').getByRole('button').waitFor();
+  equal(await linkDialog.count(), 0, 'attaching a valid URL closes the dialog');
+  await card('example.com').getByRole('button').click();
+
+  await page.evaluate(platform => {
+    if (platform === 'android') {
+      window.shareTextInbox = ['Horário da prova\nhttps://example.com/guia?id=7#mapa'];
+      window.dispatchEvent(new Event('aegis-shared-attachments'));
+    } else {
+      const data = new DataTransfer(); data.setData('text/plain', 'https://example.com/guia?id=7#mapa');
+      document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }
+  }, platform);
+  await card('example.com').getByRole('button').waitFor();
+  equal(await textarea.inputValue(), platform === 'android' ? 'Horário da prova' : '', 'URL becomes an attachment, shared text remains editable');
+  await card('example.com').getByRole('button').click();
+  await textarea.fill('');
 }
 const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, headless: true });
 const errors = [];
@@ -287,7 +319,9 @@ try {
         if (command === 'node_notification_settings') return { granted: false, pushConfigured: false };
         if (command === 'node_consume_reminder_open') return { reminderId: null, conversationId: null };
         if (command === 'node_take_shared_attachments') {
-          const files = window.shareInbox ?? []; window.shareInbox = []; return { files };
+          const files = window.shareInbox ?? [], texts = window.shareTextInbox ?? [];
+          window.shareInbox = []; window.shareTextInbox = [];
+          return { files, texts };
         }
         if (command === 'node_shared_attachment') {
           if (args.operation !== 'upload') return {};
@@ -511,6 +545,22 @@ try {
       const original = page.locator('.messages').getByRole('link', { name: 'aula.zip' });
       await original.waitFor();
       ok((await original.getAttribute('href')).endsWith(`/api/chat/messages/${retried.request.turnId}-user/attachments/attachment-0`), 'reconciled history opens the original ZIP on its user message');
+
+      const documentUrl = 'https://example.com/guia?id=7#mapa';
+      await page.evaluate(url => {
+        const data = new DataTransfer(); data.setData('text/plain', url);
+        document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      }, documentUrl);
+      await page.getByRole('button', { name: 'Remover example.com' }).waitFor();
+      const uploadCountBeforeLink = fixture.uploads.size;
+      const linkTurn = await send('Confira este documento online.');
+      equal(linkTurn.request.attachmentLinks?.[0], documentUrl, 'link keeps its full original address on submission');
+      equal(fixture.uploads.size, uploadCountBeforeLink, 'links do not start an upload session');
+      linkTurn.accept(); linkTurn.token('Documento recebido.'); linkTurn.done(); await settled();
+      await select('Beta'); await select('Alfa');
+      const savedLink = page.locator('.messages').getByRole('link', { name: 'example.com', exact: true });
+      await savedLink.waitFor();
+      equal(await savedLink.getAttribute('href'), documentUrl, 'history reopens the full link including query and fragment');
       await composer().fill('');
 
       if (platform === 'android') {
@@ -543,7 +593,7 @@ try {
         const previews = page.getByRole('list', { name: 'Anexos da mensagem' });
         equal(await previews.getByRole('listitem').count(), 20, 'file picker, clipboard and drag-and-drop share the same allowance');
         await page.locator('.composer input[type=file]').setInputFiles({ name: 'extra.txt', mimeType: 'text/plain', buffer: Buffer.from('extra') });
-        await page.getByText('Anexe até 20 arquivos por mensagem.').waitFor();
+        await page.getByText('Adicione até 20 anexos por mensagem.').waitFor();
         equal(await previews.getByRole('listitem').count(), 20, 'a rejected 21st file preserves the rest of the draft');
         const batch = await send('Leia os vinte anexos.');
         const uploaded = batch.request.attachmentUploadIds.map(id => fixture.uploads.get(id));

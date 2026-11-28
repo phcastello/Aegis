@@ -5,7 +5,7 @@ export interface ClientEnvironment {
   processSessionId?: string;
   voiceMeterProfile?: 'desktop' | 'mobile';
   dismissKeyboard?: () => Promise<void>;
-  takeSharedAttachments?: () => Promise<{ files: SharedAttachment[]; error?: string }>;
+  takeSharedAttachments?: () => Promise<{ files: SharedAttachment[]; texts?: string[]; error?: string }>;
   uploadSharedChunk?: (handle: string, uploadId: string, index: number, chunkSize: number, signal: AbortSignal) => Promise<number>;
   releaseSharedAttachment?: (handle: string) => Promise<void>;
   // Native hosts can distinguish Activity/window visibility from WebView input

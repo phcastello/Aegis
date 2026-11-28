@@ -289,14 +289,14 @@ impl Shared {
     }
     fn view(&self) -> Value {
         let installed = windows_wakeword::installed(&self.dir);
-        let (sync_enabled, sync_status) = self.wake_queue.state();
+        let wake_sync = self.wake_queue.state();
         let state = self.state.lock().unwrap();
         json!({"enabled":state.settings.enabled,"diagnostic":state.settings.diagnostic,
             "assistantSelected":true,"permissionGranted":!matches!(state.status,"microphone_unavailable"|"microphone_disconnected"|"device_unavailable"),
             "captureConfirmed":matches!(state.status,"listening"|"capturing"|"processing"|"speaking"|"continuation"),
             "modelReady":installed,"modelName":installed.then_some("Aegis Open v2"),
             "status":state.status,"message":message(state.status),"generation":state.generation,
-            "wakeSync":{"enabled":sync_enabled,"status":sync_status}})
+            "wakeSync":wake_sync})
     }
 }
 fn waveform_visible(window_handle: &AtomicIsize) -> bool {

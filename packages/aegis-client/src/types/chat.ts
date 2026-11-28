@@ -40,6 +40,7 @@ export interface ChatAttachment {
   fileName: string;
   contentType: string;
   sizeBytes: number;
+  linkUrl?: string;
 }
 
 export interface ChatMessage {
@@ -87,6 +88,7 @@ export interface SendMessageRequest {
   conversationId?: string | null;
   content: string;
   attachmentUploadIds?: string[];
+  attachmentLinks?: string[];
 }
 
 export interface SendMessageResponse {

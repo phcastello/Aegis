@@ -8,9 +8,9 @@ defineEmits<{ remove: [] }>();
 const extension = /\.([a-z0-9]{1,10})$/i.exec(file.name)?.[1] ?? '';
 const isImage = file.type.startsWith('image/') ||
   /^(avif|bmp|gif|heic|heif|ico|jpe?g|jfif|png|svg|tiff?|webp)$/i.test(extension);
-const objectUrl = isImage && typeof file.source !== 'string' ? URL.createObjectURL(file.source) : undefined;
-const thumbnail = ref(objectUrl ?? file.previewUrl);
-const description = `${file.name} · ${attachmentSize(file.size)}`;
+const objectUrl = file.kind === 'file' && isImage && typeof file.source !== 'string' ? URL.createObjectURL(file.source) : undefined;
+const thumbnail = ref(objectUrl ?? (file.kind === 'file' ? file.previewUrl : undefined));
+const description = file.kind === 'link' ? file.name : `${file.name} · ${attachmentSize(file.size)}`;
 onBeforeUnmount(() => { if (objectUrl) URL.revokeObjectURL(objectUrl); });
 </script>
 
@@ -20,11 +20,14 @@ onBeforeUnmount(() => { if (objectUrl) URL.revokeObjectURL(objectUrl); });
       decoding="async" draggable="false" @error="thumbnail = undefined" />
     <template v-else>
       <div class="attachment-preview-symbol" aria-hidden="true">
-        <svg viewBox="0 0 32 36" fill="none">
+        <svg v-if="file.kind === 'link'" viewBox="0 0 24 24" fill="none">
+          <path d="M10 13a4 4 0 0 0 6 .4l3.5-3.5a4 4 0 0 0-5.6-5.6L12 6.2M14 11a4 4 0 0 0-6-.4l-3.5 3.5a4 4 0 0 0 5.6 5.6l1.9-1.9" />
+        </svg>
+        <svg v-else viewBox="0 0 32 36" fill="none">
           <path d="M19 3H8a3 3 0 0 0-3 3v24a3 3 0 0 0 3 3h16a3 3 0 0 0 3-3V11L19 3Z" />
           <path d="M19 3v6a2 2 0 0 0 2 2h6" />
         </svg>
-        <span v-if="extension && extension.length <= 5" class="attachment-preview-type">{{ extension }}</span>
+        <span v-if="file.kind === 'file' && extension && extension.length <= 5" class="attachment-preview-type">{{ extension }}</span>
       </div>
       <span class="attachment-preview-name">{{ file.name }}</span>
     </template>

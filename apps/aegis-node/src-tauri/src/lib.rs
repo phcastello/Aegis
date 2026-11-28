@@ -350,6 +350,7 @@ pub fn run() {
             node_domains::node_reminders,
             node_domains::node_places,
             node_domains::node_custom_instructions,
+            node_domains::node_wake_dataset,
             node_domains::node_location,
             node_domains::node_geofences,
             node_domains::node_settings_open,

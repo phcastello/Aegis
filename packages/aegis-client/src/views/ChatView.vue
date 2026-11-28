@@ -6,6 +6,7 @@ import RuriMascot from '../components/RuriMascot.vue';
 import ChatMessage from '../components/ChatMessage.vue';
 import VideoAttachmentDialog from '../components/VideoAttachmentDialog.vue';
 import AttachmentPreview from '../components/AttachmentPreview.vue';
+import ChatAttachmentPicker from '../components/ChatAttachmentPicker.vue';
 import BackgroundResearchStatus from '../components/BackgroundResearchStatus.vue';
 import WebResearchActivity from '../components/WebResearchActivity.vue';
 import { mergeResearchSites, topResearchSites } from '../services/researchSites';
@@ -16,7 +17,7 @@ import ConversationMenu from '../components/ConversationMenu.vue';
 import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
-import { attachmentSize, checkAttachmentLimits, pickedFile, releaseAttachment, sharedAttachmentFile, uploadAttachment, type DraftAttachment } from '../services/chatAttachments';
+import { attachmentSize, checkAttachmentLimits, draftLink, pickedFile, releaseAttachment, sharedAttachmentFile, uploadAttachment, type DraftAttachment } from '../services/chatAttachments';
 import { resolveVideoCitation, type VideoCitation } from '../services/chatVideo';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
@@ -127,7 +128,6 @@ let stopObservingGoogle: (() => void) | null = null;
 const messagesContainer = ref<HTMLElement | null>(null);
 const messagesContent = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
-const filePicker = ref<HTMLInputElement | null>(null);
 const isComposerScrollable = ref(false);
 const feedbackTarget = ref<{ message: LocalChatMessage; rating: FeedbackRating } | null>(null);
 const feedbackStatusByMessageId = ref<Record<string, string>>({});
@@ -671,17 +671,18 @@ function stageFiles(owner: ConversationContext, files: DraftAttachment[]): void 
   }
 }
 
-function selectFiles(event: Event): void {
-  const input = event.target as HTMLInputElement;
-  stageFiles(selected.value, Array.from(input.files ?? [], pickedFile));
-  input.value = '';
+function stageLink(url: string): void {
+  const link = draftLink(url);
+  if (link) stageFiles(selected.value, [link]);
 }
 
 function pasteFiles(event: ClipboardEvent): void {
-  const files = Array.from(event.clipboardData?.files ?? []);
-  if (!files.length) return;
+  const clipboard = event.clipboardData;
+  const files = Array.from(clipboard?.files ?? [], pickedFile);
+  const link = files.length === 0 ? draftLink(clipboard?.getData('text/plain') ?? '') : null;
+  if (!files.length && !link) return;
   event.preventDefault();
-  stageFiles(selected.value, files.map(pickedFile));
+  stageFiles(selected.value, link ? [link] : files);
 }
 
 function dragFiles(event: DragEvent): void {
@@ -706,24 +707,42 @@ async function receiveSharedFiles(): Promise<void> {
         const result = await take();
         if (!result) return;
         if (disposed) { result.files.forEach(file => releaseAttachment(sharedAttachmentFile(file))); return; }
-        stageFiles(owner, result.files.map(sharedAttachmentFile));
+        const attachments: DraftAttachment[] = result.files.map(sharedAttachmentFile);
+        const sharedText: string[] = [];
+        for (const text of result.texts ?? []) {
+          const draftLines: string[] = [];
+          for (const line of text.split(/\r?\n/)) {
+            const link = draftLink(line);
+            if (link) attachments.push(link);
+            else draftLines.push(line);
+          }
+          const remaining = draftLines.join('\n').trim();
+          if (remaining) sharedText.push(remaining);
+        }
+        stageFiles(owner, attachments);
+        if (sharedText.length) owner.draft = [owner.draft, ...sharedText].filter(Boolean).join('\n');
         if (result.error) owner.error = result.error;
-        if (selected.value === owner && (result.files.length || result.error)) {
+        if (selected.value === owner && (attachments.length || sharedText.length || result.error)) {
           closeSidebarDrawer();
+          resizeComposer();
           window.dispatchEvent(new Event('aegis-show-shared-draft'));
         }
-      } catch { if (!disposed) owner.error = 'Não foi possível ler o compartilhamento. Compartilhe o arquivo novamente.'; }
+      } catch { if (!disposed) owner.error = 'Não foi possível ler o compartilhamento. Tente compartilhar novamente.'; }
     }
   } finally { receivingShare = false; }
 }
 
 function createLocalUserMessage(content: string, files: DraftAttachment[]): LocalChatMessage {
+  // Transport stores chunked files first and links after them. Match that history order
+  // when reconciling the provisional message, even if the draft interleaved both kinds.
+  const attachments = [...files.filter(file => file.kind === 'file'), ...files.filter(file => file.kind === 'link')];
   return reactive({
     id: createLocalMessageId(),
     conversationId: conversationId.value ?? 'pending',
     role: 'user',
     content,
-    attachments: files.map(file => ({ id: createLocalMessageId(), fileName: file.name, contentType: file.type, sizeBytes: file.size })),
+    attachments: attachments.map(file => ({ id: createLocalMessageId(), fileName: file.name, contentType: file.type,
+      sizeBytes: file.size, linkUrl: file.kind === 'link' ? file.url : undefined })),
     createdAt: new Date().toISOString(),
     model: null,
     pending: true
@@ -1356,7 +1375,8 @@ async function handleSubmit(): Promise<void> {
   const localMessage = createLocalUserMessage(content, files);
   const assistantMessage = createLocalAssistantMessage();
   const controller = new AbortController();
-  const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller, accepted: false, uploading: files.length > 0, status: 'thinking' });
+  const turn: ActiveTurn = reactive({ id: turnId, owner, user: localMessage, assistant: assistantMessage, controller,
+    accepted: false, uploading: files.some(file => file.kind === 'file'), status: 'thinking' });
   activeTurns.set(turnId, turn);
   // Consume the submitted draft, including the unsaved-conversation slot.
   if (newConversation === owner) newConversation = createConversationContext();
@@ -1375,7 +1395,12 @@ async function handleSubmit(): Promise<void> {
 
   try {
     const attachmentUploadIds: string[] = [];
+    const attachmentLinks: string[] = [];
     for (const file of files) {
+      if (file.kind === 'link') {
+        attachmentLinks.push(file.url);
+        continue;
+      }
       attachmentUploadIds.push(await uploadAttachment(file, controller.signal, bytes => {
         if (owns()) owner.toolMessage = `Enviando ${file.name} · ${attachmentSize(bytes)} de ${attachmentSize(file.size)}`;
       }));
@@ -1384,7 +1409,8 @@ async function handleSubmit(): Promise<void> {
     turn.uploading = false;
     clearToolStatus(owner);
     await sendMessageStream({ turnId, conversationId: requestConversationId, content,
-      attachmentUploadIds: files.length ? attachmentUploadIds : undefined }, {
+      attachmentUploadIds: attachmentUploadIds.length ? attachmentUploadIds : undefined,
+      attachmentLinks: attachmentLinks.length ? attachmentLinks : undefined }, {
       onConversation: (eventTurnId, id) => {
         if (!owns() || eventTurnId !== turnId) return;
         associateTurnConversation(turn, id);
@@ -1968,10 +1994,7 @@ onBeforeUnmount(() => {
             <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
               @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
             <div v-else class="composer-field">
-              <input ref="filePicker" type="file" multiple hidden aria-label="Selecionar arquivos" @change="selectFiles" />
-              <button type="button" class="attachment-button" title="Anexar arquivo" aria-label="Anexar arquivo" @click="filePicker?.click()">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16" /></svg>
-              </button>
+              <ChatAttachmentPicker @files="stageFiles(selected, $event.map(pickedFile))" @link="stageLink" />
               <textarea
                 v-model="draft"
                 rows="1"

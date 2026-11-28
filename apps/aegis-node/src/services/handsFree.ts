@@ -16,7 +16,8 @@ export interface HandsFreeState {
   mediaReference?: HandsFreeMediaReference;
   batteryDiagnostics?: HandsFreeBatteryDiagnostics;
   collection?: { enabled: boolean; limitMiB: number; bytes: number; ready: boolean; status: string; skippedEvents: number };
-  wakeSync?: { enabled: boolean; status: 'ready' | 'waiting' | 'sent' | 'queue_full' | 'rejected' };
+  wakeSync?: { enabled: boolean; status: 'ready' | 'waiting' | 'sent' | 'queue_full' | 'server_full' | 'rejected';
+    pendingEvents?: number; rejectedEvents?: number; pendingBytes?: number; maximumBytes?: number; skippedEvents?: number };
 }
 export type HandsFreeMediaReferenceStatus = 'unsupported' | 'off' | 'requesting' | 'starting' | 'waiting' | 'warming' | 'ready' | 'unavailable' | 'denied' | 'blocked' | 'stopped';
 export interface HandsFreeMediaReference {
@@ -244,8 +245,13 @@ function stateResponse(value: unknown): HandsFreeState {
         !mediaReferenceStatuses.includes(String(ref.status)) || (!ref.supported && ref.session))
       throw new HandsFreeError('invalid_response');
   }
-  if (row.wakeSync !== undefined && (!batteryRecord(row.wakeSync) ||
-      typeof row.wakeSync.enabled !== 'boolean' || !['ready', 'waiting', 'sent', 'queue_full', 'rejected'].includes(String(row.wakeSync.status)))) {
+  const wakeSync = row.wakeSync;
+  if (wakeSync !== undefined && (!batteryRecord(wakeSync) ||
+      typeof wakeSync.enabled !== 'boolean' || !['ready', 'waiting', 'sent', 'queue_full', 'server_full', 'rejected'].includes(String(wakeSync.status)) ||
+      ['pendingEvents', 'rejectedEvents', 'pendingBytes', 'maximumBytes', 'skippedEvents'].some(key => {
+        const value = wakeSync[key];
+        return value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0);
+      }))) {
     throw new HandsFreeError('invalid_response');
   }
   if (row.collection !== undefined) {

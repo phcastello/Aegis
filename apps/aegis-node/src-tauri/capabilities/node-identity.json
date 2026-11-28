@@ -30,6 +30,7 @@
     "allow-node-reminders",
     "allow-node-places",
     "allow-node-custom-instructions",
+    "allow-node-wake-dataset",
     "allow-node-location",
     "allow-node-geofences",
     "allow-node-settings-open",

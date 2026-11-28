@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { batteryRateDifference, batteryRunsForComparison, latestBatteryRuns, type HandsFreeBatteryMode, type HandsFreeMediaReferenceStatus } from '../services/handsFree';
 import { useHandsFreeSettings } from '../composables/useHandsFreeSettings';
+import WakeDatasetReview from './WakeDatasetReview.vue';
 
 const props = withDefaults(defineProps<{ platform?: 'android' | 'windows' }>(), { platform: 'android' });
 const { state, busy, stale, canAct, canConfigure, batteryLocked, error, diagnosticCode, refresh, run, configureCollection, automationSupported, automationLive, canStartBattery, startBattery, finishBattery, canStartAuto, startAuto, cancelAuto, exportBattery } = useHandsFreeSettings();
@@ -43,6 +44,7 @@ const automationMessage = computed(() => {
 });
 function isValidationRun(id: string): boolean { return Boolean(automation.value?.validation && automation.value.runIds.includes(id)); }
 const deleteArmed = ref(false);
+const reviewingWakeDataset = ref(false);
 let stopVoiceEvents: UnlistenFn | undefined;
 let mounted = false;
 onMounted(async () => {
@@ -161,7 +163,20 @@ onBeforeUnmount(() => { mounted = false; stopVoiceEvents?.(); clearInterval(coll
         <legend>Amostras da palavra de ativação</legend>
         <p>Quando este dispositivo detectar “Aegis”, o servidor privado poderá receber um trecho do disparo e até 20 segundos do pedido. Falsos disparos podem incluir conversas próximas. Sem conexão, as amostras aguardam no dispositivo. Desativar a sincronização descarta os envios pendentes.</p>
         <label class="audio-preference"><input type="checkbox" :checked="state.wakeSync.enabled" :disabled="!canConfigure" @change="run('collectionSync', ($event.target as HTMLInputElement).checked)" /> Sincronizar amostras com meu servidor</label>
-        <p v-if="state.wakeSync.enabled" role="status">{{ { ready: 'Aguardando uma ativação.', waiting: 'Há amostras aguardando envio.', sent: 'Último envio confirmado pelo servidor.', queue_full: 'Fila local cheia. Aguardando o envio das amostras guardadas.', rejected: 'Não foi possível guardar ou enviar uma amostra.' }[state.wakeSync.status] }}</p>
+        <p v-if="state.wakeSync.enabled" role="status">{{ { ready: 'Aguardando uma ativação.', waiting: 'Há amostras aguardando envio.', sent: 'Último envio confirmado pelo servidor.', queue_full: 'Fila local cheia. Aguardando o envio das amostras guardadas.', server_full: 'A cota do servidor bloqueou o envio. As amostras guardadas continuam na fila.', rejected: 'Não foi possível guardar ou enviar uma amostra.' }[state.wakeSync.status] }}</p>
+        <p v-if="state.wakeSync.enabled && state.wakeSync.pendingEvents !== undefined">
+          {{ state.wakeSync.pendingEvents }} aguardando envio · {{ state.wakeSync.rejectedEvents ?? 0 }} recusadas ·
+          {{ measured((state.wakeSync.pendingBytes ?? 0) / 1048576, 'MiB') }} de
+          {{ measured((state.wakeSync.maximumBytes ?? 0) / 1048576, 'MiB') }} na fila local
+        </p>
+        <p v-if="state.wakeSync.enabled && state.wakeSync.skippedEvents">
+          {{ state.wakeSync.skippedEvents === 1 ? 'Uma ativação ficou sem amostra' : state.wakeSync.skippedEvents + ' ativações ficaram sem amostra' }}
+          enquanto a fila local estava cheia.
+        </p>
+        <button type="button" :aria-expanded="reviewingWakeDataset" @click="reviewingWakeDataset = !reviewingWakeDataset">
+          {{ reviewingWakeDataset ? 'Fechar acervo do servidor' : 'Revisar amostras do servidor' }}
+        </button>
+        <WakeDatasetReview v-if="reviewingWakeDataset" />
       </fieldset>
       <fieldset v-if="state.collection" class="collection-settings">
         <legend>Coleta local de ativações</legend>

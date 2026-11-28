@@ -76,6 +76,19 @@ pub struct Clip {
     id: Uuid,
     epoch: u64,
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueState {
+    enabled: bool,
+    status: &'static str,
+    pending_events: u32,
+    rejected_events: u32,
+    pending_bytes: u64,
+    maximum_bytes: usize,
+    skipped_events: u64,
+}
+
 fn storage<T>(_: T) -> &'static str {
     "storage_unavailable"
 }
@@ -131,6 +144,8 @@ impl Queue {
             db.execute_batch("PRAGMA secure_delete=ON;
                 CREATE TABLE IF NOT EXISTS consent (id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL, scope BLOB);
                 INSERT OR IGNORE INTO consent VALUES(1, 0, NULL);
+                CREATE TABLE IF NOT EXISTS statistics (id INTEGER PRIMARY KEY CHECK(id=1), skipped INTEGER NOT NULL);
+                INSERT OR IGNORE INTO statistics VALUES(1, 0);
                 CREATE TABLE IF NOT EXISTS clips (id TEXT PRIMARY KEY, scope BLOB NOT NULL,
                     body TEXT NOT NULL, size INTEGER NOT NULL, ready INTEGER NOT NULL, rejected INTEGER NOT NULL DEFAULT 0);").map_err(storage)?;
             data.db = Some(db);
@@ -140,9 +155,17 @@ impl Queue {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }
-    pub fn state(&self) -> (bool, &'static str) {
+    pub fn state(&self) -> QueueState {
         let data = self.data.lock().unwrap();
-        (self.epoch() % 2 == 1, data.status)
+        let (pending_events, rejected_events, pending_bytes, skipped_events) = data.db.as_ref()
+            .and_then(|db| db.query_row(
+                "SELECT count(*) - coalesce(sum(rejected), 0), coalesce(sum(rejected), 0), coalesce(sum(size), 0),
+                 (SELECT skipped FROM statistics WHERE id=1) FROM clips",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            ).ok())
+            .unwrap_or_default();
+        QueueState { enabled: self.epoch() % 2 == 1, status: data.status, pending_events, rejected_events,
+            pending_bytes, maximum_bytes: QUEUE_BYTES, skipped_events }
     }
     pub fn configure(&self, scope: Option<[u8; 32]>) -> Result<()> {
         let enabled = scope.is_some();
@@ -158,6 +181,7 @@ impl Queue {
         .map_err(storage)?;
         if !enabled {
             tx.execute("DELETE FROM clips", []).map_err(storage)?;
+            tx.execute("UPDATE statistics SET skipped=0 WHERE id=1", []).map_err(storage)?;
         }
         tx.commit().map_err(storage)?;
         data.token.cancel();
@@ -221,6 +245,9 @@ impl Queue {
         });
         if stored != Ok(1) {
             data.status = if stored == Ok(0) {
+                if let Some(db) = &data.db {
+                    let _ = db.execute("UPDATE statistics SET skipped=skipped+1 WHERE id=1 AND skipped < 9223372036854775807", []);
+                }
                 "queue_full"
             } else {
                 "rejected"
@@ -285,6 +312,7 @@ impl Queue {
                             data.status = "rejected";
                             continue;
                         }
+                        Err("server_full") => data.status = "server_full",
                         _ => data.status = "waiting",
                     }
                 }
@@ -362,7 +390,9 @@ mod tests {
         drop(clip);
         drop(queue);
         let (queue, _) = Queue::new(dir.path());
-        assert!(queue.state().0);
+        assert!(queue.state().enabled);
+        assert_eq!(queue.state().pending_events, 1);
+        assert!(queue.state().pending_bytes > 0);
         let read = || {
             let mut data = queue.data.lock().unwrap();
             queue
@@ -381,6 +411,7 @@ mod tests {
         assert!(body.get("postWav").is_none());
         queue.configure(None).unwrap();
         assert!(read().is_none());
+        assert_eq!(queue.state().pending_events, 0);
         queue.configure(Some([5; 32])).unwrap();
         assert!(queue.capture(id, [5; 32], &mut ring, 0.7, false).is_none());
     }

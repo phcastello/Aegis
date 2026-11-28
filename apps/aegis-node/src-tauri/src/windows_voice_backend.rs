@@ -469,6 +469,7 @@ impl Backend {
             .body(body);
         match self.send_response(request)?.status() {
             StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::INSUFFICIENT_STORAGE => Err("server_full"),
             StatusCode::BAD_REQUEST
             | StatusCode::UNPROCESSABLE_ENTITY
             | StatusCode::CONFLICT

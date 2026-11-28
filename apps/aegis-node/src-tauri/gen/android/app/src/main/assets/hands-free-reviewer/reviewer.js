@@ -6,15 +6,18 @@
   const names = {correct:'Correta', false_positive:'Falso positivo', uncertain:'Incerta'};
   const allowed = new Set(Object.keys(names));
   const storageKey = `aegis-activation-labels-v1:${events.map(e=>e.id).join(':')}`;
-  let labels = {}, labelTimes = {}, position = 0, selectedFiles = new Map();
-  let intentions = {}, intentionTimes = {};
   const intentValues = new Set(['directed', 'not_directed', 'uncertain']);
+  let labels = Object.fromEntries(events.filter(row => allowed.has(row.humanLabel)).map(row => [row.id, row.humanLabel]));
+  let labelTimes = Object.fromEntries(events.filter(row => row.labeledAt).map(row => [row.id, row.labeledAt]));
+  let intentions = Object.fromEntries(events.filter(row => intentValues.has(row.commandLabel)).map(row => [row.id, row.commandLabel]));
+  let intentionTimes = Object.fromEntries(events.filter(row => row.commandLabeledAt).map(row => [row.id, row.commandLabeledAt]));
+  let position = 0, selectedFiles = new Map();
   try {
-    intentions = JSON.parse(localStorage.getItem(storageKey + ':intent') || '{}');
-    intentionTimes = JSON.parse(localStorage.getItem(storageKey + ':intent-times') || '{}');
+    intentions = JSON.parse(localStorage.getItem(storageKey + ':intent') || 'null') ?? intentions;
+    intentionTimes = JSON.parse(localStorage.getItem(storageKey + ':intent-times') || 'null') ?? intentionTimes;
   } catch { /* Local review still works without browser storage. */ }
   function notice(text){ $('notice').textContent=text; }
-  try { labels=JSON.parse(localStorage.getItem(storageKey)||'{}');labelTimes=JSON.parse(localStorage.getItem(storageKey+':times')||'{}'); } catch { notice('Este navegador não mantém rótulos locais. Exporte o dataset antes de fechar.'); }
+  try { labels=JSON.parse(localStorage.getItem(storageKey)||'null')??labels;labelTimes=JSON.parse(localStorage.getItem(storageKey+':times')||'null')??labelTimes; } catch { notice('Este navegador não mantém rótulos locais. Exporte o dataset antes de fechar.'); }
   function current(){return events[position];}
   function render(){
     const e=current(), count=events.filter(x=>allowed.has(labels[x.id]) || intentValues.has(intentions[x.id])).length;

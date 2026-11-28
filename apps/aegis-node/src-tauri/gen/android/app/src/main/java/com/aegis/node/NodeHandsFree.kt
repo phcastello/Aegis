@@ -320,6 +320,7 @@ internal class HandsFreeRuntime(private val context:Context) {
         // Never hold the audio/control lock while a platform snapshot is in flight.
         val batteryView=batteryState()
         val mediaReference=NodeExternalPlaybackReference.state()
+        val wakeDataset=dataset.snapshot()
         return synchronized(lock) {
         val role=NodeHandsFree.selected(context);val permission=NodeHandsFree.permission(context)
         val info=context.packageManager.getPackageInfo(context.packageName,0)
@@ -331,7 +332,7 @@ internal class HandsFreeRuntime(private val context:Context) {
             .put("modelName",model?.name?:JSONObject.NULL).put("modelVersion",model?.version?:JSONObject.NULL)
             .put("modelSha256",model?.sha256?:JSONObject.NULL)
             .put("collection",collection.state())
-            .put("wakeSync",JSONObject().put("enabled", dataset.epoch != null).put("status", dataset.status))
+            .put("wakeSync",wakeDataset)
             .put("batteryDiagnostics",batteryView)
             .put("mediaReference",mediaReference)
         }

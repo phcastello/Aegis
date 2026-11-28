@@ -8,28 +8,50 @@ const UPLOAD_LIFETIME = 24 * 60 * 60 * 1000;
 
 interface Upload { id: string; chunkSize: number; next: number; expiresAt: number }
 let nextDraftId = 0;
-export interface DraftAttachment {
+interface DraftAttachmentInfo {
   localId: number;
   name: string;
   size: number;
   type: string;
+}
+export interface DraftFile extends DraftAttachmentInfo {
+  kind: 'file';
   source: File | string;
   previewUrl?: string;
   upload?: Upload;
 }
+export interface DraftLink extends DraftAttachmentInfo { kind: 'link'; url: string }
+export type DraftAttachment = DraftFile | DraftLink;
 
-export function pickedFile(source: File): DraftAttachment {
-  return { localId: ++nextDraftId, source, name: source.name, size: source.size, type: source.type || 'application/octet-stream' };
+export function pickedFile(source: File): DraftFile {
+  return { kind: 'file', localId: ++nextDraftId, source, name: source.name, size: source.size, type: source.type || 'application/octet-stream' };
 }
 
-export function sharedAttachmentFile(file: SharedAttachment): DraftAttachment {
+export function sharedAttachmentFile(file: SharedAttachment): DraftFile {
   const previewUrl = file.previewUrl?.startsWith('data:image/jpeg;base64,') ? file.previewUrl : undefined;
-  return { localId: ++nextDraftId, source: file.handle, name: file.fileName, size: file.sizeBytes, type: file.contentType, previewUrl };
+  return { kind: 'file', localId: ++nextDraftId, source: file.handle, name: file.fileName, size: file.sizeBytes, type: file.contentType, previewUrl };
+}
+
+export function attachmentLinkUrl(value: string): URL | null {
+  const text = value.trim();
+  if (text.length > 2048 || !/^https?:\/\//i.test(text) || /[\s\\\x00-\x1f\x7f]/.test(text)) return null;
+  try {
+    const url = new URL(text);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password &&
+      url.host && url.href.length <= 2048 ? url : null;
+  } catch { return null; }
+}
+
+export function draftLink(value: string): DraftLink | null {
+  const url = attachmentLinkUrl(value);
+  return url ? { kind: 'link', localId: ++nextDraftId, name: url.hostname, size: url.href.length,
+    type: 'text/uri-list', url: url.href } : null;
 }
 
 export function checkAttachmentLimits(files: readonly DraftAttachment[]): void {
-  if (files.length > MAX_ATTACHMENT_COUNT) throw new Error(`Anexe até ${MAX_ATTACHMENT_COUNT} arquivos por mensagem.`);
+  if (files.length > MAX_ATTACHMENT_COUNT) throw new Error(`Adicione até ${MAX_ATTACHMENT_COUNT} anexos por mensagem.`);
   for (const file of files) {
+    if (file.kind === 'link') continue;
     if (!Number.isSafeInteger(file.size) || file.size < 1) throw new Error(`O arquivo ${file.name} está vazio ou não pôde ser lido.`);
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} excede 512 MiB por arquivo.`);
   }
@@ -46,7 +68,7 @@ export function chatAttachmentUrl(messageId: string, attachmentId: string): stri
   return `${baseUrl}/api/chat/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
-async function startUpload(file: DraftAttachment, signal: AbortSignal): Promise<Upload> {
+async function startUpload(file: DraftFile, signal: AbortSignal): Promise<Upload> {
   const expiresAt = Date.now() + UPLOAD_LIFETIME;
   const info = await requestJson<{ id: string; chunkSize: number; sizeBytes: number }>('/api/chat/uploads', {
     method: 'POST', signal, redirect: 'error',
@@ -59,7 +81,7 @@ async function startUpload(file: DraftAttachment, signal: AbortSignal): Promise<
   return { id: info.id, chunkSize: info.chunkSize, next: 0, expiresAt };
 }
 
-async function putChunk(file: DraftAttachment, upload: Upload, signal: AbortSignal): Promise<number> {
+async function putChunk(file: DraftFile, upload: Upload, signal: AbortSignal): Promise<number> {
   const env = clientEnvironment();
   if (typeof file.source === 'string') {
     if (!env.uploadSharedChunk) throw new Error('Compartilhamento de arquivo indisponível.');
@@ -73,7 +95,7 @@ async function putChunk(file: DraftAttachment, upload: Upload, signal: AbortSign
   return response.status;
 }
 
-export async function uploadAttachment(file: DraftAttachment, signal: AbortSignal, progress: (bytes: number) => void): Promise<string> {
+export async function uploadAttachment(file: DraftFile, signal: AbortSignal, progress: (bytes: number) => void): Promise<string> {
   ensureActive(signal);
   if (!file.upload || Date.now() >= file.upload.expiresAt) file.upload = await startUpload(file, signal);
   let upload = file.upload;
@@ -97,6 +119,7 @@ export async function uploadAttachment(file: DraftAttachment, signal: AbortSigna
 }
 
 export function releaseAttachment(file: DraftAttachment, discardUpload = false): void {
+  if (file.kind === 'link') return;
   if (typeof file.source === 'string') void clientEnvironment().releaseSharedAttachment?.(file.source).catch(() => {});
   if (discardUpload && file.upload)
     void requestJson<void>(uploadPath(file.upload.id), { method: 'DELETE', redirect: 'error' }).catch(() => {});

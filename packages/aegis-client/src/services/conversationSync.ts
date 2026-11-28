@@ -75,10 +75,16 @@ export function mergeConversationMessages(local: LocalChatMessage[], incoming: C
     const nextAnchor = local.slice(index + 1).map(message => serverPositions.get(message.serverId ?? message.id))
       .find(position => position !== undefined && position > lowerBound);
     const upperBound = nextAnchor ?? incoming.length;
+    const implicitQuestion = !user.content && user.attachments?.length
+      ? (user.attachments.some(file => file.linkUrl) ? 'Analise os anexos.' : 'Analise os arquivos anexados.') : undefined;
     const candidate = incoming.findIndex((message, position) => position > lowerBound && position < upperBound &&
-      message.role === 'user' && message.content === user.content && !acceptedUsers.has(message.id) &&
+      message.role === 'user' && (message.content === user.content || message.content === implicitQuestion) && !acceptedUsers.has(message.id) &&
       (message.attachments?.length ?? 0) === (user.attachments?.length ?? 0) &&
-      (user.attachments ?? []).every((file, i) => file.fileName === message.attachments![i].fileName && file.sizeBytes === message.attachments![i].sizeBytes));
+      (user.attachments ?? []).every((file, i) => {
+        const saved = message.attachments![i];
+        return file.linkUrl || saved.linkUrl ? file.linkUrl === saved.linkUrl :
+          file.fileName === saved.fileName && file.sizeBytes === saved.sizeBytes;
+      }));
     if (candidate >= 0) { acceptedUsers.set(incoming[candidate].id, user); lowerBound = candidate; }
   }
   const merged = incoming.map(message => {

@@ -37,6 +37,8 @@ class NodeWakeDatasetTest {
             current.resolve("pending.hold").writeText("older")
             current.resolve("interrupted.hold").writeText("unknown")
             current.resolve("partial.tmp").writeText("partial")
+            current.resolve("recused.rejected").writeText("recused")
+            current.resolve("recused.hold").writeText("duplicate")
             val scheduled = mutableListOf<Pair<String, String>>()
             recoverWakeDataset(root, "current") { epoch, id -> scheduled.add(epoch to id) }
             assertEquals(listOf("current" to "interrupted", "current" to "pending"), scheduled.sortedBy { it.second })
@@ -44,6 +46,8 @@ class NodeWakeDatasetTest {
             assertEquals("final", current.resolve("pending.json").readText())
             assertEquals("unknown", current.resolve("interrupted.json").readText())
             assertFalse(current.resolve("partial.tmp").exists())
+            assertFalse(current.resolve("recused.hold").exists())
+            assertEquals(WakeDatasetQueueFiles(2, 1, 19), wakeDatasetQueueFiles(current))
             recoverWakeDataset(root, null) { _, _ -> fail("Revoked samples must never be scheduled") }
             assertFalse(current.exists())
         } finally { root.deleteRecursively() }
