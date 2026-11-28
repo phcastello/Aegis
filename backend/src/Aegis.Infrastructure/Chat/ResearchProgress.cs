@@ -2,7 +2,7 @@ using Aegis.Application.Models;
 
 namespace Aegis.Infrastructure.Chat;
 
-internal sealed class ResearchProgress(bool isPython = false)
+internal sealed class ResearchProgress(bool isPython = false, bool isVideo = false)
 {
     private readonly Dictionary<string, int> counts = new(StringComparer.Ordinal);
 
@@ -21,11 +21,13 @@ internal sealed class ResearchProgress(bool isPython = false)
             if (status.State == "started") Phase = "executing";
             if (status.State == "completed") HasSuccessfulScript = true;
         }
+        else if (isVideo && chunk.ToolStatus is { Category: "video", State: "started" })
+            Phase = "executing";
         else if (Phase is null && chunk.ToolStatus?.Category == "web_search")
             Phase = "searching";
 
         var changed = prior != Phase;
-        if (!isPython && chunk.WebResearchSources is not null)
+        if (!isPython && !isVideo && chunk.WebResearchSources is not null)
         {
             foreach (var source in chunk.WebResearchSources)
                 changed |= ObserveSource(source.Url, source.Count);

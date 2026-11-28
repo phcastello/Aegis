@@ -14,7 +14,7 @@ public sealed record ResearchJobSnapshot(
 
 internal sealed record ResearchJobInput(
     Guid JobId, Guid ConversationId, Guid UserMessageId, string Content, DateTimeOffset DeadlineAt,
-    bool IsHandsFree, bool IsPython = false);
+    bool IsHandsFree, bool IsPython = false, bool IsVideo = false);
 
 internal sealed record ResearchJobResult(
     string Content, string Model, string? MetadataJson, LlmRequestAuditData Audit);

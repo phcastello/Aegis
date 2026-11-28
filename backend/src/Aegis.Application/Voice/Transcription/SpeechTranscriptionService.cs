@@ -37,7 +37,7 @@ public sealed class SpeechTranscriptionService(
             try
             {
                 var result = await TryTranscribeAsync(primary, request, false, null, cancellationToken);
-                return new TranscriptionResult(request.TranscriptionRequestId, result.Text);
+                return ToResult(request, result);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -52,7 +52,7 @@ public sealed class SpeechTranscriptionService(
 
                 fallbackUsed = true;
                 var fallbackResult = await TryFallbackAsync(fallback, request, exception, cancellationToken);
-                return new TranscriptionResult(request.TranscriptionRequestId, fallbackResult.Text);
+                return ToResult(request, fallbackResult);
             }
             catch (TranscriptionProviderException exception)
             {
@@ -68,7 +68,7 @@ public sealed class SpeechTranscriptionService(
                 request,
                 new TranscriptionProviderException(TranscriptionFailureKind.Technical, "primary", "Primary provider is unavailable."),
                 cancellationToken);
-            return new TranscriptionResult(request.TranscriptionRequestId, fallbackResult.Text);
+            return ToResult(request, fallbackResult);
         }
 
         logger.LogInformation(
@@ -92,6 +92,9 @@ public sealed class SpeechTranscriptionService(
         var fallbackAvailable = settings.FallbackEnabled && FindProvider(settings.FallbackProvider)?.IsConfigured == true;
         return new TranscriptionServiceStatus(true, primaryAvailable || fallbackAvailable, Math.Max(1, settings.MaxRecordingSeconds));
     }
+
+    private static TranscriptionResult ToResult(TranscriptionRequest request, ProviderTranscriptionResult result) =>
+        new(request.TranscriptionRequestId, result.Text) { TimedSegments = result.TimedSegments };
 
     private async Task<ProviderTranscriptionResult> TryFallbackAsync(
         ISpeechTranscriptionProvider fallback,
@@ -143,7 +146,7 @@ public sealed class SpeechTranscriptionService(
                 stopwatch.ElapsedMilliseconds,
                 request.Audio.Length,
                 request.ClientDurationMilliseconds,
-                provider.KeytermCount,
+                request.IsAttachmentAudio ? 0 : provider.KeytermCount,
                 fallbackUsed,
                 fallbackCause?.Kind.ToString(),
                 null,
@@ -166,7 +169,7 @@ public sealed class SpeechTranscriptionService(
                 stopwatch.ElapsedMilliseconds,
                 request.Audio.Length,
                 request.ClientDurationMilliseconds,
-                provider.KeytermCount,
+                request.IsAttachmentAudio ? 0 : provider.KeytermCount,
                 fallbackUsed,
                 fallbackCause?.Kind.ToString(),
                 exception.ExternalStatusCode);

@@ -33,3 +33,13 @@ A Aegis recebe uma prévia dos anexos. Em texto, CSV, JSON e código, ela pode b
 
 Num ZIP, cada entrada conserva seu caminho. A Aegis pode listar arquivos por nome, consultar uma entrada e cruzar dados de pastas diferentes. O índice comporta até 4.096 entradas no conjunto de anexos, com até 2 GiB de conteúdo descompactado para leitura e dois níveis de ZIPs internos. A prévia textual inicial soma até 96 mil caracteres. O leitor sinaliza cortes e limites, e o tamanho da prévia não reduz o arquivo disponível para download. ZIPs ilegíveis ou com senha não podem ser interpretados.
 [Arquivos ZIP no .NET](https://learn.microsoft.com/en-us/dotnet/api/system.io.compression.ziparchive?view=net-8.0)
+
+## Perguntas sobre vídeos
+
+Anexe um vídeo MP4, MOV, WebM ou MKV e pergunte sobre o que aparece ou é dito. Se souber o horário, indique o trecho, como “O que aparece na tela entre 00:12 e 00:18?”. Os horários citados na resposta abrem o vídeo no ponto indicado. A reprodução usa os codecs disponíveis no aplicativo. Se o formato não tocar ali, o original continua disponível para download. Você pode pedir que a Aegis reveja um trecho na mesma conversa.
+
+O servidor privado abre o original com FFmpeg. A visão geral distribui até oito quadros pelo vídeo. Para uma pergunta sobre um intervalo, a ferramenta examina até doze quadros nesse trecho. Se a pergunta depender da fala, ela extrai até 60 segundos por consulta e usa a configuração de transcrição da Aegis. O modelo recebe apenas quadros selecionados e texto. O provedor de transcrição recebe só o áudio do trecho solicitado. São até quatro consultas de vídeo por pedido, das quais até duas incluem transcrição. O limite de upload continua sendo 512 MiB por arquivo.
+[Seleção de faixas no FFmpeg](https://ffmpeg.org/ffmpeg.html#Stream-selection) · [Resultados de ferramentas com imagens na OpenAI](https://developers.openai.com/api/docs/guides/function-calling#formatting-results) · [Horários na transcrição ElevenLabs](https://elevenlabs.io/docs/api-reference/speech-to-text/convert)
+
+A Aegis pode anunciar a análise e concluí-la em segundo plano. Um evento breve pode cair entre os quadros, e texto pequeno ou fala difícil de ouvir pode ficar sem confirmação. A resposta indica o trecho que sustenta o que foi encontrado e sinaliza quando a análise foi parcial.
+[Moment-Video, avaliação de eventos breves](https://arxiv.org/html/2606.02522#S4.SS3)

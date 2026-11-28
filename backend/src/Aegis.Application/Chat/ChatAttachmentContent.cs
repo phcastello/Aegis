@@ -25,6 +25,7 @@ public sealed partial class ChatAttachmentContent
 
     public IReadOnlyList<ChatAttachment> Files { get; private init; } = [];
     public bool OffersReader { get; private set; }
+    public bool OffersVideoReader { get; private set; }
 
     public static async Task<ChatAttachmentContent> PrepareAsync(IAegisDbContext db, Guid messageId,
         IReadOnlyList<ChatAttachmentRequest>? inline, IReadOnlyList<Guid>? uploadIds, CancellationToken ct)
@@ -98,6 +99,8 @@ public sealed partial class ChatAttachmentContent
         else input[position] = UserInput(question);
         var guidance = JsonSerializer.SerializeToElement(new { role = "developer", content = Guidance });
         input.Add(guidance);
+        if (OffersVideoReader)
+            input.Add(JsonSerializer.SerializeToElement(new { role = "developer", content = AttachmentVideoTool.Guidance }));
         // Audits retain the normal question but never file bytes or extracted private text.
         return prompt with { InputItems = input, AuditInputItems = [.. prompt.AuditInputItems ?? prompt.InputItems, guidance], ContainsAttachments = true, AttachmentReader = OffersReader ? this : null };
     }
@@ -133,10 +136,14 @@ public sealed partial class ChatAttachmentContent
         var turns = history.Where(m => m.Role == ChatRoles.User || m.Role == ChatRoles.Assistant && index.Contains(m.Id))
             .OrderByDescending(m => m.CreatedAt).ThenByDescending(m => m.Id).ToArray();
         var mentioned = turns.FirstOrDefault(m => index[m.Id].Any(file => question.Contains(file.FileName, StringComparison.OrdinalIgnoreCase)));
+        var videoQuestion = new[] { "vídeo", "video", "gravação" }.Any(word => question.Contains(word, StringComparison.OrdinalIgnoreCase));
+        var recentVideo = videoQuestion
+            ? turns.FirstOrDefault(m => index[m.Id].Any(file => IsVideoFileName(file.FileName)))
+            : null;
         var attachmentQuestion = new[] { "anexo", "arquivo", "foto", "imagem", "documento", "pdf", "zip", "planilha" }
             .Any(word => question.Contains(word, StringComparison.OrdinalIgnoreCase));
         // Preserve immediate follow-ups ("e o horário?") without resending private media indefinitely.
-        var relevant = mentioned ?? (attachmentQuestion ? turns : turns.Take(2)).FirstOrDefault(m => index.Contains(m.Id));
+        var relevant = mentioned ?? recentVideo ?? (attachmentQuestion ? turns : turns.Take(2)).FirstOrDefault(m => index.Contains(m.Id));
         if (relevant is null) return new();
         var files = await db.GetMessageAttachmentsAsync(relevant.Id, ct);
         try { return await FromStoredAsync(db, files, ct); }
@@ -175,6 +182,20 @@ public sealed partial class ChatAttachmentContent
         await stream.ReadExactlyAsync(sample, ct);
         var type = Identify(name, sample);
         item.Type = type;
+        if (IsVideoType(type))
+        {
+            if (path.Length == 0)
+            {
+                OffersVideoReader = true;
+                MarkPartial(item, "Vídeo disponível em inspect_video. O original permanece no servidor.");
+            }
+            else
+            {
+                item.Unavailable = "Para analisar o vídeo, extraia-o do ZIP e anexe-o diretamente.";
+                MarkPartial(item, item.Unavailable);
+            }
+            return type;
+        }
         await using var fresh = stream.CanSeek ? null : reopen!();
         var data = fresh ?? stream;
         if (data.CanSeek) data.Position = 0;
@@ -311,6 +332,7 @@ public sealed partial class ChatAttachmentContent
         if (bytes.StartsWith(new byte[] { 255, 216, 255 })) return "image/jpeg";
         if (bytes.Length >= 12 && bytes.StartsWith("RIFF"u8) && bytes[8..].StartsWith("WEBP"u8)) return "image/webp";
         if (bytes.StartsWith("GIF87a"u8) || bytes.StartsWith("GIF89a"u8)) return "image/gif";
+        if (IdentifyVideo(name, bytes) is { } video) return video;
         if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || bytes.StartsWith("PK\x03\x04"u8) || bytes.StartsWith("PK\x05\x06"u8))
             return Path.GetExtension(name).ToLowerInvariant() switch
             {
@@ -333,5 +355,26 @@ public sealed partial class ChatAttachmentContent
             };
         }
         catch (DecoderFallbackException) { return "application/octet-stream"; }
+    }
+
+    public static bool IsVideoType(string contentType) =>
+        contentType is "video/mp4" or "video/quicktime" or "video/webm" or "video/x-matroska";
+
+    private static bool IsVideoFileName(string name) =>
+        Path.GetExtension(name).ToLowerInvariant() is ".mp4" or ".mov" or ".webm" or ".mkv";
+
+    public static string? IdentifyVideo(string name, ReadOnlySpan<byte> bytes)
+    {
+        var extension = Path.GetExtension(name).ToLowerInvariant();
+        if (bytes.Length >= 12 && bytes.Slice(4, 4).SequenceEqual("ftyp"u8) &&
+            extension is ".mp4" or ".mov")
+            return extension == ".mov" ? "video/quicktime" : "video/mp4";
+        if (bytes.Length >= 8 && extension == ".mov" &&
+            (bytes.Slice(4, 4).SequenceEqual("moov"u8) || bytes.Slice(4, 4).SequenceEqual("mdat"u8) ||
+                bytes.Slice(4, 4).SequenceEqual("wide"u8)))
+            return "video/quicktime";
+        if (bytes.StartsWith(new byte[] { 0x1a, 0x45, 0xdf, 0xa3 }))
+            return extension switch { ".webm" => "video/webm", ".mkv" => "video/x-matroska", _ => null };
+        return null;
     }
 }

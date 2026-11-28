@@ -3,10 +3,11 @@ using System.Text.Json;
 
 namespace Aegis.Application.Chat;
 
-internal sealed record ResearchDelegation(string Intent, string Brief, bool DelegatePython)
+internal sealed record ResearchDelegation(string Intent, string Brief, bool DelegatePython, bool DelegateVideo)
 {
     public const string ToolName = "delegate_web_research";
     public const string PythonToolName = "delegate_python";
+    public const string VideoToolName = "delegate_video_analysis";
     private const int MaximumIntentLength = 300;
 
     public static ModelToolDefinition Definition { get; } = CreateDefinition(ToolName,
@@ -23,6 +24,12 @@ internal sealed record ResearchDelegation(string Intent, string Brief, bool Dele
         "Uma frase breve dizendo o que você vai calcular ou analisar. Ela pode ser falada imediatamente.",
         "Instrução autossuficiente com o objetivo, os dados necessários, as restrições e o resultado desejado. " +
         "Preserve os dados exatos do pedido. Inclua apenas o que o usuário indicou para esta tarefa. Exclua credenciais e memórias.");
+
+    public static ModelToolDefinition VideoDefinition { get; } = CreateDefinition(VideoToolName,
+        "Delegue uma análise de vídeo anexado que deve levar tempo, como transcrever a fala ou buscar um momento desconhecido. " +
+        "Use antes da primeira inspeção, como única chamada. Para olhar um trecho curto do vídeo, use inspect_video no próprio turno.",
+        "Uma frase breve que diga qual trecho, ação ou fala você vai verificar.",
+        "Pedido autossuficiente com o vídeo e o que deve ser observado. Preserve intervalos, nomes de arquivo e objetivo.");
 
     private static ModelToolDefinition CreateDefinition(string name, string description, string intentDescription,
         string briefDescription) => new(name, description, JsonSerializer.SerializeToElement(new
@@ -47,7 +54,7 @@ internal sealed record ResearchDelegation(string Intent, string Brief, bool Dele
 
     public static ResearchDelegation? Read(ModelToolRequest round, IReadOnlyList<ModelToolCall> calls)
     {
-        var call = calls.FirstOrDefault(call => call.Name is ToolName or PythonToolName);
+        var call = calls.FirstOrDefault(call => call.Name is ToolName or PythonToolName or VideoToolName);
         if (call is null) return null;
         var args = call.Arguments;
         if (calls.Count != 1 || !round.Tools.Any(tool => tool.Name == call.Name) ||
@@ -56,7 +63,7 @@ internal sealed record ResearchDelegation(string Intent, string Brief, bool Dele
             !TryReadText(args, "brief", IResearchDelegationQueue.MaximumBriefLength, out var brief))
             throw new InvalidOperationException("Delegação inválida ou indisponível.");
 
-        return new(intent, brief, call.Name == PythonToolName);
+        return new(intent, brief, call.Name == PythonToolName, call.Name == VideoToolName);
     }
 
     private static bool TryReadText(JsonElement args, string name, int maximum, out string text)

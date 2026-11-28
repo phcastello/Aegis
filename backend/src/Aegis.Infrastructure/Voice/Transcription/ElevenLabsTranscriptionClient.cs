@@ -33,13 +33,16 @@ public sealed class ElevenLabsTranscriptionClient(
         audio.Headers.ContentType = MediaTypeHeaderValue.Parse(request.ContentType);
         form.Add(audio, "file", request.FileName);
         form.Add(new StringContent(Model), "model_id");
-        form.Add(new StringContent(ToElevenLabsLanguageCode(sttOptions.Value.Language)), "language_code");
         form.Add(new StringContent("false"), "no_verbatim");
         form.Add(new StringContent("false"), "tag_audio_events");
-        form.Add(new StringContent("none"), "timestamps_granularity");
-        foreach (var keyterm in keytermProvider.GetKeyterms())
+        form.Add(new StringContent(request.IsAttachmentAudio ? "word" : "none"), "timestamps_granularity");
+        if (!request.IsAttachmentAudio)
         {
-            form.Add(new StringContent(keyterm), "keyterms");
+            form.Add(new StringContent(ToElevenLabsLanguageCode(sttOptions.Value.Language)), "language_code");
+            foreach (var keyterm in keytermProvider.GetKeyterms())
+            {
+                form.Add(new StringContent(keyterm), "keyterms");
+            }
         }
 
         using var message = new HttpRequestMessage(HttpMethod.Post, "v1/speech-to-text") { Content = form };
@@ -66,7 +69,12 @@ public sealed class ElevenLabsTranscriptionClient(
                 // A successful, empty transcript means no words recognized.
                 // This is distinct from a missing/invalid result and must not
                 // cause another recognizer to guess at the same silence.
-                return new ProviderTranscriptionResult(textElement.GetString()!.Trim(), ProviderName, Model);
+                return new ProviderTranscriptionResult(textElement.GetString()!.Trim(), ProviderName, Model)
+                {
+                    TimedSegments = request.IsAttachmentAudio
+                        ? ElevenLabsTimedTranscript.Read(document.RootElement, request.ClientDurationMilliseconds / 1000.0)
+                        : null
+                };
             }
             catch (JsonException exception)
             {

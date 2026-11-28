@@ -34,8 +34,11 @@ public sealed class OpenAiTranscriptionClient(
         audio.Headers.ContentType = MediaTypeHeaderValue.Parse(request.ContentType);
         form.Add(audio, "file", request.FileName);
         form.Add(new StringContent(Model), "model");
-        form.Add(new StringContent(ToOpenAiLanguageCode(sttOptions.Value.Language)), "language");
-        form.Add(new StringContent(FidelityPrompt), "prompt");
+        if (!request.IsAttachmentAudio)
+        {
+            form.Add(new StringContent(ToOpenAiLanguageCode(sttOptions.Value.Language)), "language");
+            form.Add(new StringContent(FidelityPrompt), "prompt");
+        }
         form.Add(new StringContent("json"), "response_format");
 
         using var message = new HttpRequestMessage(HttpMethod.Post, "v1/audio/transcriptions") { Content = form };

@@ -16,4 +16,5 @@ public sealed record ModelToolResponse(
     string? VoiceContinuation = null,
     bool Ignored = false,
     string? DelegatedResearchBrief = null,
-    bool DelegatePython = false);
+    bool DelegatePython = false,
+    bool DelegateVideo = false);

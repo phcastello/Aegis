@@ -55,6 +55,7 @@ public static class DependencyInjection
         services.AddSingleton<AegisMetrics>();
         services.AddScoped<IVoiceService, VoiceService>();
         services.AddScoped<ISpeechTranscriptionService, SpeechTranscriptionService>();
+        services.AddScoped<IVideoAttachmentAudio, VideoAttachmentAudio>();
         services.AddSingleton<VoiceStatusCache>();
         services.AddSingleton<IActiveTurnRegistry, ActiveTurnRegistry>();
         services.AddSingleton<VoiceInterruptionReceipts>();
@@ -77,6 +78,8 @@ public static class DependencyInjection
         services.AddScoped<IAegisToolLoop, AegisToolLoop>();
         services.AddScoped<IAegisToolRegistry, AegisToolRegistry>();
         services.AddScoped<IAegisTool, AttachmentReadTool>();
+        services.AddScoped<AttachmentVideoTool>();
+        services.AddScoped<IAegisTool>(provider => provider.GetRequiredService<AttachmentVideoTool>());
         services.AddScoped<IAegisTool, EmailGetStatusTool>();
         services.AddScoped<IAegisTool, EmailCreateConnectLinkTool>();
         services.AddScoped<IAegisTool, EmailSearchTool>();

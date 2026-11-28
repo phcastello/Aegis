@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Buffers.Binary;
 using Aegis.Api.Controllers;
+using Aegis.Application.Chat;
 using Aegis.Application.Turns;
 using Aegis.Application.Voice;
 using Aegis.Application.Voice.Transcription;
@@ -193,6 +194,76 @@ public sealed class VoiceTranscriptionTests
         Assert.Equal("stt-openai-key", openAiHandler.Authorization?.Parameter);
     }
 
+    [Fact]
+    public async Task VideoTranscriptionMapsRecognizedPhrasesToTheOriginalTimeline()
+    {
+        using var handler = new RecordingHandler("""
+            {"text":"Hello world. Go!", "words":[
+                {"text":"Hello","type":"word","start":0.25,"end":0.5},
+                {"text":" ","type":"spacing"},
+                {"text":"world.","type":"word","start":0.51,"end":0.75},
+                {"text":" ","type":"spacing"},
+                {"text":"Go!","type":"word","start":2,"end":2.5}
+            ]}
+            """);
+        var settings = new SttOptions();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.elevenlabs.io/") };
+        var provider = new ElevenLabsTranscriptionClient(http, Options.Create(new ElevenLabsSttOptions { ApiKey = "key" }),
+            Options.Create(settings), CreateKeyterms("Aegis", 80));
+        var service = new SpeechTranscriptionService([provider], settings, NullLogger<SpeechTranscriptionService>.Instance);
+        var result = await new VideoAttachmentAudio(service).TranscribeAsync(VideoClip(), CancellationToken.None);
+
+        Assert.Null(result.Error);
+        Assert.Collection(result.Segments,
+            first => Assert.Equal(new VideoTranscriptSegment(42.25, 42.75, "Hello world.", false), first),
+            second => Assert.Equal(new VideoTranscriptSegment(44, 44.5, "Go!", false), second));
+        Assert.Equal("word", handler.Fields["timestamps_granularity"]);
+        Assert.False(handler.Fields.ContainsKey("language_code"));
+        Assert.False(handler.Fields.ContainsKey("keyterms"));
+
+        var dictated = await service.TranscribeAsync(ValidRequest());
+        Assert.Equal("Hello world. Go!", dictated.Text);
+        Assert.Null(dictated.TimedSegments);
+        Assert.Equal("none", handler.Fields["timestamps_granularity"]);
+        Assert.Equal("por", handler.Fields["language_code"]);
+        Assert.Equal("Aegis", handler.Fields["keyterms"]);
+    }
+
+    [Fact]
+    public async Task VideoTranscriptionWithTheOpenAiFallbackUsesTheActualClipRange()
+    {
+        using var handler = new RecordingHandler("""{"text":"Bonjour tout le monde!"}""");
+        var settings = new SttOptions();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
+        var provider = new OpenAiTranscriptionClient(http, Options.Create(new OpenAiSttOptions { ApiKey = "key" }),
+            Options.Create(settings));
+        var primary = FakeProvider.Failure("elevenlabs", TranscriptionFailureKind.Technical, 503);
+        var service = new SpeechTranscriptionService([primary, provider], settings, NullLogger<SpeechTranscriptionService>.Instance);
+        var result = await new VideoAttachmentAudio(service).TranscribeAsync(VideoClip(), CancellationToken.None);
+
+        Assert.Null(result.Error);
+        Assert.Equal(new VideoTranscriptSegment(42, 47, "Bonjour tout le monde!", true), Assert.Single(result.Segments));
+        Assert.Equal("json", handler.Fields["response_format"]);
+        Assert.False(handler.Fields.ContainsKey("language"));
+        Assert.False(handler.Fields.ContainsKey("prompt"));
+    }
+
+    [Fact]
+    public async Task VideoWithoutAnAudioTrackSkipsTheProvider()
+    {
+        var primary = FakeProvider.Success("elevenlabs", "scribe_v2", "ignored");
+        var clip = VideoClip() with { HasAudio = false, AudioWav = null, AudioEndSeconds = null };
+        var result = await new VideoAttachmentAudio(CreateService(primary, null)).TranscribeAsync(clip, CancellationToken.None);
+
+        Assert.Empty(result.Segments);
+        Assert.NotNull(result.Error);
+        Assert.Equal(0, primary.Calls);
+    }
+
+    private static AttachmentVideoMediaResult VideoClip() =>
+        new(DurationSeconds: 90, StartSeconds: 42, EndSeconds: 50, HasAudio: true,
+            Frames: [], AudioWav: [1, 2, 3, 4], AudioEndSeconds: 47, Error: null);
+
     [Theory]
     [InlineData("{\"text\":\"\"}", true)]
     [InlineData("{\"text\":\" \\t \"}", true)]
@@ -353,12 +424,23 @@ public sealed class VoiceTranscriptionTests
         public Uri? RequestUri { get; private set; }
         public string? ElevenKey { get; private set; }
         public AuthenticationHeaderValue? Authorization { get; private set; }
+        public Dictionary<string, string> Fields { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri;
             ElevenKey = request.Headers.TryGetValues("xi-api-key", out var values) ? values.Single() : null;
             Authorization = request.Headers.Authorization;
+            Fields.Clear();
+            if (request.Content is MultipartFormDataContent multipart)
+            {
+                foreach (var part in multipart)
+                {
+                    var name = part.Headers.ContentDisposition?.Name?.Trim('"');
+                    if (!string.IsNullOrEmpty(name) && part.Headers.ContentDisposition?.FileName is null)
+                        Fields[name] = await part.ReadAsStringAsync(cancellationToken);
+                }
+            }
             _ = request.Content is null ? Array.Empty<byte>() : await request.Content.ReadAsByteArrayAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson) };
         }

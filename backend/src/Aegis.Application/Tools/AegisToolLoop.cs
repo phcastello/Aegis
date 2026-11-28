@@ -59,6 +59,7 @@ public sealed class AegisToolLoop(
         var webSearchBudget = initialSearchActionBudget;
         var webSearchRequested = false;
         var pythonStarted = false;
+        var videoStarted = false;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
@@ -66,7 +67,7 @@ public sealed class AegisToolLoop(
             var round = CreateRoundRequest(request, tools, inputItems, auditInputItems, iteration, handsFree,
                 HandsFreeReply.Definition, decisionPending, context.AllowResearchDelegation,
                 webSearchRequested, webSearchBudget, argumentFailures,
-                context.AllowPythonDelegation, pythonStarted);
+                context.AllowPythonDelegation, pythonStarted, videoStarted);
             var response = await TurnLatencyProfile.MeasureAsync("model.round",
                 () => modelClient.RespondWithToolsAsync(round, cancellationToken));
             ConsumeWebSearchBudget(response.OutputItems, round.NativeSearchActionBudget, ref webSearchBudget, context.ConversationId);
@@ -96,6 +97,7 @@ public sealed class AegisToolLoop(
                     VoiceContinuation = handsFree ? HandsFreeReply.Close : null,
                     DelegatedResearchBrief = delegation.Brief,
                     DelegatePython = delegation.DelegatePython,
+                    DelegateVideo = delegation.DelegateVideo,
                     AuditData = CombineAuditData(response, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget)
                 };
             }
@@ -156,6 +158,7 @@ public sealed class AegisToolLoop(
                 else
                 {
                     pythonStarted |= call.Name == PythonScriptTool.ToolName;
+                    videoStarted |= call.Name == AttachmentVideoTool.ToolName;
                     var tool = FindRoundTool(round, call.Name);
                     result = tool is null
                         ? new AegisToolResult(false, "{\"error\":\"unknown_tool\"}", "unknown_tool")
@@ -172,7 +175,8 @@ public sealed class AegisToolLoop(
                     Content = IsPrivateTool(call.Name) ? "[redacted]" : result.Content,
                     result.AuditMetadataJson
                 });
-                inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                inputItems.Add(CreateFunctionCallOutputItem(call.Id,
+                    result.ModelOutput is { } modelOutput ? modelOutput : result.Content));
                 auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
                     AuditToolOutput(call.Name, result.Content)));
                 if (IsRecoverableArgumentFailure(result) && ++argumentFailures > 1)
@@ -207,6 +211,7 @@ public sealed class AegisToolLoop(
         var webSearchBudget = initialSearchActionBudget;
         var webSearchRequested = false;
         var pythonStarted = false;
+        var videoStarted = false;
 
         for (var iteration = 1; iteration <= DefaultMaxIterations + 1; iteration++)
         {
@@ -217,7 +222,7 @@ public sealed class AegisToolLoop(
             var round = CreateRoundRequest(request, tools, inputItems, auditInputItems, iteration, handsFree,
                 terminal, decisionPending, context.AllowResearchDelegation,
                 webSearchRequested, webSearchBudget, argumentFailures,
-                context.AllowPythonDelegation, pythonStarted);
+                context.AllowPythonDelegation, pythonStarted, videoStarted);
             await foreach (var chunk in modelClient.RespondWithToolsStreamAsync(round, cancellationToken))
             {
                 if (chunk.IsDone)
@@ -285,7 +290,7 @@ public sealed class AegisToolLoop(
                 yield return new ModelStreamChunk(null, true, completed.Provider, completed.Model, completed.Purpose,
                     AuditData: CombineStreamAuditData(completed, responses, executions, stopwatch.ElapsedMilliseconds, initialSearchActionBudget),
                     VoiceContinuation: handsFree ? HandsFreeReply.Close : null, DelegatedResearchBrief: delegation.Brief,
-                    DelegatePython: delegation.DelegatePython);
+                    DelegatePython: delegation.DelegatePython, DelegateVideo: delegation.DelegateVideo);
                 yield break;
             }
 
@@ -385,12 +390,14 @@ public sealed class AegisToolLoop(
                 var (category, label, completedLabel) = ToolDisplay(call.Name);
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(category, "started", label));
                 pythonStarted |= call.Name == PythonScriptTool.ToolName;
+                videoStarted |= call.Name == AttachmentVideoTool.ToolName;
                 var tool = FindRoundTool(round, call.Name);
                 var result = tool is null
                     ? new AegisToolResult(false, "{\"error\":\"unknown_tool\"}", "unknown_tool")
                     : await ExecuteToolSafelyAsync(tool, call, context, cancellationToken);
                 executions.Add(new { iteration, tool = call.Name, result.Success, result.ErrorCode, result.AuditMetadataJson });
-                inputItems.Add(CreateFunctionCallOutputItem(call.Id, result.Content));
+                inputItems.Add(CreateFunctionCallOutputItem(call.Id,
+                    result.ModelOutput is { } modelOutput ? modelOutput : result.Content));
                 auditInputItems.Add(CreateFunctionCallOutputItem(call.Id,
                     AuditToolOutput(call.Name, result.Content)));
                 yield return new ModelStreamChunk(null, false, ToolStatus: new ToolStatus(
@@ -408,13 +415,15 @@ public sealed class AegisToolLoop(
     private List<ModelToolDefinition> DescribeAvailableTools(ToolExecutionContext context) =>
         toolRegistry.GetAvailableTools(context)
             .Where(tool => tool is not PythonScriptTool { IsAvailable: false } &&
-                (tool is not AttachmentReadTool || context.AttachmentReader is { OffersReader: true }))
+                (tool is not AttachmentReadTool || context.AttachmentReader is { OffersReader: true }) &&
+                (tool is not AttachmentVideoTool || context.AttachmentReader is { OffersVideoReader: true }))
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)
             .Select(tool => new ModelToolDefinition(tool.Name, tool.Description, tool.ParametersSchema))
             .ToList();
 
     private IAegisTool? FindRoundTool(ModelToolRequest round, string name) =>
-        (name is PythonScriptTool.ToolName or AttachmentReadTool.ToolName) && !round.Tools.Any(tool => tool.Name == name)
+        (name is PythonScriptTool.ToolName or AttachmentReadTool.ToolName or AttachmentVideoTool.ToolName) &&
+            !round.Tools.Any(tool => tool.Name == name)
             ? null
             : toolRegistry.Find(name);
 
@@ -423,7 +432,7 @@ public sealed class AegisToolLoop(
         IReadOnlyList<JsonElement>? inputItems, IReadOnlyList<JsonElement>? auditInputItems,
         int iteration, bool handsFree, ModelToolDefinition terminal, bool decisionPending,
         bool allowResearchDelegation, bool webSearchRequested, int? webSearchBudget, int argumentFailures,
-        bool allowPythonDelegation, bool pythonStarted)
+        bool allowPythonDelegation, bool pythonStarted, bool videoStarted)
     {
         var ordinaryRound = iteration <= DefaultMaxIterations && argumentFailures <= 1;
         var requiresSearchDecision = handsFree || allowResearchDelegation;
@@ -439,6 +448,8 @@ public sealed class AegisToolLoop(
         var pythonAvailable = roundTools.Any(tool => tool.Name == PythonScriptTool.ToolName);
         var canDelegatePython = pythonAvailable && allowPythonDelegation && !pythonStarted;
         if (canDelegatePython) roundTools.Add(ResearchDelegation.PythonDefinition);
+        if (allowResearchDelegation && !videoStarted && roundTools.Any(tool => tool.Name == AttachmentVideoTool.ToolName))
+            roundTools.Add(ResearchDelegation.VideoDefinition);
         if (decisionPending)
             roundTools.Add(HandsFreeDirection.IgnoreDefinition);
 
@@ -579,6 +590,7 @@ public sealed class AegisToolLoop(
     private static (string Category, string Started, string Completed) ToolDisplay(string name) => name switch
     {
         AttachmentReadTool.ToolName => ("attachment", "Lendo anexo…", "Anexo consultado"),
+        AttachmentVideoTool.ToolName => ("video", "Analisando vídeo…", "Trecho consultado"),
         PythonScriptTool.ToolName => ("python", "Executando Python…", "Python executado"),
         "memory_remember" => ("memory", "Guardando memória…", "Memória guardada"),
         "memory_search" => ("memory", "Consultando memória…", "Memória consultada"),
@@ -683,7 +695,7 @@ public sealed class AegisToolLoop(
         { return IntegrationError("email_temporarily_unavailable", "Google está temporariamente indisponível. Tente mais tarde."); }
         catch (Exception exception)
         {
-            if (IsPythonTool(toolCall.Name) || toolCall.Name == AttachmentReadTool.ToolName)
+            if (IsPythonTool(toolCall.Name) || IsAttachmentTool(toolCall.Name))
                 logger.LogWarning("Tool {ToolName} failed: {ErrorType}.", toolCall.Name, exception.GetType().Name);
             else
                 logger.LogWarning(exception, "Tool {ToolName} failed.", toolCall.Name);
@@ -753,18 +765,21 @@ public sealed class AegisToolLoop(
     private static bool IsPythonTool(string name) =>
         name is PythonScriptTool.ToolName or ResearchDelegation.PythonToolName;
 
+    private static bool IsAttachmentTool(string name) =>
+        name is AttachmentReadTool.ToolName or AttachmentVideoTool.ToolName or ResearchDelegation.VideoToolName;
+
     private static bool IsPrivateTool(string name) =>
-        name == AttachmentReadTool.ToolName || IsPythonTool(name) || name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
+        IsAttachmentTool(name) || IsPythonTool(name) || name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
         name.StartsWith("geographic_reminder_", StringComparison.Ordinal) || name.StartsWith("place_", StringComparison.Ordinal) ||
         name.StartsWith("location_", StringComparison.Ordinal);
 
     private static string AuditToolOutput(string name, string content) =>
-        name == AttachmentReadTool.ToolName ? "[attachment_tool_output_redacted]" :
+        IsAttachmentTool(name) ? "[attachment_tool_output_redacted]" :
         IsPythonTool(name) ? "[python_tool_output_redacted]" :
         IsPrivateTool(name) ? "[memory_tool_output_redacted]" : content;
 
     private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
-        calls.Any(call => call.Name == AttachmentReadTool.ToolName) ? "[attachment_tool_response_redacted]" :
+        calls.Any(call => IsAttachmentTool(call.Name)) ? "[attachment_tool_response_redacted]" :
         calls.Any(call => IsPythonTool(call.Name)) ? "[python_tool_response_redacted]" :
         calls.Any(call => IsPrivateTool(call.Name)) ? "[memory_response_redacted]" : body;
 
@@ -777,7 +792,7 @@ public sealed class AegisToolLoop(
         });
     }
 
-    private static JsonElement CreateFunctionCallOutputItem(string callId, string output)
+    private static JsonElement CreateFunctionCallOutputItem(string callId, object output)
     {
         return ToJsonElement(new
         {
@@ -794,7 +809,8 @@ public sealed class AegisToolLoop(
             IsPrivateTool(name.GetString() ?? ""))
             return ToJsonElement(new { type = "function_call", name = name.GetString(),
                 call_id = item.TryGetProperty("call_id", out var id) ? id.GetString() : null,
-                arguments = IsPythonTool(name.GetString()!) ? "[python_tool_arguments_redacted]" : "[memory_tool_arguments_redacted]" });
+                arguments = IsPythonTool(name.GetString()!) ? "[python_tool_arguments_redacted]" :
+                    IsAttachmentTool(name.GetString()!) ? "[attachment_tool_arguments_redacted]" : "[memory_tool_arguments_redacted]" });
         return item;
     }
 

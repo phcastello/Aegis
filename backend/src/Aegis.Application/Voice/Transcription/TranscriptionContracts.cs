@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Aegis.Application.Voice.Transcription;
 
 public sealed record TranscriptionRequest(
@@ -5,13 +7,25 @@ public sealed record TranscriptionRequest(
     byte[] Audio,
     string FileName,
     string ContentType,
-    long ClientDurationMilliseconds);
+    long ClientDurationMilliseconds)
+{
+    public bool IsAttachmentAudio { get; init; }
+}
 
-public sealed record TranscriptionResult(Guid TranscriptionRequestId, string Text);
+public sealed record TranscriptionResult(Guid TranscriptionRequestId, string Text)
+{
+    [JsonIgnore]
+    public IReadOnlyList<TranscriptionSegment>? TimedSegments { get; init; }
+}
 
 public sealed record TranscriptionServiceStatus(bool Enabled, bool Configured, int MaxRecordingSeconds);
 
-public sealed record ProviderTranscriptionResult(string Text, string Provider, string Model);
+public sealed record TranscriptionSegment(double StartSeconds, double EndSeconds, string Text);
+
+public sealed record ProviderTranscriptionResult(string Text, string Provider, string Model)
+{
+    public IReadOnlyList<TranscriptionSegment>? TimedSegments { get; init; }
+}
 
 public enum TranscriptionFailureKind
 {

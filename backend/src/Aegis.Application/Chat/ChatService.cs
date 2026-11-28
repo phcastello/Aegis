@@ -109,7 +109,7 @@ public sealed class ChatService(
                 userMessage.Id,
                 assistantMessage.Id,
                 promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(completion.AuditData) : completion.AuditData));
-            StageResearch(userMessage, completion.DelegatedResearchBrief, isPython: completion.DelegatePython);
+            StageResearch(userMessage, completion.DelegatedResearchBrief, isPython: completion.DelegatePython, isVideo: completion.DelegateVideo);
 
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
@@ -288,7 +288,7 @@ public sealed class ChatService(
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id,
                 promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(chunk.AuditData) : chunk.AuditData));
             var researchVoiceSession = request.IsHandsFree && request.VoiceSegments ? request.VoiceSessionId : null;
-            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession, chunk.DelegatePython);
+            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession, chunk.DelegatePython, chunk.DelegateVideo);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -738,14 +738,16 @@ public sealed class ChatService(
             response.VoiceContinuation,
             response.Ignored,
             response.DelegatedResearchBrief,
-            response.DelegatePython);
+            response.DelegatePython,
+            response.DelegateVideo);
     }
 
-    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null, bool isPython = false)
+    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null, bool isPython = false,
+        bool isVideo = false)
     {
         if (brief is null) return;
         (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível."))
-            .Stage(userMessage, brief, voiceSessionId, isPython);
+            .Stage(userMessage, brief, voiceSessionId, isPython, isVideo);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(

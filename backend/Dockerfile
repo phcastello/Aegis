@@ -37,7 +37,7 @@ WORKDIR /app
 
 # Render a bounded view of large attachments before sending them to the model.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends poppler-utils libvips-tools util-linux \
+    && apt-get install -y --no-install-recommends poppler-utils libvips-tools util-linux ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .

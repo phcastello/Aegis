@@ -176,13 +176,33 @@ public sealed class ChatController(IChatService chatService, IVoiceService voice
 
     [HttpGet("messages/{messageId:guid}/attachments/{attachmentId:guid}")]
     public async Task<IActionResult> GetAttachment(Guid messageId, Guid attachmentId,
-        [FromServices] IAegisDbContext database, CancellationToken cancellationToken)
+        [FromServices] IAegisDbContext database, CancellationToken cancellationToken, [FromQuery] bool inline = false)
     {
         var file = await database.GetAttachmentAsync(messageId, attachmentId, cancellationToken);
         if (file is null) return NotFound();
         Response.Headers.CacheControl = "private, no-store";
         Response.Headers.XContentTypeOptions = "nosniff";
         var stream = await database.OpenAttachmentContentAsync(file, cancellationToken);
+        if (inline)
+        {
+            try
+            {
+                var sample = new byte[Math.Min(64, file.SizeBytes)];
+                await stream.ReadExactlyAsync(sample, cancellationToken);
+                if (ChatAttachmentContent.IdentifyVideo(file.FileName, sample) is { } videoType)
+                {
+                    stream.Position = 0;
+                    return File(stream, videoType, enableRangeProcessing: true);
+                }
+            }
+            catch
+            {
+                await stream.DisposeAsync();
+                throw;
+            }
+            await stream.DisposeAsync();
+            return NotFound();
+        }
         return File(stream, file.ContentType, file.FileName, enableRangeProcessing: true);
     }
 
