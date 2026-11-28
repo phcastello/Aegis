@@ -666,7 +666,12 @@ class NodeHandsFreeBackend internal constructor(
               unit.worker=Thread({
                 var synthesizedFrames = 0L
                 val pipe=object:HandsFreePcmSink {
-                  override fun write(bytes:ByteArray,offset:Int,count:Int){unit.output.write(bytes,offset,count);synthesizedFrames += count / 2}
+                  override fun write(bytes:ByteArray,offset:Int,count:Int) {
+                    unit.output.write(bytes,offset,count)
+                    // Wake a reader on the empty pipe without waiting for its timeout.
+                    unit.output.flush()
+                    synthesizedFrames += count / 2
+                  }
                   override fun finish()=Unit
                   override fun abort()=unit.close()
                   override fun close()=Unit

@@ -1270,6 +1270,44 @@ class NodeHandsFreeBackendTest {
     }
   }
 
+  @Test fun segmentPcmWakesWaitingPlayerBeforeHttpEof() {
+    val playbackThread = Thread.currentThread()
+    val firstPlayed = CountDownLatch(1)
+    val device = NodeHandsFreePcmStreamTest.Device(autoPlay = true)
+    val pcm = byteArrayOf(1, 2, 3, 4)
+    Fixture(respond = { request, normal ->
+      when (request.path) {
+        "/api/chat/messages/stream" -> segmentedReply(request)
+        "/api/voice/speech/segments" -> segmentPcmReply().copy(bytes = pcm, stream = { output ->
+          // Send PCM only after the playback thread has blocked on the empty pipe.
+          val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+          while (playbackThread.state != Thread.State.TIMED_WAITING ||
+            playbackThread.stackTrace.none { it.className == "java.io.PipedInputStream" }) {
+            check(System.nanoTime() < deadline) { "Player did not wait for segment PCM" }
+            Thread.sleep(1)
+          }
+          output.write(pcm, 0, 2)
+          output.flush()
+          // Leave the response open. Without notification, the pipe waits one second
+          // before noticing available bytes and this times out first.
+          check(firstPlayed.await(500, TimeUnit.MILLISECONDS)) { "Segment PCM did not wake the player before HTTP EOF" }
+          output.write(pcm, 2, 2)
+        })
+        else -> normal
+      }
+    }).use { fixture ->
+      val native = HandsFreeStreamingPcmSink({ device })
+      val sink = object : HandsFreePcmSink by native {
+        override fun write(bytes: ByteArray, offset: Int, count: Int) {
+          native.write(bytes, offset, count)
+          if (device.playedFrames() > 0) firstPlayed.countDown()
+        }
+      }
+      assertTrue(fixture.backend().execute(wav(), session, null, sink, trace = null, incremental = true).playedAudio)
+      assertArrayEquals(pcm, device.recorded.toByteArray())
+    }
+  }
+
   @Test fun duplicateOrOutOfOrderSegmentsAbortTheRemainingAudioAndCannotContinue() {
     for(bad in listOf(0,2)) Fixture(respond={request,normal->
       if(request.path=="/api/chat/messages/stream") {
