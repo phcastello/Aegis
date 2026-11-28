@@ -6,9 +6,10 @@ import WebSourceStack from './WebSourceStack.vue';
 import { mergeResearchSites, topResearchSites, type ResearchSite } from '../services/researchSites';
 import { prepareWebResearch } from '../services/webResearchPresentation';
 import { clientEnvironment, openClientLink } from '../services/clientEnvironment';
-import { attachmentSize } from '../services/chatAttachments';
+import { attachmentSize, chatAttachmentUrl } from '../services/chatAttachments';
+import { copyVideoCitationLabels, type VideoCitation } from '../services/chatVideo';
 import MemoryActivityDisclosure from './MemoryActivityDisclosure.vue';
-import type { FeedbackRating, LocalChatMessage } from '../types/chat';
+import type { ChatAttachment, FeedbackRating, LocalChatMessage } from '../types/chat';
 
 const props = defineProps<{
   message: LocalChatMessage;
@@ -17,11 +18,13 @@ const props = defineProps<{
   activityStatus?: string | null;
   researchSites?: readonly ResearchSite[] | null;
   activityState?: 'working' | 'completed' | 'failed';
+  resolveVideo?: (citation: VideoCitation) => ChatAttachment | undefined;
 }>();
 const emit = defineEmits<{
   feedback: [message: LocalChatMessage, rating: FeedbackRating];
   replay: [message: LocalChatMessage];
   stopPlayback: [];
+  openVideo: [citation: VideoCitation];
 }>();
 const copied = ref(false);
 const copyError = ref(false);
@@ -32,7 +35,7 @@ const attachmentError = ref(false);
 function attachmentUrl(id: string): string | undefined {
   const messageId = props.message.serverId ?? props.message.id;
   if (messageId.startsWith('local-') || id.startsWith('local-')) return;
-  return `${clientEnvironment().apiBaseUrl}/api/chat/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(id)}`;
+  return chatAttachmentUrl(messageId, id);
 }
 async function openAttachment(event: MouseEvent, id: string): Promise<void> {
   const url = attachmentUrl(id);
@@ -62,7 +65,8 @@ async function followSource(event: MouseEvent, href: string): Promise<void> {
 
 async function copy(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(props.message.content);
+    await navigator.clipboard.writeText(props.message.role === 'assistant'
+      ? copyVideoCitationLabels(props.message.content) : props.message.content);
     copied.value = true;
     copyError.value = false;
     window.setTimeout(() => copied.value = false, 1800);
@@ -88,7 +92,8 @@ async function copy(): Promise<void> {
         :activity="message.memoryActivity" />
       <div v-if="message.role === 'user' || message.content.trim() || message.attachments?.length || (message.streaming && !activityStatus)" class="message-bubble" :class="{ 'message-bubble--streaming': message.streaming }">
         <MarkdownMessage v-if="message.role !== 'user'" :content="message.content" :animate-changes="message.streaming"
-          :web-research="message.streaming ? null : message.webResearch" />
+          :web-research="message.streaming ? null : message.webResearch" :resolve-video="resolveVideo"
+          @open-video="emit('openVideo', $event)" />
         <ul v-if="message.attachments?.length" class="attachment-list" :aria-label="message.role === 'assistant' ? 'Arquivos gerados' : 'Arquivos anexados'">
           <li v-for="file in message.attachments" :key="file.id" class="attachment-chip">
             <a v-if="attachmentUrl(file.id)" class="attachment-name" :href="attachmentUrl(file.id)" :download="file.fileName"

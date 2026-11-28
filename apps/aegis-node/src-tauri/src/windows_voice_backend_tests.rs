@@ -498,6 +498,7 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             sources_event(conversation),
             json!({"type":"tool_status","turnId":turn,"category":"web_search","state":"completed","message":"Busca concluída"}),
             json!({"type":"tool_status","turnId":turn,"category":"python","state":"started","message":"Executando Python…"}),
+            json!({"type":"tool_status","turnId":turn,"category":"video","state":"started","message":"Analisando vídeo…"}),
             json!({"type":"token","turnId":turn,"content":"Never display uncommitted text."}),
             segment_event(turn, conversation, message, first, 0),
         ] {
@@ -516,7 +517,7 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             .expect("audio waited for HTTP EOF");
         {
             let events = server_observed.lock().unwrap();
-            assert_eq!(events.len(), 6);
+            assert_eq!(events.len(), 7);
             assert_eq!(events[0].kind, "conversation");
             assert_eq!(
                 json!(events[1]),
@@ -535,8 +536,9 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             );
             assert_eq!(events[3].tool_status.as_ref().unwrap().state, "completed");
             assert_eq!(events[4].tool_status.as_ref().unwrap().category, "python");
+            assert_eq!(events[5].tool_status.as_ref().unwrap().category, "video");
             assert_eq!(
-                json!(events[5]),
+                json!(events[6]),
                 json!({
                     "type":"final_segment","turnId":turn,"conversationId":conversation,
                     "assistantMessageId":message,"segmentId":first,"sequence":0,"content":"Resposta."
@@ -588,14 +590,15 @@ fn publishes_committed_text_and_plays_first_pcm_before_either_http_stream_finish
             "web_research_sources",
             "tool_status",
             "tool_status",
+            "tool_status",
             "final_segment",
             "final_segment",
             "done"
         ]
     );
-    assert_eq!(events[6].segment_id, Some(second));
-    assert_eq!(events[6].sequence, Some(1));
-    assert_eq!(events[7].assistant_message_id, Some(message));
+    assert_eq!(events[7].segment_id, Some(second));
+    assert_eq!(events[7].sequence, Some(1));
+    assert_eq!(events[8].assistant_message_id, Some(message));
     assert!(events
         .iter()
         .all(|e| e.conversation_id == Some(conversation) && e.turn_id == report.turn_id));

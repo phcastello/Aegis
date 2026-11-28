@@ -578,7 +578,7 @@ class NodeHandsFreeBackend internal constructor(
               val category=event.opt("category")
               val state=event.opt("state")
               val statusMessage=event.opt("message")
-              if(accepted && !stopped.get() && destination!=null && (category=="web_search" || category=="python") &&
+              if(accepted && !stopped.get() && destination!=null && (category=="web_search" || category=="python" || category=="video") &&
                 (event.isNull("conversationId") || event.opt("conversationId")==destination) &&
                 state is String && state in listOf("started","completed","failed") && statusMessage is String &&
                 statusMessage.isNotBlank() && statusMessage.length<=256 && statusMessage.none{it.isISOControl()}) {

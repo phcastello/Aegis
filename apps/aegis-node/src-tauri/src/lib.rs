@@ -216,11 +216,13 @@ pub fn run() {
     let builder = builder.plugin(native_notifications::plugin());
     let mut context = tauri::generate_context!();
     if let Ok(endpoint) = config::configured_endpoint() {
-        if let Some(csp) = context.config_mut().app.security.csp.as_mut() {
-            let policy = csp.to_string()
-                .replace("connect-src ", &format!("connect-src {} ", endpoint.base_url()))
-                .replace("img-src ", &format!("img-src {} ", endpoint.base_url()));
-            *csp = tauri::utils::config::Csp::Policy(policy);
+        let security = &mut context.config_mut().app.security;
+        for csp in [&mut security.csp, &mut security.dev_csp]
+            .into_iter()
+            .flatten()
+        {
+            *csp =
+                tauri::utils::config::Csp::Policy(endpoint.client_content_policy(&csp.to_string()));
         }
     }
     builder

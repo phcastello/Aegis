@@ -36,7 +36,7 @@ export class StreamTextReveal {
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 export type NativeVoiceStreamKind = 'conversation' | 'final_segment' | 'done' | 'interrupted' | 'error' | 'ignored' | 'tool_status' | 'web_research_sources';
 export interface NativeVoiceToolStatus {
-  category: 'web_search' | 'python';
+  category: 'web_search' | 'python' | 'video';
   state: 'started' | 'completed' | 'failed';
   message: string;
 }
@@ -82,7 +82,7 @@ export function parseNativeVoiceStreamEvent(payload: unknown): NativeVoiceStream
   if (type === 'tool_status') {
     if (!conversationId || assistantMessageId !== null || !row.toolStatus || typeof row.toolStatus !== 'object') return null;
     const status = row.toolStatus as Record<string, unknown>;
-    if ((status.category !== 'web_search' && status.category !== 'python') ||
+    if ((status.category !== 'web_search' && status.category !== 'python' && status.category !== 'video') ||
       (status.state !== 'started' && status.state !== 'completed' && status.state !== 'failed') ||
       typeof status.message !== 'string' || !status.message.trim() || status.message.length > 240) return null;
     return { type, turnId: row.turnId, conversationId, assistantMessageId,

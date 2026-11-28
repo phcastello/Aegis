@@ -4,6 +4,7 @@ import { observeGoogleConnection } from '../services/googleConnection';
 import AegisMark from '../components/AegisMark.vue';
 import RuriMascot from '../components/RuriMascot.vue';
 import ChatMessage from '../components/ChatMessage.vue';
+import VideoAttachmentDialog from '../components/VideoAttachmentDialog.vue';
 import AttachmentPreview from '../components/AttachmentPreview.vue';
 import BackgroundResearchStatus from '../components/BackgroundResearchStatus.vue';
 import WebResearchActivity from '../components/WebResearchActivity.vue';
@@ -16,6 +17,7 @@ import RecordingComposer from '../components/RecordingComposer.vue';
 import RenameConversationDialog from '../components/RenameConversationDialog.vue';
 import { clientEnvironment } from '../services/clientEnvironment';
 import { attachmentSize, checkAttachmentLimits, pickedFile, releaseAttachment, sharedAttachmentFile, uploadAttachment, type DraftAttachment } from '../services/chatAttachments';
+import { resolveVideoCitation, type VideoCitation } from '../services/chatVideo';
 import { initialConversationId } from '../services/conversationSession';
 import { ConversationSyncQueue, mergeConversationMessages } from '../services/conversationSync';
 import { NativeVoiceSegments, parseNativeVoiceStreamEvent, StreamTextReveal, STREAM_FRAME_MS, type NativeVoiceToolStatus } from '../services/streamTextPresentation';
@@ -93,6 +95,13 @@ const hasDraft = (owner: ConversationContext): boolean => Boolean(owner.draft.tr
 const unsentConversation = computed(() => unsentConversations.value.find(owner => owner !== selected.value && hasDraft(owner)) ?? null);
 if (initialId) contexts.set(initialId, selected.value);
 const messages = computed(() => selected.value.messages);
+const videoTarget = ref<{ citation: VideoCitation; fileName: string } | null>(null);
+const resolveVideo = (citation: VideoCitation) => resolveVideoCitation(messages.value, citation);
+function openVideo(citation: VideoCitation): void {
+  const file = resolveVideo(citation);
+  if (file) videoTarget.value = { citation, fileName: file.fileName };
+}
+watch(selected, () => { videoTarget.value = null; });
 const conversationId = computed(() => selected.value.id);
 const draft = computed({ get: () => selected.value.draft, set: value => { selected.value.draft = value; } });
 const isLoading = computed(() => selectedHasActiveTurn.value);
@@ -1919,6 +1928,8 @@ onBeforeUnmount(() => {
               : null"
             :activity-state="toolStatusState === 'completed' ? 'completed' : toolStatusState === 'failed' ? 'failed' : 'working'"
             :research-sites="message.role === 'assistant' && message.id === messages[messages.length - 1]?.id ? selectedResearchSites : null"
+            :resolve-video="resolveVideo"
+            @open-video="openVideo"
             @feedback="openFeedback"
             @replay="replayMessage"
             @stop-playback="stopPlayback"
@@ -2001,6 +2012,7 @@ onBeforeUnmount(() => {
     </div>
 
     <ConversationInfo v-if="infoTarget" :conversation-id="infoTarget.id" :created-at="infoTarget.createdAt" @close="infoTarget = null" />
+    <VideoAttachmentDialog v-if="videoTarget" :citation="videoTarget.citation" :file-name="videoTarget.fileName" @close="videoTarget = null" />
     <RenameConversationDialog v-if="renameTarget" :title="renameTarget.title || 'Nova conversa'" :saving="isRenaming" :error="renameError" @cancel="renameTarget = null" @save="handleRenameConversation" />
 
     <FeedbackDialog

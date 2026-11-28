@@ -22,6 +22,26 @@ const date = '2026-10-01T12:00:00Z';
 // A ZIP archive containing aula/sala.txt with the text "Sala 517".
 const zipBase64 = 'UEsDBBQAAAAAAAAAIQA511y0CAAAAAgAAAANAAAAYXVsYS9zYWxhLnR4dFNhbGEgNTE3UEsBAhQAFAAAAAAAAAAhADnXXLQIAAAACAAAAA0AAAAAAAAAAAAAAIABAAAAAGF1bGEvc2FsYS50eHRQSwUGAAAAAAEAAQA7AAAAMwAAAAAA';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const videoUser = '77777777-0000-4000-8000-000000000001';
+const videoFile = '77777777-0000-4000-8000-000000000002';
+const missingUser = '77777777-0000-4000-8000-000000000003';
+const videoPath = `/api/chat/messages/${videoUser}/attachments/${videoFile}`;
+// VP8, 32×24, six keyframes at 2 FPS, generated from a blue FFmpeg color source.
+const videoBytes = Buffer.from([
+  'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAOaEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZU',
+  'rmtTrIHYTbuMU6uEElTDZ1OsggElTbuMU6uEHFO7a1OsggMp7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsirXsYMPQkBNgI1M',
+  'YXZmNjIuMTIuMTAxV0GNTGF2ZjYyLjEyLjEwMUSJiECncAAAAAAAFlSua8iuAQAAAAAAAD/XgQFzxYg2N3SRpQT/MpyBACK1nIN1',
+  'bmSIgQCGhVZfVlA4g4EBI+ODhB3NZQDgkLCBILqBGJqBAlWwhFW5gQESVMNn/HNzoGPAgGfImkWjh0VOQ09ERVJEh41MYXZmNjIu',
+  'MTIuMTAxc3PWY8CLY8WINjd0kaUE/zJnyKFFo4dFTkNPREVSRIeUTGF2YzYyLjI4LjEwMSBsaWJ2cHhnyKFFo4hEVVJBVElPTkSH',
+  'kzAwOjAwOjAzLjAwMDAwMDAwMAAfQ7Z1QX3ngQCjvYEAAIDQAgCdASogABgAAEcIhYWIhYSIAgICdaoD+AIIIQg9AP7/TRL//FhX',
+  '8WFfxYV/8WFf/PzO7cX85gCjvYEB9IDQAgCdASogABgAAEcIhYWIhYSIAgICdaoD+AIIIQg9AP7/TRL//FhX8WFfxYV/8WFf/PzO',
+  '7cX85gCjvYED6IDQAgCdASogABgAAEcIhYWIhYSIAgICdaoD+AIIIQg9AP7/TRL//FhX8WFfxYV/8WFf/PzO7cX85gCjvYEF3IDQ',
+  'AgCdASogABgAAEcIhYWIhYSIAgICdaoD+AIIIQg9AP7/TRL//FhX8WFfxYV/8WFf/PzO7cX85gCjvYEH0IDQAgCdASogABgAAEcI',
+  'hYWIhYSIAgICdaoD+AIIIQg9AP7/TRL//FhX8WFfxYV/8WFf/PzO7cX85gCjvYEJxIDQAgCdASogABgAAEcIhYWIhYSIAgICdaoD',
+  '+AIIIQg9AP7/TRL//FhX8WFfxYV/8WFf/PzO7cX85gAcU7tr7LuPs4EAt4r3gQHxggGm8IEDu5CzggH0t4r3gQHxggGm8IFCu5Cz',
+  'ggPot4r3gQHxggGm8IGBu5CzggXct4r3gQHxggGm8IHAu5CzggfQt4r3gQHxggGm8IH/u5GzggnEt4v3gQHxggGm8IIBPg==',
+].join(''), 'base64');
 async function until(condition, label) {
   for (let attempt = 0; attempt < 150; attempt++) { if (condition()) return; await delay(20); }
   throw Error(`Timed out: ${label}`);
@@ -33,6 +53,7 @@ function createFixture(viteOrigin) {
   const streams = new Map(), uploads = new Map();
   let newConversations = 0;
   const requests = [], cancellations = [], completions = [], deletions = [], speech = [];
+  const videoRanges = [];
   let holdChunkIndex = null, heldChunk = null;
   let current, failNext = false, heldConversation = null, holdConversationId = null;
   const summary = row => ({ id: row.id, title: row.title, createdAt: row.createdAt, updatedAt: row.updatedAt, messageCount: row.messages.length,
@@ -44,6 +65,15 @@ function createFixture(viteOrigin) {
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     if (req.method === 'OPTIONS') return json(res, null, 204);
     const url = new URL(req.url, 'http://localhost'), path = url.pathname;
+    if (path === videoPath && url.searchParams.get('inline') === 'true') {
+      const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '');
+      if (!range) return json(res, null, 416);
+      const start = Number(range[1]), end = Math.min(range[2] ? Number(range[2]) : Infinity, videoBytes.length - 1);
+      videoRanges.push(range[0]);
+      res.writeHead(206, { 'Content-Type': 'video/webm', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1,
+        'Content-Range': `bytes ${start}-${end}/${videoBytes.length}` });
+      return res.end(videoBytes.subarray(start, end + 1));
+    }
     if (!path.startsWith('/api/')) {
       const response = await fetch(viteOrigin + req.url), headers = Object.fromEntries(response.headers);
       for (const name of ['content-encoding', 'content-length', 'transfer-encoding']) delete headers[name];
@@ -121,9 +151,10 @@ function createFixture(viteOrigin) {
           const attachments = body.attachmentUploadIds?.map((uploadId, index) => {
             const { fileName, contentType, sizeBytes, received } = uploads.get(uploadId);
             assert.equal(received, sizeBytes);
-            return { id: `attachment-${index}`, fileName, contentType, sizeBytes };
+            return { id: fileName === 'gravacao.webm' ? videoFile : `attachment-${index}`, fileName, contentType, sizeBytes };
           });
-          data.get(id).messages.push({ id: `${body.turnId}-user`, conversationId: id, role: 'user', content: body.content, attachments, createdAt: date });
+          const userId = attachments?.some(file => file.id === videoFile) ? videoUser : `${body.turnId}-user`;
+          data.get(id).messages.push({ id: userId, conversationId: id, role: 'user', content: body.content, attachments, createdAt: date });
           this.accepted = true; this.event({ type: 'conversation', conversationId: id });
         },
         token(content) { this.content += content; this.event({ type: 'token', content }); },
@@ -142,7 +173,7 @@ function createFixture(viteOrigin) {
     }
     return json(res, { error: `Unknown fixture path: ${path}` }, 404);
   });
-  return { server, data, uploads, requests, cancellations, completions, deletions, speech,
+  return { server, data, uploads, requests, cancellations, completions, deletions, speech, videoRanges,
     holdChunk(index) { holdChunkIndex = index; },
     get heldChunk() { return heldChunk; },
     holdConversation(id) { holdConversationId = id; },
@@ -635,6 +666,36 @@ try {
         await restored.locator('.composer textarea').fill('Mensagem após restauração inválida');
         equal(await restored.getByRole('button', { name: 'Enviar mensagem', exact: true }).isEnabled(), true, 'composer remains usable after missing-history restoration');
       } finally { await restored.close(); }
+      if (width <= 900 && await page.locator('#conversation-sidebar').evaluate(el => !el.inert)) await page.getByRole('button', { name: 'Fechar histórico', exact: true }).click();
+      await page.locator('input[type=file]').setInputFiles({ name: 'gravacao.webm', mimeType: 'application/octet-stream', buffer: videoBytes });
+      const videoTurn = await send('Em que momento aparece a tela azul?');
+      videoTurn.accept();
+      videoTurn.token(`A gravação mostra azul em [00:02](aegis-video:${videoUser}/${videoFile}#t=2). ` +
+        `Referência de outro chat [00:01](aegis-video:${missingUser}/${videoFile}#t=1).`);
+      videoTurn.done('Beta');
+      await settled();
+      const timestamp = page.getByRole('button', { name: 'Abrir gravacao.webm em 00:02' });
+      await timestamp.waitFor();
+      equal(await page.locator('button.video-citation').count(), 1, 'only a video in this conversation becomes clickable');
+      ok(await page.getByText('Referência de outro chat 00:01.').isVisible(), 'unresolved video keeps its text');
+      const videoAnswer = timestamp.locator('xpath=ancestor::article');
+      await videoAnswer.getByRole('button', { name: 'Copiar mensagem', exact: true }).click();
+      ok(!(await page.evaluate(() => window.fixtureClipboard.at(-1))).includes('aegis-video:'), 'copy preserves labels without internal references');
+      await timestamp.focus();
+      await timestamp.press('Enter');
+      const player = page.getByRole('dialog', { name: 'gravacao.webm' });
+      await player.waitFor();
+      await page.waitForFunction(() => Math.abs(document.querySelector('dialog video')?.currentTime - 2) < .02);
+      ok(fixture.videoRanges.length > 0, 'seeks the attached original over HTTP range');
+      equal(await player.locator('video').getAttribute('src'), `${origin}${videoPath}?inline=true`, 'requests the inline media route');
+      if (platform === 'android') await page.evaluate(() => window.dispatchEvent(new Event('aegis-back', { cancelable: true })));
+      else await page.keyboard.press('Escape');
+      await player.waitFor({ state: 'detached' });
+      equal(await timestamp.evaluate(element => document.activeElement === element), true, 'returns focus to the timestamp');
+      await page.evaluate(id => localStorage.setItem('aegis.currentConversationId', id), b);
+      await page.reload();
+      await timestamp.waitFor();
+      equal(await page.locator('button.video-citation').count(), 1, 'restored history retains the validated timestamp');
       if (width <= 900 && await page.locator('#conversation-sidebar').evaluate(el => !el.inert)) await page.getByRole('button', { name: 'Fechar histórico', exact: true }).click();
       if (process.env.UX_SCREENSHOT_DIR) {
         await page.locator('#conversation-sidebar').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => undefined))));

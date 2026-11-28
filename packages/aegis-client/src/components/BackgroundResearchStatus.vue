@@ -8,9 +8,20 @@ import { parseWebResearchSourceCounts } from '../services/streamTextPresentation
 const props = defineProps<{ job?: ResearchJob; cancelling: ReadonlySet<string> }>();
 const emit = defineEmits<{ cancel: [job: ResearchJob] }>();
 const isPython = computed(() => props.job?.kind === 'python');
+const isVideo = computed(() => props.job?.kind === 'video');
+const cancelLabel = computed(() => isVideo.value ? 'Cancelar análise de vídeo'
+  : isPython.value ? 'Cancelar execução em Python' : 'Cancelar pesquisa em segundo plano');
 const sites = computed(() => topResearchSites(mergeResearchSites(new Map(), parseWebResearchSourceCounts(props.job?.sources, 128))));
 const statusLabel = computed(() => {
   const job = props.job;
+  if (isVideo.value) {
+    if (job?.state === 'completed') return 'Análise de vídeo concluída';
+    if (job?.state === 'failed') return 'A análise de vídeo foi interrompida.';
+    if (job?.state === 'cancelled') return 'Análise de vídeo cancelada.';
+    if (job?.phase === 'queued') return 'Análise de vídeo na fila';
+    if (job?.phase === 'finishing') return 'Preparando a resposta';
+    return 'Analisando vídeo em segundo plano';
+  }
   if (isPython.value) {
     if (job?.state === 'completed') return 'Execução em Python concluída';
     if (job?.state === 'failed') return 'A execução em Python foi interrompida.';
@@ -30,7 +41,7 @@ const statusLabel = computed(() => {
 <template>
   <div v-if="job" class="message-row message-row--assistant">
     <div class="research-job">
-      <span v-if="isPython" role="status">{{ statusLabel }}</span>
+      <span v-if="isPython || isVideo" role="status">{{ statusLabel }}</span>
       <template v-else>
         <WebResearchActivity v-if="job.state !== 'cancelled'" :sites="sites" :label="statusLabel"
           :state="job.state === 'failed' ? 'failed' : job.state === 'completed' ? 'completed' : 'working'" />
@@ -39,7 +50,7 @@ const statusLabel = computed(() => {
       </template>
       <button v-if="isResearchPending(job)" type="button" class="research-job__cancel"
         :disabled="cancelling.has(job.id)"
-        :aria-label="isPython ? 'Cancelar execução em Python' : 'Cancelar pesquisa em segundo plano'"
+        :aria-label="cancelLabel"
         @click="emit('cancel', job)">Cancelar</button>
     </div>
   </div>

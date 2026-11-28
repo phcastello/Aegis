@@ -52,6 +52,15 @@ impl Endpoint {
         url.set_path("/api/health");
         url
     }
+
+    #[cfg(any(test, feature = "native-runtime"))]
+    pub fn client_content_policy(&self, policy: &str) -> String {
+        let origin = self.base_url();
+        policy
+            .replace("connect-src ", &format!("connect-src {origin} "))
+            .replace("img-src ", &format!("img-src {origin} "))
+            .replace("media-src ", &format!("media-src {origin} "))
+    }
 }
 
 #[cfg(feature = "native-runtime")]
@@ -120,5 +129,30 @@ mod tests {
     fn http_is_debug_only() {
         assert!(Endpoint::parse("http://backend.lan:8090", false, true).is_err());
         assert!(Endpoint::parse("https://backend.example", false, true).is_ok());
+    }
+
+    #[test]
+    fn chat_media_policy_admits_the_configured_origin() {
+        let endpoint = Endpoint::parse("https://backend.example:8443/", false, true).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for key in ["csp", "devCsp"] {
+            let policy =
+                endpoint.client_content_policy(config["app"]["security"][key].as_str().unwrap());
+            let media = policy
+                .split(';')
+                .find(|value| value.trim_start().starts_with("media-src "))
+                .unwrap();
+            assert_eq!(
+                media.split_whitespace().collect::<Vec<_>>(),
+                [
+                    "media-src",
+                    "https://backend.example:8443",
+                    "'self'",
+                    "blob:"
+                ]
+            );
+            assert!(policy.contains("frame-src 'none'"));
+        }
     }
 }

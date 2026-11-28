@@ -6,14 +6,17 @@ import { clientEnvironment, externalUrl, openClientLink } from '../services/clie
 import { isGoogleAuthorizationLink } from '../services/emailConnectionLinks';
 import { renderWebResearchMarkdown, type ResearchLink } from '../services/webResearchPresentation';
 import { isUsableResearchFavicon } from '../services/researchSites';
-import type { WebResearch } from '../types/chat';
+import { formatVideoTime, parseVideoCitation, type VideoCitation } from '../services/chatVideo';
+import type { ChatAttachment, WebResearch } from '../types/chat';
 import WebSourceIcon from './WebSourceIcon.vue';
 
 const props = defineProps<{
   content: string;
   animateChanges?: boolean;
   webResearch?: WebResearch | null;
+  resolveVideo?: (citation: VideoCitation) => ChatAttachment | undefined;
 }>();
+const emit = defineEmits<{ openVideo: [citation: VideoCitation] }>();
 
 const messageElement = ref<HTMLElement | null>(null);
 
@@ -35,6 +38,23 @@ const defaultLinkOpen =
     renderer.renderToken(tokens, index, options));
 
 markdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {
+  const link = tokens[index];
+  const href = link.attrGet('href');
+  if (href && /^aegis-video:/i.test(href)) {
+    const citation = parseVideoCitation(href);
+    const file = citation ? props.resolveVideo?.(citation) : undefined;
+    const tag = file && citation ? 'button' : 'span';
+    const end = tokens.findIndex((token, position) => position > index && token.type === 'link_close');
+    if (end >= 0) tokens[end].tag = tag;
+    link.tag = tag;
+    link.attrs = file && citation ? [
+      ['class', 'video-citation'],
+      ['type', 'button'],
+      ['data-video-citation', href],
+      ['aria-label', `Abrir ${file.fileName} em ${formatVideoTime(citation.seconds)}`],
+    ] : null;
+    return renderer.renderToken(tokens, index, options);
+  }
   // The OAuth callback must return to this app tab so its connection result is visible.
   const citation = tokens[index].attrGet('class')?.split(' ').includes('web-research-link');
   tokens[index].attrSet('target', !citation && isGoogleAuthorizationLink(tokens[index].attrGet('href')) ? '_self' : '_blank');
@@ -56,7 +76,12 @@ async function followLink(event: MouseEvent): Promise<void> {
 }
 const linkError = ref<string | null>(null);
 
-const renderedResearch = computed(() => renderWebResearchMarkdown(markdown, props.content, props.webResearch));
+const renderedResearch = computed(() => {
+  const content = props.animateChanges
+    ? props.content.replace(/(\[[^\]\r\n]+\])\(aegis-video:[^)\r\n]*$/i, '$1')
+    : props.content;
+  return renderWebResearchMarkdown(markdown, content, props.webResearch);
+});
 const renderedContent = computed(() => DOMPurify.sanitize(renderedResearch.value.html, { ADD_ATTR: ['referrerpolicy', 'target'] }));
 
 type PreviewMode = 'hover' | 'focus' | 'pinned';
@@ -127,6 +152,13 @@ function blurCitation(event: FocusEvent): void {
 }
 
 function clickMessage(event: MouseEvent): void {
+  const video = event.target instanceof Element
+    ? event.target.closest<HTMLButtonElement>('button[data-video-citation]') : null;
+  if (video) {
+    const citation = parseVideoCitation(video.dataset.videoCitation ?? '');
+    if (citation && props.resolveVideo?.(citation)) emit('openVideo', citation);
+    return;
+  }
   const group = citationGroup(event.target);
   const details = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.web-citation__details') : null;
   if (group && details) {
@@ -363,6 +395,20 @@ function wrapAnimatedText(textNode: Text, start: number, end: number, elapsed: n
 </template>
 
 <style scoped>
+.markdown-message :deep(.video-citation) {
+  padding: .12em .45em;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.markdown-message :deep(.video-citation:hover) { background: var(--surface-raised); }
+.markdown-message :deep(.video-citation:focus-visible) { outline: 2px solid var(--accent); }
 .markdown-message :deep(.web-citation-group) {
   display: inline-flex;
   align-items: stretch;

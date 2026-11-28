@@ -41,6 +41,11 @@ function ensureActive(signal: AbortSignal): void {
 
 const uploadPath = (id: string) => `/api/chat/uploads/${encodeURIComponent(id)}`;
 
+export function chatAttachmentUrl(messageId: string, attachmentId: string): string {
+  const baseUrl = clientEnvironment().apiBaseUrl;
+  return `${baseUrl}/api/chat/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
 async function startUpload(file: DraftAttachment, signal: AbortSignal): Promise<Upload> {
   const expiresAt = Date.now() + UPLOAD_LIFETIME;
   const info = await requestJson<{ id: string; chunkSize: number; sizeBytes: number }>('/api/chat/uploads', {

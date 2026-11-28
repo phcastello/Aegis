@@ -201,6 +201,7 @@ impl VoiceChatStreamEvent {
         let category = match event["category"].as_str() {
             Some("web_search") => "web_search",
             Some("python") => "python",
+            Some("video") => "video",
             _ => return None,
         };
         if !matches!(
