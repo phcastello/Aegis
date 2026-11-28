@@ -192,7 +192,7 @@ let assertions = 0;
 const equal = (actual, expected, message) => { assert.equal(actual, expected, message); assertions++; };
 const ok = (value, message) => { assert.ok(value, message); assertions++; };
 async function checkAttachmentPreviews(page, platform, width) {
-  const add = page.getByRole('button', { name: 'Adicionar anexo', exact: true });
+  const add = page.getByRole('button', { name: 'Anexar arquivos', exact: true });
   const list = page.getByRole('list', { name: 'Anexos da mensagem' });
   const textarea = page.getByRole('textbox', { name: 'Mensagem', exact: true });
   const [addBox, textBox] = await Promise.all([add.boundingBox(), textarea.boundingBox()]);
@@ -220,9 +220,8 @@ async function checkAttachmentPreviews(page, platform, width) {
     { name: 'roteiro-de-viagem.txt', mimeType: 'text/plain', buffer: Buffer.from('Roteiro da viagem') },
     { name: 'aulas.zip', mimeType: 'application/zip', buffer: Buffer.from(zipBase64, 'base64') },
   ];
-  await add.click();
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Anexar arquivos', exact: true }).click();
+  await add.click();
   await (await chooser).setFiles(files);
   await list.waitFor();
   equal(await list.getByRole('listitem').count(), 3, 'each file gets its own preview card');
@@ -263,18 +262,6 @@ async function checkAttachmentPreviews(page, platform, width) {
   const next = card(name).locator('img'); await next.waitFor();
   ok(await next.evaluate(async image => { await image.decode(); return image.naturalWidth > 1; }), 'shared or pasted image also has a decoded thumbnail');
   await card(name).getByRole('button').click();
-
-  await add.click();
-  await page.getByRole('button', { name: 'Anexar link', exact: true }).click();
-  const linkDialog = page.getByRole('dialog', { name: 'Anexar link' });
-  await linkDialog.getByRole('textbox', { name: 'Endereço' }).fill('javascript:alert(1)');
-  await linkDialog.getByRole('button', { name: 'Anexar', exact: true }).click();
-  await linkDialog.getByRole('alert').waitFor();
-  await linkDialog.getByRole('textbox', { name: 'Endereço' }).fill('https://example.com/guia?id=7#mapa');
-  await linkDialog.getByRole('button', { name: 'Anexar', exact: true }).click();
-  await card('example.com').getByRole('button').waitFor();
-  equal(await linkDialog.count(), 0, 'attaching a valid URL closes the dialog');
-  await card('example.com').getByRole('button').click();
 
   await page.evaluate(platform => {
     if (platform === 'android') {

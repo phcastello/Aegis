@@ -671,11 +671,6 @@ function stageFiles(owner: ConversationContext, files: DraftAttachment[]): void 
   }
 }
 
-function stageLink(url: string): void {
-  const link = draftLink(url);
-  if (link) stageFiles(selected.value, [link]);
-}
-
 function pasteFiles(event: ClipboardEvent): void {
   const clipboard = event.clipboardData;
   const files = Array.from(clipboard?.files ?? [], pickedFile);
@@ -1994,7 +1989,7 @@ onBeforeUnmount(() => {
             <RecordingComposer v-if="transcription.isBusy.value" :state="transcription.state.value" :levels="transcription.inputLevels.value"
               @cancel="cancelRecording" @review="transcription.stopRecording('review')" @send="transcription.stopRecording('send')" />
             <div v-else class="composer-field">
-              <ChatAttachmentPicker @files="stageFiles(selected, $event.map(pickedFile))" @link="stageLink" />
+              <ChatAttachmentPicker @files="stageFiles(selected, $event.map(pickedFile))" />
               <textarea
                 v-model="draft"
                 rows="1"
