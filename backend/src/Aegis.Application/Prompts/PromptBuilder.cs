@@ -87,9 +87,10 @@ public sealed class PromptBuilder(IRuntimeContextProvider runtimeContextProvider
             {
                 role = "user", content = "Dados de memória recuperada: [automatic_memory_context_redacted]"
             });
-        if (ownerInstructions is not null)
-            OwnerInstructions.Include(input, auditInput, (await ownerInstructions.ReadAsync(cancellationToken)).Text);
-        return new PromptBuildResult(identity, dynamicContext, input, auditContext, auditInput);
+        var settings = ownerInstructions is null ? null : await ownerInstructions.ReadAsync(cancellationToken);
+        OwnerInstructions.Include(input, auditInput, settings?.Text);
+        return new PromptBuildResult(identity, dynamicContext, input, auditContext, auditInput)
+            { InstructionsSnapshot = settings };
     }
 
     private static async Task<string> LoadIdentityPromptAsync()

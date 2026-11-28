@@ -68,6 +68,8 @@ public static class DependencyInjection
         services.AddSingleton<ResearchFaviconDiscovery>();
         services.AddScoped<ResearchJobStore>();
         services.AddScoped<IResearchDelegationQueue>(provider => provider.GetRequiredService<ResearchJobStore>());
+        services.AddScoped<IBackgroundWorkStatusReader>(provider => provider.GetRequiredService<ResearchJobStore>());
+        services.AddScoped<IAegisTool, BackgroundWorkStatusTool>();
         services.AddHostedService<ResearchWorker>();
         services.AddSingleton<IWebSearchUsageRecorder, WebSearchUsageRecorder>();
 

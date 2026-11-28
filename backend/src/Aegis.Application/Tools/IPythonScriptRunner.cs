@@ -8,7 +8,11 @@ public interface IPythonScriptRunner
 }
 
 public sealed record PythonScriptResult(bool Success, string Stdout, string Stderr, string? ErrorCode = null,
-    IReadOnlyList<string>? GeneratedFiles = null);
+    IReadOnlyList<string>? GeneratedFiles = null)
+{
+    public string? SanitizedCode { get; init; }
+    public int? ReplayedWorkspaceSteps { get; init; }
+}
 
 public interface IScriptWorkspaceCleanup
 {

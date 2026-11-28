@@ -35,7 +35,8 @@ public sealed class WakeDatasetTests : IDisposable
         var sample = Sample();
         await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => store.SaveAsync(node, id, sample, default)));
         await Store().SaveAsync(node, id, sample, default);
-        Assert.Single(Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories));
+        Assert.Single(Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories));
+        Assert.Single(Directory.EnumerateFiles(directory, "*.meta", SearchOption.AllDirectories));
         var conflict = await Assert.ThrowsAsync<NodeException>(() => store.SaveAsync(node, id, sample with { Disposition = "activated" }, default));
         Assert.Equal(409, conflict.Status);
         await store.SaveAsync(Guid.NewGuid(), id, sample, default);
@@ -72,6 +73,78 @@ public sealed class WakeDatasetTests : IDisposable
         Assert.Equal(HttpStatusCode.Conflict, (await client.PutAsJsonAsync(path, sample with { Disposition = "candidate" })).StatusCode);
         await registry.SetEnabledAsync(null, paired.Node.Id, false);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(path, sample)).StatusCode);
+    }
+
+    [Fact]
+    public async Task CentralReviewRequiresPairingAndKeepsDeletionAcrossReplaysAndRestarts()
+    {
+        var (app, client, registry) = await NodeApiTests.Host(directory);
+        await using var host = app;
+        const string review = "/api/nodes/settings/wake-dataset";
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(review)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.DeleteAsync($"{review}/{node}/{id}")).StatusCode);
+        var paired = await NodeApiTests.Pair(registry);
+        client.DefaultRequestHeaders.Add("Authorization", "AegisNode " + paired.Secret);
+        var sample = Sample() with { CommandDisposition = "ignored" };
+        var ingest = $"/api/nodes/me/wake-samples/{id}";
+        var entryPath = $"{review}/{paired.Node.Id}/{id}";
+        var empty = await client.GetFromJsonAsync<WakeDatasetPage>(review);
+        Assert.Empty(empty!.Samples);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync(ingest, sample)).StatusCode);
+
+        var page = await client.GetFromJsonAsync<WakeDatasetPage>(review + "?filter=ignored");
+        var entry = Assert.Single(page!.Samples);
+        Assert.Equal(id, entry.EventId);
+        Assert.Equal(entry.Bytes, Assert.Single(page.Nodes).Bytes);
+        Assert.Equal(page.Bytes, entry.Bytes);
+        Assert.Null(entry.HumanLabel);
+        Assert.DoesNotContain("wav", await client.GetStringAsync(review), StringComparison.OrdinalIgnoreCase);
+        var audio = await client.GetFromJsonAsync<Dictionary<string, byte[]>>(entryPath + "/audio/trigger");
+        Assert.Equal(sample.Wav, audio!["wav"]);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync(entryPath + "/labels",
+            new WakeDatasetLabels("made_up", null))).StatusCode);
+
+        var response = await client.PutAsJsonAsync(entryPath + "/labels", new WakeDatasetLabels("correct", "not_directed"));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var restarted = Store();
+        var labeled = Assert.Single((await restarted.ReviewAsync(paired.Node.Id, "correct", 0, default)).Samples);
+        Assert.Equal("not_directed", labeled.CommandLabel);
+        Assert.Empty((await restarted.ReviewAsync(null, "unreviewed", 0, default)).Samples);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync(entryPath)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(entryPath + "/audio/trigger")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync(entryPath)).StatusCode);
+        await Store().SaveAsync(paired.Node.Id, id, sample, default);
+        Assert.Empty((await Store().ReviewAsync(null, null, 0, default)).Samples);
+        Assert.Empty(Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories));
+
+        await registry.SetEnabledAsync(null, paired.Node.Id, false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync(review)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ReviewPagesOldFilesAndReportsStorageBlockedUntilThereIsRoom()
+    {
+        var store = Store(10);
+        await Assert.ThrowsAsync<NodeException>(() => store.SaveAsync(node, id, Sample(), default));
+        var blocked = await store.ReviewAsync(null, null, 0, default);
+        Assert.True(blocked.QuotaBlocked);
+        Assert.True(Assert.Single(blocked.Nodes).QuotaBlocked);
+        Assert.Equal(0, blocked.Bytes);
+        Assert.True((await Store(10).ReviewAsync(null, null, 0, default)).QuotaBlocked);
+        var sender = Store();
+        var template = Sample();
+        await sender.SaveAsync(node, id, template, default);
+        File.Delete(Path.Combine(directory, node.ToString("D"), id.ToString("D") + ".meta"));
+        for (var i = 1; i <= 24; ++i)
+            await sender.SaveAsync(node, Guid.NewGuid(), template with { ActivatedAt = template.ActivatedAt.AddSeconds(i) }, default);
+        var reader = Store();
+        var first = await reader.ReviewAsync(node, null, 0, default);
+        Assert.Equal(25, first.Total);
+        Assert.Equal(24, first.NextOffset);
+        var last = await reader.ReviewAsync(node, null, first.NextOffset!.Value, default);
+        Assert.Null(last.NextOffset);
+        Assert.Equal(id, Assert.Single(last.Samples).EventId);
     }
 
     public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }

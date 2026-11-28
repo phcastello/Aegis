@@ -10,6 +10,12 @@ static const uint64_t fuel = UINT64_C(4000000000);
 static const char bootstrap[] =
     "import io, json, sys\n"
     "request = json.load(sys.stdin)\n"
+    "if request.get('workspace', False):\n"
+    "    import tempfile\n"
+    "    tempfile.tempdir = '/work'\n"
+    "if request.get('audit', False):\n"
+    "    from aegis_script_audit import shape\n"
+    "    print('AEGIS_SCRIPT_SHAPE:' + json.dumps(shape(request['code'])), file=sys.stderr)\n"
     "data = request['input']\n"
     "sys.stdin = io.TextIOWrapper(io.BytesIO((data or '').encode('utf-8')), encoding='utf-8')\n"
     "exec(compile(request['code'], '<aegis-script>', 'exec'), "

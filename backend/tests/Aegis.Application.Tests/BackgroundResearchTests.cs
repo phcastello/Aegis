@@ -11,6 +11,7 @@ using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Models;
 using Aegis.Infrastructure.Persistence;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,43 @@ namespace Aegis.Application.Tests;
 public sealed class BackgroundResearchTests
 {
     private const string ExampleScript = "import secrets\nprint(secrets.randbelow(53) - 10)";
+
+    [Fact]
+    public async Task HandsFreeStatusFromAnotherSessionReadsVerifiedProgressWithoutRestartingWork()
+    {
+        var model = new WorkStatusModel();
+        await using var services = Services(model, new ConversationChanges());
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        var store = scope.ServiceProvider.GetRequiredService<ResearchJobStore>();
+        var job = await store.CreateAsync(new CreateResearchJobRequest(Guid.NewGuid(), null, "Pedido privado de pesquisa."), default);
+        Assert.NotNull(await store.ClaimAsync(default));
+        Assert.True(await store.ReportAsync(job.Id, "searching", [new("https://example.com/item", 2)], default));
+
+        var status = Assert.Single(await store.ReadStatusAsync(job.ConversationId, false, default));
+        Assert.Equal("Pedido privado de pesquisa.", status.Request);
+        Assert.True(status.InThisConversation);
+        Assert.Equal(1, status.ObservedLinks);
+        Assert.Empty(await store.ReadStatusAsync(Guid.NewGuid(), false, default));
+
+        var accepted = false;
+        var loop = new AegisToolLoop(model, new AegisToolRegistry([new BackgroundWorkStatusTool(store)]),
+            NullLogger<AegisToolLoop>.Instance, services.GetRequiredService<AegisMetrics>());
+        var context = new ToolExecutionContext(Guid.NewGuid(), Guid.NewGuid(), "Como está?", HandsFreeReply.Origin,
+            Guid.NewGuid(), VoiceSegments: true, AcceptVoiceTurn: _ =>
+            {
+                accepted = true;
+                return Task.CompletedTask;
+            });
+        var chunks = new List<ModelStreamChunk>();
+        await foreach (var chunk in loop.StreamAsync(new ModelRequest("", "Como está?"), context))
+            chunks.Add(chunk);
+        Assert.True(accepted);
+        Assert.Equal("A pesquisa está em andamento e já registrou uma fonte.",
+            Assert.Single(chunks, chunk => chunk.FinalSpeechSegment is not null).FinalSpeechSegment);
+        Assert.Equal(ResearchJob.Running, (await store.GetAsync(job.Id, default))!.State);
+        Assert.Single(await db.ResearchJobs.ToListAsync());
+    }
 
     [Fact]
     public async Task CompletedResearchStreamsTheEntireAnswerToItsOriginatingVoiceSession()
@@ -327,6 +365,7 @@ public sealed class BackgroundResearchTests
         const string original = "Pedido de origem desta conversa.";
         const string brief = "Contexto autorizado para o trabalho.";
         const string preference = "Comece com uma unidade de medida por extenso.";
+        const string laterPreference = "Uma instrução nova para o próximo pedido.";
         var transport = new DelegatedJobTransport(isPython);
         using var http = new HttpClient(transport) { BaseAddress = new Uri("https://responses.test/") };
         using var metrics = new AegisMetrics();
@@ -342,12 +381,15 @@ public sealed class BackgroundResearchTests
             var conversation = new Conversation(Conversation.DefaultTitle);
             var origin = conversation.AddMessage(ChatRoles.User, original);
             var settings = scope.ServiceProvider.GetRequiredService<IOwnerInstructions>();
-            await settings.UpdateAsync(preference, Guid.Empty, CancellationToken.None);
+            var pinned = await settings.UpdateAsync(preference, Guid.Empty, CancellationToken.None);
+            Assert.NotNull(pinned);
             db.Conversations.Add(conversation);
             db.ChatMessages.Add(origin);
             await db.SaveChangesAsync();
-            scope.ServiceProvider.GetRequiredService<ResearchJobStore>().Stage(origin, brief, session, isPython);
+            scope.ServiceProvider.GetRequiredService<ResearchJobStore>().Stage(origin, brief, session, isPython, instructions: pinned);
             await db.SaveChangesAsync();
+            Assert.DoesNotContain(preference, origin.MetadataJson ?? "");
+            Assert.NotNull(await settings.UpdateAsync(laterPreference, pinned.Revision, CancellationToken.None));
             jobId = origin.Id;
         }
 
@@ -364,6 +406,7 @@ public sealed class BackgroundResearchTests
         Assert.Contains(isPython ? "Use run_python" : "Use a pesquisa nativa", instructions);
         Assert.Equal("user", input[1].GetProperty("role").GetString());
         Assert.Contains(preference, input[1].GetProperty("content").GetString());
+        Assert.DoesNotContain(laterPreference, input[1].GetProperty("content").GetString());
         var userContent = input[2].GetProperty("content").GetString();
         Assert.Contains(brief, userContent);
         if (isPython) Assert.Contains(original, userContent);
@@ -422,6 +465,7 @@ public sealed class BackgroundResearchTests
         var dbName = Guid.NewGuid().ToString();
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
         services.AddDbContext<AegisDbContext>(options => options.UseInMemoryDatabase(dbName));
         services.AddSingleton<IConversationChangePublisher>(changes);
         services.AddSingleton<IAegisModelClient>(model);
@@ -446,6 +490,38 @@ public sealed class BackgroundResearchTests
     {
         public readonly System.Collections.Concurrent.ConcurrentQueue<Guid> Ids = new();
         public void Publish(Guid conversationId) => Ids.Enqueue(conversationId);
+    }
+
+    private sealed class WorkStatusModel : IAegisModelClient
+    {
+        public Task<ModelToolResponse> RespondWithToolsAsync(ModelToolRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ModelToolStreamChunk> RespondWithToolsStreamAsync(ModelToolRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            await Task.Yield();
+            var output = request.InputItems!.FirstOrDefault(item => item.TryGetProperty("type", out var value) &&
+                value.ValueEquals("function_call_output"));
+            var audit = new LlmRequestAuditData("fixture", "status", true, 1, "{}", 200, null, null, null);
+            if (output.ValueKind == JsonValueKind.Undefined)
+            {
+                Assert.Contains(request.Tools, tool => tool.Name == BackgroundWorkStatusTool.ToolName);
+                yield return new(null, true, [new("status", BackgroundWorkStatusTool.ToolName, JsonSerializer.SerializeToElement(new { }))],
+                    [], Provider: "fixture", Model: "status", AuditData: audit);
+                yield break;
+            }
+            using var parsed = JsonDocument.Parse(output.GetProperty("output").GetString()!);
+            var job = Assert.Single(parsed.RootElement.GetProperty("jobs").EnumerateArray());
+            Assert.Equal(ResearchJob.Running, job.GetProperty("state").GetString());
+            Assert.Equal("searching", job.GetProperty("phase").GetString());
+            Assert.False(job.GetProperty("inThisConversation").GetBoolean());
+            Assert.Empty(job.GetProperty("request").GetString()!);
+            Assert.Equal(1, job.GetProperty("observedLinks").GetInt32());
+            yield return new("A pesquisa está em andamento e já registrou uma fonte.", false, [], []);
+            yield return new(null, true, [], [], Provider: "fixture", Model: "status", AuditData: audit);
+        }
     }
 
     private sealed class ResearchModel : IAegisModelClient

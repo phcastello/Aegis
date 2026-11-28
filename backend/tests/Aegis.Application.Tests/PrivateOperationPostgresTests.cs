@@ -388,6 +388,10 @@ public sealed class PrivateOperationPostgresTests
             Assert.Equal(pythonId, python!.JobId);
             Assert.True(python.IsPython);
             Assert.Contains(original, python.Content);
+            var status = Assert.Single(await store.ReadStatusAsync(python.ConversationId, false, CancellationToken.None));
+            Assert.Equal(ResearchJob.Running, status.State);
+            Assert.Equal("python", status.Kind);
+            Assert.Equal(original, status.Request);
             Assert.Null(await store.ClaimAsync(CancellationToken.None, allowWeb: false, allowPython: true));
             Assert.Equal(ResearchJob.Queued, (await store.GetAsync(webId, CancellationToken.None))!.State);
         }

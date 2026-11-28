@@ -1,5 +1,6 @@
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
+using Aegis.Application.Prompts;
 using System.Text.Json.Serialization;
 
 namespace Aegis.Infrastructure.Chat;
@@ -14,7 +15,7 @@ public sealed record ResearchJobSnapshot(
 
 internal sealed record ResearchJobInput(
     Guid JobId, Guid ConversationId, Guid UserMessageId, string Content, DateTimeOffset DeadlineAt,
-    bool IsHandsFree, bool IsPython = false, bool IsVideo = false);
+    bool IsHandsFree, bool IsPython = false, bool IsVideo = false, InstructionSettings? Instructions = null);
 
 internal sealed record ResearchJobResult(
     string Content, string Model, string? MetadataJson, LlmRequestAuditData Audit);

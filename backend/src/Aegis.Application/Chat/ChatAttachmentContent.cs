@@ -28,26 +28,32 @@ public sealed partial class ChatAttachmentContent
     public bool OffersVideoReader { get; private set; }
 
     public static async Task<ChatAttachmentContent> PrepareAsync(IAegisDbContext db, Guid messageId,
-        IReadOnlyList<ChatAttachmentRequest>? inline, IReadOnlyList<Guid>? uploadIds, CancellationToken ct)
+        IReadOnlyList<ChatAttachmentRequest>? inline, IReadOnlyList<Guid>? uploadIds, CancellationToken ct,
+        IReadOnlyList<string>? links = null)
     {
-        if (uploadIds is not { Count: > 0 }) return await PrepareInlineAsync(messageId, inline, ct);
+        var fileCount = (uploadIds?.Count ?? 0) + (inline?.Count ?? 0);
+        if ((long)fileCount + (links?.Count ?? 0) > ChatUploadLimits.MaxFiles)
+            throw new ArgumentException($"Envie no máximo {ChatUploadLimits.MaxFiles} anexos por mensagem.");
+        var linkAttachments = links?.Select((link, index) => ChatLinkAttachment.Create(messageId, fileCount + index, link)).ToArray();
+        if (uploadIds is not { Count: > 0 }) return await PrepareInlineAsync(messageId, inline, ct, linkAttachments);
         if (inline is { Count: > 0 }) throw new ArgumentException("Envie arquivos carregados ou anexos em linha em uma mensagem.");
         var files = await db.ResolveChatUploadsAsync(messageId, uploadIds, ct);
+        if (linkAttachments is not null) files.AddRange(linkAttachments);
         return await FromStoredAsync(db, files, ct);
     }
 
     public static ChatAttachmentContent Prepare(Guid messageId, IReadOnlyList<ChatAttachmentRequest>? uploads) =>
         PrepareInlineAsync(messageId, uploads, default).GetAwaiter().GetResult();
 
-    private static async Task<ChatAttachmentContent> PrepareInlineAsync(Guid messageId, IReadOnlyList<ChatAttachmentRequest>? uploads, CancellationToken ct)
+    private static async Task<ChatAttachmentContent> PrepareInlineAsync(Guid messageId, IReadOnlyList<ChatAttachmentRequest>? uploads,
+        CancellationToken ct, IReadOnlyList<ChatAttachment>? links = null)
     {
-        if (uploads is null or { Count: 0 }) return new();
-        if (uploads.Count > ChatUploadLimits.MaxFiles)
+        if ((uploads?.Count ?? 0) > ChatUploadLimits.MaxFiles)
             throw new ArgumentException($"Envie no máximo {ChatUploadLimits.MaxFiles} arquivos por mensagem.");
         var files = new List<ChatAttachment>();
         var content = new ChatAttachmentContent { Files = files };
         var remaining = LegacyInlineRequestBytes;
-        foreach (var upload in uploads)
+        foreach (var upload in uploads ?? [])
         {
             if (upload is null || string.IsNullOrWhiteSpace(upload.FileName))
                 throw new ArgumentException("Informe um nome para cada anexo.");
@@ -66,6 +72,11 @@ public sealed partial class ChatAttachmentContent
             var type = await content.AddFileAsync(files.Count, [], name, stream, data.Length, null, ct);
             files.Add(new ChatAttachment(messageId, files.Count, name, type, data));
         }
+        if (links is not null)
+        {
+            foreach (var link in links) content.AddLink(link);
+            files.AddRange(links);
+        }
         return content;
     }
 
@@ -76,6 +87,11 @@ public sealed partial class ChatAttachmentContent
         for (int i = 0; i < files.Count; i++)
         {
             var file = files[i];
+            if (file.ContentType == ChatLinkAttachment.ContentType && file.Upload is null)
+            {
+                content.AddLink(file);
+                continue;
+            }
             await using var stream = await db.OpenAttachmentContentAsync(file, ct);
             var type = await content.AddFileAsync(i, [], file.FileName, stream, file.SizeBytes, null, ct);
             if (file.Upload is not null) file.SetContentType(type);
@@ -140,10 +156,16 @@ public sealed partial class ChatAttachmentContent
         var recentVideo = videoQuestion
             ? turns.FirstOrDefault(m => index[m.Id].Any(file => IsVideoFileName(file.FileName)))
             : null;
-        var attachmentQuestion = new[] { "anexo", "arquivo", "foto", "imagem", "documento", "pdf", "zip", "planilha" }
+        var linkQuestion = question.Contains("link", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("url", StringComparison.OrdinalIgnoreCase);
+        var recentLink = linkQuestion
+            ? turns.FirstOrDefault(m => index[m.Id].Any(file => file.LinkUrl is not null))
+            : null;
+        var attachmentQuestion = new[] { "anexo", "arquivo", "foto", "imagem", "documento", "pdf", "zip", "planilha", "link", "url" }
             .Any(word => question.Contains(word, StringComparison.OrdinalIgnoreCase));
         // Preserve immediate follow-ups ("e o horário?") without resending private media indefinitely.
-        var relevant = mentioned ?? recentVideo ?? (attachmentQuestion ? turns : turns.Take(2)).FirstOrDefault(m => index.Contains(m.Id));
+        var relevant = mentioned ?? recentVideo ?? recentLink ??
+            (attachmentQuestion ? turns : turns.Take(2)).FirstOrDefault(m => index.Contains(m.Id));
         if (relevant is null) return new();
         var files = await db.GetMessageAttachmentsAsync(relevant.Id, ct);
         try { return await FromStoredAsync(db, files, ct); }
@@ -163,6 +185,22 @@ public sealed partial class ChatAttachmentContent
         "Nunca envie conteúdo privado dos anexos em consultas de pesquisa web.";
 
     private void Text(string text) => parts.Add(JsonSerializer.SerializeToElement(new { type = "input_text", text }));
+
+    private void AddLink(ChatAttachment file)
+    {
+        var original = ChatLinkAttachment.ReadUrl(file.Data);
+        var lookup = ChatLinkAttachment.PublicLookupUrl(original);
+        if (lookup is null)
+        {
+            Text("O usuário anexou um link privado ou incompatível com consulta pública. Se precisar do conteúdo, peça o arquivo original.");
+            return;
+        }
+        var scope = lookup == original ? "" :
+            " O endereço compartilhado tem parâmetros ou fragmento que foram omitidos. Este caminho é só uma referência pública " +
+            "e pode não identificar o mesmo conteúdo. Não alegue que abriu o alvo original sem evidência.";
+        Text($"Link fornecido pelo usuário para consulta pública, se pertinente e autorizada no pedido: {lookup}.{scope} " +
+            "Se o conteúdo exigir autenticação ou não estiver acessível, explique a limitação e peça o arquivo original.");
+    }
 
     private async Task<string> AddFileAsync(int fileIndex, int[] path, string name, Stream stream, long size,
         Func<Stream>? reopen, CancellationToken ct)

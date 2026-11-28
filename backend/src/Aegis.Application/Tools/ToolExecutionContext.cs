@@ -13,4 +13,5 @@ public sealed record ToolExecutionContext(
     Aegis.Application.Chat.ChatAttachmentContent? AttachmentReader = null)
 {
     public ScriptArtifacts Artifacts { get; init; } = new();
+    public string? ScriptRestoreFrom { get; init; }
 }

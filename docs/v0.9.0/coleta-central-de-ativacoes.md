@@ -23,6 +23,13 @@ mesmo identificador, a confirmação pode ser repetida mesmo que a conexão caia
 
 ## Revisar as amostras
 
+Num Android ou Windows pareado e habilitado, abra **Configurações → Áudio e voz → Hands-free → Revisar amostras do servidor**. A lista abre sem áudio e permite filtrar por dispositivo, por ativações ignoradas ou pelo rótulo humano. Selecione a amostra para carregar os trechos, responder às duas perguntas de revisão ou confirmar a exclusão só daquela amostra. Cada operação exige a credencial do Node, que fica na ponte nativa. Os rótulos ficam no mesmo volume, separados dos áudios originais, e são usados nas futuras exportações. Depois da exclusão, um marcador com o ID permite confirmar uma retentativa atrasada sem receber o áudio de volta.
+
+O acervo mostra o espaço central ocupado por dispositivo e sinaliza quando o servidor devolve 507. Cada aparelho exibe os seus próprios envios pendentes, recusas e bytes da fila. Um envio barrado pela cota central continua na fila. Se a fila local ficar cheia, o contador local mostra ativações que ficaram sem gravação durante essa autorização. Esses números são locais porque um dispositivo offline pode continuar coletando.
+[Filtros e operações no Label Studio](https://labelstud.io/guide/manage_data.html) · [Autorização por política no ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/authorization/policies)
+
+### Revisão offline via ZIP
+
 Em uma máquina com acesso administrativo privado ao Compose e ao checkout da Aegis, copie o volume para um diretório privado novo e gere um ZIP de revisão com Python 3:
 
 ```sh

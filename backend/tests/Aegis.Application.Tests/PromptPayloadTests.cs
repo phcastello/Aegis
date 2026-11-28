@@ -122,15 +122,16 @@ public sealed class PromptPayloadTests
     public async Task CacheUsageIsEmittedAsStructuredMetrics()
     {
         var values = new Dictionary<string, long>();
+        using var metrics = new AegisMetrics();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, activeListener) =>
         {
-            if (instrument.Meter.Name == "Aegis") activeListener.EnableMeasurementEvents(instrument);
+            if (ReferenceEquals(instrument.Meter, metrics.LlmInputTokens.Meter))
+                activeListener.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, _, _) => values[instrument.Name] = value);
         listener.Start();
 
-        using var metrics = new AegisMetrics();
         using var httpClient = new HttpClient(new CaptureHandler()) { BaseAddress = new Uri("https://api.openai.com/") };
         var client = new OpenAIResponsesClient(httpClient, Options.Create(new OpenAIOptions { ApiKey = "fake" }), metrics, NullLogger<OpenAIResponsesClient>.Instance);
         await client.RespondWithToolsAsync(new ModelToolRequest(new ModelRequest("", "oi"), []));

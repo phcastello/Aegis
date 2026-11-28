@@ -12,7 +12,7 @@ public sealed record WakeSample(int SchemaVersion, DateTimeOffset ActivatedAt, G
     double? InstantaneousScore, double? DecisionScore, double? VerifierScore, string Sha256, byte[] Wav,
     string Disposition = "candidate", string? PostSha256 = null, byte[]? PostWav = null, string? CommandDisposition = null);
 
-public sealed class WakeDatasetStore(IConfiguration configuration)
+public sealed partial class WakeDatasetStore(IConfiguration configuration)
 {
     public const int MaximumWav = 44 + 35200 * 2;
     private readonly string root = configuration["WakeDataset:Directory"] ?? "/var/lib/aegis/wake-dataset";
@@ -35,13 +35,22 @@ public sealed class WakeDatasetStore(IConfiguration configuration)
             throw new NodeException("invalid_wake_sample", "A amostra de ativação é inválida.");
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(sample, Json);
-        var folder = Path.Combine(root, node.ToString("D"));
-        var destination = Path.Combine(folder, eventId.ToString("D") + ".json");
+        var folder = NodeFolder(node);
+        var destination = SamplePath(node, eventId, ".json");
         await writer.WaitAsync(ct);
         try
         {
-            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(folder);
-            else Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (File.Exists(SamplePath(node, eventId, ".deleted")))
+            {
+                if (File.Exists(destination))
+                {
+                    File.Delete(destination);
+                    File.Delete(SamplePath(node, eventId, ".meta"));
+                    used = null;
+                }
+                return;
+            }
+            EnsurePrivateDirectory(folder);
             if (File.Exists(destination))
             {
                 var previous = await File.ReadAllBytesAsync(destination, ct);
@@ -53,22 +62,17 @@ public sealed class WakeDatasetStore(IConfiguration configuration)
             if (used is null || used + payload.Length > quota)
                 used = Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories).Sum(path => new FileInfo(path).Length);
             if (used + payload.Length > quota)
-                throw new NodeException("wake_dataset_full", "A coleta central atingiu o limite de armazenamento.", 507);
-
-            var staging = Path.Combine(folder, "." + Guid.NewGuid().ToString("N") + ".part");
-            try
             {
-                var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
-                if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-                await using (var file = new FileStream(staging, options))
-                {
-                    await file.WriteAsync(payload, ct);
-                    file.Flush(flushToDisk: true);
-                }
-                File.Move(staging, destination);
-                used += payload.Length;
+                if (!File.Exists(QuotaMarker(node))) await WriteAtomicAsync(QuotaMarker(node), [], ct);
+                throw new NodeException("wake_dataset_full", "A coleta central atingiu o limite de armazenamento.", 507);
             }
-            finally { File.Delete(staging); }
+            // Commit the immutable recording last. Readers and replays only consider committed recordings.
+            var entry = WakeDatasetEntry.From(node, eventId, sample, payload.Length);
+            await WriteMetadataAsync(entry, ct);
+            await WriteAtomicAsync(destination, payload, ct);
+            if (index is not null) index[(node, eventId)] = entry;
+            used += payload.Length;
+            File.Delete(QuotaMarker(node));
         }
         finally { writer.Release(); }
     }

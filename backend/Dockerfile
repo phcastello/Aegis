@@ -9,7 +9,10 @@ RUN sh ./build.sh "$TARGETARCH"
 
 FROM python-wasi-build AS python-runtime
 COPY script-runtime/launcher.c script-runtime/test_runtime.py ./
+COPY script-runtime/install_libraries.py script-runtime/libraries.lock script-runtime/aegis_docx.py script-runtime/aegis_script_audit.py ./
 RUN mkdir -p /opt/aegis-python/stdlib/lib-dynload \
+    && python3 install_libraries.py /opt/aegis-python \
+    && sha256sum build.sh launcher.c libraries.lock aegis_docx.py aegis_script_audit.py | sha256sum | cut -d ' ' -f 1 > /opt/aegis-python/revision \
     && cc -O2 -Wall -Wextra -Werror -I/opt/wasmtime-c-api/include \
     -L/opt/aegis-python -Wl,-rpath,'$ORIGIN' -o /opt/aegis-python/runner launcher.c -lwasmtime \
     && python3 test_runtime.py

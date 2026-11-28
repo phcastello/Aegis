@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
 using Aegis.Application.Chat;
 using Aegis.Application.Tools;
 using Aegis.Infrastructure.Persistence;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -45,7 +47,8 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
     private SemaphoreSlim Gate(Guid id) => locks[(uint)id.GetHashCode() % locks.Length];
 
     internal async Task<PythonScriptResult> RunAsync(ToolExecutionContext context, IReadOnlyList<string> selection,
-        Func<ScriptDirectories, CancellationToken, Task<PythonScriptResult>> execute, CancellationToken ct)
+        Func<ScriptDirectories, CancellationToken, Task<PythonScriptResult>> execute, CancellationToken ct,
+        ScriptExecution? execution = null)
     {
         var id = context.ConversationId;
         var gate = Gate(id);
@@ -61,28 +64,64 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
             if (latest is null) return Failed("workspace_unavailable", "Esta conversa não está disponível.");
             Directory.CreateDirectory(durable);
             var dirs = new ScriptDirectories(inputs, Path.Combine(ephemeral, "work"), Path.Combine(ephemeral, "outputs"));
-            Directory.CreateDirectory(inputs);
             Directory.CreateDirectory(dirs.Work);
             Directory.CreateDirectory(dirs.Outputs);
-            await PrepareInputsAsync(db, id, selection, inputs, ct);
-            if (File.Exists(snapshot))
-                ZipFile.ExtractToDirectory(snapshot, dirs.Work);
+            var protection = scope.ServiceProvider.GetService<IDataProtectionProvider>();
+            var recipes = execution is not null && protection is not null ? new ScriptRecipes(db, protection, clock) : null;
+            using var previous = File.Exists(snapshot) ? ZipFile.OpenRead(snapshot) : null;
+            var available = ReadState(previous);
+            var starting = available;
+            Guid? restoredFrom = null;
+            int? replayedSteps = null;
+            bool replacedSnapshot = false;
+            if (context.ScriptRestoreFrom is { } restore && execution is not null)
+            {
+                if (recipes is null)
+                    throw new ScriptRestoreException("A recuperação de receitas está indisponível.");
+                var plan = await recipes.PlanAsync(id, restore, available, execution.RuntimeRevision, ct);
+                starting = plan.Work;
+                restoredFrom = plan.RestoredFrom;
+                replayedSteps = plan.Steps.Count;
+                replacedSnapshot = starting != available;
+                if (replacedSnapshot)
+                    await ReplayAsync(db, id, dirs, execution, plan, ct);
+            }
+            if (!replacedSnapshot) previous?.ExtractToDirectory(dirs.Work);
+            // Releasing the old archive before the atomic rename also supports Windows unit tests.
+            previous?.Dispose();
+            var selected = await PrepareInputsAsync(db, id, selection, inputs, ct);
 
+            var started = Stopwatch.StartNew();
             var result = await execute(dirs, ct);
-            if (!result.Success) return result;
+            var elapsed = started.ElapsedMilliseconds;
+            var idOfExecution = Guid.NewGuid();
+            if (!result.Success)
+            {
+                if (recipes is not null)
+                    await recipes.RecordAsync(idOfExecution, context, execution!, result, elapsed, selected,
+                        new Dictionary<string, Guid>(), starting, starting.Revision, new(null, [], 0),
+                        false, restoredFrom, ct);
+                return result with { ReplayedWorkspaceSteps = replayedSteps };
+            }
             ct.ThrowIfCancellationRequested();
 
             var outputs = new DirectoryInfo(dirs.Outputs).EnumerateFileSystemInfos().Take(ChatUploadLimits.MaxFiles + 1).ToArray();
             if (outputs.Length > ChatUploadLimits.MaxFiles || outputs.Any(f => f is not FileInfo || f.LinkTarget is not null))
                 throw new ArgumentException("Coloque até 20 arquivos regulares diretamente em /outputs. Para entregar uma pasta, compacte-a em um ZIP.");
             var work = InspectWork(dirs.Work);
-            if (work.Count > 0)
+            var manifest = recipes is not null ? await ScriptRecipes.ManifestAsync(dirs.Work, work, ct) : new(null, [], work.Count);
+            var changed = manifest.Digest != starting.Digest;
+            var state = recipes is null ? ScriptWorkState.Legacy : changed
+                ? work.Count > 0 ? new(idOfExecution, manifest.Digest, starting.Reproducible) : ScriptWorkState.Empty
+                : starting;
+            var saveSnapshot = work.Count > 0 && (recipes is null || changed || replacedSnapshot || !File.Exists(snapshot));
+            if (saveSnapshot)
             {
                 await diskWriter.WaitAsync(ct);
                 try
                 {
                     EnsureDiskSpace(work.OfType<FileInfo>().Sum(f => f.Length));
-                    await SaveSnapshotAsync(dirs.Work, work, pending, ct);
+                    await SaveSnapshotAsync(dirs.Work, work, pending, state, ct);
                     File.SetLastWriteTimeUtc(pending, latest.Value.UtcDateTime);
                 }
                 finally { diskWriter.Release(); }
@@ -90,11 +129,18 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
 
             var staged = await artifacts.StageAsync(outputs.OrderBy(f => f.Name, StringComparer.Ordinal)
                 .Select(f => new ScriptArtifactFile(f.Name, f.FullName)).ToArray(), context, ct);
-            if (work.Count > 0) File.Move(pending, snapshot, overwrite: true);
-            else File.Delete(snapshot);
+            if (recipes is not null)
+                await recipes.RecordAsync(idOfExecution, context, execution!, result, elapsed, selected, staged, state,
+                    starting.Revision, manifest, changed, restoredFrom, ct);
+            ct.ThrowIfCancellationRequested();
+            if (saveSnapshot) File.Move(pending, snapshot, overwrite: true);
+            else if (work.Count == 0) File.Delete(snapshot);
             context.Artifacts.Publish(staged);
-            return result with { GeneratedFiles = staged.Keys.ToArray() };
+            if (recipes is not null && (changed || staged.Count > 0 || restoredFrom.HasValue))
+                context.Artifacts.RecordRecipe(id, idOfExecution, staged.Values);
+            return result with { GeneratedFiles = staged.Keys.ToArray(), ReplayedWorkspaceSteps = replayedSteps };
         }
+        catch (ScriptRestoreException e) { return Failed("workspace_restore_unavailable", e.Message); }
         catch (ArgumentException e) { return Failed("invalid_workspace_files", e.Message); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -114,10 +160,51 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
         }
     }
 
-    private async Task PrepareInputsAsync(AegisDbContext db, Guid conversationId, IReadOnlyList<string> selectors, string inputs, CancellationToken ct)
+    private static ScriptWorkState ReadState(ZipArchive? archive)
     {
+        if (archive is null) return ScriptWorkState.Empty;
+        // Previous releases saved plain ZIPs without a recipe version.
+        return archive.Comment is { Length: > 0 } comment
+            ? JsonSerializer.Deserialize<ScriptWorkState>(comment) ?? ScriptWorkState.Legacy
+            : ScriptWorkState.Legacy;
+    }
+
+    private async Task ReplayAsync(AegisDbContext db, Guid conversationId, ScriptDirectories dirs,
+        ScriptExecution execution, ScriptReplayPlan plan, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(75));
+        var replayToken = deadline.Token;
+        try
+        {
+            foreach (var step in plan.Steps)
+            {
+                await PrepareInputsAsync(db, conversationId, step.Attachments.Select(id => id.ToString("D")).ToArray(),
+                    dirs.Inputs, replayToken);
+                var result = await execution.Replay(step.Program, dirs, replayToken);
+                if (!result.Success)
+                    throw new ScriptRestoreException("Uma etapa da receita não pôde ser refeita. A entrega anterior continua no chat.");
+                RemoveDirectory(dirs.Outputs);
+                Directory.CreateDirectory(dirs.Outputs);
+                var manifest = await ScriptRecipes.ManifestAsync(dirs.Work, InspectWork(dirs.Work), replayToken);
+                if (manifest.Digest != step.ExpectedDigest)
+                    throw new ScriptRestoreException("Os intermediários ficaram diferentes na repetição da receita. Refaça a análise usando os originais.");
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new ScriptRestoreException("A recuperação da receita excedeu o tempo disponível. Refaça a análise usando os originais.");
+        }
+    }
+
+    private async Task<IReadOnlyCollection<Guid>> PrepareInputsAsync(AegisDbContext db, Guid conversationId,
+        IReadOnlyList<string> selectors, string inputs, CancellationToken ct)
+    {
+        RemoveDirectory(inputs);
+        Directory.CreateDirectory(inputs);
         var catalog = await db.ChatAttachments.AsNoTracking()
-            .Where(f => f.Message.ConversationId == conversationId && f.Message.Conversation!.DeletedAt == null)
+            .Where(f => f.Message.ConversationId == conversationId && f.Message.Conversation!.DeletedAt == null &&
+                f.ContentType != ChatLinkAttachment.ContentType)
             .OrderBy(f => f.Message.CreatedAt).ThenBy(f => f.MessageId).ThenBy(f => f.Position)
             .Select(f => new { id = f.Id, messageId = f.MessageId, role = f.Message.Role,
                 createdAt = f.Message.CreatedAt, name = f.FileName, size = f.SizeBytes }).ToListAsync(ct);
@@ -135,7 +222,7 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
                 throw new ArgumentException("O nome está ausente ou é ambíguo. Consulte /inputs/index.json em uma execução sem input_files e indique cada ID desejado.");
             selected.TryAdd(matches[0].id, matches[0].messageId);
         }
-        if (selected.Count == 0) return;
+        if (selected.Count == 0) return [];
         // Only the requested originals touch disk. Their names never become host paths.
         await diskWriter.WaitAsync(ct);
         try
@@ -151,6 +238,7 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
             }
         }
         finally { diskWriter.Release(); }
+        return selected.Keys.ToArray();
     }
 
     private void EnsureDiskSpace(long bytes)
@@ -184,10 +272,12 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
         return result;
     }
 
-    private static async Task SaveSnapshotAsync(string root, IReadOnlyList<FileSystemInfo> entries, string destination, CancellationToken ct)
+    private static async Task SaveSnapshotAsync(string root, IReadOnlyList<FileSystemInfo> entries, string destination,
+        ScriptWorkState state, CancellationToken ct)
     {
         await using var stream = File.Create(destination);
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
+        zip.Comment = JsonSerializer.Serialize(state);
         foreach (var entry in entries)
         {
             ct.ThrowIfCancellationRequested();
@@ -225,6 +315,7 @@ public sealed class ScriptWorkspace : IScriptWorkspaceCleanup
                     if (Guid.TryParseExact(Path.GetFileName(path), "N", out var id)) ids.Add(id);
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
+        await ScriptRecipes.ForgetExpiredAsync(db, clock.GetUtcNow(), ct);
         foreach (var id in ids)
         {
             var gate = Gate(id);

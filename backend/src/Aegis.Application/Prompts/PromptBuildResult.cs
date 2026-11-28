@@ -26,6 +26,8 @@ public sealed partial record PromptBuildResult(
     public bool ContainsAttachments { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public Aegis.Application.Chat.ChatAttachmentContent? AttachmentReader { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public InstructionSettings? InstructionsSnapshot { get; init; }
     public IReadOnlyList<Guid> UsedObservedMemoryIds { get; init; } = [];
     public IReadOnlyList<Guid> UsedRelationIds { get; init; } = [];
 }

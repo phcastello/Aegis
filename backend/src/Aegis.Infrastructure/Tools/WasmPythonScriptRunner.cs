@@ -10,6 +10,8 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
 {
     private const string RuntimeDirectory = "/opt/aegis-python";
     private const string RunnerPath = RuntimeDirectory + "/runner";
+    private const string RevisionPath = RuntimeDirectory + "/revision";
+    private const string AuditPrefix = "AEGIS_SCRIPT_SHAPE:";
     private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(30);
     private readonly SemaphoreSlim _slots = new(2, 2);
 
@@ -17,6 +19,7 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
         && File.Exists(RunnerPath)
         && File.Exists(RuntimeDirectory + "/python.cwasm")
         && File.Exists(RuntimeDirectory + "/libwasmtime.so")
+        && File.Exists(RevisionPath)
         && Directory.Exists(RuntimeDirectory + "/stdlib")
         && workspace.HasBoundedScratch;
 
@@ -41,8 +44,11 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
 
         try
         {
+            var revision = (await File.ReadAllTextAsync(RevisionPath, cancellationToken)).Trim();
+            var execution = new ScriptExecution(revision, new ScriptProgram(code, input),
+                (program, dirs, token) => ExecuteAsync(program.Code, program.Input, dirs, audit: false, token));
             return await workspace.RunAsync(context, inputFiles,
-                (dirs, token) => ExecuteAsync(code, input, dirs, token), cancellationToken);
+                (dirs, token) => ExecuteAsync(code, input, dirs, audit: true, token), cancellationToken, execution);
         }
         finally
         {
@@ -50,7 +56,7 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
         }
     }
 
-    private static async Task<PythonScriptResult> ExecuteAsync(string code, string? input, ScriptDirectories dirs,
+    private static async Task<PythonScriptResult> ExecuteAsync(string code, string? input, ScriptDirectories dirs, bool audit,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -90,17 +96,20 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
         var stderr = process.StandardError.ReadToEndAsync();
         try
         {
-            await JsonSerializer.SerializeAsync(process.StandardInput.BaseStream, new { code, input }, cancellationToken: timeout.Token);
+            await JsonSerializer.SerializeAsync(process.StandardInput.BaseStream, new { code, input, workspace = true, audit },
+                cancellationToken: timeout.Token);
             process.StandardInput.Close();
             await process.WaitForExitAsync(timeout.Token);
 
+            var errors = await stderr;
+            var sanitized = audit ? ReadAudit(ref errors) : null;
             return process.ExitCode switch
             {
-                0 => new PythonScriptResult(true, await stdout, await stderr),
-                1 => new PythonScriptResult(false, await stdout, await stderr, "execution_failed"),
-                3 => Failure("output_limit"),
-                4 => Failure("timed_out"),
-                _ => Failure("python_unavailable"),
+                0 => new PythonScriptResult(true, await stdout, errors) { SanitizedCode = sanitized },
+                1 => new PythonScriptResult(false, await stdout, errors, "execution_failed") { SanitizedCode = sanitized },
+                3 => Failure("output_limit") with { SanitizedCode = sanitized },
+                4 => Failure("timed_out") with { SanitizedCode = sanitized },
+                _ => Failure("python_unavailable") with { SanitizedCode = sanitized },
             };
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -138,4 +147,15 @@ public sealed class WasmPythonScriptRunner(ScriptWorkspace workspace) : IPythonS
     }
 
     private static PythonScriptResult Failure(string errorCode) => new(false, string.Empty, string.Empty, errorCode);
+
+    private static string? ReadAudit(ref string errors)
+    {
+        if (!errors.StartsWith(AuditPrefix, StringComparison.Ordinal)) return null;
+        var end = errors.IndexOf('\n');
+        if (end < 0) return null;
+        var metadata = errors[AuditPrefix.Length..end];
+        errors = errors[(end + 1)..];
+        try { return JsonSerializer.Deserialize<string>(metadata); }
+        catch (JsonException) { return null; }
+    }
 }

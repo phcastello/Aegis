@@ -29,7 +29,7 @@ public sealed class ResearchFaviconTests
         Assert.Equal(ResearchFaviconDiscovery.Status.Found, actual.Status);
         Assert.Equal("image/png", actual.Icon!.ContentType);
         Assert.Equal(ValidPng, actual.Icon.Bytes);
-        Assert.Equal([Origin + "/", Origin + "/theme/favicon.png?v=3"], transport.Requests);
+        Assert.Equal(new[] { Origin + "/", Origin + "/theme/favicon.png?v=3" }, transport.Requests);
         Assert.Equal(actual, await resolver.FindAsync(Host.ToUpperInvariant()));
         Assert.Equal(2, transport.Requests.Count);
     }
@@ -53,7 +53,7 @@ public sealed class ResearchFaviconTests
         }));
         using var resolver = new ResearchFaviconDiscovery(TimeProvider.System, transport);
         Assert.Equal(ResearchFaviconDiscovery.Status.Found, (await resolver.FindAsync(Host)).Status);
-        Assert.Equal([Origin + "/", "https://news.example.org/pt/", "https://public-assets.example.org/assets/icons/a.png"],
+        Assert.Equal(new[] { Origin + "/", "https://news.example.org/pt/", "https://public-assets.example.org/assets/icons/a.png" },
             transport.Requests);
     }
 

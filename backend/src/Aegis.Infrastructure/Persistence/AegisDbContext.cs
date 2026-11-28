@@ -118,9 +118,11 @@ public sealed class AegisDbContext(
     {
         var rows = await VisibleAttachments.Where(a => a.Message.ConversationId == conversationId)
             .OrderBy(a => a.Position)
-            .Select(a => new { a.MessageId, Attachment = new ChatAttachmentResponse(a.Id, a.FileName, a.ContentType, a.SizeBytes) })
+            .Select(a => new { a.MessageId, a.Id, a.FileName, a.ContentType, a.SizeBytes,
+                LinkData = a.ContentType == ChatLinkAttachment.ContentType ? a.Data : null })
             .ToListAsync(ct);
-        return rows.ToLookup(a => a.MessageId, a => a.Attachment);
+        return rows.ToLookup(a => a.MessageId, a => new ChatAttachmentResponse(a.Id, a.FileName, a.ContentType, a.SizeBytes,
+            ChatLinkAttachment.ReadUrl(a.LinkData)));
     }
 
     public Task<List<ChatAttachment>> GetMessageAttachmentsAsync(Guid messageId, CancellationToken ct) =>

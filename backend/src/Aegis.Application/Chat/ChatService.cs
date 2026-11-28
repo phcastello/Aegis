@@ -109,7 +109,8 @@ public sealed class ChatService(
                 userMessage.Id,
                 assistantMessage.Id,
                 promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(completion.AuditData) : completion.AuditData));
-            StageResearch(userMessage, completion.DelegatedResearchBrief, isPython: completion.DelegatePython, isVideo: completion.DelegateVideo);
+            StageResearch(userMessage, completion.DelegatedResearchBrief, promptResult.InstructionsSnapshot,
+                isPython: completion.DelegatePython, isVideo: completion.DelegateVideo);
 
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
@@ -288,7 +289,8 @@ public sealed class ChatService(
             dbContext.AddLlmRequestAudit(CreateLlmRequestAudit(conversation.Id, userMessage.Id, assistantMessage.Id,
                 promptResult.ContainsAttachments ? ChatAttachmentContent.PrivateAudit(chunk.AuditData) : chunk.AuditData));
             var researchVoiceSession = request.IsHandsFree && request.VoiceSegments ? request.VoiceSessionId : null;
-            StageResearch(userMessage, chunk.DelegatedResearchBrief, researchVoiceSession, chunk.DelegatePython, chunk.DelegateVideo);
+            StageResearch(userMessage, chunk.DelegatedResearchBrief, promptResult.InstructionsSnapshot,
+                researchVoiceSession, chunk.DelegatePython, chunk.DelegateVideo);
             var memoryActivity = await CompleteMemoryActivityAsync(promptResult, conversation.Id,
                 userMessage.Id, assistantMessage.Id, CancellationToken.None);
             if (turnRegistry.IsCurrent(conversation.Id, turn.TurnId))
@@ -496,7 +498,7 @@ public sealed class ChatService(
             $"{PriorSpeechLabel}{interruptedContent}{CurrentSpeechLabel}{userContent}";
         var userMessage = new ChatMessage(conversation.Id, ChatRoles.User, content);
         var attachments = await ChatAttachmentContent.PrepareAsync(dbContext, userMessage.Id, request.Attachments,
-            request.AttachmentUploadIds, cancellationToken);
+            request.AttachmentUploadIds, cancellationToken, request.AttachmentLinks);
         if (request.InterruptedGeneration is not null)
             VoicePlaybackContext.Attach(userMessage, playback, conversation.Messages);
         else
@@ -742,12 +744,12 @@ public sealed class ChatService(
             response.DelegateVideo);
     }
 
-    private void StageResearch(ChatMessage userMessage, string? brief, Guid? voiceSessionId = null, bool isPython = false,
-        bool isVideo = false)
+    private void StageResearch(ChatMessage userMessage, string? brief, InstructionSettings? instructions,
+        Guid? voiceSessionId = null, bool isPython = false, bool isVideo = false)
     {
         if (brief is null) return;
         (researchQueue ?? throw new InvalidOperationException("A fila de pesquisa está indisponível."))
-            .Stage(userMessage, brief, voiceSessionId, isPython, isVideo);
+            .Stage(userMessage, brief, voiceSessionId, isPython, isVideo, instructions);
     }
 
     private static LlmRequestAudit CreateLlmRequestAudit(

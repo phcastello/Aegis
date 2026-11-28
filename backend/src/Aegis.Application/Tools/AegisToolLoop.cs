@@ -422,7 +422,7 @@ public sealed class AegisToolLoop(
             .ToList();
 
     private IAegisTool? FindRoundTool(ModelToolRequest round, string name) =>
-        (name is PythonScriptTool.ToolName or AttachmentReadTool.ToolName or AttachmentVideoTool.ToolName) &&
+        (name is PythonScriptTool.ToolName or AttachmentReadTool.ToolName or AttachmentVideoTool.ToolName or BackgroundWorkStatusTool.ToolName) &&
             !round.Tools.Any(tool => tool.Name == name)
             ? null
             : toolRegistry.Find(name);
@@ -695,7 +695,7 @@ public sealed class AegisToolLoop(
         { return IntegrationError("email_temporarily_unavailable", "Google está temporariamente indisponível. Tente mais tarde."); }
         catch (Exception exception)
         {
-            if (IsPythonTool(toolCall.Name) || IsAttachmentTool(toolCall.Name))
+            if (IsPythonTool(toolCall.Name) || IsAttachmentTool(toolCall.Name) || toolCall.Name == BackgroundWorkStatusTool.ToolName)
                 logger.LogWarning("Tool {ToolName} failed: {ErrorType}.", toolCall.Name, exception.GetType().Name);
             else
                 logger.LogWarning(exception, "Tool {ToolName} failed.", toolCall.Name);
@@ -769,18 +769,21 @@ public sealed class AegisToolLoop(
         name is AttachmentReadTool.ToolName or AttachmentVideoTool.ToolName or ResearchDelegation.VideoToolName;
 
     private static bool IsPrivateTool(string name) =>
-        IsAttachmentTool(name) || IsPythonTool(name) || name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
+        IsAttachmentTool(name) || IsPythonTool(name) || name == BackgroundWorkStatusTool.ToolName ||
+        name.StartsWith("memory_", StringComparison.Ordinal) || name.StartsWith("reminder_", StringComparison.Ordinal) ||
         name.StartsWith("geographic_reminder_", StringComparison.Ordinal) || name.StartsWith("place_", StringComparison.Ordinal) ||
         name.StartsWith("location_", StringComparison.Ordinal);
 
     private static string AuditToolOutput(string name, string content) =>
         IsAttachmentTool(name) ? "[attachment_tool_output_redacted]" :
         IsPythonTool(name) ? "[python_tool_output_redacted]" :
+        name == BackgroundWorkStatusTool.ToolName ? "[background_work_status_output_redacted]" :
         IsPrivateTool(name) ? "[memory_tool_output_redacted]" : content;
 
     private static string? SafeResponseBody(IReadOnlyList<ModelToolCall> calls, string? body) =>
         calls.Any(call => IsAttachmentTool(call.Name)) ? "[attachment_tool_response_redacted]" :
         calls.Any(call => IsPythonTool(call.Name)) ? "[python_tool_response_redacted]" :
+        calls.Any(call => call.Name == BackgroundWorkStatusTool.ToolName) ? "[background_work_status_response_redacted]" :
         calls.Any(call => IsPrivateTool(call.Name)) ? "[memory_response_redacted]" : body;
 
     private static JsonElement CreateUserInputItem(string content)

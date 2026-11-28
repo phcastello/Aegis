@@ -1,19 +1,24 @@
 using Aegis.Application.Chat;
 using Aegis.Application.Llm;
 using Aegis.Application.Models;
+using Aegis.Application.Prompts;
 using Aegis.Application.Tools;
 using Aegis.Application.Voice;
 using Aegis.Domain;
 using Aegis.Domain.Entities;
 using Aegis.Infrastructure.Persistence;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Aegis.Infrastructure.Chat;
 
-public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IResearchDelegationQueue
+public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock,
+    IDataProtectionProvider? protection = null, IOwnerInstructions? ownerInstructions = null)
+    : IResearchDelegationQueue, IBackgroundWorkStatusReader
 {
     public const int MaximumRequestLength = 12_000;
     internal const int MaximumSources = 128;
@@ -24,8 +29,11 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
     private const string DelegationKey = "researchDelegation";
     private const string PythonDelegationKey = "pythonDelegation";
     private const string VideoDelegationKey = "videoDelegation";
+    private const string PinnedInstructionsKey = "backgroundInstructions";
+    private readonly IDataProtector? instructionsProtector = protection?.CreateProtector("Aegis.ResearchJob.OwnerInstructions.v1");
 
-    public void Stage(ChatMessage userMessage, string brief, Guid? voiceSessionId = null, bool isPython = false, bool isVideo = false)
+    public void Stage(ChatMessage userMessage, string brief, Guid? voiceSessionId = null, bool isPython = false,
+        bool isVideo = false, InstructionSettings? instructions = null)
     {
         if (userMessage.Role != ChatRoles.User || db.Entry(userMessage).State != EntityState.Unchanged ||
             string.IsNullOrWhiteSpace(brief) || brief.Length > IResearchDelegationQueue.MaximumBriefLength)
@@ -37,6 +45,7 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         var delegation = new JsonObject { ["version"] = 1, ["brief"] = brief.Trim() };
         if (voiceSessionId is { } session && session != Guid.Empty) delegation["voiceSessionId"] = JsonValue.Create(session);
         metadata[isVideo ? VideoDelegationKey : isPython ? PythonDelegationKey : DelegationKey] = delegation;
+        PinInstructions(metadata, instructions);
         userMessage.AttachAuditData(userMessage.Model, userMessage.PromptSnapshot, userMessage.RuntimeContextSnapshot,
             metadata.ToJsonString(JsonOptions));
         db.ResearchJobs.Add(new ResearchJob(userMessage.Id, userMessage.ConversationId, userMessage.Id, clock.GetUtcNow()));
@@ -60,6 +69,12 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
 
         var now = clock.GetUtcNow();
         var userMessage = conversation.AddMessage(ChatRoles.User, content, now);
+        if (ownerInstructions is not null)
+        {
+            var metadata = new JsonObject();
+            PinInstructions(metadata, await ownerInstructions.ReadAsync(ct));
+            userMessage.AttachAuditData(null, null, null, metadata.ToJsonString(JsonOptions));
+        }
         db.ChatMessages.Add(userMessage);
         var job = new ResearchJob(request.JobId, conversation.Id, userMessage.Id, now);
         db.ResearchJobs.Add(job);
@@ -137,6 +152,39 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
         return jobs.Select(job => Snapshot(job, metadata.GetValueOrDefault(job.UserMessageId))).ToArray();
     }
 
+    public async Task<IReadOnlyList<BackgroundWorkStatus>> ReadStatusAsync(
+        Guid conversationId, bool includeRecentVoiceContext, CancellationToken ct)
+    {
+        var visible = VisibleJobs().AsNoTracking();
+        var rows = await ReadStatusRowsAsync(visible.Where(job => job.ConversationId == conversationId), ct);
+        if (rows.Count == 0 && includeRecentVoiceContext)
+        {
+            // New wake sessions have no conversation ID from the previous session. Give their
+            // owner a recent status without carrying request text across conversations.
+            var recent = clock.GetUtcNow() - TimeSpan.FromMinutes(10);
+            rows = await ReadStatusRowsAsync(visible.Where(job => job.State == ResearchJob.Queued ||
+                job.State == ResearchJob.Running || job.UpdatedAt >= recent), ct);
+        }
+        return rows.Select(row =>
+        {
+            var current = row.Job.ConversationId == conversationId;
+            var snapshot = Snapshot(row.Job, row.Metadata);
+            return new BackgroundWorkStatus(snapshot.Kind ?? "web_search", snapshot.State, snapshot.Phase,
+                snapshot.UpdatedAt, snapshot.Sources.Count, current ? ShortRequest(row.Request) : "", current);
+        }).ToArray();
+    }
+
+    private sealed record StatusRow(ResearchJob Job, string Request, string? Metadata);
+
+    private Task<List<StatusRow>> ReadStatusRowsAsync(IQueryable<ResearchJob> jobs, CancellationToken ct) =>
+        (from job in jobs
+         join message in db.ChatMessages.AsNoTracking() on job.UserMessageId equals message.Id
+         where message.ConversationId == job.ConversationId && message.Role == ChatRoles.User
+         orderby (job.State == ResearchJob.Queued || job.State == ResearchJob.Running) descending, job.UpdatedAt descending, job.Id descending
+         select new StatusRow(job, message.Content, message.MetadataJson)).Take(5).ToListAsync(ct);
+
+    private static string ShortRequest(string text) => text.Length <= 240 ? text : text[..240] + "…";
+
     public async Task<ResearchJobSnapshot?> CancelAsync(Guid id, CancellationToken ct)
     {
         while (true)
@@ -179,13 +227,51 @@ public sealed class ResearchJobStore(AegisDbContext db, TimeProvider clock) : IR
             await SaveTransitionAsync(ct);
             return null;
         }
+        InstructionSettings? instructions;
+        try
+        {
+            instructions = ReadPinnedInstructions(message.MetadataJson);
+        }
+        catch (CryptographicException)
+        {
+            job.Fail("background_instructions_unavailable", clock.GetUtcNow());
+            await SaveTransitionAsync(ct);
+            return null;
+        }
         job.Start(clock.GetUtcNow(), JobTimeout);
         return await SaveTransitionAsync(ct)
             ? new ResearchJobInput(job.Id, job.ConversationId, job.UserMessageId,
                 delegation.IsPython || delegation.IsVideo
                     ? $"Pedido original do usuário\n{message.Content}\n\nContexto da tarefa\n{content}" : content,
-                job.DeadlineAt!.Value, delegation.VoiceSessionId.HasValue, delegation.IsPython, delegation.IsVideo)
+                job.DeadlineAt!.Value, delegation.VoiceSessionId.HasValue, delegation.IsPython, delegation.IsVideo, instructions)
             : null;
+    }
+
+    private void PinInstructions(JsonObject metadata, InstructionSettings? settings)
+    {
+        if (settings is null) return;
+        var protector = instructionsProtector ?? throw new InvalidOperationException("A proteção dos dados do trabalho está indisponível.");
+        metadata[PinnedInstructionsKey] = protector.Protect(JsonSerializer.Serialize(settings, JsonOptions));
+    }
+
+    private InstructionSettings? ReadPinnedInstructions(string? metadata)
+    {
+        if (metadata is null) return null;
+        using var document = JsonDocument.Parse(metadata);
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty(PinnedInstructionsKey, out var field))
+            return null;
+        if (instructionsProtector is null || field.ValueKind != JsonValueKind.String || field.GetString() is not { Length: > 0 } ciphertext)
+            throw new CryptographicException("A revisão protegida do trabalho está indisponível.");
+        try
+        {
+            return JsonSerializer.Deserialize<InstructionSettings>(instructionsProtector.Unprotect(ciphertext), JsonOptions)
+                ?? throw new CryptographicException("A revisão protegida do trabalho está inválida.");
+        }
+        catch (JsonException error)
+        {
+            throw new CryptographicException("A revisão protegida do trabalho está inválida.", error);
+        }
     }
 
     private IQueryable<Guid> DelegatedMessageIds(string key)

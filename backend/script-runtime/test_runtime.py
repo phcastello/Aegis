@@ -8,10 +8,10 @@ import zipfile
 RUNNER = "/opt/aegis-python/runner"
 
 
-def run(code, data=None, directories=()):
+def run(code, data=None, directories=(), audit=False):
     return subprocess.run(
         [RUNNER, *directories],
-        input=json.dumps({"code": code, "input": data}),
+        input=json.dumps({"code": code, "input": data, "workspace": bool(directories), "audit": audit}),
         encoding="utf-8",
         capture_output=True,
         timeout=5,
@@ -71,6 +71,10 @@ timeout = run("while True: pass")
 assert timeout.returncode == 4, (timeout.returncode, timeout.stderr)
 memory = run("bytearray(128 * 1024 * 1024)")
 assert memory.returncode == 1 and 'MemoryError' in memory.stderr, memory
+redacted = run("private_name = 993; print(f'private_email {private_name}') # private_comment", audit=True)
+assert expect_success(redacted).strip() == "private_email 993"
+assert "private_" not in redacted.stderr and "993" not in redacted.stderr
+assert "<nome>" in redacted.stderr and "<texto>" in redacted.stderr
 
 print("Python WASI runtime checks passed")
 
@@ -101,3 +105,39 @@ with ZipFile('/outputs/resultado.zip', 'w', ZIP_DEFLATED) as result:
 """, directories=directories))
     with zipfile.ZipFile(directories[2] / "resultado.zip") as result:
         assert result.read("total.txt") == b"42"
+
+    expect_success(run("""
+from aegis_docx import read_paragraphs, write_document
+from openpyxl import Workbook, load_workbook
+import png
+from pypdf import PdfReader, PdfWriter
+
+book = Workbook()
+sheet = book.active
+sheet.append(['Mês', 'Vendas'])
+sheet.append(['Janeiro', 42])
+book.save('/outputs/vendas.xlsx')
+saved = load_workbook('/outputs/vendas.xlsx', read_only=True)
+assert next(saved.active.values) == ('Mês', 'Vendas')
+saved.close()
+
+two_lines = 'Linha 1' + chr(10) + 'Linha 2'
+write_document('/outputs/relatório.docx', ['Total: 42', two_lines],
+               tables=[[['Mês', 'Vendas'], ['Janeiro', 42]]])
+assert read_paragraphs('/outputs/relatório.docx') == ['Total: 42', two_lines, 'Mês', 'Vendas', 'Janeiro', '42']
+
+with open('/outputs/gráfico.png', 'wb') as image:
+    png.Writer(2, 1, greyscale=True, bitdepth=8).write(image, [[0, 255]])
+with open('/outputs/gráfico.png', 'rb') as image:
+    width, height, rows, _ = png.Reader(file=image).read()
+    assert (width, height, list(next(rows))) == (2, 1, [0, 255])
+
+pdf = PdfWriter()
+pdf.add_blank_page(72, 72)
+pdf.write('/outputs/resumo.pdf')
+assert len(PdfReader('/outputs/resumo.pdf').pages) == 1
+""", directories=directories))
+    with zipfile.ZipFile(directories[2] / "vendas.xlsx") as result:
+        assert b"<v>42</v>" in result.read("xl/worksheets/sheet1.xml")
+    with zipfile.ZipFile(directories[2] / "relatório.docx") as result:
+        assert b"Total: 42" in result.read("word/document.xml")

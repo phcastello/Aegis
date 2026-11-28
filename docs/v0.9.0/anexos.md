@@ -3,6 +3,11 @@
 O botão **+** à esquerda do campo de mensagem aceita até **20 arquivos por mensagem**, com até **512 MiB por arquivo** no Android e no Windows. Os anexos podem somar **10 GiB**. Imagens, planilhas e ZIPs têm o mesmo limite de tamanho. Você pode digitar ou ditar a pergunta. No Android também pode compartilhar vários arquivos de outro app para a Aegis e acrescentar a pergunta antes de enviar. O histórico permite baixar o original. Para voltar a ele em uma conversa longa, mencione o nome do arquivo.
 [Compartilhamento no Android](https://developer.android.com/develop/ui/compose/sharing/receive)
 
+Em **+ → Anexar link**, cole o endereço de uma página ou documento online. Colar apenas uma URL no campo de mensagem também cria o cartão. No Android, **Compartilhar → Aegis** recebe links e textos selecionados, além de arquivos como fotos, vídeos, PDFs e documentos de escritório. Tudo chega como rascunho para revisar e enviar. Links contam no total de 20 anexos e podem ser abertos no histórico em qualquer Node.
+
+O endereço integral fica no seu histórico. Para analisar uma página pública quando a pergunta pede isso, a Aegis usa a pesquisa web existente. A referência entregue à pesquisa exclui parâmetros e fragmentos que podem conter chaves ou dados privados. Esse caminho pode apontar para um conteúdo diferente do original. Para um documento com acesso restrito ou que dependa desses parâmetros, compartilhe ou envie o arquivo. O backend privado não abre a URL diretamente.
+[Entradas da folha de compartilhamento](https://developer.android.com/develop/ui/compose/sharing/receive) · [Pesquisa web hospedada](https://developers.openai.com/api/docs/guides/tools-web-search) · [Como exportar documentos do Google Drive](https://developers.google.com/workspace/drive/api/guides/manage-downloads)
+
 A contagem segue o limite publicado para o ChatGPT na web. A OpenAI informa 512 MB por arquivo, com tetos menores para imagens (20 MB) e planilhas (cerca de 50 MB). A documentação não especifica um limite total em bytes para uma mensagem. Os 10 GiB da Aegis correspondem a 20 × 512 MiB.
 [Notas de versão do ChatGPT, 13 de fevereiro de 2026](https://help.openai.com/pt-br/articles/6825453-chatgpt-release-notes) · [Limites de upload do ChatGPT](https://help.openai.com/pt-br/articles/8555545-uploading-files-and-audio-to-chatgpt)
 

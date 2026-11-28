@@ -21,6 +21,7 @@ using Aegis.Application.Voice.Transcription;
 using Aegis.Infrastructure.Chat;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -62,6 +63,7 @@ public sealed class ChatVideoIntegrationTests
             services.AddScoped<ResearchJobStore>();
             services.AddScoped<IResearchDelegationQueue>(sp => sp.GetRequiredService<ResearchJobStore>());
             services.AddScoped<IOwnerInstructions, OwnerInstructionsStore>();
+            services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
             services.AddSingleton(TimeProvider.System);
             services.AddSingleton(new WebSearchOptions { Enabled = false });
             services.AddSingleton<IVideoAttachmentAudio, UnexpectedVideoSpeech>();

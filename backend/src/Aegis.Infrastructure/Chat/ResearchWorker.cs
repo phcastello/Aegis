@@ -90,7 +90,9 @@ public sealed class ResearchWorker(IServiceScopeFactory scopes, TimeProvider clo
             var userInput = containsAttachments ? attachments.UserInput(job.Content) : briefInput;
             var input = new List<JsonElement> { developerInput, userInput };
             var audit = new List<JsonElement> { developerInput, job.IsPython || job.IsVideo ? RedactedPythonInput : briefInput };
-            var preferences = await services.GetRequiredService<IOwnerInstructions>().ReadAsync(jobCancellation.Token);
+            // Tasks created before instruction pinning keep their previous behavior.
+            var preferences = job.Instructions ??
+                await services.GetRequiredService<IOwnerInstructions>().ReadAsync(jobCancellation.Token);
             OwnerInstructions.Include(input, audit, preferences.Text);
             var request = new ModelRequest(instructions, job.Content, InputItems: input, AuditInputItems: audit);
             var context = new ToolExecutionContext(job.ConversationId, job.UserMessageId, job.Content,
